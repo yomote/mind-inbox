@@ -1,0 +1,33 @@
+---
+id: new-consultation
+title: 新しい相談を始める
+route: /consultations/new
+status: implemented
+owner: frontend
+---
+
+import { NewConsultationSpecPreview } from '../../../frontend/src/spec/previews/NewConsultationSpecPreview'
+
+## 新しい相談を始める
+
+<NewConsultationSpecPreview />
+
+## 実装対応
+
+- 画面キー: `newConsultation`
+- 実装ファイル: `frontend/src/Layout.tsx`
+
+## UI要素
+
+- 相談テーマ入力欄
+- 「戻る」ボタン
+- 「対話を開始」ボタン（ローディング表示あり）
+
+## バリデーション
+
+- 空入力でも開始可能（タイトルは「相談セッション」になる）
+
+## 遷移
+
+- 戻る -> `home`
+- 対話を開始 -> `session`

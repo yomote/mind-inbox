@@ -1,0 +1,35 @@
+---
+id: history
+title: 履歴・振り返り
+route: /history
+status: implemented
+owner: frontend
+---
+
+import { HistorySpecPreview } from '../../../frontend/src/spec/previews/HistorySpecPreview'
+
+## 履歴・振り返り
+
+<HistorySpecPreview />
+
+## 実装対応
+
+- 画面キー: `history`
+- 実装ファイル: `frontend/src/Layout.tsx`
+
+## UI要素
+
+- 「ホームへ」ボタン
+- 履歴カード（タイトル、日時、要約）
+- 「この結果を開く」ボタン
+- 選択中の履歴表示
+
+## 状態
+
+- 履歴0件: 「履歴はまだありません。」を表示
+- 履歴あり: 一覧表示
+
+## 遷移
+
+- ホームへ -> `home`
+- この結果を開く -> `result`
