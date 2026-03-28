@@ -1,0 +1,4 @@
+mode,displayName,userPrincipalName,email,mailNickname,password,groups
+member,山田 太郎,taro.yamada@contoso.onmicrosoft.com,,,"",app-users
+member,佐藤 花子,hanako.sato@contoso.onmicrosoft.com,,,"",app-users;app-admins
+guest,External User,,external.user@example.com,,,app-users

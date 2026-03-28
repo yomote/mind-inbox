@@ -1,0 +1,27 @@
+---
+id: paused
+title: 一時保存 / 中断
+route: /paused
+status: implemented
+owner: frontend
+---
+
+import { PausedSpecPreview } from '../../../frontend/src/spec/previews/PausedSpecPreview'
+
+## 一時保存 / 中断
+
+<PausedSpecPreview />
+
+## 実装対応
+
+- 画面キー: `paused`
+- 実装ファイル: `frontend/src/Layout.tsx`
+
+## UI要素
+
+- 一時保存完了メッセージ
+- 「ホームに戻る」ボタン
+
+## 遷移
+
+- ホームに戻る -> `home`

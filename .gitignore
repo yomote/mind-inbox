@@ -1,0 +1,10 @@
+# Local-only Azure icon assets (official icons downloaded per developer machine)
+cicd/scripts/viz-structure/icons/
+cicd/scripts/viz-structure/artifacts/
+
+# Bicep compile outputs (generated ARM templates)
+cicd/iac/*.json
+!cicd/iac/*.parameters.json
+cicd/modules/*.json
+
+.local

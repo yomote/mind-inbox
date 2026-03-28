@@ -1,0 +1,30 @@
+---
+id: home
+title: ホーム
+route: /home
+status: implemented
+owner: frontend
+---
+
+import { HomeSpecPreview } from '../../../frontend/src/spec/previews/HomeSpecPreview'
+
+## ホーム
+
+<HomeSpecPreview />
+
+## 実装対応
+
+- 画面キー: `home`
+- 実装ファイル: `frontend/src/Layout.tsx`
+
+## UI要素
+
+- 「新しい相談を始める」
+- 「履歴・振り返り」
+- 「設定 / プライバシー」
+
+## 遷移
+
+- 新しい相談を始める -> `newConsultation`
+- 履歴・振り返り -> `history`
+- 設定 / プライバシー -> `settings`
