@@ -125,6 +125,76 @@ param voicevoxMinReplicas int = 0
 @description('Maximum replicas for VOICEVOX container app.')
 param voicevoxMaxReplicas int = 1
 
+// -------------------- Azure OpenAI params --------------------
+@description('Enable Azure OpenAI account and model deployment.')
+param enableOpenAi bool = false
+
+@description('Azure region for Azure OpenAI. Must be a region where OpenAI is available (e.g. eastus, japaneast, swedencentral).')
+param openAiLocation string = location
+
+@description('Azure OpenAI account name (must be globally unique).')
+param openAiAccountName string = toLower('oai-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}')
+
+@allowed([
+  'S0'
+])
+@description('Azure OpenAI account SKU.')
+param openAiSkuName string = 'S0'
+
+@description('Model deployment name (used as the deployment identifier in API calls).')
+param openAiDeploymentName string = 'gpt-4o'
+
+@description('OpenAI model name.')
+param openAiModelName string = 'gpt-4o'
+
+@description('OpenAI model version.')
+param openAiModelVersion string = '2024-11-20'
+
+@minValue(1)
+@description('Deployment capacity in units of 1,000 tokens-per-minute (TPM). Subject to regional quota.')
+param openAiCapacity int = 10
+
+// -------------------- Azure Container Registry params --------------------
+@description('Enable Azure Container Registry for building and storing AI Agent images.')
+param enableAcr bool = false
+
+@description('ACR name (alphanumeric, 5-50 chars, globally unique).')
+param acrName string = toLower('cr${take('${environmentName}${replace(replace(appName, '-', ''), '_', '')}', 46)}')
+
+@allowed([
+  'Basic'
+  'Standard'
+  'Premium'
+])
+@description('ACR SKU.')
+param acrSkuName string = 'Basic'
+
+// -------------------- AI Agent Container App params --------------------
+@description('Enable AI Agent on Azure Container Apps.')
+param enableAiAgentAca bool = false
+
+@description('Azure region for AI Agent Container Apps resources.')
+param aiAgentLocation string = location
+
+@description('Container Apps Environment name for AI Agent.')
+param aiAgentContainerAppsEnvironmentName string = toLower('cae-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-ai')
+
+@description('Container App name for AI Agent.')
+param aiAgentContainerAppName string = toLower('ca-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-ai-agent')
+
+// -------------------- VOICEVOX Wrapper Container App params --------------------
+@description('Enable VOICEVOX Wrapper on Azure Container Apps.')
+param enableVoicevoxWrapperAca bool = false
+
+@description('Azure region for VOICEVOX Wrapper Container Apps resources.')
+param voicevoxWrapperLocation string = location
+
+@description('Container Apps Environment name for VOICEVOX Wrapper.')
+param voicevoxWrapperContainerAppsEnvironmentName string = toLower('cae-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-vv-wrap')
+
+@description('Container App name for VOICEVOX Wrapper.')
+param voicevoxWrapperContainerAppName string = toLower('ca-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-vv-wrap')
+
 @allowed([
   'B1'
   'S1'
@@ -273,21 +343,26 @@ resource sqlPrivateDnsVnetLink 'Microsoft.Network/privateDnsZones/virtualNetwork
 }
 
 // -------------------- Key Vault for SQL admin password --------------------
+@description('Set to true if a soft-deleted Key Vault with the same name already exists and needs to be recovered.')
+param recoverSqlAdminKeyVault bool = false
+
 resource sqlAdminKeyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: sqlAdminKeyVaultName
   location: location
-  properties: {
-    tenantId: subscription().tenantId
-    sku: {
-      family: 'A'
-      name: 'standard'
-    }
-    // Use RBAC for access control; no static accessPolicies are defined here.
-    enableRbacAuthorization: true
-    publicNetworkAccess: 'Enabled'
-    softDeleteRetentionInDays: 90
-    enablePurgeProtection: true
-  }
+  properties: union(
+    {
+      tenantId: subscription().tenantId
+      sku: {
+        family: 'A'
+        name: 'standard'
+      }
+      enableRbacAuthorization: true
+      publicNetworkAccess: 'Enabled'
+      softDeleteRetentionInDays: 90
+      enablePurgeProtection: true
+    },
+    recoverSqlAdminKeyVault ? { createMode: 'recover' } : {}
+  )
 }
 
 resource sqlAdminPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
@@ -546,6 +621,89 @@ resource voicevoxContainerApp 'Microsoft.App/containerApps@2024-03-01' = if (ena
       scale: {
         minReplicas: voicevoxMinReplicas
         maxReplicas: voicevoxMaxReplicas
+      }
+    }
+  }
+}
+
+// -------------------- Azure OpenAI --------------------
+@description('Set to true if a soft-deleted Cognitive Services account with the same name already exists.')
+param restoreOpenAiAccount bool = false
+
+resource openAiAccount 'Microsoft.CognitiveServices/accounts@2023-05-01' = if (enableOpenAi) {
+  name: openAiAccountName
+  location: openAiLocation
+  kind: 'OpenAI'
+  sku: {
+    name: openAiSkuName
+  }
+  properties: union(
+    {
+      customSubDomainName: openAiAccountName
+      publicNetworkAccess: 'Enabled'
+      disableLocalAuth: false
+    },
+    restoreOpenAiAccount ? { restore: true } : {}
+  )
+}
+
+resource openAiDeployment 'Microsoft.CognitiveServices/accounts/deployments@2023-05-01' = if (enableOpenAi) {
+  parent: openAiAccount
+  name: openAiDeploymentName
+  sku: {
+    name: 'Standard'
+    capacity: openAiCapacity
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: openAiModelName
+      version: openAiModelVersion
+    }
+    versionUpgradeOption: 'OnceCurrentVersionExpired'
+  }
+}
+
+// -------------------- Azure Container Registry --------------------
+resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = if (enableAcr) {
+  name: acrName
+  location: location
+  sku: {
+    name: acrSkuName
+  }
+  properties: {
+    adminUserEnabled: false
+  }
+}
+
+// -------------------- AI Agent Container Apps Environment --------------------
+// Container App itself is created/updated by deploy-ai-agent.sh (avoids ARM provisioning timeout)
+// Consumption-only environment (no workloadProfiles) — provisions in seconds
+resource aiAgentManagedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = if (enableAiAgentAca) {
+  name: aiAgentContainerAppsEnvironmentName
+  location: aiAgentLocation
+  properties: {
+    appLogsConfiguration: {
+      destination: 'log-analytics'
+      logAnalyticsConfiguration: {
+        customerId: law.properties.customerId
+        sharedKey: law.listKeys().primarySharedKey
+      }
+    }
+  }
+}
+
+// -------------------- VOICEVOX Wrapper Container Apps Environment --------------------
+// Container App itself is created/updated by deploy-voicevox-wrapper.sh
+resource voicevoxWrapperManagedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = if (enableVoicevoxWrapperAca) {
+  name: voicevoxWrapperContainerAppsEnvironmentName
+  location: voicevoxWrapperLocation
+  properties: {
+    appLogsConfiguration: {
+      destination: 'log-analytics'
+      logAnalyticsConfiguration: {
+        customerId: law.properties.customerId
+        sharedKey: law.listKeys().primarySharedKey
       }
     }
   }
@@ -815,3 +973,16 @@ output voicevoxContainerAppName string = enableVoicevoxAca ? voicevoxContainerAp
 output voicevoxBaseUrl string = enableVoicevoxAca
   ? 'https://${voicevoxContainerApp.?properties.?configuration.?ingress.?fqdn ?? ''}'
   : ''
+output openAiEnabled bool = enableOpenAi
+output openAiEndpoint string = enableOpenAi ? (openAiAccount.?properties.?endpoint ?? '') : ''
+output openAiAccountName string = enableOpenAi ? openAiAccountName : ''
+output openAiDeploymentName string = enableOpenAi ? openAiDeploymentName : ''
+output acrEnabled bool = enableAcr
+output acrName string = enableAcr ? acrName : ''
+output acrLoginServer string = enableAcr ? acr!.properties.loginServer : ''
+output aiAgentEnabled bool = enableAiAgentAca
+output aiAgentContainerAppName string = enableAiAgentAca ? aiAgentContainerAppName : ''
+output aiAgentContainerAppsEnvironmentName string = enableAiAgentAca ? aiAgentContainerAppsEnvironmentName : ''
+output voicevoxWrapperEnabled bool = enableVoicevoxWrapperAca
+output voicevoxWrapperContainerAppName string = enableVoicevoxWrapperAca ? voicevoxWrapperContainerAppName : ''
+output voicevoxWrapperContainerAppsEnvironmentName string = enableVoicevoxWrapperAca ? voicevoxWrapperContainerAppsEnvironmentName : ''
