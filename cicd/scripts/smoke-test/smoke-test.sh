@@ -60,7 +60,7 @@ if [[ -n "$SWA_HOST" ]]; then
   # Best-effort: discover SWA SKU from ARM so we can decide whether /api/* is expected.
   # Note: linkedBackends (SWA -> existing Function App) is Standard-only in our IaC.
   SWA_SKU=$(az resource list -g "$RG" --resource-type "Microsoft.Web/staticSites" --query "[?properties.defaultHostname=='$SWA_HOST']|[0].sku.name" -o tsv 2>/dev/null || true)
-  [[ -n "$SWA_SKU" ]] && ok "SWA SKU: $SWA_SKU" || warn "Could not resolve SWA SKU (will treat /api/health check as best-effort)"
+  [[ -n "$SWA_SKU" ]] && ok "SWA SKU: $SWA_SKU" || warn "Could not resolve SWA SKU (will treat /api/trpc/health.ping check as best-effort)"
 
   if curl -fsS "https://$SWA_HOST" >/dev/null; then
     ok "SWA root reachable"
@@ -69,28 +69,28 @@ if [[ -n "$SWA_HOST" ]]; then
   fi
 
   set +e
-  swa_api_code=$(curl -sS -o /dev/null -w "%{http_code}" "https://$SWA_HOST/api/health")
+  swa_api_code=$(curl -sS -o /dev/null -w "%{http_code}" "https://$SWA_HOST/api/trpc/health.ping")
   curl_rc=$?
   set -e
 
   if [[ "$curl_rc" -eq 0 && "$swa_api_code" == "200" ]]; then
-    ok "SWA /api/health reachable"
+    ok "SWA /api/trpc/health.ping reachable"
   else
     if [[ "$SWA_SKU" == "Standard" ]]; then
-      ng "SWA /api/health not reachable (expected reachable for Standard SKU linked backend; HTTP ${swa_api_code:-?})"
+      ng "SWA /api/trpc/health.ping not reachable (expected reachable for Standard SKU linked backend; HTTP ${swa_api_code:-?})"
     else
-      warn "SWA /api/health not reachable (often expected on Free SKU unless repo/API is wired; HTTP ${swa_api_code:-?})"
+      warn "SWA /api/trpc/health.ping not reachable (often expected on Free SKU unless repo/API is wired; HTTP ${swa_api_code:-?})"
       warn "Tip: set staticSiteSkuName=Standard to enable linked backend in IaC, or link repo so SWA builds the API"
     fi
   fi
 fi
 
 if [[ -n "$FUNC_HOST" ]]; then
-  if curl -fsS "https://$FUNC_HOST/api/health" >/dev/null; then
-    ok "Function App /api/health reachable"
+  if curl -fsS "https://$FUNC_HOST/api/trpc/health.ping" >/dev/null; then
+    ok "Function App /api/trpc/health.ping reachable"
     warn "If you intend to block direct access to Function App, add access restrictions (not present in IaC)"
   else
-    warn "Function App /api/health not reachable (deployment/package may not be published yet)"
+    warn "Function App /api/trpc/health.ping not reachable (deployment/package may not be published yet)"
   fi
 fi
 
