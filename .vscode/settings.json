@@ -1,5 +1,11 @@
 {
   "files.associations": {
     "*.mdx": "markdown"
+  },
+  "chat.tools.terminal.autoApprove": {
+    "/^bash -n cicd/scripts/viz-structure/viz-structure\\.sh$/": {
+      "approve": true,
+      "matchCommandLine": true
+    }
   }
 }
