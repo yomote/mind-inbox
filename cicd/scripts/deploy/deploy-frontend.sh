@@ -16,7 +16,7 @@ need curl
 need swa
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-FRONTEND_DIR="$ROOT_DIR/frontend"
+FRONTEND_DIR="$ROOT_DIR/apps/frontend"
 
 resolve_auth_tenant_id() {
   local tenant_id="${ENTRA_TENANT_ID:-}"
