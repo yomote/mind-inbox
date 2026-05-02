@@ -15,13 +15,34 @@
       "value": "eastasia"
     },
     "enableVoicevoxAca": {
-      "value": false
+      "value": true
     },
     "voicevoxLocation": {
       "value": "japaneast"
     },
     "functionPlanSkuName": {
       "value": "Y1"
+    },
+    "enableOpenAi": {
+      "value": true
+    },
+    "openAiLocation": {
+      "value": "japaneast"
+    },
+    "enableAcr": {
+      "value": true
+    },
+    "enableAiAgentAca": {
+      "value": true
+    },
+    "aiAgentLocation": {
+      "value": "japaneast"
+    },
+    "enableVoicevoxWrapperAca": {
+      "value": true
+    },
+    "voicevoxWrapperLocation": {
+      "value": "japaneast"
     }
   }
 }

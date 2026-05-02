@@ -39,6 +39,36 @@ param voicevoxLocation string = functionLocation
 @description('Functions plan SKU')
 param functionPlanSkuName string = 'Y1'
 
+// -------------------- Azure OpenAI --------------------
+@description('Enable Azure OpenAI account and model deployment.')
+param enableOpenAi bool = false
+
+@description('Azure region for Azure OpenAI (e.g. japaneast, eastus, swedencentral).')
+param openAiLocation string = functionLocation
+
+// -------------------- ACR + AI Agent Container App --------------------
+@description('Enable Azure Container Registry.')
+param enableAcr bool = false
+
+@description('Enable AI Agent on Azure Container Apps.')
+param enableAiAgentAca bool = false
+
+@description('Azure region for AI Agent Container Apps resources.')
+param aiAgentLocation string = functionLocation
+
+// -------------------- VOICEVOX Wrapper Container App --------------------
+@description('Enable VOICEVOX Wrapper on Azure Container Apps.')
+param enableVoicevoxWrapperAca bool = false
+
+@description('Azure region for VOICEVOX Wrapper Container Apps resources.')
+param voicevoxWrapperLocation string = functionLocation
+
+@description('Set to true if a soft-deleted Key Vault with the same name already exists.')
+param recoverSqlAdminKeyVault bool = false
+
+@description('Set to true if a soft-deleted Azure OpenAI account with the same name already exists.')
+param restoreOpenAiAccount bool = false
+
 @description('Full infra bootstrap deployment (without SWA Entra auth setup).')
 module infra '../modules/bootstrap-core.bicep' = {
   params: {
@@ -51,6 +81,15 @@ module infra '../modules/bootstrap-core.bicep' = {
     voicevoxLocation: voicevoxLocation
     enableStaticSiteEntraAuth: false
     autoCreateStaticSiteEntraAppRegistration: false
+    enableOpenAi: enableOpenAi
+    openAiLocation: openAiLocation
+    enableAcr: enableAcr
+    enableAiAgentAca: enableAiAgentAca
+    aiAgentLocation: aiAgentLocation
+    enableVoicevoxWrapperAca: enableVoicevoxWrapperAca
+    voicevoxWrapperLocation: voicevoxWrapperLocation
+    recoverSqlAdminKeyVault: recoverSqlAdminKeyVault
+    restoreOpenAiAccount: restoreOpenAiAccount
   }
 }
 
@@ -62,3 +101,14 @@ output staticSiteEntraClientId string = infra.outputs.staticSiteEntraClientId
 output staticSiteEntraAppAutoCreated bool = infra.outputs.staticSiteEntraAppAutoCreated
 output staticSiteEntraAppObjectId string = infra.outputs.staticSiteEntraAppObjectId
 output voicevoxBaseUrl string = infra.outputs.voicevoxBaseUrl
+output openAiEnabled bool = infra.outputs.openAiEnabled
+output openAiEndpoint string = infra.outputs.openAiEndpoint
+output openAiDeploymentName string = infra.outputs.openAiDeploymentName
+output acrLoginServer string = infra.outputs.acrLoginServer
+output acrName string = infra.outputs.acrName
+output aiAgentEnabled bool = infra.outputs.aiAgentEnabled
+output aiAgentContainerAppName string = infra.outputs.aiAgentContainerAppName
+output aiAgentContainerAppsEnvironmentName string = infra.outputs.aiAgentContainerAppsEnvironmentName
+output voicevoxWrapperEnabled bool = infra.outputs.voicevoxWrapperEnabled
+output voicevoxWrapperContainerAppName string = infra.outputs.voicevoxWrapperContainerAppName
+output voicevoxWrapperContainerAppsEnvironmentName string = infra.outputs.voicevoxWrapperContainerAppsEnvironmentName
