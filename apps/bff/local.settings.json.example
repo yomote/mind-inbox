@@ -1,0 +1,13 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+
+    "// AI_AGENT_BASE_URL": "未設定なら BFF が stub レスポンスで動作する",
+    "AI_AGENT_BASE_URL": "",
+
+    "// VOICEVOX_BASE_URL": "未設定なら /api/tts が 204 を返し、フロントは Web Speech にフォールバック",
+    "VOICEVOX_BASE_URL": ""
+  }
+}
