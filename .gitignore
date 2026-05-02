@@ -7,4 +7,19 @@ cicd/iac/*.json
 !cicd/iac/*.parameters.json
 cicd/modules/*.json
 
+node_modules
+dist
+
+__pycache__
+
 .local
+
+# Azure Functions local config (may contain secrets)
+**/local.settings.json
+
+# MCP / E2E ツールのスクラッチ
+.playwright-mcp/
+.serena/
+
+# viz-structure.sh が生成するルート artifacts (再生成可能)
+artifacts/
