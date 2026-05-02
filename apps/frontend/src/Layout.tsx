@@ -21,15 +21,11 @@ import {
   createActionPlan,
   loadHistories,
   organizeResult,
+  saveHistory,
   sendMessage,
   startNewConsultation,
-} from "./mockApi";
-import type {
-  ActionPlan,
-  ConsultationSession,
-  HistoryItem,
-  OrganizedResult,
-} from "./mockApi";
+} from "./api";
+import type { ActionPlan, ConsultationSession, HistoryItem, OrganizedResult } from "./api";
 import type { PaletteMode } from "@mui/material";
 import { AppRouter, ROUTE_PATHS } from "./Router";
 import type { AppRoute, AuthStatus } from "./Router";
@@ -65,9 +61,7 @@ const HEADER_BY_ROUTE: Record<AppRoute, string> = {
   crisisSupport: "危機時サポート",
 };
 
-function getClientPrincipal(
-  payload: unknown,
-): StaticWebAppsClientPrincipal | null {
+function getClientPrincipal(payload: unknown): StaticWebAppsClientPrincipal | null {
   if (Array.isArray(payload)) {
     const [entry] = payload;
     if (
@@ -100,17 +94,6 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const isDev = import.meta.env.DEV;
   const location = useLocation();
   const navigate = useNavigate();
-  const voicevoxBaseUrl = React.useMemo(() => {
-    const configuredUrl = import.meta.env.VITE_VOICEVOX_BASE_URL;
-    if (configuredUrl) return configuredUrl;
-    if (typeof window === "undefined") return "";
-
-    const host = window.location.hostname;
-    const isLocalHost =
-      host === "localhost" || host === "127.0.0.1" || host === "::1";
-
-    return isLocalHost ? "http://127.0.0.1:50021" : "";
-  }, []);
   const voicevoxSpeaker = Number(import.meta.env.VITE_VOICEVOX_SPEAKER || "3");
   const loginUrl = "/login";
   const logoutUrl = "/logout";
@@ -126,17 +109,13 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const [concern, setConcern] = React.useState("");
   const [draftMessage, setDraftMessage] = React.useState("");
 
-  const [session, setSession] = React.useState<ConsultationSession | null>(
-    null,
-  );
+  const [session, setSession] = React.useState<ConsultationSession | null>(null);
   const [result, setResult] = React.useState<OrganizedResult | null>(null);
   const [plan, setPlan] = React.useState<ActionPlan | null>(null);
   const [histories, setHistories] = React.useState<HistoryItem[]>([]);
 
-  const [selectedHistory, setSelectedHistory] =
-    React.useState<HistoryItem | null>(null);
-  const [accountMenuAnchorEl, setAccountMenuAnchorEl] =
-    React.useState<null | HTMLElement>(null);
+  const [selectedHistory, setSelectedHistory] = React.useState<HistoryItem | null>(null);
+  const [accountMenuAnchorEl, setAccountMenuAnchorEl] = React.useState<null | HTMLElement>(null);
 
   const recognitionRef = React.useRef<SpeechRecognition | null>(null);
   const activeAudioRef = React.useRef<HTMLAudioElement | null>(null);
@@ -144,9 +123,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const lastSpokenAssistantMessageIdRef = React.useRef<string | null>(null);
   const voiceCacheRef = React.useRef<Map<string, Blob>>(new Map());
 
-  const speechRecognitionCtor = React.useMemo<
-    SpeechRecognitionConstructor | undefined
-  >(() => {
+  const speechRecognitionCtor = React.useMemo<SpeechRecognitionConstructor | undefined>(() => {
     if (typeof window === "undefined") return undefined;
     return window.SpeechRecognition || window.webkitSpeechRecognition;
   }, []);
@@ -221,13 +198,9 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
       return;
     }
 
-    const postLoginRedirectUri = encodeURIComponent(
-      `${window.location.origin}${ROUTE_PATHS.home}`,
-    );
+    const postLoginRedirectUri = encodeURIComponent(`${window.location.origin}${ROUTE_PATHS.home}`);
 
-    window.location.assign(
-      `${loginUrl}?post_login_redirect_uri=${postLoginRedirectUri}`,
-    );
+    window.location.assign(`${loginUrl}?post_login_redirect_uri=${postLoginRedirectUri}`);
   }, [authStatus, isDev, loginUrl, transition]);
 
   const stopSpeaking = React.useCallback(() => {
@@ -251,58 +224,25 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
   const synthesizeWithVoicevox = React.useCallback(
     async (text: string): Promise<Blob> => {
-      if (!voicevoxBaseUrl) {
-        throw new Error("VOICEVOX base URL is not configured");
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, speaker: voicevoxSpeaker }),
+      });
+
+      if (res.status === 204) {
+        // VOICEVOX_BASE_URL 未設定時の stub。フォールバックをトリガーする。
+        throw new Error("TTS_STUB");
       }
 
-      const queryResponse = await fetch(
-        `${voicevoxBaseUrl}/audio_query?text=${encodeURIComponent(text)}&speaker=${voicevoxSpeaker}`,
-        { method: "POST" },
-      );
-
-      if (!queryResponse.ok) {
-        throw new Error("VOICEVOX audio_query failed");
+      if (!res.ok) {
+        throw new Error(`TTS synthesis failed: ${res.status}`);
       }
 
-      const audioQuery = (await queryResponse.json()) as unknown;
-
-      const synthesisResponse = await fetch(
-        `${voicevoxBaseUrl}/synthesis?speaker=${voicevoxSpeaker}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(audioQuery),
-        },
-      );
-
-      if (!synthesisResponse.ok) {
-        throw new Error("VOICEVOX synthesis failed");
-      }
-
-      return synthesisResponse.blob();
+      return await res.blob();
     },
-    [voicevoxBaseUrl, voicevoxSpeaker],
+    [voicevoxSpeaker],
   );
-
-  React.useEffect(() => {
-    if (!voicevoxBaseUrl) return;
-
-    void (async () => {
-      try {
-        const warmupText = "準備完了";
-        const response = await fetch(`${voicevoxBaseUrl}/version`);
-        if (!response.ok) return;
-
-        const warmupBlob = await synthesizeWithVoicevox(warmupText);
-        voiceCacheRef.current.set(
-          `${voicevoxSpeaker}:${warmupText}`,
-          warmupBlob,
-        );
-      } catch {
-        // warm-up failure is non-fatal; fallback path handles runtime playback
-      }
-    })();
-  }, [synthesizeWithVoicevox, voicevoxBaseUrl, voicevoxSpeaker]);
 
   const speakText = React.useCallback(
     async (text: string) => {
@@ -315,8 +255,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
       try {
         const cacheKey = `${voicevoxSpeaker}:${text}`;
         const audioBlob =
-          voiceCacheRef.current.get(cacheKey) ||
-          (await synthesizeWithVoicevox(text));
+          voiceCacheRef.current.get(cacheKey) || (await synthesizeWithVoicevox(text));
 
         if (!voiceCacheRef.current.has(cacheKey)) {
           voiceCacheRef.current.set(cacheKey, audioBlob);
@@ -350,9 +289,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
       } catch {
         if (typeof window === "undefined" || !("speechSynthesis" in window)) {
           setSpeaking(false);
-          setVoiceError(
-            "音声合成に失敗しました。VOICEVOX接続を確認してください。",
-          );
+          setVoiceError("音声合成に失敗しました。VOICEVOX接続を確認してください。");
           return;
         }
 
@@ -362,9 +299,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
         utterance.onend = () => setSpeaking(false);
         utterance.onerror = () => {
           setSpeaking(false);
-          setVoiceError(
-            "音声合成に失敗しました。VOICEVOX接続を確認してください。",
-          );
+          setVoiceError("音声合成に失敗しました。VOICEVOX接続を確認してください。");
         };
 
         window.speechSynthesis.speak(utterance);
@@ -485,11 +420,9 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
     setLoading(true);
     try {
-      const assistantMessage = await sendMessage(userMessage.text);
+      const assistantMessage = await sendMessage(session.id, userMessage.text);
       setSession((prev) =>
-        prev
-          ? { ...prev, messages: [...prev.messages, assistantMessage] }
-          : prev,
+        prev ? { ...prev, messages: [...prev.messages, assistantMessage] } : prev,
       );
     } finally {
       setLoading(false);
@@ -516,7 +449,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     if (!session || loading) return;
     setLoading(true);
     try {
-      const organized = await organizeResult(session.messages);
+      const organized = await organizeResult(session.id);
       setResult(organized);
       transition("result");
     } finally {
@@ -536,20 +469,24 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     }
   };
 
-  const handleSaveAndGoHistory = () => {
-    if (!result || !plan) return;
+  const handleSaveAndGoHistory = async () => {
+    if (!result || !plan || !session) return;
 
-    const item: HistoryItem = {
-      id: `h-${Date.now()}`,
-      title: session?.title || "相談履歴",
-      createdAt: new Date().toISOString(),
-      result,
-      plan,
-    };
+    setLoading(true);
+    try {
+      const item = await saveHistory({
+        sessionId: session.id,
+        title: session.title || "相談履歴",
+        result,
+        plan,
+      });
 
-    setHistories((prev) => [item, ...prev]);
-    setSelectedHistory(item);
-    transition("history");
+      setHistories((prev) => [item, ...prev]);
+      setSelectedHistory(item);
+      transition("history");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const openHistoryResult = (item: HistoryItem) => {
@@ -629,9 +566,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   }, [location.pathname]);
 
   const activeHeader =
-    isAuthenticated && currentRoute !== "onboarding"
-      ? currentRoute
-      : "onboarding";
+    isAuthenticated && currentRoute !== "onboarding" ? currentRoute : "onboarding";
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>

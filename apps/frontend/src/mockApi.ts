@@ -50,9 +50,7 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const nowText = () => new Date().toISOString();
 const uid = () => Math.random().toString(36).slice(2, 10);
 
-export async function startNewConsultation(
-  concern: string,
-): Promise<ConsultationSession> {
+export async function startNewConsultation(concern: string): Promise<ConsultationSession> {
   await wait(350);
 
   return {
@@ -69,7 +67,7 @@ export async function startNewConsultation(
   };
 }
 
-export async function sendMessage(text: string): Promise<ChatMessage> {
+export async function sendMessage(_sessionId: string, text: string): Promise<ChatMessage> {
   await wait(300);
 
   const reply =
@@ -85,18 +83,11 @@ export async function sendMessage(text: string): Promise<ChatMessage> {
   };
 }
 
-export async function organizeResult(
-  messages: ChatMessage[],
-): Promise<OrganizedResult> {
+export async function organizeResult(_sessionId: string): Promise<OrganizedResult> {
   await wait(450);
 
-  const lastUserMessage = [...messages]
-    .reverse()
-    .find((m) => m.role === "user");
-  const seed = lastUserMessage?.text || "気持ちの整理";
-
   return {
-    summary: `現在のテーマは「${seed.slice(0, 26)}${seed.length > 26 ? "…" : ""}」。不安と疲労が混ざっており、優先順位を付けると前進しやすい状態です。`,
+    summary: "現在のテーマには不安と疲労が混ざっており、優先順位を付けると前進しやすい状態です。",
     emotions: ["不安", "焦り", "少しの希望"],
     priorities: [
       "今日やることを3つに絞る",
@@ -106,9 +97,7 @@ export async function organizeResult(
   };
 }
 
-export async function createActionPlan(
-  result: OrganizedResult,
-): Promise<ActionPlan> {
+export async function createActionPlan(result: OrganizedResult): Promise<ActionPlan> {
   await wait(300);
 
   return {
@@ -121,6 +110,22 @@ export async function createActionPlan(
   };
 }
 
+export async function saveHistory(input: {
+  sessionId: string;
+  title: string;
+  result: OrganizedResult;
+  plan: ActionPlan;
+}): Promise<HistoryItem> {
+  await wait(150);
+  return {
+    id: uid(),
+    title: input.title,
+    createdAt: nowText(),
+    result: input.result,
+    plan: input.plan,
+  };
+}
+
 export async function loadHistories(): Promise<HistoryItem[]> {
   await wait(250);
 
@@ -130,8 +135,7 @@ export async function loadHistories(): Promise<HistoryItem[]> {
       title: "仕事の優先順位を整理",
       createdAt: new Date(Date.now() - 1000 * 60 * 60 * 26).toISOString(),
       result: {
-        summary:
-          "タスク過多による焦りが中心。優先順位の明確化で負荷を下げられる状態。",
+        summary: "タスク過多による焦りが中心。優先順位の明確化で負荷を下げられる状態。",
         emotions: ["焦り", "疲労"],
         priorities: ["重要タスクの絞り込み", "期限交渉", "休憩確保"],
       },
