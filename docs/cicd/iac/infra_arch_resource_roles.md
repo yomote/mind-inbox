@@ -1,0 +1,26 @@
+# Resource Roles
+
+| Name                                                        | Type                                                  | RG                | Role                      | Note                                          |
+| ----------------------------------------------------------- | ----------------------------------------------------- | ----------------- | ------------------------- | --------------------------------------------- |
+| ca-dev-mindbox-ai-agent                                     | microsoft.app/containerapps                           | rg-dev-mind-inbox | App microservice          | Runtime endpoint for service workloads        |
+| ca-dev-mindbox-voicevox                                     | microsoft.app/containerapps                           | rg-dev-mind-inbox | App microservice          | Runtime endpoint for service workloads        |
+| ca-dev-mindbox-vv-wrap                                      | microsoft.app/containerapps                           | rg-dev-mind-inbox | App microservice          | Runtime endpoint for service workloads        |
+| cae-dev-mindbox-ai                                          | microsoft.app/managedenvironments                     | rg-dev-mind-inbox | Container app environment | Shared runtime/network for Container Apps     |
+| cae-dev-mindbox-voicevox                                    | microsoft.app/managedenvironments                     | rg-dev-mind-inbox | Container app environment | Shared runtime/network for Container Apps     |
+| cae-dev-mindbox-vv-wrap                                     | microsoft.app/managedenvironments                     | rg-dev-mind-inbox | Container app environment | Shared runtime/network for Container Apps     |
+| oai-dev-mindbox                                             | microsoft.cognitiveservices/accounts                  | rg-dev-mind-inbox | LLM endpoint              | Azure OpenAI account for model inference      |
+| crdevmindbox                                                | microsoft.containerregistry/registries                | rg-dev-mind-inbox | Container image registry  | Stores deployable images                      |
+| kv-dev-mindbox-sql                                          | microsoft.keyvault/vaults                             | rg-dev-mind-inbox | Secrets management        | Stores/guards credentials and secrets         |
+| pe-sql-dev-mindbox.nic.f994f906-8962-442a-8089-45b245b65cec | microsoft.network/networkinterfaces                   | rg-dev-mind-inbox | General Azure resource    | Role not yet classified                       |
+| privatelink.database.windows.net                            | microsoft.network/privatednszones                     | rg-dev-mind-inbox | Private name resolution   | DNS for private endpoints                     |
+| vnet-dev-mindbox-link                                       | microsoft.network/privatednszones/virtualnetworklinks | rg-dev-mind-inbox | DNS-to-VNet link          | Binds private DNS zone to VNet                |
+| pe-sql-dev-mindbox                                          | microsoft.network/privateendpoints                    | rg-dev-mind-inbox | Private ingress           | Private connectivity to PaaS resources        |
+| vnet-dev-mindbox                                            | microsoft.network/virtualnetworks                     | rg-dev-mind-inbox | Network boundary          | Private address space and subnet isolation    |
+| law-dev-mindbox-ops                                         | microsoft.operationalinsights/workspaces              | rg-dev-mind-inbox | Central logging           | Aggregates app/platform logs and metrics      |
+| sql-dev-mindbox                                             | microsoft.sql/servers                                 | rg-dev-mind-inbox | Relational DB server      | Managed SQL control plane                     |
+| master                                                      | microsoft.sql/servers/databases                       | rg-dev-mind-inbox | Application database      | Persistent relational data                    |
+| sqldb-dev-mindbox                                           | microsoft.sql/servers/databases                       | rg-dev-mind-inbox | Application database      | Persistent relational data                    |
+| stdevmindboxfunc                                            | microsoft.storage/storageaccounts                     | rg-dev-mind-inbox | Function runtime storage  | Functions runtime/state storage               |
+| asp-dev-mindbox-func                                        | microsoft.web/serverfarms                             | rg-dev-mind-inbox | Compute plan              | Function/App Service compute capacity         |
+| func-dev-mindbox                                            | microsoft.web/sites                                   | rg-dev-mind-inbox | Backend API               | Hosts Azure Functions/BFF endpoints           |
+| swa-dev-mindbox                                             | microsoft.web/staticsites                             | rg-dev-mind-inbox | Frontend hosting          | Browser UI delivery and edge auth entry point |

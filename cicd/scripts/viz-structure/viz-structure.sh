@@ -9,13 +9,39 @@ set -euo pipefail
 # - You can extend edge rules later by enriching graph.json.
 
 HERE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+PROJECT_ROOT="$(git -C "$HERE_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -z "$PROJECT_ROOT" ]]; then
+  PROJECT_ROOT="$(cd -- "$HERE_DIR/../../.." && pwd)"
+fi
+
+resolve_path() {
+  local p="$1"
+  if [[ "$p" = /* ]]; then
+    printf '%s' "$p"
+  elif [[ "$p" == */* ]]; then
+    printf '%s/%s' "$PROJECT_ROOT" "$p"
+  else
+    printf '%s/%s' "$HERE_DIR" "$p"
+  fi
+}
+
+resolve_project_path() {
+  local p="$1"
+  if [[ "$p" = /* ]]; then
+    printf '%s' "$p"
+  else
+    printf '%s/%s' "$PROJECT_ROOT" "$p"
+  fi
+}
+
 ARCH_FILE_NAME="infra_arch"
 SUBS=""
 RGS=""
 OUT="artifacts/$ARCH_FILE_NAME/latest"
 ICONS_DIR=""
 DEFAULT_ICONS_DIR="$HERE_DIR/icons"
-DOCS_DIR="../../../docs/cicd/iac"
+DOCS_DIR="$PROJECT_ROOT/docs/cicd/iac"
+CODEBASE_ROOT="$PROJECT_ROOT"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -23,9 +49,16 @@ while [[ $# -gt 0 ]]; do
     --rgs)  RGS="$2"; shift 2;;
     --out)  OUT="$2"; shift 2;;
     --icons) ICONS_DIR="$2"; shift 2;;
+    --codebase-root) CODEBASE_ROOT="$2"; shift 2;;
     *) echo "Unknown arg: $1" >&2; exit 1;;
   esac
 done
+
+OUT="$(resolve_path "$OUT")"
+if [[ -n "$ICONS_DIR" ]]; then
+  ICONS_DIR="$(resolve_path "$ICONS_DIR")"
+fi
+CODEBASE_ROOT="$(resolve_project_path "$CODEBASE_ROOT")"
 
 if [[ -z "$SUBS" || -z "$RGS" ]]; then
   echo "Required: --subs and --rgs" >&2
@@ -51,6 +84,12 @@ command -v dot >/dev/null || { echo "dot (graphviz) not found" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "python3 not found" >&2; exit 1; }
 
 mkdir -p "$OUT"
+mkdir -p "$DOCS_DIR"
+
+if [[ ! -d "$CODEBASE_ROOT" ]]; then
+  echo "WARN: --codebase-root not found: $CODEBASE_ROOT (logical code deps disabled)" >&2
+  CODEBASE_ROOT=""
+fi
 
 # 1) Collect (Azure Resource Graph)
 # Fetch basic fields + properties (needed to infer edges).
@@ -267,6 +306,212 @@ jq '
     }
 ' "$OUT/resources.json" > "$OUT/graph.json"
 
+# 2.5) Enrich with logical dependencies from codebase + generate resource role table.
+if [[ -n "$CODEBASE_ROOT" ]]; then
+  python3 - "$OUT/graph.json" "$CODEBASE_ROOT" "$OUT/logical-edges.json" "$OUT/resource-roles.tsv" "$OUT/resource-roles.md" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+graph_path = pathlib.Path(sys.argv[1])
+codebase_root = pathlib.Path(sys.argv[2])
+logical_edges_path = pathlib.Path(sys.argv[3])
+roles_tsv_path = pathlib.Path(sys.argv[4])
+roles_md_path = pathlib.Path(sys.argv[5])
+
+graph = json.loads(graph_path.read_text(encoding="utf-8"))
+nodes = graph.get("nodes", [])
+
+def lc(s):
+  return (s or "").lower()
+
+def find_nodes(type_lc=None, name_contains=None):
+  out = []
+  for n in nodes:
+    t = lc(n.get("type"))
+    nm = lc(n.get("label", "").split("\n")[0])
+    if type_lc and t != type_lc:
+      continue
+    if name_contains and name_contains not in nm:
+      continue
+    out.append(n)
+  return out
+
+def read_text_safe(path):
+  try:
+    return path.read_text(encoding="utf-8", errors="ignore")
+  except Exception:
+    return ""
+
+def grep_any(paths, patterns):
+  regex = re.compile("|".join(patterns), re.IGNORECASE)
+  for p in paths:
+    if not p.exists() or not p.is_file():
+      continue
+    txt = read_text_safe(p)
+    if txt and regex.search(txt):
+      return True
+  return False
+
+logical_edges = []
+
+# Heuristic 1: AI Agent Container App -> Azure OpenAI account
+ai_agent_uses_openai = grep_any(
+  [
+    codebase_root / "apps/services/ai-agent/README.md",
+    codebase_root / "cicd/scripts/deploy/deploy-ai-agent.sh",
+  ],
+  [r"AZURE_OPENAI_ENDPOINT", r"openai\\.azure\\.com", r"openAiEndpoint"],
+)
+if ai_agent_uses_openai:
+  ai_apps = find_nodes("microsoft.app/containerapps", "ai-agent")
+  openai_accounts = find_nodes("microsoft.cognitiveservices/accounts", None)
+  for src in ai_apps:
+    for dst in openai_accounts:
+      logical_edges.append(
+        {
+          "from": src.get("id"),
+          "to": dst.get("id"),
+          "rel": "openaiApi",
+          "source": "codebase",
+        }
+      )
+
+# Heuristic 2: VOICEVOX Wrapper Container App -> VOICEVOX Engine Container App
+wrapper_uses_engine = grep_any(
+  [
+    codebase_root / "apps/services/voicevox/README.md",
+    codebase_root / "cicd/scripts/deploy/deploy-voicevox-wrapper.sh",
+  ],
+  [r"VOICEVOX_ENGINE_BASE_URL", r"voicevox"],
+)
+if wrapper_uses_engine:
+  wrappers = find_nodes("microsoft.app/containerapps", "vv-wrap")
+  engines = [
+    n
+    for n in find_nodes("microsoft.app/containerapps", "voicevox")
+    if "vv-wrap" not in lc(n.get("label", ""))
+  ]
+  for src in wrappers:
+    for dst in engines:
+      logical_edges.append(
+        {
+          "from": src.get("id"),
+          "to": dst.get("id"),
+          "rel": "voicevoxEngine",
+          "source": "codebase",
+        }
+      )
+
+# Heuristic 3: Function App (BFF) -> VOICEVOX Wrapper API
+bff_uses_voicevox = grep_any(
+  [
+    codebase_root / "apps/bff/src/config.ts",
+    codebase_root / "apps/bff/src/clients/voicevoxClient.ts",
+  ],
+  [r"VOICEVOX_BASE_URL", r"/synthesize", r"voicevox"],
+)
+if bff_uses_voicevox:
+  function_apps = find_nodes("microsoft.web/sites", "func-")
+  wrappers = find_nodes("microsoft.app/containerapps", "vv-wrap")
+  for src in function_apps:
+    for dst in wrappers:
+      logical_edges.append(
+        {
+          "from": src.get("id"),
+          "to": dst.get("id"),
+          "rel": "voicevoxApi",
+          "source": "codebase",
+        }
+      )
+
+# Keep only edges that point to existing nodes.
+node_ids = {n.get("id") for n in nodes}
+logical_edges = [
+  e
+  for e in logical_edges
+  if e.get("from") in node_ids and e.get("to") in node_ids and e.get("from") and e.get("to")
+]
+
+# Deduplicate by from/to so we don't clash with structural edges.
+unique = {}
+for e in logical_edges:
+  key = (e["from"], e["to"])
+  if key not in unique:
+    unique[key] = e
+logical_edges = list(unique.values())
+
+logical_edges_path.write_text(json.dumps(logical_edges, ensure_ascii=False, indent=2), encoding="utf-8")
+
+ROLE_MAP = {
+  "microsoft.web/staticsites": ("Frontend hosting", "Browser UI delivery and edge auth entry point"),
+  "microsoft.web/sites": ("Backend API", "Hosts Azure Functions/BFF endpoints"),
+  "microsoft.web/serverfarms": ("Compute plan", "Function/App Service compute capacity"),
+  "microsoft.storage/storageaccounts": ("Function runtime storage", "Functions runtime/state storage"),
+  "microsoft.operationalinsights/workspaces": ("Central logging", "Aggregates app/platform logs and metrics"),
+  "microsoft.network/virtualnetworks": ("Network boundary", "Private address space and subnet isolation"),
+  "microsoft.network/privateendpoints": ("Private ingress", "Private connectivity to PaaS resources"),
+  "microsoft.network/privatednszones": ("Private name resolution", "DNS for private endpoints"),
+  "microsoft.network/privatednszones/virtualnetworklinks": ("DNS-to-VNet link", "Binds private DNS zone to VNet"),
+  "microsoft.sql/servers": ("Relational DB server", "Managed SQL control plane"),
+  "microsoft.sql/servers/databases": ("Application database", "Persistent relational data"),
+  "microsoft.keyvault/vaults": ("Secrets management", "Stores/guards credentials and secrets"),
+  "microsoft.cognitiveservices/accounts": ("LLM endpoint", "Azure OpenAI account for model inference"),
+  "microsoft.cognitiveservices/accounts/deployments": ("Model deployment", "Specific model/runtime deployment"),
+  "microsoft.containerregistry/registries": ("Container image registry", "Stores deployable images"),
+  "microsoft.app/managedenvironments": ("Container app environment", "Shared runtime/network for Container Apps"),
+  "microsoft.app/containerapps": ("App microservice", "Runtime endpoint for service workloads"),
+}
+
+rows = []
+for n in sorted(nodes, key=lambda x: (lc(x.get("rg")), lc(x.get("type")), lc(x.get("label")))):
+  t = lc(n.get("type"))
+  role, note = ROLE_MAP.get(t, ("General Azure resource", "Role not yet classified"))
+  name = (n.get("label", "").split("\n")[0] if n.get("label") else "")
+  rows.append(
+    {
+      "name": name,
+      "type": n.get("type", ""),
+      "resourceGroup": n.get("rg", ""),
+      "role": role,
+      "note": note,
+      "id": n.get("id", ""),
+    }
+  )
+
+with roles_tsv_path.open("w", encoding="utf-8") as f:
+  f.write("name\ttype\tresourceGroup\trole\tnote\tid\n")
+  for r in rows:
+    f.write(
+      f"{r['name']}\t{r['type']}\t{r['resourceGroup']}\t{r['role']}\t{r['note']}\t{r['id']}\n"
+    )
+
+with roles_md_path.open("w", encoding="utf-8") as f:
+  f.write("# Resource Roles\n\n")
+  f.write("| Name | Type | RG | Role | Note |\n")
+  f.write("|---|---|---|---|---|\n")
+  for r in rows:
+    f.write(
+      f"| {r['name']} | {r['type']} | {r['resourceGroup']} | {r['role']} | {r['note']} |\n"
+    )
+PY
+
+  jq -s '
+  .[0] as $g
+  | .[1] as $logical
+  | ($g.nodes | map(.id) | map({key: ., value: true}) | from_entries) as $ids
+  | $g
+  | .edges = (
+    ($g.edges + ($logical | map(select($ids[.from] and $ids[.to]))))
+    | unique_by(.from + "->" + .to)
+    )
+  ' "$OUT/graph.json" "$OUT/logical-edges.json" > "$OUT/graph.with-code.json"
+  mv "$OUT/graph.with-code.json" "$OUT/graph.json"
+else
+  printf '[]\n' > "$OUT/logical-edges.json"
+fi
+
 # 3) Render to DOT (clusters by resource group)
 # This is readable, and scalable: clusters reduce clutter.
 GENERATED_AT_UTC="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -317,7 +562,10 @@ jq -r --arg iconsDir "$ICONS_DIR" --arg generatedAt "$GENERATED_AT_UTC" --arg su
     "serverfarm": { color: "#2E7D32", style: "solid", label: "App Service Plan" },
     "virtualnetwork": { color: "#006064", style: "dotted", label: "VNet Link" },
     "managedenvironment": { color: "#F57C00", style: "solid", label: "Managed Env" },
-    "server": { color: "#C62828", style: "solid", label: "SQL Parent" }
+    "server": { color: "#C62828", style: "solid", label: "SQL Parent" },
+    "openaiapi": { color: "#1565C0", style: "dashed", label: "OpenAI API" },
+    "voicevoxengine": { color: "#2E7D32", style: "dashed", label: "VOICEVOX Engine" },
+    "voicevoxapi": { color: "#6A1B9A", style: "dashed", label: "VOICEVOX API" }
   };
 
   def edge_stmt($e):
@@ -490,9 +738,18 @@ fi
 
 # 6) Copy SVG to docs (for easy reference in markdown)
 cp "$OUT/$ARCH_FILE_NAME.svg" "$DOCS_DIR/$ARCH_FILE_NAME.svg"
+if [[ -f "$OUT/resource-roles.md" ]]; then
+  cp "$OUT/resource-roles.md" "$DOCS_DIR/${ARCH_FILE_NAME}_resource_roles.md"
+fi
 
 echo "OK:"
 echo "  $OUT/$ARCH_FILE_NAME.svg"
 echo "  $OUT/$ARCH_FILE_NAME.dot"
 echo "  $OUT/graph.json"
+echo "  $OUT/logical-edges.json"
+echo "  $OUT/resource-roles.tsv"
+echo "  $OUT/resource-roles.md"
 echo "  $DOCS_DIR/$ARCH_FILE_NAME.svg"
+if [[ -f "$DOCS_DIR/${ARCH_FILE_NAME}_resource_roles.md" ]]; then
+  echo "  $DOCS_DIR/${ARCH_FILE_NAME}_resource_roles.md"
+fi
