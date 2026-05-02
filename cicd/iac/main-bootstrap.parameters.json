@@ -43,6 +43,9 @@
     },
     "voicevoxWrapperLocation": {
       "value": "japaneast"
+    },
+    "sqlAdminKeyVaultName": {
+      "value": "kv-dev-mindbox-sql2"
     }
   }
 }

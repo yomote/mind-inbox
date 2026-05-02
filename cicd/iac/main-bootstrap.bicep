@@ -66,6 +66,9 @@ param voicevoxWrapperLocation string = functionLocation
 @description('Set to true if a soft-deleted Key Vault with the same name already exists.')
 param recoverSqlAdminKeyVault bool = false
 
+@description('Name of the Azure Key Vault that stores the SQL administrator password (lowercase, 3-24 chars). 既存 soft-deleted vault と被る場合は別名にする。')
+param sqlAdminKeyVaultName string = toLower('kv-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-sql')
+
 @description('Set to true if a soft-deleted Azure OpenAI account with the same name already exists.')
 param restoreOpenAiAccount bool = false
 
@@ -89,6 +92,7 @@ module infra '../modules/bootstrap-core.bicep' = {
     enableVoicevoxWrapperAca: enableVoicevoxWrapperAca
     voicevoxWrapperLocation: voicevoxWrapperLocation
     recoverSqlAdminKeyVault: recoverSqlAdminKeyVault
+    sqlAdminKeyVaultName: sqlAdminKeyVaultName
     restoreOpenAiAccount: restoreOpenAiAccount
   }
 }
