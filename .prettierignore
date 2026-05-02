@@ -1,0 +1,34 @@
+# Build outputs
+**/dist
+**/build
+**/.python_packages
+**/node_modules
+**/.next
+
+# Generated artifacts
+artifacts
+.local
+**/coverage
+**/__pycache__
+
+# Tooling caches
+.serena
+.playwright-mcp
+.claude
+
+# Bicep compiled outputs (gitignored, but be explicit)
+cicd/iac/main.json
+cicd/iac/main-bootstrap.json
+cicd/iac/main-config.json
+cicd/modules/*.json
+
+# Lock files (handled by their tools)
+**/package-lock.json
+**/pnpm-lock.yaml
+**/uv.lock
+
+# Generated SVGs
+docs/cicd/iac/*.svg
+
+# Don't reformat the basic_design's mermaid blocks etc — keep authorial control
+docs/design/basic_design.md

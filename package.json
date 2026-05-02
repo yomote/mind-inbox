@@ -1,0 +1,25 @@
+{
+  "name": "mind-inbox",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mind Inbox monorepo root (tooling only — actual apps live under apps/*)",
+  "scripts": {
+    "prepare": "husky",
+    "lint": "npm run lint:bff && npm run lint:frontend && npm run lint:py && npm run lint:md",
+    "lint:bff": "npm --prefix apps/bff run lint",
+    "lint:frontend": "pnpm --dir apps/frontend run lint",
+    "lint:py": "uv run --directory apps/services/ai-agent ruff check .. && uv run --directory apps/services/ai-agent ruff format --check ..",
+    "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#**/dist\" \"#**/.serena\" \"#**/.playwright-mcp\" \"#**/artifacts\"",
+    "format": "prettier --write . && uv run --directory apps/services/ai-agent ruff format ..",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.1",
+    "markdownlint-cli2": "^0.18.1",
+    "prettier": "^3.4.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
