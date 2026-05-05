@@ -522,7 +522,7 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
       httpsOnly: true
       siteConfig: union(
         {
-          linuxFxVersion: 'Node|20'
+          linuxFxVersion: 'Node|22'
           minTlsVersion: '1.2'
           ftpsState: 'Disabled'
           appSettings: [
@@ -540,7 +540,7 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
             }
             {
               name: 'WEBSITE_NODE_DEFAULT_VERSION'
-              value: '~20'
+              value: '~22'
             }
             {
               name: 'WEBSITE_RUN_FROM_PACKAGE'
