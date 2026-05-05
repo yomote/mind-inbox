@@ -105,8 +105,8 @@ IFS=',' read -r -a SUB_ARR <<< "$SUBS"
 trim() {
   local s="$1"
   # trim leading/trailing whitespace
-  s="${s#${s%%[![:space:]]*}}"
-  s="${s%${s##*[![:space:]]}}"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
   printf '%s' "$s"
 }
 
@@ -735,6 +735,32 @@ if new_svg != svg:
     f.write(new_svg)
 PY
 fi
+
+# 5) Mask subscription IDs across generated artifacts (raw GUID + HTML-encoded form
+#    used by Graphviz inside <title> elements, e.g. "<SUBSCRIPTION_ID>...").
+#    Public docs must not leak the customer's subscription id.
+mask_sub_ids() {
+  local f sid encoded
+  for f in "$@"; do
+    [[ -f "$f" ]] || continue
+    for sid in "${SUB_IDS[@]}"; do
+      [[ -z "$sid" ]] && continue
+      encoded="${sid//-/&#45;}"
+      sed -i \
+        -e "s|${sid}|<SUBSCRIPTION_ID>|g" \
+        -e "s|${encoded}|<SUBSCRIPTION_ID>|g" \
+        "$f"
+    done
+  done
+}
+
+mask_sub_ids \
+  "$OUT/$ARCH_FILE_NAME.svg" \
+  "$OUT/$ARCH_FILE_NAME.dot" \
+  "$OUT/graph.json" \
+  "$OUT/logical-edges.json" \
+  "$OUT/resource-roles.tsv" \
+  "$OUT/resource-roles.md"
 
 # 6) Copy SVG to docs (for easy reference in markdown)
 cp "$OUT/$ARCH_FILE_NAME.svg" "$DOCS_DIR/$ARCH_FILE_NAME.svg"
