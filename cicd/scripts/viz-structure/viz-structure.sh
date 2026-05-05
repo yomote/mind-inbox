@@ -737,7 +737,7 @@ PY
 fi
 
 # 5) Mask subscription IDs across generated artifacts (raw GUID + HTML-encoded form
-#    used by Graphviz inside <title> elements, e.g. "<SUBSCRIPTION_ID>...").
+#    used by Graphviz inside <title> elements, where "-" becomes "&#45;").
 #    Public docs must not leak the customer's subscription id.
 mask_sub_ids() {
   local f sid encoded
