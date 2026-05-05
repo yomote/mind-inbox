@@ -101,13 +101,24 @@ if [[ -z "$CA_EXISTS" ]]; then
     --query 'properties.configuration.ingress.fqdn' -o tsv)"
 else
   echo "Updating Container App '$CA_NAME'..."
-  # --system-assigned は update でも必要（MI が未設定の場合に付与する）
+  # MI を system-assigned に（既に有効なら no-op）
+  az containerapp identity assign \
+    --resource-group "$RG" \
+    --name "$CA_NAME" \
+    --system-assigned \
+    --output none
+  # ACR registry を identity 経由で設定（既に設定済みなら no-op）
+  az containerapp registry set \
+    --resource-group "$RG" \
+    --name "$CA_NAME" \
+    --server "${ACR_NAME}.azurecr.io" \
+    --identity system \
+    --output none
   FQDN="$(az containerapp update \
     --resource-group "$RG" \
     --name "$CA_NAME" \
     --image "$IMAGE" \
     --set-env-vars "${ENV_VARS[@]}" \
-    --system-assigned \
     --query 'properties.configuration.ingress.fqdn' -o tsv)"
 fi
 
