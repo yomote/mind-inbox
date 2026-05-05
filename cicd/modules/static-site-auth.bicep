@@ -109,7 +109,20 @@ resource staticSiteEntraAppBootstrap 'Microsoft.Resources/deploymentScripts@2023
 
       CALLBACK_URL="https://$SWA_HOSTNAME/.auth/login/aad/callback"
       LOGOUT_CALLBACK_URL="https://$SWA_HOSTNAME/.auth/logout/aad/callback"
-      APP_OBJECT_ID="$(az ad app show --id "$APP_ID" --query id -o tsv)"
+      # az ad app create 直後は Entra の directory replication が未完了で
+      # az ad app show が NotFound を返すケースがあるため retry でカバーする。
+      APP_OBJECT_ID=""
+      for i in 1 2 3 4 5 6 7 8 9 10; do
+        if APP_OBJECT_ID="$(az ad app show --id "$APP_ID" --query id -o tsv 2>/dev/null)" && [ -n "$APP_OBJECT_ID" ]; then
+          break
+        fi
+        echo "Waiting for Entra app $APP_ID to be queryable (attempt $i/10)..."
+        sleep 3
+      done
+      if [ -z "$APP_OBJECT_ID" ]; then
+        echo "ERROR: Entra app $APP_ID not visible via az ad app show after retries" >&2
+        exit 1
+      fi
       az ad app update \
         --id "$APP_ID" \
         --web-redirect-uris "$CALLBACK_URL" \
