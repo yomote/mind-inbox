@@ -107,6 +107,7 @@ output staticSiteEntraAppObjectId string = infra.outputs.staticSiteEntraAppObjec
 output voicevoxBaseUrl string = infra.outputs.voicevoxBaseUrl
 output openAiEnabled bool = infra.outputs.openAiEnabled
 output openAiEndpoint string = infra.outputs.openAiEndpoint
+output openAiAccountName string = infra.outputs.openAiAccountName
 output openAiDeploymentName string = infra.outputs.openAiDeploymentName
 output acrLoginServer string = infra.outputs.acrLoginServer
 output acrName string = infra.outputs.acrName
