@@ -8,16 +8,22 @@ Endpoints:
   POST /approve  — 承認待ちツール呼び出しの実行 / キャンセル
   GET  /health   — ヘルスチェック
 """
+
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 
 from .config import get_settings
 from .kernel import get_kernel
 from .organizer import organize
 from .planner import generate_plan
-from .repositories import InMemoryApprovalRepository, InMemorySessionRepository
+from .repositories import (
+    ApprovalRepository,
+    InMemoryApprovalRepository,
+    InMemorySessionRepository,
+    SessionRepository,
+)
 from .schemas import (
     ApproveRequest,
     ApproveResponse,
@@ -35,10 +41,20 @@ settings = get_settings()
 logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
 logger = logging.getLogger(__name__)
 
-# PoC: モジュールレベルのシングルトン
+# PoC: モジュールレベルのシングルトン (本番動作用)
 # TODO(PoC): マルチレプリカ環境では Redis に差し替える
-_session_repo = InMemorySessionRepository()
-_approval_repo = InMemoryApprovalRepository()
+_session_repo: SessionRepository = InMemorySessionRepository()
+_approval_repo: ApprovalRepository = InMemoryApprovalRepository()
+
+
+def get_session_repo() -> SessionRepository:
+    """FastAPI Depends provider。test では app.dependency_overrides で差し替える。"""
+    return _session_repo
+
+
+def get_approval_repo() -> ApprovalRepository:
+    """FastAPI Depends provider。test では app.dependency_overrides で差し替える。"""
+    return _approval_repo
 
 
 @asynccontextmanager
@@ -58,13 +74,17 @@ async def health() -> HealthResponse:
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest) -> ChatResponse:
+async def chat(
+    req: ChatRequest,
+    session_repo: SessionRepository = Depends(get_session_repo),
+    approval_repo: ApprovalRepository = Depends(get_approval_repo),
+) -> ChatResponse:
     try:
         return await run_workflow(
             req.session_id,
             req.message,
-            _session_repo,
-            _approval_repo,
+            session_repo,
+            approval_repo,
             get_kernel(),
         )
     except Exception as exc:
@@ -73,9 +93,12 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
 
 @app.post("/organize", response_model=OrganizeResponse)
-async def organize_endpoint(req: OrganizeRequest) -> OrganizeResponse:
+async def organize_endpoint(
+    req: OrganizeRequest,
+    session_repo: SessionRepository = Depends(get_session_repo),
+) -> OrganizeResponse:
     try:
-        return await organize(req.session_id, _session_repo, get_kernel())
+        return await organize(req.session_id, session_repo, get_kernel())
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
@@ -93,13 +116,17 @@ async def plan_endpoint(req: PlanRequest) -> PlanResponse:
 
 
 @app.post("/approve", response_model=ApproveResponse)
-async def approve(req: ApproveRequest) -> ApproveResponse:
+async def approve(
+    req: ApproveRequest,
+    session_repo: SessionRepository = Depends(get_session_repo),
+    approval_repo: ApprovalRepository = Depends(get_approval_repo),
+) -> ApproveResponse:
     try:
         reply = await resume_after_approval(
             req.approval_request_id,
             req.approved,
-            _session_repo,
-            _approval_repo,
+            session_repo,
+            approval_repo,
             get_kernel(),
         )
         return ApproveResponse(reply=reply)

@@ -9,21 +9,9 @@ InMemory* は dev/test stub であり、本番は SQL/Cosmos に置き換わる�
 - 並行アクセスの一貫性 — InMemory は単一プロセス前提
 """
 
-import pytest
 from semantic_kernel.contents import ChatHistory
 
-from app.repositories import InMemoryApprovalRepository, InMemorySessionRepository
 from app.schemas import ApprovalRecord, Plan
-
-
-@pytest.fixture
-def session_repo() -> InMemorySessionRepository:
-    return InMemorySessionRepository()
-
-
-@pytest.fixture
-def approval_repo() -> InMemoryApprovalRepository:
-    return InMemoryApprovalRepository()
 
 
 class TestInMemorySessionRepository:

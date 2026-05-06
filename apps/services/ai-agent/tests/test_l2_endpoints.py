@@ -22,18 +22,17 @@ from httpx import ASGITransport, AsyncClient
 from semantic_kernel.contents import ChatHistory
 
 from app import main as app_main
-from app.main import _approval_repo, _session_repo, app
+from app.main import app, get_approval_repo, get_session_repo
 from app.schemas import ChatResponse
 
 
 @pytest.fixture(autouse=True)
-def reset_repos():
-    """各 test の前後で module-level singleton repo の state をクリア。"""
-    _session_repo._store.clear()
-    _approval_repo._store.clear()
+def override_repos(session_repo, approval_repo):
+    """FastAPI Depends を test 毎の fresh repo で上書きする。"""
+    app.dependency_overrides[get_session_repo] = lambda: session_repo
+    app.dependency_overrides[get_approval_repo] = lambda: approval_repo
     yield
-    _session_repo._store.clear()
-    _approval_repo._store.clear()
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -97,12 +96,12 @@ class TestChat:
 
 class TestOrganize:
     async def test_l2_organize_returns_200_with_existing_session(
-        self, client, monkeypatch, make_kernel
+        self, client, monkeypatch, make_kernel, session_repo
     ):
         # 無いと: organize() の戻り値を FastAPI が JSON で正しく返さない退行が静かに通る
         history = ChatHistory()
         history.add_user_message("仕事が辛い")
-        await _session_repo.save("s1", history)
+        await session_repo.save("s1", history)
 
         kernel = make_kernel(
             json.dumps(
