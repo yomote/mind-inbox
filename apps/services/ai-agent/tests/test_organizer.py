@@ -13,13 +13,7 @@ import pytest
 from semantic_kernel.contents import ChatHistory
 
 from app.organizer import organize
-from app.repositories import InMemorySessionRepository
 from app.schemas import OrganizeResponse
-
-
-@pytest.fixture
-def session_repo() -> InMemorySessionRepository:
-    return InMemorySessionRepository()
 
 
 class TestOrganize:

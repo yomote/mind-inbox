@@ -4,6 +4,18 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app.repositories import InMemoryApprovalRepository, InMemorySessionRepository
+
+
+@pytest.fixture
+def session_repo() -> InMemorySessionRepository:
+    return InMemorySessionRepository()
+
+
+@pytest.fixture
+def approval_repo() -> InMemoryApprovalRepository:
+    return InMemoryApprovalRepository()
+
 
 @pytest.fixture
 def make_kernel():
