@@ -7,24 +7,11 @@
 """
 
 import json
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.planner import generate_plan
 from app.schemas import PlanRequest, PlanResponse
-
-
-def _make_kernel(response_text: str) -> MagicMock:
-    mock_result = MagicMock()
-    mock_result.__str__ = lambda self: response_text
-
-    mock_svc = MagicMock()
-    mock_svc.get_chat_message_content = AsyncMock(return_value=mock_result)
-
-    kernel = MagicMock()
-    kernel.get_service = MagicMock(return_value=mock_svc)
-    return kernel
 
 
 @pytest.fixture
@@ -37,14 +24,16 @@ def basic_request() -> PlanRequest:
 
 
 class TestGeneratePlan:
-    async def test_l1_maps_kernel_response_to_plan_schema(self, basic_request):
+    async def test_l1_maps_kernel_response_to_plan_schema(
+        self, basic_request, make_kernel
+    ):
         # Kernel が返した JSON の各フィールドが PlanResponse に正しく mapping されることを pin する。
         # 無いと: schema フィールドのリネーム/型変更が静かに通り、BFF 側で deserialize が壊れる
         payload = {
             "title": "48時間アクションプラン",
             "steps": ["今日は早く帰る", "信頼できる人に話す", "明日の予定を整理する"],
         }
-        kernel = _make_kernel(json.dumps(payload))
+        kernel = make_kernel(json.dumps(payload))
 
         result = await generate_plan(basic_request, kernel)
 
@@ -53,19 +42,19 @@ class TestGeneratePlan:
             steps=["今日は早く帰る", "信頼できる人に話す", "明日の予定を整理する"],
         )
 
-    async def test_json_inside_markdown_fence(self, basic_request):
+    async def test_json_inside_markdown_fence(self, basic_request, make_kernel):
         payload = {"title": "フェンスプラン", "steps": ["ステップ1"]}
         fenced = f"```json\n{json.dumps(payload)}\n```"
-        kernel = _make_kernel(fenced)
+        kernel = make_kernel(fenced)
 
         result = await generate_plan(basic_request, kernel)
 
         assert result.title == "フェンスプラン"
 
-    async def test_malformed_json_returns_fallback(self, basic_request):
+    async def test_malformed_json_returns_fallback(self, basic_request, make_kernel):
         # LLM が JSON でない文字列を返した時、例外を投げず fallback PlanResponse を返す契約を pin する。
         # 無いと: parse failure 時に 500 で落ちる退行が静かに通り、user に対して generic error が返る
-        kernel = _make_kernel("not valid json")
+        kernel = make_kernel("not valid json")
 
         result = await generate_plan(basic_request, kernel)
 
@@ -75,8 +64,8 @@ class TestGeneratePlan:
             steps=["具体的なステップを考えてみましょう"],
         )
 
-    async def test_partial_json_uses_defaults(self, basic_request):
-        kernel = _make_kernel(json.dumps({"title": "タイトルのみ"}))
+    async def test_partial_json_uses_defaults(self, basic_request, make_kernel):
+        kernel = make_kernel(json.dumps({"title": "タイトルのみ"}))
 
         result = await generate_plan(basic_request, kernel)
 
