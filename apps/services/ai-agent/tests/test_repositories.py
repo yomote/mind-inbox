@@ -1,3 +1,14 @@
+"""[L1] InMemory repository の "状態を跨いだ" 不変条件を pin する。
+
+InMemory* は dev/test stub であり、本番は SQL/Cosmos に置き換わる予定 (#7)。
+本番 repository が実装された時点でこの test 群は **意味を失う** ので、
+本番 repository test の追加と同時に削除する想定。
+
+ここで test しないこと:
+- 単発の get/save (= dict 操作の wrapper) — 本番 repository 実装時の対象
+- 並行アクセスの一貫性 — InMemory は単一プロセス前提
+"""
+
 import pytest
 from semantic_kernel.contents import ChatHistory
 
@@ -16,18 +27,6 @@ def approval_repo() -> InMemoryApprovalRepository:
 
 
 class TestInMemorySessionRepository:
-    async def test_get_missing_returns_none(self, session_repo):
-        result = await session_repo.get("nonexistent")
-        assert result is None
-
-    async def test_save_and_get_roundtrip(self, session_repo):
-        history = ChatHistory()
-        history.add_user_message("hello")
-        await session_repo.save("s1", history)
-
-        fetched = await session_repo.get("s1")
-        assert fetched is history
-
     async def test_save_overwrites(self, session_repo):
         h1 = ChatHistory()
         h2 = ChatHistory()
@@ -48,20 +47,6 @@ class TestInMemorySessionRepository:
 
 
 class TestInMemoryApprovalRepository:
-    async def test_get_missing_returns_none(self, approval_repo):
-        result = await approval_repo.get("nonexistent")
-        assert result is None
-
-    async def test_save_and_get_roundtrip(self, approval_repo):
-        record = ApprovalRecord(
-            session_id="s1",
-            plan=Plan(tool_name="send_reply", is_side_effecting=True),
-        )
-        await approval_repo.save(record)
-
-        fetched = await approval_repo.get(record.id)
-        assert fetched is record
-
     async def test_save_overwrites_on_same_id(self, approval_repo):
         record = ApprovalRecord(
             session_id="s1",

@@ -1,3 +1,12 @@
+"""[L1] organizer の入出力契約と例外パスを pin する。
+
+ここで test しないこと:
+- LLM の組織化品質 (要約の妥当性、感情ラベルの適切さ) — prompt engineering の領域
+- prompt 文面の正しさ — 仕様変更時に false positive を量産する
+- session repository 自体の挙動 — それは test_repositories.py
+- HTTP / FastAPI 経由の通し挙動 — それは L2 (issue #3)
+"""
+
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -28,7 +37,9 @@ def session_repo() -> InMemorySessionRepository:
 
 
 class TestOrganize:
-    async def test_valid_json_response(self, session_repo):
+    async def test_l1_maps_kernel_response_to_response_schema(self, session_repo):
+        # Kernel が返した JSON の各フィールドが OrganizeResponse に正しく mapping されることを pin する。
+        # 無いと: schema フィールドのリネーム/型変更が静かに通り、BFF 側で deserialize が壊れる
         history = ChatHistory()
         history.add_user_message("仕事が辛い")
         history.add_assistant_message("どんなところが辛いですか？")
@@ -43,17 +54,22 @@ class TestOrganize:
 
         result = await organize("s1", session_repo, kernel)
 
-        assert isinstance(result, OrganizeResponse)
-        assert result.summary == "仕事のストレスを感じている"
-        assert result.emotions == ["疲労", "不安"]
-        assert result.priorities == ["休息", "相談"]
+        assert result == OrganizeResponse(
+            summary="仕事のストレスを感じている",
+            emotions=["疲労", "不安"],
+            priorities=["休息", "相談"],
+        )
 
     async def test_json_inside_markdown_fence(self, session_repo):
         history = ChatHistory()
         history.add_user_message("テスト")
         await session_repo.save("s1", history)
 
-        payload = {"summary": "テスト要約", "emotions": ["平静"], "priorities": ["確認"]}
+        payload = {
+            "summary": "テスト要約",
+            "emotions": ["平静"],
+            "priorities": ["確認"],
+        }
         fenced = f"```json\n{json.dumps(payload)}\n```"
         kernel = _make_kernel(fenced)
 
@@ -62,6 +78,8 @@ class TestOrganize:
         assert result.summary == "テスト要約"
 
     async def test_malformed_json_returns_fallback(self, session_repo):
+        # LLM が JSON でない文字列を返した時、例外を投げず fallback OrganizeResponse を返す契約を pin する。
+        # 無いと: parse failure 時に 500 で落ちる退行が静かに通り、user に対して generic error が返る
         history = ChatHistory()
         history.add_user_message("テスト")
         await session_repo.save("s1", history)
@@ -70,9 +88,12 @@ class TestOrganize:
 
         result = await organize("s1", session_repo, kernel)
 
-        assert "エラー" in result.summary
-        assert result.emotions == []
-        assert result.priorities == []
+        # fallback の "形" を全体一致で pin。文言を変える時は test も更新する運用。
+        assert result == OrganizeResponse(
+            summary="整理中にエラーが発生しました。",
+            emotions=[],
+            priorities=[],
+        )
 
     async def test_missing_session_raises_value_error(self, session_repo):
         kernel = _make_kernel("{}")
