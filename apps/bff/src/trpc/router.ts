@@ -10,7 +10,6 @@ import {
 } from "../clients/aiAgentClient";
 import {
   ActionPlanSchema,
-  historyRepository,
   HistoryItemSchema,
   OrganizedResultSchema,
 } from "../repositories/historyRepository";
@@ -147,8 +146,8 @@ const consultationRouter = router({
 // ---- history ---------------------------------------------------------------
 
 const historyRouter = router({
-  list: publicProcedure.query(async () => {
-    return await historyRepository.list();
+  list: publicProcedure.query(async ({ ctx }) => {
+    return await ctx.historyRepo.list();
   }),
 
   save: publicProcedure
@@ -160,7 +159,7 @@ const historyRouter = router({
         plan: ActionPlanSchema,
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const item = HistoryItemSchema.parse({
         id: randomUUID(),
         title: input.title,
@@ -169,7 +168,7 @@ const historyRouter = router({
         plan: input.plan,
       });
       console.log(`[history.save] id=${item.id} title=${item.title}`);
-      return await historyRepository.save(item);
+      return await ctx.historyRepo.save(item);
     }),
 });
 
