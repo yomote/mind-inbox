@@ -3,6 +3,7 @@ OrganizedResult を ActionPlan（タイトル・ステップ）に変換する�
 
 workflow.py の FSM を経由せず、単発の structured LLM 呼び出しで完結する。
 """
+
 from __future__ import annotations
 
 import json

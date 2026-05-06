@@ -6,6 +6,7 @@ PoC では in-memory 実装を使用する。
   InMemorySessionRepository  → Redis
   InMemoryApprovalRepository → Redis（TTL 付き）
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
