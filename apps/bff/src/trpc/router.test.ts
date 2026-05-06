@@ -28,24 +28,23 @@ import {
   organize as organizeAiAgent,
   sendChatMessage,
 } from "../clients/aiAgentClient";
-import { historyRepository, type HistoryItem } from "../repositories/historyRepository";
+import { InMemoryHistoryRepository } from "../repositories/historyRepository";
 import type { TrpcContext } from "./context";
 import { appRouter } from "./router";
 
 // ---- helpers ---------------------------------------------------------------
 
 function makeCaller() {
-  const ctx: TrpcContext = { req: {} as HttpRequest };
+  // historyRepo は test 毎に fresh InMemory を渡して isolation を担保する。
+  const ctx: TrpcContext = {
+    req: {} as HttpRequest,
+    historyRepo: new InMemoryHistoryRepository(),
+  };
   return appRouter.createCaller(ctx);
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // historyRepository は module-level singleton。InMemoryHistoryRepository の
-  // private store を直接リセットする (TS の private は runtime では効かない)。
-  // 将来 historyRepository を TrpcContext に注入する形にリファクタすれば、
-  // ここは ctx に新しい repo を渡すだけで済むようになる。
-  (historyRepository as unknown as { store: HistoryItem[] }).store = [];
 });
 
 // ---- consultation.start ----------------------------------------------------
@@ -222,7 +221,10 @@ describe("[L2] consultation.approve", () => {
 describe("[L2] history", () => {
   it("save then list returns the saved item with generated id and createdAt", async () => {
     // 無いと: history.save の zod schema 検証や id/createdAt 自動付与の退行が静かに通る
-    const saved = await makeCaller().history.save({
+    // makeCaller() ごとに fresh historyRepo が作られるため、save+list は同一 caller で実行する
+    const caller = makeCaller();
+
+    const saved = await caller.history.save({
       sessionId: "s1",
       title: "仕事のストレス",
       result: {
@@ -237,7 +239,7 @@ describe("[L2] history", () => {
     expect(saved.title).toBe("仕事のストレス");
     expect(saved.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
 
-    const list = await makeCaller().history.list();
+    const list = await caller.history.list();
     expect(list).toEqual([saved]);
   });
 });
