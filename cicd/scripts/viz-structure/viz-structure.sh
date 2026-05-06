@@ -279,6 +279,30 @@ jq '
       | add // []
     );
 
+  # CA -> ACR via properties.configuration.registries[].server, joined to ACR.loginServer.
+  def edges_from_ca_registries($items):
+    ($items
+      | map(select((.type|lc) == "microsoft.containerregistry/registries"))
+      | map({
+          key: ((.properties.loginServer // "") | ascii_downcase),
+          value: .id
+        })
+      | from_entries
+    ) as $acrByServer
+    | ($items
+        | map(select((.type|lc) == "microsoft.app/containerapps"))
+        | map(. as $app
+            | (($app.properties.configuration.registries // []) | map(select(.server != null)))
+            | map({
+                from: $app.id,
+                to: ($acrByServer[(.server | ascii_downcase)] // null),
+                rel: "registry"
+              })
+          )
+        | add // []
+        | map(select(.to != null))
+      );
+
   . as $items
   | ($items | map({ key: (.id|lc), value: .id }) | from_entries) as $idmap
   | {
@@ -291,6 +315,7 @@ jq '
           + edges_from_sql_dbs($items)
           + edges_from_static_sites($items)
           + edges_from_container_apps($items)
+          + edges_from_ca_registries($items)
         )
         | map(select(.to != null and (.to|type) == "string" and (.to|length) > 0))
         | map(. as $e
@@ -426,6 +451,29 @@ if bff_uses_voicevox:
         }
       )
 
+# Heuristic 4: Function App (BFF) -> AI Agent Container App
+bff_uses_ai_agent = grep_any(
+  [
+    codebase_root / "apps/bff/src/config.ts",
+    codebase_root / "apps/bff/src/clients/aiAgentClient.ts",
+    codebase_root / "apps/bff/src/trpc/routers/chat.ts",
+  ],
+  [r"AI_AGENT_BASE_URL", r"aiAgentClient", r"ai-agent"],
+)
+if bff_uses_ai_agent:
+  function_apps = find_nodes("microsoft.web/sites", "func-")
+  ai_apps = find_nodes("microsoft.app/containerapps", "ai-agent")
+  for src in function_apps:
+    for dst in ai_apps:
+      logical_edges.append(
+        {
+          "from": src.get("id"),
+          "to": dst.get("id"),
+          "rel": "aiAgentApi",
+          "source": "codebase",
+        }
+      )
+
 # Keep only edges that point to existing nodes.
 node_ids = {n.get("id") for n in nodes}
 logical_edges = [
@@ -464,10 +512,74 @@ ROLE_MAP = {
   "microsoft.app/containerapps": ("App microservice", "Runtime endpoint for service workloads"),
 }
 
+# Per-resource overrides: (type_lc, name_substring_lc, role, note)
+# Resolution: first match wins — list more specific patterns BEFORE general ones.
+# Returning (None, None) means "fall through to ROLE_MAP" (used to short-circuit a generic
+# resource without overriding it; currently unused but kept as an escape hatch).
+NAME_OVERRIDES = [
+  # Container Apps: 3 services, distinct roles
+  ("microsoft.app/containerapps", "ai-agent", "AI Agent service",
+    "FastAPI + Semantic Kernel; orchestrates Azure OpenAI calls and human-in-the-loop tool approval"),
+  ("microsoft.app/containerapps", "vv-wrap", "VOICEVOX wrapper API",
+    "FastAPI; bridges BFF and the VOICEVOX engine, handles audio post-processing"),
+  ("microsoft.app/containerapps", "voicevox", "VOICEVOX TTS engine",
+    "Speech synthesis runtime (open-source VOICEVOX engine)"),
+  # Managed environments: name-based hint about which CA group they host
+  ("microsoft.app/managedenvironments", "ai", "Container app env (AI Agent)",
+    "Hosts AI Agent Container App"),
+  ("microsoft.app/managedenvironments", "vv-wrap", "Container app env (VOICEVOX wrap)",
+    "Hosts VOICEVOX wrapper Container App"),
+  ("microsoft.app/managedenvironments", "voicevox", "Container app env (VOICEVOX engine)",
+    "Hosts VOICEVOX engine Container App"),
+  # Web tier
+  ("microsoft.web/sites", "func-", "BFF (Azure Functions + tRPC)",
+    "Single tRPC entrypoint; orchestrates AI Agent / VOICEVOX wrapper, NOT a chat passthrough"),
+  ("microsoft.web/staticsites", "swa-", "Frontend SPA (React + Vite + MUI)",
+    "SWA Standard SKU; linked-backend proxies /api/* to BFF, built-in Entra auth"),
+  ("microsoft.web/serverfarms", "asp-", "Function App Service plan",
+    "Compute capacity for the BFF Function App"),
+  # Data & secrets
+  ("microsoft.sql/servers/databases", "master", "(SQL system DB)",
+    "Default master DB; not used by the application"),
+  ("microsoft.sql/servers/databases", "sqldb-", "Application database (provisioned, not wired)",
+    "Provisioned for future session/artifact persistence; BFF and AI Agent currently do not reference it"),
+  ("microsoft.sql/servers", "sql-", "Relational DB server (provisioned, not wired)",
+    "SQL infra is fully set up (server + DB + private endpoint + DNS) but no application code references it yet"),
+  ("microsoft.keyvault/vaults", "kv-", "Secrets management (SQL creds)",
+    "Stores SQL admin password and other deployment secrets"),
+  # LLM
+  ("microsoft.cognitiveservices/accounts", "oai-", "Azure OpenAI account",
+    "GPT-4o for AI Agent inference"),
+  # Networking specifics
+  ("microsoft.network/privateendpoints", "pe-sql", "Private endpoint to SQL",
+    "Network-isolated SQL access from within VNet"),
+  ("microsoft.network/networkinterfaces", "pe-sql", "Private endpoint NIC (SQL)",
+    "Auto-created NIC for SQL private endpoint"),
+  ("microsoft.network/privatednszones", "privatelink.database.windows.net", "Private DNS zone (SQL)",
+    "Resolves SQL private endpoint FQDN inside the VNet"),
+  ("microsoft.containerregistry/registries", "cr", "Container image registry",
+    "Stores AI Agent / VOICEVOX wrapper images for Container Apps"),
+  ("microsoft.storage/storageaccounts", "st", "Function runtime storage",
+    "Required by Azure Functions for state/queues/triggers"),
+  ("microsoft.operationalinsights/workspaces", "law-", "Central Log Analytics workspace",
+    "Aggregates logs/metrics from BFF, Container Apps, and platform"),
+  # Bicep deployment artifacts (transient — note this so reader doesn't mistake them for app components)
+  ("microsoft.resources/deploymentscripts", "ds-", "Bicep deployment script (transient)",
+    "Generated by IaC for one-shot tasks (e.g., Entra ID auth setup); safe to ignore in arch view"),
+]
+
+def role_for(node):
+  t = lc(node.get("type"))
+  name = lc((node.get("label") or "").split("\n")[0])
+  for pat_t, pat_n, pat_role, pat_note in NAME_OVERRIDES:
+    if t == pat_t and pat_n in name and pat_role is not None:
+      return (pat_role, pat_note)
+  return ROLE_MAP.get(t, ("General Azure resource", "Role not yet classified"))
+
 rows = []
 for n in sorted(nodes, key=lambda x: (lc(x.get("rg")), lc(x.get("type")), lc(x.get("label")))):
   t = lc(n.get("type"))
-  role, note = ROLE_MAP.get(t, ("General Azure resource", "Role not yet classified"))
+  role, note = role_for(n)
   name = (n.get("label", "").split("\n")[0] if n.get("label") else "")
   rows.append(
     {
@@ -565,17 +677,23 @@ jq -r --arg iconsDir "$ICONS_DIR" --arg generatedAt "$GENERATED_AT_UTC" --arg su
     "server": { color: "#C62828", style: "solid", label: "SQL Parent" },
     "openaiapi": { color: "#1565C0", style: "dashed", label: "OpenAI API" },
     "voicevoxengine": { color: "#2E7D32", style: "dashed", label: "VOICEVOX Engine" },
-    "voicevoxapi": { color: "#6A1B9A", style: "dashed", label: "VOICEVOX API" }
+    "voicevoxapi": { color: "#6A1B9A", style: "dashed", label: "VOICEVOX API" },
+    "aiagentapi": { color: "#1565C0", style: "dashed", label: "AI Agent API" },
+    "registry": { color: "#455A64", style: "dotted", label: "ACR Pull" }
   };
 
   def edge_stmt($e):
     ((edgeStyle[($e.rel|ascii_downcase)] // { color: "#6B7280", style: "solid", label: $e.rel })) as $st
     | "  \"" + ($e.from|esc) + "\" -> \"" + ($e.to|esc)
       + "\" [color=\"" + ($st.color|tostring|esc)
-      + "\", fontcolor=\"" + ($st.color|tostring|esc)
       + "\", style=\"" + ($st.style|tostring|esc)
-      + "\", penwidth=1.2, xlabel=\"" + ($st.label|tostring|esc)
-      + "\"];";
+      + "\", penwidth=1.2"
+      # HTML label with white halo so text stays readable when crossing edges/nodes.
+      + ", xlabel=<<TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLPADDING=\"2\" BGCOLOR=\"white\">"
+      + "<TR><TD><FONT POINT-SIZE=\"8\" FACE=\"Segoe UI\" COLOR=\""
+      + ($st.color|tostring|htmlesc) + "\">"
+      + ($st.label|tostring|htmlesc)
+      + "</FONT></TD></TR></TABLE>>];";
 
   def node_stmt($n):
     (icon_for($n.type)) as $icon
@@ -668,7 +786,7 @@ jq -r --arg iconsDir "$ICONS_DIR" --arg generatedAt "$GENERATED_AT_UTC" --arg su
     "";
 
   "digraph G {",
-  "  graph [rankdir=LR, fontsize=10, fontname=\"Segoe UI\", bgcolor=\"white\", pad=0.25, nodesep=0.4, ranksep=0.85, splines=ortho, overlap=false, concentrate=true];",
+  "  graph [rankdir=LR, fontsize=10, fontname=\"Segoe UI\", bgcolor=\"white\", pad=0.25, nodesep=0.5, ranksep=1.0, splines=true, overlap=false, concentrate=true];",
   "  node  [shape=box, fontsize=10, fontname=\"Segoe UI\", style=rounded, margin=\"0.14,0.08\"];",
   "  edge  [fontsize=8, fontname=\"Segoe UI\", arrowsize=0.7, color=\"#6B7280\"];",
   "  label=\"Mind Inbox Azure Infra Arch\\nGenerated(UTC): " + ($generatedAt|esc) + "\\nScope: subs=" + ($subs|esc) + " | rgs=" + ($rgs|esc) + "\";",
@@ -739,6 +857,9 @@ fi
 # 5) Mask subscription IDs across generated artifacts (raw GUID + HTML-encoded form
 #    used by Graphviz inside <title> elements, where "-" becomes "&#45;").
 #    Public docs must not leak the customer's subscription id.
+#    NOTE: placeholder uses __SUBSCRIPTION_ID__ (not <SUBSCRIPTION_ID>) because
+#    angle brackets are XML reserved chars and break SVG rendering when injected
+#    into <title> elements.
 mask_sub_ids() {
   local f sid encoded
   for f in "$@"; do
@@ -747,8 +868,8 @@ mask_sub_ids() {
       [[ -z "$sid" ]] && continue
       encoded="${sid//-/&#45;}"
       sed -i \
-        -e "s|${sid}|<SUBSCRIPTION_ID>|g" \
-        -e "s|${encoded}|<SUBSCRIPTION_ID>|g" \
+        -e "s|${sid}|__SUBSCRIPTION_ID__|g" \
+        -e "s|${encoded}|__SUBSCRIPTION_ID__|g" \
         "$f"
     done
   done
