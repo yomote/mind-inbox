@@ -177,9 +177,21 @@ cd apps/bff && npm run test -- --watch
 2. npm run test:contract  ← L0
 3. npm run test:fast       ← L1 + L2 (並列)
 4. npm run test:e2e        ← L3
+5. build summary           ← レイヤ別 pass/fail を Markdown で生成
+6. sticky PR comment       ← 同 Markdown を PR に常駐コメント (header: test-summary)
+7. fail if any layer failed
 ```
 
+各レイヤは `continue-on-error: true` で実行し、最後にまとめて結果を集計してから fail させる。これにより「L0 が落ちたから L2 の状況が見えない」を防ぐ。
+
+サマリは 2 か所に出力される:
+
+- **GitHub Actions の Step Summary** — 該当 run のページに常時表示
+- **PR の sticky comment** — `marocchino/sticky-pull-request-comment` で同じ内容を PR conversation に投稿。次回 push で同 header のコメントを上書きするので肥大化しない
+
 main ブランチ保護で 2〜4 を必須チェックに設定する。
+
+> **現状 (2026-05 時点)**: L0/L3/BFF/Frontend/VOICEVOX は placeholder script (`echo + exit 0`) で実装済み。各 issue (#1, #2, #4) が着地した時点で placeholder を実コマンドに差し替えるだけで CI が活きる。
 
 ---
 
@@ -193,6 +205,8 @@ main ブランチ保護で 2〜4 を必須チェックに設定する。
 
 ### 6.2 PR セルフチェックリスト (エージェントに渡す)
 
+`.github/PULL_REQUEST_TEMPLATE.md` に同じ内容が組み込まれている (PR を開くと自動表示) ので、エージェントには「テンプレートを埋めてから push する」と指示すれば足りる。
+
 ```markdown
 - [ ] `npm run test:fast` がローカルで緑
 - [ ] 新機能なら L2 を最低 1 本追加した
@@ -201,7 +215,21 @@ main ブランチ保護で 2〜4 を必須チェックに設定する。
 - [ ] 新しいモックを増やしていない (既存 fixture を再利用)
 ```
 
-### 6.3 テストが落ちた時の切り分け順序
+PR テンプレートには加えて **「テスト設計セクション」** (対象レイヤ / 追加 or 変更したテスト / あえてテストしないこと) を必須化している。これにより人間レビュアーは PR を開いた最初の画面で "agent が何を どこに 書いた/書かなかったか" を把握できる。
+
+### 6.3 テスト追加 issue を立てるとき
+
+`.github/ISSUE_TEMPLATE/test.md` を使う (Issue 作成画面で「テスト追加 / 変更」を選択)。テンプレートが要求する項目:
+
+- レイヤ (L0〜L4)
+- 目的 (どんな回帰を捕まえるか)
+- 対象 (関数 / mutation / endpoint / シナリオ)
+- **あえてテストしないこと** — スコープ外を明示することでレビュー時の論点を作る
+- 完了条件
+
+これにより agent に着手させる前に、人間が「テスト設計」を査収できる。
+
+### 6.4 テストが落ちた時の切り分け順序
 
 ```
 落ちたテスト名のプレフィックスを見る:
