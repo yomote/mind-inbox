@@ -1,0 +1,105 @@
+name: test
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: test (L0 / L1+L2 / L3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install root deps
+        run: npm ci
+
+      - name: Install bff deps
+        run: npm --prefix apps/bff ci
+
+      - name: Install frontend deps
+        run: pnpm --dir apps/frontend install --frozen-lockfile
+
+      - name: Sync ai-agent (with dev deps)
+        working-directory: apps/services/ai-agent
+        run: uv sync --dev
+
+      - name: L0 contract
+        id: l0
+        continue-on-error: true
+        run: npm run test:contract
+
+      - name: L1+L2 fast (parallel BFF / Frontend / Python)
+        id: fast
+        continue-on-error: true
+        run: npm run test:fast
+
+      - name: L3 e2e
+        id: e2e
+        continue-on-error: true
+        run: npm run test:e2e
+
+      - name: Build summary
+        run: |
+          fmt() {
+            case "$1" in
+              success) echo "pass" ;;
+              failure) echo "FAIL" ;;
+              skipped) echo "skip" ;;
+              *)       echo "$1" ;;
+            esac
+          }
+          {
+            echo "## テスト実行結果"
+            echo ""
+            echo "| Layer | Status | コマンド |"
+            echo "| --- | --- | --- |"
+            echo "| L0 contract | $(fmt ${{ steps.l0.outcome }}) | \`npm run test:contract\` |"
+            echo "| L1+L2 fast  | $(fmt ${{ steps.fast.outcome }}) | \`npm run test:fast\` |"
+            echo "| L3 e2e      | $(fmt ${{ steps.e2e.outcome }}) | \`npm run test:e2e\` |"
+            echo ""
+            echo "詳細は各 Step のログを参照。未実装レイヤは placeholder (exit 0) のため pass 表示になります。"
+            echo ""
+            echo "戦略: [docs/testing/strategy.md](https://github.com/yomote/mind-inbox/blob/main/docs/testing/strategy.md)"
+          } | tee pr-comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Sticky PR comment
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: test-summary
+          path: pr-comment.md
+
+      - name: Fail if any layer failed
+        run: |
+          if [ "${{ steps.l0.outcome }}" != "success" ] || \
+             [ "${{ steps.fast.outcome }}" != "success" ] || \
+             [ "${{ steps.e2e.outcome }}" != "success" ]; then
+            echo "::error::One or more test layers failed"
+            exit 1
+          fi
