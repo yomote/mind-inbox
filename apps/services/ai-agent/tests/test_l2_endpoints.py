@@ -16,7 +16,6 @@ HTTP レイヤをバイパスし FastAPI を in-process に叩く。
 """
 
 import json
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -25,17 +24,6 @@ from semantic_kernel.contents import ChatHistory
 from app import main as app_main
 from app.main import _approval_repo, _session_repo, app
 from app.schemas import ChatResponse
-
-
-def _make_kernel(response_text: str) -> MagicMock:
-    """Kernel mock: chat service が response_text を返すように構成する。"""
-    mock_result = MagicMock()
-    mock_result.__str__ = lambda self: response_text
-    mock_svc = MagicMock()
-    mock_svc.get_chat_message_content = AsyncMock(return_value=mock_result)
-    kernel = MagicMock()
-    kernel.get_service = MagicMock(return_value=mock_svc)
-    return kernel
 
 
 @pytest.fixture(autouse=True)
@@ -109,14 +97,14 @@ class TestChat:
 
 class TestOrganize:
     async def test_l2_organize_returns_200_with_existing_session(
-        self, client, monkeypatch
+        self, client, monkeypatch, make_kernel
     ):
         # 無いと: organize() の戻り値を FastAPI が JSON で正しく返さない退行が静かに通る
         history = ChatHistory()
         history.add_user_message("仕事が辛い")
         await _session_repo.save("s1", history)
 
-        kernel = _make_kernel(
+        kernel = make_kernel(
             json.dumps(
                 {
                     "summary": "仕事のストレス",
@@ -136,10 +124,10 @@ class TestOrganize:
         }
 
     async def test_l2_organize_returns_404_when_session_not_found(
-        self, client, monkeypatch
+        self, client, monkeypatch, make_kernel
     ):
         # 無いと: ValueError → HTTPException(404) マッピングが切れて 500 を返す退行が静かに通る
-        kernel = _make_kernel("{}")
+        kernel = make_kernel("{}")
         monkeypatch.setattr(app_main, "get_kernel", lambda: kernel)
 
         res = await client.post("/organize", json={"session_id": "nonexistent"})
@@ -151,9 +139,11 @@ class TestOrganize:
 
 
 class TestPlan:
-    async def test_l2_plan_returns_200_with_valid_input(self, client, monkeypatch):
+    async def test_l2_plan_returns_200_with_valid_input(
+        self, client, monkeypatch, make_kernel
+    ):
         # 無いと: generate_plan() の戻り値を FastAPI が JSON で正しく返さない退行が静かに通る
-        kernel = _make_kernel(
+        kernel = make_kernel(
             json.dumps({"title": "プラン", "steps": ["step1", "step2"]})
         )
         monkeypatch.setattr(app_main, "get_kernel", lambda: kernel)
