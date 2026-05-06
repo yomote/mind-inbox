@@ -11,12 +11,22 @@
     "lint:py": "uv run --directory apps/services/ai-agent ruff check .. && uv run --directory apps/services/ai-agent ruff format --check ..",
     "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#**/dist\" \"#**/.serena\" \"#**/.playwright-mcp\" \"#**/artifacts\"",
     "format": "prettier --write . && uv run --directory apps/services/ai-agent ruff format ..",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "test": "npm-run-all2 --serial test:contract test:fast test:e2e",
+    "test:fast": "npm-run-all2 --parallel test:bff test:frontend test:python",
+    "test:bff": "echo 'placeholder: tests not yet implemented (issue #2)' && exit 0",
+    "test:frontend": "echo 'placeholder: tests not yet implemented (issue #2)' && exit 0",
+    "test:python": "npm-run-all2 --parallel test:py:ai-agent test:py:voicevox",
+    "test:py:ai-agent": "uv run --directory apps/services/ai-agent pytest --tb=short",
+    "test:py:voicevox": "echo 'placeholder: tests not yet implemented (issue #2)' && exit 0",
+    "test:contract": "echo 'placeholder: contract tests not yet implemented (issue #1)' && exit 0",
+    "test:e2e": "echo 'placeholder: e2e tests not yet implemented (issue #4)' && exit 0"
   },
   "devDependencies": {
     "husky": "^9.1.7",
     "lint-staged": "^15.5.1",
     "markdownlint-cli2": "^0.18.1",
+    "npm-run-all2": "^7.0.2",
     "prettier": "^3.4.2"
   },
   "engines": {
