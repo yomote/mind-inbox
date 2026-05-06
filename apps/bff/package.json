@@ -10,7 +10,9 @@
     "start": "npm run build && func start",
     "dev": "concurrently \"npm run build:watch\" \"func start --port 7071\"",
     "lint": "eslint src",
-    "clean": "rimraf dist"
+    "clean": "rimraf dist",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@azure/functions": "^4.5.0",
@@ -24,7 +26,8 @@
     "eslint": "^10.3.0",
     "rimraf": "^6.0.0",
     "typescript": "^5.4.5",
-    "typescript-eslint": "^8.59.1"
+    "typescript-eslint": "^8.59.1",
+    "vitest": "^2.1.9"
   },
   "engines": {
     "node": ">=22"

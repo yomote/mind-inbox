@@ -14,7 +14,7 @@
     "format:check": "prettier --check .",
     "test": "npm-run-all2 --serial test:contract test:fast test:e2e",
     "test:fast": "npm-run-all2 --parallel test:bff test:frontend test:python",
-    "test:bff": "echo 'placeholder: tests not yet implemented (issue #2)' && exit 0",
+    "test:bff": "npm --prefix apps/bff test",
     "test:frontend": "echo 'placeholder: tests not yet implemented (issue #2)' && exit 0",
     "test:python": "npm-run-all2 --parallel test:py:ai-agent test:py:voicevox",
     "test:py:ai-agent": "uv run --directory apps/services/ai-agent pytest --tb=short",
