@@ -1,0 +1,6 @@
+# pnpm 10+ reads build-script and other settings from here (no longer from the
+# "pnpm" field in package.json). Allow the native packages that ship a build
+# step so esbuild / SWC binaries are available for vite.
+onlyBuiltDependencies:
+  - "@swc/core"
+  - esbuild
