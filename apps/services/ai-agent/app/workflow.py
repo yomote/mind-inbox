@@ -6,6 +6,7 @@ State transitions:
        → APPROVAL_IF_NEEDED  (side-effecting tool: pause, return to caller)
        → EXECUTE_TOOL → RESPOND
 """
+
 from __future__ import annotations
 
 import json

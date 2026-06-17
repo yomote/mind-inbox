@@ -9,7 +9,7 @@
     "lint:bff": "npm --prefix apps/bff run lint",
     "lint:frontend": "pnpm --dir apps/frontend run lint",
     "lint:py": "uv run --directory apps/services/ai-agent ruff check .. && uv run --directory apps/services/ai-agent ruff format --check ..",
-    "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#**/dist\" \"#**/.serena\" \"#**/.playwright-mcp\" \"#**/artifacts\"",
+    "lint:md": "markdownlint-cli2 \"**/*.md\" \"#**/node_modules\" \"#**/dist\" \"#**/.serena\" \"#**/.playwright-mcp\" \"#**/artifacts\" \"#**/.venv\"",
     "format": "prettier --write . && uv run --directory apps/services/ai-agent ruff format ..",
     "format:check": "prettier --check .",
     "test": "npm-run-all2 --serial test:contract test:fast test:e2e",

@@ -3,6 +3,7 @@ Semantic Kernel のシングルトン。
 
 workflow / organizer / planner が共有する。
 """
+
 from __future__ import annotations
 
 import logging
@@ -49,6 +50,7 @@ def _build_kernel() -> Kernel:
                     DefaultAzureCredential,
                     get_bearer_token_provider,
                 )
+
                 token_provider = get_bearer_token_provider(
                     DefaultAzureCredential(),
                     "https://cognitiveservices.azure.com/.default",
