@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 # ── API schemas ───────────────────────────────────────────────────────────────
 
+
 class ChatRequest(BaseModel):
     session_id: str = Field(..., description="Session identifier")
     message: str = Field(..., description="User message")
@@ -33,6 +34,7 @@ class HealthResponse(BaseModel):
 
 # ── Internal workflow schemas ─────────────────────────────────────────────────
 
+
 class Plan(BaseModel):
     needs_retrieval: bool = False
     tool_name: Optional[str] = None
@@ -49,6 +51,7 @@ class ApprovalRecord(BaseModel):
 
 
 # ── Organize / Plan schemas ───────────────────────────────────────────────────
+
 
 class OrganizeRequest(BaseModel):
     session_id: str = Field(..., description="Session identifier")

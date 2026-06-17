@@ -20,19 +20,23 @@ class _ToolEntry(NamedTuple):
 
 # ── Read-only tools ───────────────────────────────────────────────────────────
 
+
 class ReadOnlyPlugin:
     @kernel_function(name="search_faq", description="Search FAQ knowledge base")
     async def search_faq(self, query: str) -> str:
         logger.info("Tool[search_faq] query=%r", query)
         return f"[stub] FAQ result for '{query}': No relevant FAQ found."
 
-    @kernel_function(name="get_inbox_stats", description="Get inbox statistics (read-only)")
+    @kernel_function(
+        name="get_inbox_stats", description="Get inbox statistics (read-only)"
+    )
     async def get_inbox_stats(self, user_id: str = "default") -> str:
         logger.info("Tool[get_inbox_stats] user=%r", user_id)
         return "[stub] Inbox: 5 unread, 2 flagged, 0 urgent."
 
 
 # ── Side-effecting tools ──────────────────────────────────────────────────────
+
 
 class SideEffectPlugin:
     @kernel_function(name="send_reply", description="Send a reply to a message")
@@ -52,10 +56,14 @@ READONLY_PLUGIN = ReadOnlyPlugin()
 SIDEEFFECT_PLUGIN = SideEffectPlugin()
 
 _REGISTRY: dict[str, _ToolEntry] = {
-    "search_faq":      _ToolEntry(fn=READONLY_PLUGIN.search_faq,       side_effecting=False),
-    "get_inbox_stats": _ToolEntry(fn=READONLY_PLUGIN.get_inbox_stats,   side_effecting=False),
-    "send_reply":      _ToolEntry(fn=SIDEEFFECT_PLUGIN.send_reply,      side_effecting=True),
-    "archive_message": _ToolEntry(fn=SIDEEFFECT_PLUGIN.archive_message, side_effecting=True),
+    "search_faq": _ToolEntry(fn=READONLY_PLUGIN.search_faq, side_effecting=False),
+    "get_inbox_stats": _ToolEntry(
+        fn=READONLY_PLUGIN.get_inbox_stats, side_effecting=False
+    ),
+    "send_reply": _ToolEntry(fn=SIDEEFFECT_PLUGIN.send_reply, side_effecting=True),
+    "archive_message": _ToolEntry(
+        fn=SIDEEFFECT_PLUGIN.archive_message, side_effecting=True
+    ),
 }
 
 
