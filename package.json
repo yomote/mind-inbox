@@ -19,7 +19,7 @@
     "test:python": "npm-run-all2 --parallel test:py:ai-agent test:py:voicevox",
     "test:py:ai-agent": "uv run --directory apps/services/ai-agent pytest --tb=short",
     "test:py:voicevox": "echo 'placeholder: tests not yet implemented (issue #2)' && exit 0",
-    "test:contract": "echo 'placeholder: contract tests not yet implemented (issue #1)' && exit 0",
+    "test:contract": "node --experimental-strip-types --no-warnings apps/bff/scripts/contract-check.mjs",
     "test:e2e": "echo 'placeholder: e2e tests not yet implemented (issue #4)' && exit 0"
   },
   "devDependencies": {
