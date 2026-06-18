@@ -1,0 +1,107 @@
+# 運用保守エージェント (B1 診断 + B2 PR 提案)
+#
+# 仕組みと判断: docs/adr/0006-autonomous-ops-agent-via-github-oidc.md
+# 初期セットアップ:  docs/runbooks/ops-agent-azure-oidc-setup.md
+#
+# Azure へは OIDC ワークロード ID フェデレーションで認証する (保存シークレットなし)。
+# 権限は rg-dev-mind-inbox スコープの Reader 限定。エージェントは Azure へ書き込まない。
+# 異常を見つけたら GitHub Issue を立て、直す案があれば PR を出す。実適用は人の merge 経由。
+name: ops-agent
+
+on:
+  schedule:
+    - cron: "0 21 * * *" # 毎日 06:00 JST (21:00 UTC) — 定期ヘルスチェック
+  workflow_dispatch:
+    inputs:
+      focus:
+        description: "重点的に見たい観点 (任意。例: コスト / Container App の health / 直近デプロイ)"
+        required: false
+        type: string
+
+# 同時実行を 1 本に制限 (重複 Issue/PR を防ぐ)
+concurrency:
+  group: ops-agent
+  cancel-in-progress: false
+
+permissions:
+  id-token: write # OIDC トークン発行 (azure/login)
+  contents: write # PR 用ブランチ作成 (B2)
+  pull-requests: write # PR 作成 (B2)
+  issues: write # Issue 作成 (B1)
+
+jobs:
+  diagnose:
+    name: diagnose & propose (Reader only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # federated credential の subject はこの環境名に縛られている (Runbook step 2/5)
+    environment: azure-ops
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # OIDC でログイン。client/tenant/subscription は機密でないので vars で渡す。
+      - name: Azure login (OIDC, no secret)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # エージェントに渡す土台データを Reader 権限で収集する。
+      - name: Collect Azure status (read-only)
+        env:
+          RG: rg-dev-mind-inbox
+        run: |
+          mkdir -p .ops-agent
+          {
+            echo "# Azure status snapshot ($(date -u +%FT%TZ))"
+            echo
+            echo "## Resources in $RG"
+            az resource list -g "$RG" -o table || echo "(resource list failed)"
+            echo
+            echo "## Container Apps"
+            az containerapp list -g "$RG" \
+              --query "[].{name:name, runningStatus:properties.runningStatus, replicas:properties.template.scale}" \
+              -o json 2>/dev/null || echo "(no container apps / not permitted)"
+            echo
+            echo "## Function Apps state"
+            az functionapp list -g "$RG" \
+              --query "[].{name:name, state:state, defaultHostName:defaultHostName}" \
+              -o json 2>/dev/null || echo "(no function apps)"
+            echo
+            echo "## Static Web Apps"
+            az staticwebapp list -g "$RG" \
+              --query "[].{name:name, defaultHostname:defaultHostname}" \
+              -o json 2>/dev/null || echo "(no static web apps)"
+          } | tee .ops-agent/status.md
+
+      # Claude Code に診断させ、Issue (B1) / PR (B2) を起こさせる。
+      # az の Reader セッションと GITHUB_TOKEN はこのステップでも有効。
+      #
+      # NOTE: action のバージョン/入力名は最新リリースに合わせてピン留めし直すこと。
+      #       (anthropic_api_key / prompt の入力仕様は action README で要確認)
+      - name: Run ops agent (diagnose -> Issue / propose -> PR)
+        uses: anthropics/claude-code-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            あなたは Mind Inbox の運用保守エージェントです。権限は Azure に対して
+            Reader のみ。Azure へ書き込む操作 (再起動/スケール/削除/デプロイ) は
+            絶対に実行しないでください。
+
+            手順:
+            1. `.ops-agent/status.md` のスナップショットを読む。
+            2. 必要なら追加の **読み取り専用** `az ... show/list` を実行して掘り下げる。
+            3. 重点観点 (任意): "${{ inputs.focus }}"
+            4. 異常・劣化・コスト懸念・設定ドリフトを見つけたら:
+               - 事象ごとに GitHub Issue を 1 件立てる (B1)。既存の重複 Issue があれば
+                 新規作成せずコメントで更新する。
+               - リポジトリ内の設定 / IaC (Bicep) / コードで直せる提案があれば、
+                 修正ブランチを切って PR を出す (B2)。PR 本文に根拠 (どの status から
+                 何を読み取ったか) を必ず書く。
+            5. 異常がなければ Issue も PR も作らず、ジョブログに "no action" と出力して終了する。
+
+            重要: 変更の実適用は人間の merge を通す。あなたは提案までに留めること。
