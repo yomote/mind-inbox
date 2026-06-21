@@ -84,4 +84,4 @@ Option C は無人書き込みの blast radius が大きく、いずれにせよ
 - 関連 Runbook: [claude-web-azure-access.md](../runbooks/claude-web-azure-access.md)
 - スクリプト正本: `cicd/scripts/cloud-env/setup.sh`
 - 見送った無人案の設計記録: PR #29 (closed)
-- docs: https://code.claude.com/docs/en/claude-code-on-the-web#network-access
+- docs: <https://code.claude.com/docs/en/claude-code-on-the-web#network-access>

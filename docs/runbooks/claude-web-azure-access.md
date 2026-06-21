@@ -104,4 +104,4 @@ az account set --subscription "<subscription-name-or-id>"
 
 - スクリプト正本: [`cicd/scripts/cloud-env/setup.sh`](../../cicd/scripts/cloud-env/setup.sh)
 - ADR: [0006 Azure アクセスは device-code を主とする](../adr/0006-azure-access-via-device-code.md)
-- docs: https://code.claude.com/docs/en/claude-code-on-the-web#network-access
+- docs: <https://code.claude.com/docs/en/claude-code-on-the-web#network-access>
