@@ -44,7 +44,10 @@ Chosen option: **"Option B"**。
 ### Negative Consequences
 
 - 緊急の自動修復 (例: 即時再起動) はできない — 必ず人の merge を挟む
-- エージェント実行のために GitHub 側に 1 つだけ静的シークレット (`ANTHROPIC_API_KEY`) が残る (将来 Bedrock/Vertex の OIDC で解消可能、別 ADR 候補)
+- エージェント実行のために GitHub 側に 1 つだけ静的シークレット (`ANTHROPIC_API_KEY`) を置く。これは意図的な判断:
+  - このキーを OIDC で消すには Bedrock(AWS) / Vertex(GCP) へのフェデレーションが必要で、**Azure とは別のクラウドを 1 つ常設依存に追加**することになる (Azure に Claude の一級サービスは無い)
+  - 当該キーはインフラ権限ではなく課金付き API キーで、漏洩時の blast radius が Azure 資格情報とは別物。よって「クラウド 2 個目の依存」より「GitHub Secret 1 個」を選ぶ
+  - 緩和策: このワークフロー専用キーを発行 / 支出上限を設定 / 定期ローテーション / 環境 `azure-ops` に承認者を付ける
 - Reader では取得できないメトリクス/ログ系は、後日スコープを足す判断が要る
 
 ## Pros and Cons of the Options
