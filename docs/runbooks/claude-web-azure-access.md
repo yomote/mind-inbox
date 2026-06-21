@@ -42,8 +42,9 @@ Claude Code on the web の開発セッション内から、実 Azure リソー�
 
 ### 2. Setup script に az インストールを仕込む (同じダイアログ → Setup script)
 
-正本: [`cicd/scripts/cloud-env/setup-azure-cli.sh`](../../cicd/scripts/cloud-env/setup-azure-cli.sh)。
-このファイルの中身を **Setup script 欄に貼り付ける**。
+正本: [`cicd/scripts/cloud-env/setup.sh`](../../cicd/scripts/cloud-env/setup.sh)。
+このファイルの中身を **Setup script 欄に貼り付ける** (Azure CLI は中の 1 セクション。今後ツールが
+増えたら同ファイルにセクションを追記する)。
 
 > Network access か Setup script を変更すると、次セッションで setup script が再実行され
 > キャッシュが作り直される (docs の Environment caching)。1 回 az が入れば以降は高速。
@@ -92,7 +93,7 @@ az account set --subscription "<subscription-name-or-id>"
 ### `az: command not found`
 
 - 原因: setup script 未設定、または egress/script 変更後にセッションを開き直していない。
-- 対処: Setup script 欄に `setup-azure-cli.sh` の内容を貼り、新セッションで再実行させる。
+- 対処: Setup script 欄に `setup.sh` の内容を貼り、新セッションで再実行させる。
 
 ### device-code のコードを承認しても進まない
 
@@ -101,6 +102,6 @@ az account set --subscription "<subscription-name-or-id>"
 
 ## Related
 
-- スクリプト正本: [`cicd/scripts/cloud-env/setup-azure-cli.sh`](../../cicd/scripts/cloud-env/setup-azure-cli.sh)
+- スクリプト正本: [`cicd/scripts/cloud-env/setup.sh`](../../cicd/scripts/cloud-env/setup.sh)
 - ADR: [0006 運用保守エージェント (無人方式・今回は不採用)](../adr/0006-autonomous-ops-agent-via-github-oidc.md)
 - docs: https://code.claude.com/docs/en/claude-code-on-the-web#network-access
