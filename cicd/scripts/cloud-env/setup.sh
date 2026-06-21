@@ -38,7 +38,10 @@ install_azure_cli() {
     return 0
   fi
   echo "[azure-cli] インストール開始..."
-  apt-get update
+  # ベースイメージに既存の PPA (deadsnakes/ondrej 等 = ppa.launchpadcontent.net) があり、
+  # それが egress allowlist 外で 403 になる。Azure とは無関係なので update 全体は失敗させず
+  # 続行する (必要な ubuntu 本体 / packages.microsoft.com は通る)。az 入手可否は末尾で検証。
+  apt-get update || true
   apt-get install -y ca-certificates curl gnupg
   install -d -m 0755 /etc/apt/keyrings
   curl -sSL https://packages.microsoft.com/keys/microsoft.asc \
@@ -46,7 +49,7 @@ install_azure_cli() {
   chmod a+r /etc/apt/keyrings/microsoft.gpg
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ noble main" \
     > /etc/apt/sources.list.d/azure-cli.list
-  apt-get update
+  apt-get update || true  # 同上: 既存 PPA の 403 で update 全体を落とさない
   apt-get install -y azure-cli
   az version
   echo "[azure-cli] 完了。'az login --use-device-code' でログイン可能。"
