@@ -66,10 +66,9 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 
 ## 既存 ADR
 
-(初期 5 本は #11 で起こす)
-
-- 0001 — BFF を tRPC で書く判断
-- 0002 — Container Apps (scale-to-zero) を選択した判断
-- 0003 — bootstrap → config の 2-phase Bicep IaC
-- 0004 — `mockApi.ts` を frontend mock の唯一の真実とする
-- 0005 — UI 仕様は MDX が真実、実装が乖離したら実装を直す
+- [0001](0001-bff-as-trpc-not-rest.md) — BFF を REST ではなく tRPC で書く
+- [0002](0002-container-apps-not-aks.md) — サービス基盤に AKS ではなく Container Apps (scale-to-zero) を選ぶ
+- [0003](0003-two-phase-bicep.md) — IaC を bootstrap → config の 2-phase Bicep に分ける
+- [0004](0004-mockapi-as-frontend-truth.md) — `mockApi.ts` を Frontend モックの唯一の真実とする
+- [0005](0005-mdx-ui-spec-as-truth.md) — UI 仕様は MDX が真実、実装が乖離したら実装を直す
+- [0006](0006-azure-access-via-device-code.md) — 開発・運用での Azure アクセスは device-code を主とする
