@@ -30,5 +30,8 @@ cicd/modules/*.json
 # Generated SVGs
 docs/cicd/iac/*.svg
 
+# Generated OpenAPI (真実は実装側。生成器の出力をそのまま commit — #8 / #9)
+docs/api/*.yaml
+
 # Don't reformat the basic_design's mermaid blocks etc — keep authorial control
 docs/design/basic_design.md

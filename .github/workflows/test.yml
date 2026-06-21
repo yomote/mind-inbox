@@ -165,6 +165,16 @@ jobs:
         continue-on-error: true
         run: pnpm --dir apps/frontend run build
 
+      - name: Docs OpenAPI (BFF) regen + diff
+        id: openapi_bff
+        continue-on-error: true
+        run: |
+          npm run docs:openapi:bff
+          git diff --exit-code docs/api/bff-trpc.yaml || {
+            echo "::error::docs/api/bff-trpc.yaml が router の zod schema と乖離しています。ローカルで 'npm run docs:openapi:bff' を実行して commit してください。"
+            exit 1
+          }
+
       - name: Build summary
         run: |
           fmt() {
@@ -183,6 +193,7 @@ jobs:
             echo "| Lint (BFF / Frontend / Python / Markdown) | $(fmt ${{ steps.lint.outcome }}) | \`npm run lint\` |"
             echo "| Build BFF (tsc)                            | $(fmt ${{ steps.build_bff.outcome }}) | \`npm --prefix apps/bff run build\` |"
             echo "| Build Frontend (tsc + vite)                | $(fmt ${{ steps.build_frontend.outcome }}) | \`pnpm --dir apps/frontend run build\` |"
+            echo "| OpenAPI (BFF) 再生成 + diff                 | $(fmt ${{ steps.openapi_bff.outcome }}) | \`npm run docs:openapi:bff\` |"
             echo ""
             echo "戦略: [docs/testing/strategy.md §5.3](https://github.com/yomote/mind-inbox/blob/main/docs/testing/strategy.md)"
           } | tee lint-build-comment.md >> "$GITHUB_STEP_SUMMARY"
@@ -198,7 +209,8 @@ jobs:
         run: |
           if [ "${{ steps.lint.outcome }}" != "success" ] || \
              [ "${{ steps.build_bff.outcome }}" != "success" ] || \
-             [ "${{ steps.build_frontend.outcome }}" != "success" ]; then
+             [ "${{ steps.build_frontend.outcome }}" != "success" ] || \
+             [ "${{ steps.openapi_bff.outcome }}" != "success" ]; then
             echo "::error::Lint or build check failed"
             exit 1
           fi

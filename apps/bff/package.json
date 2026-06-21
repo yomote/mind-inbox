@@ -11,6 +11,7 @@
     "dev": "concurrently \"npm run build:watch\" \"func start --port 7071\"",
     "lint": "eslint src",
     "clean": "rimraf dist",
+    "docs:openapi": "npm run build && node scripts/generate-openapi.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -28,6 +29,7 @@
     "typescript": "^5.4.5",
     "typescript-eslint": "^8.59.1",
     "vitest": "^2.1.9",
+    "yaml": "^2.9.0",
     "zod-to-json-schema": "^3.25.2"
   },
   "engines": {
