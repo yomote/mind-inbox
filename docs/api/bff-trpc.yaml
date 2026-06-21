@@ -1,0 +1,438 @@
+openapi: 3.0.3
+info:
+  title: Mind Inbox BFF (tRPC)
+  version: 0.1.0
+  description: |-
+    **自動生成 — 手書き編集禁止**。真実は apps/bff/src/trpc/router.ts の zod schema。
+    再生成: `npm run docs:openapi`。BFF は単一 tRPC エントリポイント (/api/trpc/{path}) で、ここでは 1 procedure = 1 operation として表現している (ADR 0001)。
+paths:
+  /api/trpc/consultation.approve:
+    post:
+      operationId: consultation.approve
+      tags:
+        - consultation
+      summary: consultation.approve
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reply:
+                    type: string
+                required:
+                  - reply
+                additionalProperties: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                approvalRequestId:
+                  type: string
+                  minLength: 1
+                approved:
+                  type: boolean
+              required:
+                - approvalRequestId
+                - approved
+              additionalProperties: false
+  /api/trpc/consultation.createPlan:
+    post:
+      operationId: consultation.createPlan
+      tags:
+        - consultation
+      summary: consultation.createPlan
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  title:
+                    type: string
+                  steps:
+                    type: array
+                    items:
+                      type: string
+                required:
+                  - title
+                  - steps
+                additionalProperties: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                result:
+                  type: object
+                  properties:
+                    summary:
+                      type: string
+                    emotions:
+                      type: array
+                      items:
+                        type: string
+                    priorities:
+                      type: array
+                      items:
+                        type: string
+                  required:
+                    - summary
+                    - emotions
+                    - priorities
+                  additionalProperties: false
+              required:
+                - result
+              additionalProperties: false
+  /api/trpc/consultation.organize:
+    post:
+      operationId: consultation.organize
+      tags:
+        - consultation
+      summary: consultation.organize
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  summary:
+                    type: string
+                  emotions:
+                    type: array
+                    items:
+                      type: string
+                  priorities:
+                    type: array
+                    items:
+                      type: string
+                required:
+                  - summary
+                  - emotions
+                  - priorities
+                additionalProperties: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sessionId:
+                  type: string
+                  minLength: 1
+              required:
+                - sessionId
+              additionalProperties: false
+  /api/trpc/consultation.sendMessage:
+    post:
+      operationId: consultation.sendMessage
+      tags:
+        - consultation
+      summary: consultation.sendMessage
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reply:
+                    type: string
+                  requiresApproval:
+                    type: boolean
+                  approvalRequestId:
+                    type: string
+                    nullable: true
+                  citations:
+                    type: array
+                    items:
+                      type: string
+                required:
+                  - reply
+                  - requiresApproval
+                  - approvalRequestId
+                  - citations
+                additionalProperties: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sessionId:
+                  type: string
+                  minLength: 1
+                message:
+                  type: string
+                  minLength: 1
+              required:
+                - sessionId
+                - message
+              additionalProperties: false
+  /api/trpc/consultation.start:
+    post:
+      operationId: consultation.start
+      tags:
+        - consultation
+      summary: consultation.start
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      title:
+                        type: string
+                      messages:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            role:
+                              type: string
+                              enum:
+                                - user
+                                - assistant
+                            text:
+                              type: string
+                            createdAt:
+                              type: string
+                          required:
+                            - id
+                            - role
+                            - text
+                            - createdAt
+                          additionalProperties: false
+                    required:
+                      - id
+                      - title
+                      - messages
+                    additionalProperties: false
+                required:
+                  - session
+                additionalProperties: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                concern:
+                  type: string
+                  minLength: 1
+              required:
+                - concern
+              additionalProperties: false
+  /api/trpc/health.ping:
+    get:
+      operationId: health.ping
+      tags:
+        - health
+      summary: health.ping
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    enum:
+                      - true
+                required:
+                  - ok
+                additionalProperties: false
+  /api/trpc/history.list:
+    get:
+      operationId: history.list
+      tags:
+        - history
+      summary: history.list
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    title:
+                      type: string
+                    createdAt:
+                      type: string
+                    result:
+                      type: object
+                      properties:
+                        summary:
+                          type: string
+                        emotions:
+                          type: array
+                          items:
+                            type: string
+                        priorities:
+                          type: array
+                          items:
+                            type: string
+                      required:
+                        - summary
+                        - emotions
+                        - priorities
+                      additionalProperties: false
+                    plan:
+                      type: object
+                      properties:
+                        title:
+                          type: string
+                        steps:
+                          type: array
+                          items:
+                            type: string
+                      required:
+                        - title
+                        - steps
+                      additionalProperties: false
+                  required:
+                    - id
+                    - title
+                    - createdAt
+                    - result
+                    - plan
+                  additionalProperties: false
+  /api/trpc/history.save:
+    post:
+      operationId: history.save
+      tags:
+        - history
+      summary: history.save
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  title:
+                    type: string
+                  createdAt:
+                    type: string
+                  result:
+                    type: object
+                    properties:
+                      summary:
+                        type: string
+                      emotions:
+                        type: array
+                        items:
+                          type: string
+                      priorities:
+                        type: array
+                        items:
+                          type: string
+                    required:
+                      - summary
+                      - emotions
+                      - priorities
+                    additionalProperties: false
+                  plan:
+                    type: object
+                    properties:
+                      title:
+                        type: string
+                      steps:
+                        type: array
+                        items:
+                          type: string
+                    required:
+                      - title
+                      - steps
+                    additionalProperties: false
+                required:
+                  - id
+                  - title
+                  - createdAt
+                  - result
+                  - plan
+                additionalProperties: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sessionId:
+                  type: string
+                  minLength: 1
+                title:
+                  type: string
+                  minLength: 1
+                result:
+                  type: object
+                  properties:
+                    summary:
+                      type: string
+                    emotions:
+                      type: array
+                      items:
+                        type: string
+                    priorities:
+                      type: array
+                      items:
+                        type: string
+                  required:
+                    - summary
+                    - emotions
+                    - priorities
+                  additionalProperties: false
+                plan:
+                  type: object
+                  properties:
+                    title:
+                      type: string
+                    steps:
+                      type: array
+                      items:
+                        type: string
+                  required:
+                    - title
+                    - steps
+                  additionalProperties: false
+              required:
+                - sessionId
+                - title
+                - result
+                - plan
+              additionalProperties: false

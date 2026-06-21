@@ -21,12 +21,31 @@ const publicProcedure = t.procedure;
 
 // ---- shared schemas --------------------------------------------------------
 
-type ChatMessage = {
-  id: string;
-  role: "user" | "assistant";
-  text: string;
-  createdAt: string;
-};
+const ChatMessageSchema = z.object({
+  id: z.string(),
+  role: z.enum(["user", "assistant"]),
+  text: z.string(),
+  createdAt: z.string(),
+});
+
+const SessionSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  messages: z.array(ChatMessageSchema),
+});
+
+const ChatReplySchema = z.object({
+  reply: z.string(),
+  requiresApproval: z.boolean(),
+  approvalRequestId: z.string().nullable(),
+  citations: z.array(z.string()),
+});
+
+const ApproveResultSchema = z.object({
+  reply: z.string(),
+});
+
+type ChatMessage = z.infer<typeof ChatMessageSchema>;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -41,7 +60,7 @@ function deriveTitle(concern: string): string {
 // ---- health ----------------------------------------------------------------
 
 const healthRouter = router({
-  ping: publicProcedure.query(() => {
+  ping: publicProcedure.output(z.object({ ok: z.literal(true) })).query(() => {
     return { ok: true as const };
   }),
 });
@@ -51,6 +70,7 @@ const healthRouter = router({
 const consultationRouter = router({
   start: publicProcedure
     .input(z.object({ concern: z.string().min(1) }))
+    .output(z.object({ session: SessionSchema }))
     .mutation(async ({ input }) => {
       const sessionId = randomUUID();
       console.log(`[consultation.start] sessionId=${sessionId}`);
@@ -91,6 +111,7 @@ const consultationRouter = router({
         message: z.string().min(1),
       }),
     )
+    .output(ChatReplySchema)
     .mutation(async ({ input }) => {
       console.log(`[consultation.sendMessage] sessionId=${input.sessionId}`);
 
@@ -109,6 +130,7 @@ const consultationRouter = router({
 
   organize: publicProcedure
     .input(z.object({ sessionId: z.string().min(1) }))
+    .output(OrganizedResultSchema)
     .mutation(async ({ input }) => {
       console.log(`[consultation.organize] sessionId=${input.sessionId}`);
       return await organizeAiAgent({ sessionId: input.sessionId });
@@ -116,6 +138,7 @@ const consultationRouter = router({
 
   createPlan: publicProcedure
     .input(z.object({ result: OrganizedResultSchema }))
+    .output(ActionPlanSchema)
     .mutation(async ({ input }) => {
       console.log(`[consultation.createPlan]`);
       return await createPlanAiAgent({
@@ -132,6 +155,7 @@ const consultationRouter = router({
         approved: z.boolean(),
       }),
     )
+    .output(ApproveResultSchema)
     .mutation(async ({ input }) => {
       console.log(
         `[consultation.approve] approvalRequestId=${input.approvalRequestId} approved=${input.approved}`,
@@ -146,9 +170,11 @@ const consultationRouter = router({
 // ---- history ---------------------------------------------------------------
 
 const historyRouter = router({
-  list: publicProcedure.query(async ({ ctx }) => {
-    return await ctx.historyRepo.list();
-  }),
+  list: publicProcedure
+    .output(z.array(HistoryItemSchema))
+    .query(async ({ ctx }) => {
+      return await ctx.historyRepo.list();
+    }),
 
   save: publicProcedure
     .input(
@@ -159,6 +185,7 @@ const historyRouter = router({
         plan: ActionPlanSchema,
       }),
     )
+    .output(HistoryItemSchema)
     .mutation(async ({ input, ctx }) => {
       const item = HistoryItemSchema.parse({
         id: randomUUID(),

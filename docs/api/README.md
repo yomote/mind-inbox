@@ -6,11 +6,20 @@
 
 ## ファイル構成
 
-| ファイル        | 真実の所在                                     | 生成方法                             | 関連 issue                                          |
-| --------------- | ---------------------------------------------- | ------------------------------------ | --------------------------------------------------- |
-| `bff-trpc.yaml` | `apps/bff/src/trpc/router.ts` の zod schema    | `trpc-to-openapi` 等で router → YAML | [#8](https://github.com/yomote/mind-inbox/issues/8) |
-| `ai-agent.yaml` | `apps/services/ai-agent/app/main.py` (FastAPI) | `app.openapi()` を YAML 化           | [#9](https://github.com/yomote/mind-inbox/issues/9) |
-| `voicevox.yaml` | `apps/services/voicevox/app/main.py` (FastAPI) | 同上                                 | [#9](https://github.com/yomote/mind-inbox/issues/9) |
+| ファイル        | 真実の所在                                     | 生成方法                                          | 関連 issue                                          |
+| --------------- | ---------------------------------------------- | ------------------------------------------------- | --------------------------------------------------- |
+| `bff-trpc.yaml` | `apps/bff/src/trpc/router.ts` の zod schema    | `npm run docs:openapi:bff` (router introspection) | [#8](https://github.com/yomote/mind-inbox/issues/8) |
+| `ai-agent.yaml` | `apps/services/ai-agent/app/main.py` (FastAPI) | `app.openapi()` を YAML 化                        | [#9](https://github.com/yomote/mind-inbox/issues/9) |
+| `voicevox.yaml` | `apps/services/voicevox/app/main.py` (FastAPI) | 同上                                              | [#9](https://github.com/yomote/mind-inbox/issues/9) |
+
+### `bff-trpc.yaml` の生成方式
+
+`apps/bff/scripts/generate-openapi.mjs` が tRPC router を introspection し、各 procedure の
+`.input()` / `.output()` zod schema を `zod-to-json-schema` で OpenAPI 化する。
+`trpc-to-openapi` は使わない — BFF は単一 tRPC エントリポイントで REST を公開しないため
+([ADR 0001](../adr/0001-bff-as-trpc-not-rest.md))、各 procedure を `1 procedure = 1 operation`
+として `/api/trpc/{path}` に素直にマップする。レスポンス仕様を保つため router の各 procedure には
+`.output()` を付与している (出力 schema の真実も router に集約)。
 
 ## 更新フロー
 
