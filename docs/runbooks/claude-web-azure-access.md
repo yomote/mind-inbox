@@ -5,8 +5,8 @@
 Claude Code on the web の開発セッション内から、実 Azure リソースの状況確認や操作を
 `az` で直接行いたいとき。無人の定期チェックではなく、**開発者が居るセッションでの対話的な利用**が対象。
 
-> 無人・自動の運用保守エージェント (GitHub Actions + OIDC) を組む場合は別方針。
-> 経緯は ADR [0006](../adr/0006-autonomous-ops-agent-via-github-oidc.md) と PR #29 (クローズ済) を参照。
+> 無人・自動の運用保守エージェント (GitHub Actions + OIDC) は今回見送り。
+> 判断は ADR [0006](../adr/0006-azure-access-via-device-code.md)、見送った設計の記録は PR #29 (クローズ済) を参照。
 
 ## なぜこの方式か
 
@@ -103,5 +103,5 @@ az account set --subscription "<subscription-name-or-id>"
 ## Related
 
 - スクリプト正本: [`cicd/scripts/cloud-env/setup.sh`](../../cicd/scripts/cloud-env/setup.sh)
-- ADR: [0006 運用保守エージェント (無人方式・今回は不採用)](../adr/0006-autonomous-ops-agent-via-github-oidc.md)
+- ADR: [0006 Azure アクセスは device-code を主とする](../adr/0006-azure-access-via-device-code.md)
 - docs: https://code.claude.com/docs/en/claude-code-on-the-web#network-access
