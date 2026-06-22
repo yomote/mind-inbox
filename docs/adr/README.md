@@ -72,4 +72,4 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0004](0004-mockapi-as-frontend-truth.md) — `mockApi.ts` を Frontend モックの唯一の真実とする
 - [0005](0005-mdx-ui-spec-as-truth.md) — UI 仕様は MDX が真実、実装が乖離したら実装を直す
 - [0006](0006-azure-access-via-device-code.md) — 開発・運用での Azure アクセスは device-code を主とする
-- [0007](0007-problem-centric-two-layer-domain-model.md) — 困りごとを Problem 集約とする 2層ドメインモデル (Mention → Problem) — *Proposed*
+- [0007](0007-problem-centric-two-layer-domain-model.md) — 困りごとを Problem 集約とする 2層ドメインモデル (Mention → Problem)
