@@ -366,6 +366,8 @@ class PlanResponse(BaseModel):
 
 ## 4. データモデル
 
+> **v1 で集約ルートを転換**: 困りごとを Session 中心から **Problem 中心の 2層モデル（Mention → Problem）** に変更する（[ADR 0007](../adr/0007-problem-centric-two-layer-domain-model.md) / [`domain_model.md`](./domain_model.md)）。v1 のドメインモデルの真実は `domain_model.md`。以下の型は **PoC 実装の記録**であり、`OrganizedResult.priorities` 等は v1 で Mention / Problem に置き換わる。
+
 ```typescript
 type ChatRole = "user" | "assistant";
 
@@ -859,6 +861,7 @@ Wrapper の URL 管理は BFF に一元化される。
 | RAG がスタブ | 知識ベースを使えない | Azure AI Search + Embedding |
 | ツールがスタブ | 副作用操作が実行されない | 実ツール実装 + 承認フロー UI |
 | セッションタイトルが concern 文字列そのまま | 長文がタイトルになる | AI による短縮タイトル生成 |
+| 困りごとが Session 内に閉じる（`priorities: string[]`） | 継続テーマ・再出現が見えない | Problem 中心 2層モデルへ転換（[ADR 0007](../adr/0007-problem-centric-two-layer-domain-model.md)） |
 
 ### 10.2 拡張ロードマップ
 
@@ -869,17 +872,28 @@ PoC（現フェーズ）
  ├─ TTS（BFF /api/tts 経由で VOICEVOX Wrapper に統一）
  └─ Repository I/F の定義（in-memory 実装）
 
+v1: Problem 中心モデル（ADR 0007 / requirements.md・use_cases.md・domain_model.md）
+ ├─ 2層ドメイン（Mention → Problem）へ転換
+ ├─ Dump → Mention 抽出（段1）/ 自動グルーピング（段2）
+ ├─ Problem の蓄積・横断閲覧・棚卸し・テーマ分類（固定7分類 + 未分類）
+ └─ 永続化（下記 Phase 2 と統合）
+
 Phase 2: 永続化
+ ├─ Mention / Problem → Azure Cosmos DB
  ├─ Session → Azure Cache for Redis
- ├─ History → Azure Cosmos DB
- └─ history.list / history.save の本実装
+ └─ 意味類似グルーピング（embedding）の本実装
 
 Phase 3: 知識・ツール
  ├─ RAG（Azure AI Search + text-embedding-3-small）
  ├─ 実ツール実装（ノート保存、リマインダー等）
  └─ 承認フロー UI の整備
 
-Phase 4: 本番品質
+Phase 4: プロアクティブ（requirements.md §2.2 で切り出し）
+ ├─ 定期的な自動再グルーピング / 棚卸し（スケジューラ）
+ ├─ AI による状況ウォッチ & アナウンス
+ └─ 思想転換の ADR（プロアクティブ抑制 → 能動アナウンス）
+
+Phase 5: 本番品質
  ├─ shared types パッケージ化（packages/types）
  ├─ E2E テスト整備
  └─ AI セッションタイトル自動生成

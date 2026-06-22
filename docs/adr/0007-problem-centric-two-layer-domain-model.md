@@ -1,6 +1,6 @@
 # 0007. 困りごとを Problem 集約とする 2層ドメインモデル (Mention → Problem)
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-22
 - Deciders: omoteforlab
 - Consulted: —
