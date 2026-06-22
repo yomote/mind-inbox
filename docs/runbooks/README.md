@@ -50,6 +50,8 @@ Runbook PR は実際にその手順を**踏んだ人**が書くか、レビュ�
 
 ## 既存 Runbook
 
+- `claude-pr-review.md` — Claude PR 自動レビュー (LLM-as-a-judge) の有効化・停止・トラブルシュート
+
 (初期 4 本は #12 で起こす)
 
 - `deploy.md` — `deploy-all.sh` の前提・流れ・検証
