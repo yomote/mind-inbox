@@ -37,7 +37,9 @@ jobs:
       - name: Claude PR review
         uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Pro/Max サブスク枠を使い従量課金を避ける (claude setup-token で発行)。
+          # API 従量課金で回したい場合は次行を anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }} に差し替える。
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # judge は毎 PR 走るのでコスト重視で Sonnet を既定にする。
           # 深いレビューが要る場合は claude-opus-4-8 に上げてよい。
           claude_args: |

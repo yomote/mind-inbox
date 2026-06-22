@@ -9,20 +9,33 @@ diff を戦略 doc・設計・PR テンプレ整合の 3 軸でレビューす�
 ## Prerequisites
 
 - リポジトリの **Settings → Secrets and variables → Actions** への書き込み権限 (admin)
-- Anthropic API キー (<https://console.anthropic.com/> で発行) — 従量課金が発生する
+- 認証はどちらか:
+  - **既定 (推奨)**: Claude Pro/Max サブスク枠を使う OAuth トークン — 追加の従量課金なし。レート上限は個人サブスクと共有
+  - **代替**: Anthropic API キー (<https://console.anthropic.com/>) — 従量課金が発生する
 - 審査基準は [`.github/claude/review-rubric.md`](../../.github/claude/review-rubric.md)
 - ワークフロー定義は [`.github/workflows/claude-review.yml`](../../.github/workflows/claude-review.yml)
 
 ## Steps
 
-1. Anthropic API キーをリポジトリ Secret に登録する (キー名は `ANTHROPIC_API_KEY` 固定)。
+1. 認証トークンをリポジトリ Secret に登録する。
+
+   **既定: サブスク枠 OAuth トークン (従量課金なし)**
 
    ```bash
-   # gh CLI を使う場合
-   gh secret set ANTHROPIC_API_KEY --repo yomote/mind-inbox
-   # → プロンプトに API キーを貼り付け
+   # ローカルで Pro/Max にログイン済みの Claude Code から発行
+   claude setup-token
+   # → 出力されたトークンを Secret に登録 (キー名は CLAUDE_CODE_OAUTH_TOKEN 固定)
+   gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo yomote/mind-inbox
    ```
 
+   **代替: API 従量課金で回す場合**
+
+   ```bash
+   gh secret set ANTHROPIC_API_KEY --repo yomote/mind-inbox   # → API キーを貼り付け
+   ```
+
+   この場合は `.github/workflows/claude-review.yml` の `claude_code_oauth_token:` 行を
+   `anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}` に差し替える。
    GUI なら Settings → Secrets and variables → Actions → New repository secret。
 
 2. `anthropics/claude-code-action` を GitHub Actions が利用できることを確認する
@@ -56,8 +69,9 @@ diff を戦略 doc・設計・PR テンプレ整合の 3 軸でレビューす�
 
 ### ワークフローは走るがコメントが付かない
 
-- 原因: `ANTHROPIC_API_KEY` 未設定、または `permissions: pull-requests: write` 欠如。
-- 対処: Secret の登録を確認。ジョブログで API 認証エラーが出ていないか確認。
+- 原因: 認証 Secret (`CLAUDE_CODE_OAUTH_TOKEN` または `ANTHROPIC_API_KEY`) 未設定 / 失効、
+  または `permissions: pull-requests: write` 欠如。
+- 対処: Secret の登録を確認。OAuth トークンは失効するので、認証エラー時は `claude setup-token` で再発行。
 
 ### コメントが push のたびに増えていく
 
