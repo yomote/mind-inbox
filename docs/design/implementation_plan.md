@@ -2,6 +2,8 @@
 
 作成: 2026-05-02 / 対象: `docs/design/basic_design.md` を実装に落とすロードマップ
 
+> **注**: 本書は **PoC（一気通貫疎通）** の実装計画。Problem 中心 2層モデル（v1）への移行は [`implementation_plan_v1.md`](./implementation_plan_v1.md)（ADR 0007）を参照。
+
 ---
 
 ## 0. 前提と方針
