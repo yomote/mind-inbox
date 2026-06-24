@@ -73,6 +73,31 @@ cicd/scripts/ci/rotate-claude-token.sh
 - 完全自動化はできない: `claude setup-token` の OAuth 認可だけは仕様上どうしても人手が要る (それがトークンの安全性の根拠でもある)。
 - 再発行後、次回 health check が成功すれば Issue は self-heal でクローズされる。
 
+## セキュリティ (公開リポジトリ)
+
+このリポジトリは public。秘密情報の扱いで守るべき不変条件:
+
+- **トリガーは `pull_request` のまま。`pull_request_target` に変えない。**
+  `pull_request_target` は base ブランチの権限 + Secret + write 権限で untrusted な PR の
+  文脈を実行する。judge は PR の diff・本文 (= 攻撃者が書ける入力) を読むので、
+  prompt injection と Secret 窃取が組み合わさる典型的な穴になる。絶対に切り替えない。
+- **fork PR では走らない (設計どおり)。** `pull_request` では fork からの PR に Secret が
+  渡らない (GitHub 仕様)。`claude-review.yml` は `head.repo.full_name == github.repository`
+  で同一リポジトリのブランチに限定し、外部 PR では起動しない。
+  → 外部コントリビュータの PR は自動レビュー対象外。レビューしたい場合は信頼した上で
+  ブランチを本リポジトリに取り込む / 手動で `gh workflow run` する。
+- **GitHub 側の設定を確認** (Settings → Actions → General):
+  - "Fork pull request workflows from outside collaborators" は
+    *Require approval for first-time / all outside collaborators* にしておく。
+  - Workflow permissions は read 既定にし、必要な write はワークフロー側の `permissions:` で個別付与
+    (本ワークフローは既にそうしている)。
+- **Secret = write 権限者なら誰でも読める。** public/private を問わず、write 権限を持つ
+  collaborator はブランチに細工したワークフローを push すれば Secret を抜ける。
+  → write 権限は信頼できる人だけに絞る。複数メンテナがいる公開リポジトリなら、
+  個人アカウントを背負う `CLAUDE_CODE_OAUTH_TOKEN` より、
+  **spend limit を付けた `ANTHROPIC_API_KEY` (scoped・revocable・課金上限あり)** の方が
+  漏洩時の被害を限定できる。ソロ運用なら OAuth のままで問題ない。
+
 ## Rollback
 
 レビューを止めたい / コストを抑えたい場合:

@@ -26,8 +26,14 @@ jobs:
     name: claude judge
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # draft PR はレビューしない (cost 抑制)。Ready for review にした時点で synchronize で走る。
-    if: github.event.pull_request.draft == false
+    # 公開リポジトリ向けガード:
+    #  - draft はレビューしない (cost 抑制)
+    #  - fork からの PR では走らせない。fork PR には Secret が渡らない (GitHub 仕様) ため
+    #    認証が空で必ず失敗し、外部 PR に赤 X を付けるだけになる。同一リポジトリの
+    #    ブランチ (自分 / collaborator) の PR にのみ反応させる。
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
 
     steps:
       - uses: actions/checkout@v4
