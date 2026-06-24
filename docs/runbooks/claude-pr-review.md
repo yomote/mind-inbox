@@ -56,6 +56,23 @@ diff を戦略 doc・設計・PR テンプレ整合の 3 軸でレビューす�
 - [ ] 同じ PR に再 push しても**コメントが増殖せず**、既存サマリが更新される
 - [ ] blocker / major 指摘がある場合、該当行に inline comment が付く
 
+## トークンのローテーション (半自動)
+
+`CLAUDE_CODE_OAUTH_TOKEN` は定期失効する。手動で気づくのではなく、検知と再発行を半自動化している。
+
+**検知 (自動)**: `claude-token-health` ワークフローが週次 (月曜 00:00 UTC) でトークンの死活を確認する。
+失効していたら `claude-token-rotation` ラベル付きの Issue を立てる。手動確認は `gh workflow run claude-token-health.yml`。
+
+**再発行 (ワンコマンド)**: 検知 Issue が来たらローカルで実行する。
+
+```bash
+cicd/scripts/ci/rotate-claude-token.sh
+```
+
+- ブラウザで Pro/Max 認可 (←唯一の人手) → 表示されたトークンを貼り付け → Secret 更新 → 検知 Issue 自動クローズ、まで自動。
+- 完全自動化はできない: `claude setup-token` の OAuth 認可だけは仕様上どうしても人手が要る (それがトークンの安全性の根拠でもある)。
+- 再発行後、次回 health check が成功すれば Issue は self-heal でクローズされる。
+
 ## Rollback
 
 レビューを止めたい / コストを抑えたい場合:
@@ -92,7 +109,9 @@ diff を戦略 doc・設計・PR テンプレ整合の 3 軸でレビューす�
 ## Related
 
 - 審査基準: [`.github/claude/review-rubric.md`](../../.github/claude/review-rubric.md)
-- ワークフロー: [`.github/workflows/claude-review.yml`](../../.github/workflows/claude-review.yml)
+- レビュー ワークフロー: [`.github/workflows/claude-review.yml`](../../.github/workflows/claude-review.yml)
+- トークン死活監視: [`.github/workflows/claude-token-health.yml`](../../.github/workflows/claude-token-health.yml)
+- ローテーション スクリプト: `cicd/scripts/ci/rotate-claude-token.sh`
 - テスト CI (役割分担の相手): [`.github/workflows/test.yml`](../../.github/workflows/test.yml)
 - テスト戦略: [`docs/testing/strategy.md`](../testing/strategy.md)
 - ドキュメント戦略: [`docs/documentation/strategy.md`](../documentation/strategy.md)

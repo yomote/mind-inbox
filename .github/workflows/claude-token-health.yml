@@ -1,0 +1,89 @@
+name: claude-token-health
+
+# CLAUDE_CODE_OAUTH_TOKEN は定期失効する。失効に PR レビューの失敗で気づくのは遅いので、
+# 週次でトークンの生死を最小コストで確認し、死んでいたらローテーション依頼 Issue を立てる。
+# 生き返ったら Issue を自動クローズする (self-heal)。
+# 再発行手順: cicd/scripts/ci/rotate-claude-token.sh
+
+on:
+  schedule:
+    - cron: "0 0 * * 1" # 毎週月曜 00:00 UTC
+  workflow_dispatch: {} # 手動でも叩ける
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  health:
+    name: token health check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # 実際にトークンで 1 回モデル呼び出しを試す = 最も確実な死活判定。
+      # 失敗してもジョブは止めず、後段で Issue 起票/クローズを分岐する。
+      - name: Ping Claude with the token
+        id: ping
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: |
+            --model claude-sonnet-4-6
+            --max-turns 1
+            --allowedTools ""
+          prompt: "Reply with exactly: OK"
+
+      - name: Open rotation issue (token looks dead)
+        if: steps.ping.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # ラベルが無ければ作る (初回のみ)。
+          gh label create claude-token-rotation --repo "$REPO" \
+            --color B60205 --description "CLAUDE_CODE_OAUTH_TOKEN のローテーションが必要" 2>/dev/null || true
+
+          existing="$(gh issue list --repo "$REPO" --label claude-token-rotation --state open \
+            --json number --jq '.[0].number')"
+          body="$(cat <<EOF
+          \`CLAUDE_CODE_OAUTH_TOKEN\` での認証付き呼び出しが失敗しました。トークン失効の可能性が高いです。
+
+          **対処:** ローカルで以下を実行してローテーションしてください。
+
+          \`\`\`bash
+          cicd/scripts/ci/rotate-claude-token.sh
+          \`\`\`
+
+          更新後、この Issue はスクリプトが自動でクローズします (または次回 health check で self-heal)。
+
+          - 失敗した health check: $RUN_URL
+          - 手順詳細: docs/runbooks/claude-pr-review.md
+          EOF
+          )"
+          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body "再チェックでも失敗しました。$RUN_URL"
+            echo "既存 Issue #$existing に追記しました"
+          else
+            gh issue create --repo "$REPO" --label claude-token-rotation \
+              --title "🔑 CLAUDE_CODE_OAUTH_TOKEN のローテーションが必要" --body "$body"
+          fi
+
+      - name: Close rotation issue (token healthy)
+        if: steps.ping.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          existing="$(gh issue list --repo "$REPO" --label claude-token-rotation --state open \
+            --json number --jq '.[0].number' 2>/dev/null || true)"
+          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            gh issue close "$existing" --repo "$REPO" \
+              --comment "health check が成功しました。トークンは有効です。自動クローズします。"
+            echo "Issue #$existing をクローズしました"
+          else
+            echo "トークンは有効です (オープン中の検知 Issue なし)"
+          fi
