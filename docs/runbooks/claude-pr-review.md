@@ -109,6 +109,16 @@ cicd/scripts/ci/rotate-claude-token.sh
 
 ## Common Issues
 
+### 新規追加直後、ジョブは success なのにレビューが付かない (最重要)
+
+- 症状: ログに `Skipping action due to workflow validation ... must exist and have
+  identical content to the version on the repository's default branch`。
+- 原因: `claude-code-action` の改ざん防止機構。レビュー用ワークフローが**デフォルトブランチ
+  (`main`) に同一内容で存在しない限り action は自分をスキップする** (PR 内でワークフローを
+  書き換えて悪用する攻撃の防止)。新規追加時や `claude-review.yml` 自体を変更した PR では必ず起きる。
+- 対処: この PR を `main` にマージする。以降、ワークフローを変更しない通常の PR では正常に走る。
+  動作確認は**マージ後に別の小さな PR を立てる**こと。
+
 ### ワークフローは走るがコメントが付かない
 
 - 原因: 認証 Secret (`CLAUDE_CODE_OAUTH_TOKEN` または `ANTHROPIC_API_KEY`) 未設定 / 失効、
