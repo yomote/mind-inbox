@@ -9,39 +9,28 @@ diff を戦略 doc・設計・PR テンプレ整合の 3 軸でレビューす�
 ## Prerequisites
 
 - リポジトリの **Settings → Secrets and variables → Actions** への書き込み権限 (admin)
-- 認証はどちらか:
-  - **既定 (推奨)**: Claude Pro/Max サブスク枠を使う OAuth トークン — 追加の従量課金なし。レート上限は個人サブスクと共有
-  - **代替**: Anthropic API キー (<https://console.anthropic.com/>) — 従量課金が発生する
+- Anthropic API キー (<https://console.anthropic.com/>) — **すべて web で完結 / ローカル作業不要 / 失効なし**。
+  コストは Console の **spend limit** で上限を固定できる (従量課金だが低頻度ソロなら数十円/月レベル)
 - 審査基準は [`.github/claude/review-rubric.md`](../../.github/claude/review-rubric.md)
 - ワークフロー定義は [`.github/workflows/claude-review.yml`](../../.github/workflows/claude-review.yml)
 
 ## Steps
 
-1. 認証トークンをリポジトリ Secret に登録する。
+1. Anthropic Console で **API キーを発行**し、念のため **spend limit (例: 月 $5)** を設定する
+   (<https://console.anthropic.com/> → API Keys / Limits)。
 
-   **既定: サブスク枠 OAuth トークン (従量課金なし)**
-
-   ```bash
-   # ローカルで Pro/Max にログイン済みの Claude Code から発行
-   claude setup-token
-   # → 出力されたトークンを Secret に登録 (キー名は CLAUDE_CODE_OAUTH_TOKEN 固定)
-   gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo yomote/mind-inbox
-   ```
-
-   **代替: API 従量課金で回す場合**
+2. キーを GitHub Secret に登録する (キー名は `ANTHROPIC_API_KEY` 固定)。
+   GUI: Settings → Secrets and variables → Actions → New repository secret → web 上で貼るだけ。
 
    ```bash
-   gh secret set ANTHROPIC_API_KEY --repo yomote/mind-inbox   # → API キーを貼り付け
+   # gh CLI を使う場合
+   gh secret set ANTHROPIC_API_KEY --repo yomote/mind-inbox   # → キーを貼り付け
    ```
 
-   この場合は `.github/workflows/claude-review.yml` の `claude_code_oauth_token:` 行を
-   `anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}` に差し替える。
-   GUI なら Settings → Secrets and variables → Actions → New repository secret。
+3. このワークフローを `main` にマージする (改ざん防止のため `claude-code-action` は
+   default branch に同一内容で存在するまで自分をスキップする。Common Issues 参照)。
 
-2. `anthropics/claude-code-action` を GitHub Actions が利用できることを確認する
-   (public action なので追加設定は不要。Org でサードパーティ action を制限している場合のみ許可登録)。
-
-3. 適当な PR を開く / 既存 PR に push して `claude-review` ワークフローが起動するか確認する。
+4. マージ後、別の小さな PR を立てて `claude-review` が起動するか確認する。
 
    ```bash
    gh run list --repo yomote/mind-inbox --workflow claude-review.yml
@@ -56,22 +45,18 @@ diff を戦略 doc・設計・PR テンプレ整合の 3 軸でレビューす�
 - [ ] 同じ PR に再 push しても**コメントが増殖せず**、既存サマリが更新される
 - [ ] blocker / major 指摘がある場合、該当行に inline comment が付く
 
-## トークンのローテーション (半自動)
+## 認証 (API キー) について
 
-`CLAUDE_CODE_OAUTH_TOKEN` は定期失効する。手動で気づくのではなく、検知と再発行を半自動化している。
+`ANTHROPIC_API_KEY` を採用している。理由:
 
-**検知 (自動)**: `claude-token-health` ワークフローが週次 (月曜 00:00 UTC) でトークンの死活を確認する。
-失効していたら `claude-token-rotation` ラベル付きの Issue を立てる。手動確認は `gh workflow run claude-token-health.yml`。
+- **ローカル作業ゼロ**: 発行も登録も web で完結 (OAuth トークンの `claude setup-token` のような
+  ローカルのブラウザ認可が不要)。
+- **失効しない**: 定期ローテーションが不要。検知ワークフロー等のお守りもいらない。
+- **コストは上限固定可**: Console の spend limit で青天井を防ぐ。低頻度ソロ運用なら実コストは小さい。
+- **scoped・revocable**: 漏洩時はキーを 1 つ失効させれば済む (個人アカウント全体を背負わない)。
 
-**再発行 (ワンコマンド)**: 検知 Issue が来たらローカルで実行する。
-
-```bash
-cicd/scripts/ci/rotate-claude-token.sh
-```
-
-- ブラウザで Pro/Max 認可 (←唯一の人手) → 表示されたトークンを貼り付け → Secret 更新 → 検知 Issue 自動クローズ、まで自動。
-- 完全自動化はできない: `claude setup-token` の OAuth 認可だけは仕様上どうしても人手が要る (それがトークンの安全性の根拠でもある)。
-- 再発行後、次回 health check が成功すれば Issue は self-heal でクローズされる。
+> サブスク枠の OAuth トークン (`claude_code_oauth_token`) も使えるが、ローカル認可 + 定期失効が
+> 必要になるため本リポジトリでは採用しない。
 
 ## セキュリティ (公開リポジトリ)
 
@@ -93,10 +78,8 @@ cicd/scripts/ci/rotate-claude-token.sh
     (本ワークフローは既にそうしている)。
 - **Secret = write 権限者なら誰でも読める。** public/private を問わず、write 権限を持つ
   collaborator はブランチに細工したワークフローを push すれば Secret を抜ける。
-  → write 権限は信頼できる人だけに絞る。複数メンテナがいる公開リポジトリなら、
-  個人アカウントを背負う `CLAUDE_CODE_OAUTH_TOKEN` より、
-  **spend limit を付けた `ANTHROPIC_API_KEY` (scoped・revocable・課金上限あり)** の方が
-  漏洩時の被害を限定できる。ソロ運用なら OAuth のままで問題ない。
+  → write 権限は信頼できる人だけに絞る。`ANTHROPIC_API_KEY` は scoped・revocable で
+  spend limit も付くため、万一漏洩しても該当キーを失効させれば被害を箱に閉じ込められる。
 
 ## Rollback
 
@@ -121,9 +104,9 @@ cicd/scripts/ci/rotate-claude-token.sh
 
 ### ワークフローは走るがコメントが付かない
 
-- 原因: 認証 Secret (`CLAUDE_CODE_OAUTH_TOKEN` または `ANTHROPIC_API_KEY`) 未設定 / 失効、
-  または `permissions: pull-requests: write` 欠如。
-- 対処: Secret の登録を確認。OAuth トークンは失効するので、認証エラー時は `claude setup-token` で再発行。
+- 原因: `ANTHROPIC_API_KEY` 未設定、`permissions:` に `id-token: write` か `pull-requests: write` の欠如、
+  または Console の spend limit 到達でキーが弾かれている。
+- 対処: Secret の登録と権限を確認。認証エラーなら Console でキーの有効性・残枠を確認。
 
 ### コメントが push のたびに増えていく
 
@@ -145,8 +128,6 @@ cicd/scripts/ci/rotate-claude-token.sh
 
 - 審査基準: [`.github/claude/review-rubric.md`](../../.github/claude/review-rubric.md)
 - レビュー ワークフロー: [`.github/workflows/claude-review.yml`](../../.github/workflows/claude-review.yml)
-- トークン死活監視: [`.github/workflows/claude-token-health.yml`](../../.github/workflows/claude-token-health.yml)
-- ローテーション スクリプト: `cicd/scripts/ci/rotate-claude-token.sh`
 - テスト CI (役割分担の相手): [`.github/workflows/test.yml`](../../.github/workflows/test.yml)
 - テスト戦略: [`docs/testing/strategy.md`](../testing/strategy.md)
 - ドキュメント戦略: [`docs/documentation/strategy.md`](../documentation/strategy.md)
