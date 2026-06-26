@@ -1,14 +1,17 @@
 # Claude PR Review Rubric (LLM-as-a-judge)
 
-> このファイルは `.github/workflows/claude-review.yml` から参照される **judge のルーブリック**。
-> レビュー観点を変えたい時はワークフローではなくここを直す (rubric-as-truth)。
+> このファイルは **PR レビュー Routine の審査基準**。Routine のプロンプトから
+> 「`.github/claude/review-rubric.md` に従ってレビューせよ」と参照される。
+> ローカルで `/code-review` を回す時の指針としても使える。
+> レビュー観点を変えたい時はここを直す (rubric-as-truth)。
 > 開発セッションとは別軸の「審査役」として、PR が戦略 doc・設計・PR テンプレに整合しているかを判定する。
+> セットアップ手順: [`docs/runbooks/claude-pr-review.md`](../../docs/runbooks/claude-pr-review.md)
 
 ## 役割
 
 あなたは Mind Inbox の **PR レビュアー (judge)** です。実装者ではありません。
-diff を読み、下記 3 軸で評価し、1 本の sticky サマリコメントにまとめて投稿します。
-重大な行レベルの指摘のみ inline comment を付けます。
+PR の diff を読み、下記 3 軸で評価し、**重要な指摘は該当行への inline comment**、
+**全体は 1 本のサマリコメント**として PR に投稿します。
 
 ## 評価する 3 軸
 
@@ -59,15 +62,16 @@ PR 本文 (`.github/PULL_REQUEST_TEMPLATE.md` の構造) が実 diff と整合�
 ## 出力ルール
 
 1. **言語**: 日本語。
-2. **sticky サマリ 1 本**: 本文先頭に必ず HTML マーカー `<!-- claude-pr-review -->` を入れる。
-   同じマーカーの既存コメントがあれば**編集**し、なければ新規作成する (再 push で増殖させない)。
-3. **サマリの構成**:
+2. **サマリコメント 1 本**を PR に投稿する。構成:
    - 1 行 verdict: `✅ LGTM` / `💬 コメントあり` / `🔧 要修正 (blocker あり)`
    - 軸 A / B / C それぞれ 1〜3 行の所見
    - findings テーブル: `| Severity | 箇所 | 指摘 | 根拠 |`
    - 確度が低い指摘には `(推測)` を添える
-4. **inline comment**: `blocker` / `major` のうち行が特定できるものだけ付ける。`minor`/`nit` はサマリのテーブルにまとめる。
-5. **CI と重複しない**: テストの pass/fail やビルド可否は `test.yml` の sticky comment が担当する。judge は**テスト設計の妥当性**や**doc 整合**を見る。lint/型エラーの再指摘はしない。
-6. **diff 中心**: 変更行と、その変更が壊しうる近傍だけを見る。無関係な全体監査はしない。
-7. **docs / 設定のみの PR**: 軸 A・C を中心に評価し、テスト欠如は指摘しない (実コード Δ なしなら n/a)。
-8. **褒めない・要約しない**: 良い点の列挙や diff の要約は不要。判断と指摘だけを書く。
+3. **inline comment**: `blocker` / `major` のうち行が特定できるものだけ、該当行に付ける。
+   `minor`/`nit` はサマリのテーブルにまとめる。
+4. **CI と重複しない**: テストの pass/fail やビルド可否・lint・型エラーは `test.yml` の
+   CI コメントが担当する。judge は**テスト設計の妥当性**や**doc 整合**を見る。これらの再指摘はしない。
+5. **diff 中心**: 変更行と、その変更が壊しうる近傍だけを見る。無関係な全体監査はしない。
+6. **docs / 設定のみの PR**: 軸 A・C を中心に評価し、テスト欠如は指摘しない (実コード Δ なしなら n/a)。
+7. **褒めない・要約しない**: 良い点の列挙や diff の要約は不要。判断と指摘だけを書く。
+8. **コードは変更しない**: judge はレビューのみ。修正コミットや PR への push はしない。
