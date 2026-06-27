@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **テスト戦略**: [`docs/testing/strategy.md`](docs/testing/strategy.md) — L0〜L4 のテスト階層 / 書く・書かない判断基準 / PR・Issue テンプレ運用
 - **ドキュメント戦略**: [`docs/documentation/strategy.md`](docs/documentation/strategy.md) — 真実の所在 (UI = MDX / API = OpenAPI / 判断 = ADR / 手順 = Runbook) / 生成物 commit ルール
 - **プロダクト設計 (v1)**: [`docs/design/`](docs/design/requirements.md) — [要件](docs/design/requirements.md) → [ユースケース](docs/design/use_cases.md) → [ドメインモデル](docs/design/domain_model.md) → [v1 実装計画](docs/design/implementation_plan_v1.md)。**Problem 中心 2層モデル (Mention → Problem)** が v1 の核 (ADR 0007)
-- **アーキテクチャ判断 (ADR)**: [`docs/adr/`](docs/adr/README.md) — 過去の構成/技術選択の不変記録。覆す前に必ず読む。主要: [0001 tRPC](docs/adr/0001-bff-as-trpc-not-rest.md) / [0002 Container Apps](docs/adr/0002-container-apps-not-aks.md) / [0003 2-phase Bicep](docs/adr/0003-two-phase-bicep.md) / [0004 mockApi 真実](docs/adr/0004-mockapi-as-frontend-truth.md) / [0005 MDX 真実](docs/adr/0005-mdx-ui-spec-as-truth.md) / [0007 Problem 中心 2層](docs/adr/0007-problem-centric-two-layer-domain-model.md)
+- **アーキテクチャ判断 (ADR)**: [`docs/adr/`](docs/adr/README.md) — 過去の構成/技術選択の不変記録。覆す前に必ず読む。主要: [0001 tRPC](docs/adr/0001-bff-as-trpc-not-rest.md) / [0002 Container Apps](docs/adr/0002-container-apps-not-aks.md) / [0003 2-phase Bicep](docs/adr/0003-two-phase-bicep.md) / [0004 mockApi 真実](docs/adr/0004-mockapi-as-frontend-truth.md) / [0005 MDX 真実](docs/adr/0005-mdx-ui-spec-as-truth.md) / [0007 Problem 中心 2層](docs/adr/0007-problem-centric-two-layer-domain-model.md) / [0008 PR レビュー Routine](docs/adr/0008-pr-review-via-cloud-routine.md)
 
 ### ドキュメント更新ルール
 
