@@ -25,8 +25,11 @@ import {
   type ActionPlan,
   type HistoryItem,
   type OrganizedResult,
-  type Problem,
 } from "./mockApi";
+// Problem 系の shape は domain.ts（BFF = 型の真実 / CLAUDE.md §8.3）の zod schema を
+// 直接 import して縛る。inline コピーだと .int()/.min(1) などランタイムバリデータの
+// 乖離をこのテストが検知できなくなる（PR #44 レビュー指摘）。
+import { ProblemSchema } from "../../bff/src/trpc/domain";
 
 // ── frontend 内 type と shape を縛る zod schema ──────────────────────────────
 // mockApi.ts が export している type 宣言と同じ shape を runtime でも縛る。
@@ -72,54 +75,6 @@ describe("[L1] mockApi shape integrity", () => {
     }
   });
 });
-
-// ── Mention / Problem mock（Phase D）の shape を縛る zod schema ──────────────
-const ThemeSchema = z.enum([
-  "仕事・キャリア",
-  "お金",
-  "心と体",
-  "家族・パートナー",
-  "人間関係",
-  "自己理解・生き方",
-  "日常・生活",
-  "未分類",
-]);
-
-const AffectSchema = z.object({
-  label: z.string(),
-  valence: z.enum(["negative", "neutral", "positive"]),
-  intensity: z.number().min(0).max(1),
-});
-
-const MentionSchema = z.object({
-  id: z.string(),
-  sessionId: z.string(),
-  dumpId: z.string().nullable(),
-  createdAt: z.string(),
-  statement: z.string(),
-  excerpt: z.string(),
-  affect: AffectSchema,
-  proposedTheme: ThemeSchema,
-  proposedTags: z.array(z.string()),
-  problemId: z.string().nullable(),
-  groupingConfidence: z.number().min(0).max(1).nullable(),
-});
-
-const ProblemSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  summary: z.string(),
-  theme: ThemeSchema,
-  tags: z.array(z.string()),
-  status: z.enum(["open", "resolved", "shelved"]),
-  mentions: z.array(MentionSchema).min(1),
-  mentionCount: z.number(),
-  plans: z.array(ActionPlanSchema),
-  createdAt: z.string(),
-  lastMentionedAt: z.string(),
-  resolvedAt: z.string().nullable(),
-  shelvedAt: z.string().nullable(),
-}) satisfies z.ZodType<Problem>;
 
 describe("[L1] mockApi Problem shape & 不変条件", () => {
   beforeEach(() => {

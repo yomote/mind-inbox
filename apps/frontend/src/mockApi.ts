@@ -225,7 +225,11 @@ function deriveProblemDates(problem: Problem): Problem {
   };
 }
 
-function seedProblems(): Problem[] {
+/**
+ * 初期 Problem 群を生成する（store seed 兼 spec プレビュー用の決め打ちデータ）。
+ * spec preview からも import して使い、fixture の二重管理を避ける（PR #44 レビュー指摘）。
+ */
+export function seedProblems(): Problem[] {
   const seeds: Problem[] = [
     // 再出現の主役: 3回言及（🔁3回）。感情が「焦り→不安→少しの整理」と推移する。
     deriveProblemDates({
