@@ -82,6 +82,11 @@ GitHub → **Actions → "deploy" → Run workflow** → `action: up` / `environ
 - 原因: schedule teardown は毎日 `down` する設計。
 - 対処: その日は使い終わりに手動運用で再 `up`、または一時的に `deploy.yml` の `schedule` をコメントアウト（使い終わったら戻す）。
 
+### up と 夜間 teardown が重なりうる
+
+- 原因: schedule teardown（JST 04:07）と手動 `up` がごく稀に重なると、同一 RG への並列操作になりうる（`concurrency.cancel-in-progress: false` でキューはされるが順序は保証しない）。
+- 対処: **teardown 時間帯（深夜）に `up` しない**。長時間使う日は使い終わりに再 `up` するか、その日は `deploy.yml` の `schedule` を一時コメントアウトする。
+
 ### up が遅い / 毎回イメージビルドで時間がかかる
 
 - 原因: 撤収で ACR ごと消えるため、再 up でイメージを `az acr build` し直す。

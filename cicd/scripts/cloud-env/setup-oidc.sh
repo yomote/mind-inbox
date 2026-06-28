@@ -21,12 +21,19 @@ need() {
   }
 }
 need az
+need jq
 az account show >/dev/null
 
 SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-$(az account show --query id -o tsv)}"
 TENANT_ID="$(az account show --query tenantId -o tsv)"
 
 echo "==> Entra app registration: $APP_NAME"
+# 同名アプリが複数あると [0] をサイレント選択してしまう。意図しないアプリ操作を避けて中断。
+APP_COUNT="$(az ad app list --display-name "$APP_NAME" --query 'length(@)' -o tsv)"
+if [[ "${APP_COUNT:-0}" -gt 1 ]]; then
+  echo "ERROR: 同名アプリが ${APP_COUNT} 件あります（$APP_NAME）。手動で整理してから再実行してください。" >&2
+  exit 1
+fi
 APP_ID="$(az ad app list --display-name "$APP_NAME" --query '[0].appId' -o tsv)"
 if [[ -z "${APP_ID}" ]]; then
   APP_ID="$(az ad app create --display-name "$APP_NAME" --query appId -o tsv)"
@@ -38,12 +45,10 @@ SUBJECT="repo:${REPO}:ref:refs/heads/${BRANCH}"
 EXISTING="$(az ad app federated-credential list --id "$APP_ID" \
   --query "[?subject=='${SUBJECT}'].name | [0]" -o tsv 2>/dev/null || true)"
 if [[ -z "${EXISTING}" ]]; then
-  az ad app federated-credential create --id "$APP_ID" --parameters "{
-    \"name\": \"gha-${BRANCH}\",
-    \"issuer\": \"https://token.actions.githubusercontent.com\",
-    \"subject\": \"${SUBJECT}\",
-    \"audiences\": [\"api://AzureADTokenExchange\"]
-  }" >/dev/null
+  # JSON は jq で生成（ブランチ名に "や\ が入っても壊れないように raw 展開を避ける）。
+  FED_PARAMS="$(jq -n --arg name "gha-${BRANCH}" --arg subject "$SUBJECT" \
+    '{name: $name, issuer: "https://token.actions.githubusercontent.com", subject: $subject, audiences: ["api://AzureADTokenExchange"]}')"
+  az ad app federated-credential create --id "$APP_ID" --parameters "$FED_PARAMS" >/dev/null
 fi
 
 echo "==> Role assignment: ${ROLE} @ /subscriptions/${SUBSCRIPTION_ID}"
