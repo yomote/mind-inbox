@@ -1,0 +1,99 @@
+name: deploy
+
+# オンデマンド CD（ADR 0009）。
+# - 手動 up: 環境を立ち上げる（IaC + コンテナ + BFF/frontend）
+# - 手動 down: cleanup-env.sh で撤収（¥0 に戻す）
+# - 夜間 schedule: 消し忘れ防止の自動 teardown ガード
+#
+# 認証は Azure OIDC（federated credential）= 保存シークレット0。
+# 事前設定（一度きり）: docs/runbooks/azure-oidc-cd-setup.md を参照し、
+# リポジトリ Variables に AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID を設定する。
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "up = 立ち上げ / down = 撤収(¥0化)"
+        type: choice
+        options: [up, down]
+        required: true
+      environment:
+        description: 対象環境
+        type: choice
+        options: [dev]
+        default: dev
+        required: true
+  schedule:
+    # 夜間 teardown ガード: 毎日 JST 04:07 (= UTC 19:07) に down。消し忘れでも ¥0 に戻る。
+    # 立ち上げは常に手動 up なので、この自動 down で困らない（必要なら再度 up）。
+    - cron: "7 19 * * *"
+
+permissions:
+  id-token: write # OIDC トークン取得に必須
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.event.inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
+      RG: rg-${{ github.event.inputs.environment || 'dev' }}-mind-inbox
+      DEPLOYMENT: main-bootstrap
+    steps:
+      - uses: actions/checkout@v4
+
+      # OIDC 未設定（repo Variables 未登録）の間は、誤実行や夜間 schedule を赤くせず skip。
+      - name: Guard — OIDC 設定済みか
+        id: guard
+        run: |
+          if [ -n "${{ vars.AZURE_CLIENT_ID }}" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::OIDC 未設定（AZURE_CLIENT_ID 空）。docs/runbooks/azure-oidc-cd-setup.md を実施してください。今回はスキップします。"
+          fi
+
+      - name: Azure login (OIDC, no stored secret)
+        if: steps.guard.outputs.run == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # ---- DOWN: 手動 down または 夜間 schedule ----
+      - name: Tear down (cleanup-env)
+        if: steps.guard.outputs.run == 'true' && (github.event_name == 'schedule' || github.event.inputs.action == 'down')
+        run: |
+          echo "Tearing down $RG ..."
+          RG="$RG" ./cicd/scripts/env/cleanup-env.sh
+
+      # ---- UP: 手動 up のみ ----
+      - name: Setup Node 22
+        if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install deploy tooling (swa CLI, zip)
+        if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up'
+        run: |
+          npm install -g @azure/static-web-apps-cli
+          sudo apt-get update && sudo apt-get install -y zip
+
+      - name: Provision + deploy (up)
+        if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up'
+        run: |
+          RG="$RG" ENVIRONMENT="$ENVIRONMENT" DEPLOYMENT="$DEPLOYMENT" \
+            ./cicd/scripts/deploy/provision.sh
