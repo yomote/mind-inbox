@@ -27,7 +27,7 @@ function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <BrowserRouter>
+      <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, "")}>
         <Layout themeMode={themeMode} onToggleTheme={handleToggleTheme} />
       </BrowserRouter>
     </ThemeProvider>

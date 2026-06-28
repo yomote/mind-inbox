@@ -50,6 +50,7 @@ Runbook PR は実際にその手順を**踏んだ人**が書くか、レビュ�
 
 ## 既存 Runbook
 
+- `local-fullstack-dev.md` — ローカルで VOICEVOX+BFF+frontend を起動し声の UX を評価する
 - `claude-pr-review.md` — Claude PR 自動レビュー (LLM-as-a-judge) を Routine で動かす / 観点変更 / 停止
 
 (初期 4 本は #12 で起こす)

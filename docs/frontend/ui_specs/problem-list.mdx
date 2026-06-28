@@ -1,0 +1,49 @@
+---
+id: problem-list
+title: 困りごと一覧
+route: /problems
+status: implemented
+owner: frontend
+---
+
+import { ProblemListSpecPreview } from '../../../frontend/src/spec/previews/ProblemListSpecPreview'
+
+## 困りごと一覧（UC-02）
+
+蓄積された Problem を俯瞰し、継続テーマに気づくための一覧。
+既定は**直近言及順**で、再出現を `🔁N回` バッジで常時強調する。
+
+<ProblemListSpecPreview />
+
+## 実装対応
+
+- 画面キー: `problemList`
+- 実装ファイル: `frontend/src/components/screens/ProblemListScreen.tsx`
+- 関連: `use_cases.md` UC-02 / `domain_model.md §4.2`（status と既定表示）
+
+## UI要素
+
+- 並び替えトグル: `直近順`（既定）/ `よく出る順`（= `mentionCount` 降順）
+- テーマフィルタ（固定7分類 + 未分類）
+- 「棚卸し済みも表示」トグル（既定は `open` のみ表示。`resolved`/`shelved` は隠す＝参照可）
+- Problem カード:
+  - タイトル
+  - `🔁 N回` バッジ（`mentionCount > 1` のとき。再出現の常時強調）
+  - 状態チップ（追跡中 / 解決 / 棚卸し）
+  - テーマチップ + 最終言及の相対表示
+  - 要約（`summary`）
+
+## 状態
+
+- 0件（フィルタ後）: 「該当する困りごとはありません。」（UC-02 代替フロー 2a の空状態）
+- 既定: `open` のみ。棚卸し済みトグルで `resolved`/`shelved` も表示。
+
+## 振る舞い
+
+- 既定の並びは `lastMentionedAt` 降順。「よく出る順」は `mentionCount` 降順（同数なら直近順）。合成スコアは Phase 2。
+- フィルタ / 並びは画面ローカル状態（取得は全件 → クライアントで絞り込み）。
+
+## 遷移
+
+- ホームへ -> `home`
+- Problem カード -> `problemDetail`

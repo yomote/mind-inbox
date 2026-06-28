@@ -19,13 +19,26 @@ import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   createActionPlan,
+  createProblemPlan,
+  extractMentions,
   loadHistories,
+  loadProblem,
+  loadProblems,
   organizeResult,
   saveHistory,
   sendMessage,
   startNewConsultation,
+  triageProblem,
 } from "./api";
-import type { ActionPlan, ConsultationSession, HistoryItem, OrganizedResult } from "./api";
+import type {
+  ActionPlan,
+  ConsultationSession,
+  ExtractionResult,
+  HistoryItem,
+  OrganizedResult,
+  Problem,
+  TriageInput,
+} from "./api";
 import type { PaletteMode } from "@mui/material";
 import { AppRouter, ROUTE_PATHS } from "./Router";
 import type { AppRoute, AuthStatus } from "./Router";
@@ -59,6 +72,9 @@ const HEADER_BY_ROUTE: Record<AppRoute, string> = {
   settings: "設定",
   paused: "一時保存 / 中断",
   crisisSupport: "危機時サポート",
+  extractReview: "抽出結果レビュー",
+  problemList: "困りごと一覧",
+  problemDetail: "困りごと詳細",
 };
 
 function getClientPrincipal(payload: unknown): StaticWebAppsClientPrincipal | null {
@@ -90,8 +106,22 @@ function getClientPrincipal(payload: unknown): StaticWebAppsClientPrincipal | nu
   return null;
 }
 
+/**
+ * 最初の発話からセッションのタイトルを自動生成する（mock の簡易 AI タイトル）。
+ * タイトルは最初に聞かず、内容から後付けする方針。実 AI 生成は Phase A で差し替え。
+ */
+function deriveSessionTitle(text: string): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  if (!oneLine) return "新しい相談";
+  return oneLine.length > 18 ? `${oneLine.slice(0, 18)}…` : oneLine;
+}
+
 export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const isDev = import.meta.env.DEV;
+  // mock モード（VITE_USE_MOCK=true）は BFF も SWA 認証も無い自己完結デモ。
+  // 認証ゲート（/.auth/me）と login/logout リダイレクトをスキップして触れるようにする。
+  const useMock = import.meta.env.VITE_USE_MOCK === "true";
+  const standalone = isDev || useMock;
   const location = useLocation();
   const navigate = useNavigate();
   const voicevoxSpeaker = Number(import.meta.env.VITE_VOICEVOX_SPEAKER || "3");
@@ -115,13 +145,22 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const [histories, setHistories] = React.useState<HistoryItem[]>([]);
 
   const [selectedHistory, setSelectedHistory] = React.useState<HistoryItem | null>(null);
+  const [extraction, setExtraction] = React.useState<ExtractionResult | null>(null);
+  const [problems, setProblems] = React.useState<Problem[]>([]);
+  const [selectedProblem, setSelectedProblem] = React.useState<Problem | null>(null);
   const [accountMenuAnchorEl, setAccountMenuAnchorEl] = React.useState<null | HTMLElement>(null);
 
   const recognitionRef = React.useRef<SpeechRecognition | null>(null);
+  // ユーザーが「聞き続けてほしい」状態か（沈黙で勝手に止まったら再開する判定に使う）。
+  const shouldListenRef = React.useRef(false);
+  // 認識エンジンが実際に走っているか（二重 start による InvalidStateError を防ぐ）。
+  const recognitionRunningRef = React.useRef(false);
   const activeAudioRef = React.useRef<HTMLAudioElement | null>(null);
   const activeAudioUrlRef = React.useRef<string | null>(null);
   const lastSpokenAssistantMessageIdRef = React.useRef<string | null>(null);
   const voiceCacheRef = React.useRef<Map<string, Blob>>(new Map());
+  // iOS は最初のタップ起点でしか音を出せないため、一度ジェスチャ内で「解錠」しておく。
+  const audioUnlockedRef = React.useRef(false);
 
   const speechRecognitionCtor = React.useMemo<SpeechRecognitionConstructor | undefined>(() => {
     if (typeof window === "undefined") return undefined;
@@ -140,7 +179,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   React.useEffect(() => {
     let active = true;
 
-    if (isDev) {
+    if (standalone) {
       setAuthStatus("authenticated");
       return () => {
         active = false;
@@ -174,7 +213,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     return () => {
       active = false;
     };
-  }, [isDev]);
+  }, [standalone]);
 
   const transition = React.useCallback(
     (next: AppRoute) => {
@@ -244,12 +283,58 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     [voicevoxSpeaker],
   );
 
+  // ブラウザ内蔵の音声合成で読み上げる（VOICEVOX が無い時のフォールバック / mock デモ用）。
+  const speakWithBrowser = React.useCallback((text: string) => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      setSpeaking(false);
+      setVoiceError("このブラウザは音声読み上げに対応していません。");
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "ja-JP";
+    // 日本語ボイスがあれば優先（無ければ既定ボイス + lang ヒント）。
+    const jaVoice = window.speechSynthesis
+      .getVoices()
+      .find((v) => v.lang?.toLowerCase().startsWith("ja"));
+    if (jaVoice) utterance.voice = jaVoice;
+    utterance.rate = 1;
+    setSpeaking(true);
+    utterance.onend = () => setSpeaking(false);
+    utterance.onerror = () => setSpeaking(false);
+    window.speechSynthesis.speak(utterance);
+  }, []);
+
+  // ユーザー操作（タップ）の中で一度だけ音声出力を解錠する。
+  // iOS は最初のジェスチャ内で発話/再生しておかないと、以降の自動読み上げが無音になる。
+  const unlockAudioPlayback = React.useCallback(() => {
+    if (audioUnlockedRef.current) return;
+    audioUnlockedRef.current = true;
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    try {
+      const u = new SpeechSynthesisUtterance(" ");
+      u.volume = 0;
+      window.speechSynthesis.speak(u);
+    } catch {
+      // 解錠失敗は致命ではない。
+    }
+  }, []);
+
   const speakText = React.useCallback(
     async (text: string) => {
       if (!ttsEnabled || !text.trim()) return;
 
       setVoiceError(null);
       stopSpeaking();
+
+      // standalone（mock デモ）は BFF/VOICEVOX が無いので、ネットワークを叩かず
+      // ブラウザ内蔵 TTS で直接読み上げる（/api/tts の 404 待ちで詰まらせない）。
+      if (standalone) {
+        speakWithBrowser(text);
+        return;
+      }
+
       setSpeaking(true);
 
       try {
@@ -287,37 +372,39 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
         await audio.play();
       } catch {
-        if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-          setSpeaking(false);
-          setVoiceError("音声合成に失敗しました。VOICEVOX接続を確認してください。");
-          return;
-        }
-
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = "ja-JP";
-        utterance.rate = 1;
-        utterance.onend = () => setSpeaking(false);
-        utterance.onerror = () => {
-          setSpeaking(false);
-          setVoiceError("音声合成に失敗しました。VOICEVOX接続を確認してください。");
-        };
-
-        window.speechSynthesis.speak(utterance);
+        // VOICEVOX 失敗時はブラウザ TTS にフォールバック。
+        speakWithBrowser(text);
       }
     },
-    [stopSpeaking, synthesizeWithVoicevox, ttsEnabled, voicevoxSpeaker],
+    [
+      speakWithBrowser,
+      standalone,
+      stopSpeaking,
+      synthesizeWithVoicevox,
+      ttsEnabled,
+      voicevoxSpeaker,
+    ],
   );
 
   const stopListening = React.useCallback(() => {
+    // 意図を先に落とす → onend が再開しないようにしてから停止。
+    shouldListenRef.current = false;
+    setListening(false);
+    setInterimTranscript("");
     const recognition = recognitionRef.current;
     if (!recognition) return;
-    recognition.stop();
+    try {
+      recognition.stop();
+    } catch {
+      // 既に停止済みなどは無視。
+    }
   }, []);
 
   const startListening = React.useCallback(() => {
-    if (!speechRecognitionCtor || loading) return;
+    if (!speechRecognitionCtor) return;
 
     setVoiceError(null);
+    shouldListenRef.current = true;
 
     if (!recognitionRef.current) {
       const recognition = new speechRecognitionCtor();
@@ -325,6 +412,11 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => {
+        recognitionRunningRef.current = true;
+        setListening(true);
+      };
 
       recognition.onresult = (event: SpeechRecognitionEvent) => {
         let finalText = "";
@@ -350,30 +442,64 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
       };
 
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-        setVoiceError(`音声認識エラー: ${event.error}`);
+        const err = event.error;
+        // continuous モードでは沈黙や中断で頻繁に出る。無害なので握り潰し、
+        // 継続は onend → 自動再開に任せる（「エラー表示で固まった」体験を防ぐ）。
+        if (err === "no-speech" || err === "aborted") {
+          return;
+        }
+        // マイク権限・デバイス起因は復帰不能なので意図を落として明示する。
+        if (err === "not-allowed" || err === "service-not-allowed" || err === "audio-capture") {
+          shouldListenRef.current = false;
+          setVoiceError("マイクを使えませんでした。ブラウザのマイク許可を確認してください。");
+          return;
+        }
+        setVoiceError(`音声認識エラー: ${err}`);
       };
 
       recognition.onend = () => {
-        setListening(false);
+        recognitionRunningRef.current = false;
         setInterimTranscript("");
+        // 継続意図があるのに止まった（沈黙タイムアウト等）→ 自動再開。
+        // sync 再開は InvalidStateError を起こしやすいので次 tick で。
+        if (shouldListenRef.current) {
+          window.setTimeout(() => {
+            if (!shouldListenRef.current || recognitionRunningRef.current) return;
+            try {
+              recognition.start();
+            } catch {
+              // まだ停止しきっていない場合などは次の onend で再試行される。
+            }
+          }, 150);
+          return;
+        }
+        setListening(false);
       };
 
       recognitionRef.current = recognition;
     }
 
-    recognitionRef.current.start();
+    if (!recognitionRunningRef.current) {
+      try {
+        recognitionRef.current.start();
+      } catch {
+        // 既に開始中なら無視（onstart で listening は同期される）。
+      }
+    }
     setListening(true);
-  }, [loading, speechRecognitionCtor]);
+  }, [speechRecognitionCtor]);
 
   const toggleListening = React.useCallback(() => {
+    unlockAudioPlayback();
     if (listening) {
       stopListening();
       return;
     }
     startListening();
-  }, [listening, startListening, stopListening]);
+  }, [listening, startListening, stopListening, unlockAudioPlayback]);
 
   const toggleTtsEnabled = React.useCallback(() => {
+    unlockAudioPlayback();
     setTtsEnabled((prev) => {
       const next = !prev;
       if (!next) {
@@ -381,7 +507,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
       }
       return next;
     });
-  }, [stopSpeaking]);
+  }, [stopSpeaking, unlockAudioPlayback]);
 
   React.useEffect(() => {
     return () => {
@@ -391,6 +517,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   }, [stopListening, stopSpeaking]);
 
   const handleStartConsultation = async () => {
+    unlockAudioPlayback(); // タップ起点で音声を解錠（iOS の自動再生ブロック対策）
     setLoading(true);
     try {
       const newSession = await startNewConsultation(concern.trim());
@@ -407,6 +534,8 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const handleSendMessage = async () => {
     if (!session || !draftMessage.trim() || loading) return;
 
+    unlockAudioPlayback(); // タップ起点で音声を解錠（iOS の自動再生ブロック対策）
+
     const userMessage = {
       id: `u-${Date.now()}`,
       role: "user" as const,
@@ -415,8 +544,11 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     };
 
     setDraftMessage("");
+    // 最初のユーザー発話でタイトルを内容から自動生成（ChatGPT 風: 開始時は聞かない）。
+    const isFirstUserMessage = !session.messages.some((m) => m.role === "user");
+    const nextTitle = isFirstUserMessage ? deriveSessionTitle(userMessage.text) : session.title;
     const nextMessages = [...session.messages, userMessage];
-    setSession({ ...session, messages: nextMessages });
+    setSession({ ...session, title: nextTitle, messages: nextMessages });
 
     setLoading(true);
     try {
@@ -452,6 +584,89 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
       const organized = await organizeResult(session.id);
       setResult(organized);
       transition("result");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleExtract = async () => {
+    if (!session || loading) return;
+    setLoading(true);
+    try {
+      const res = await extractMentions(session.id);
+      setExtraction(res);
+      transition("extractReview");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOpenProblemList = async () => {
+    setLoading(true);
+    try {
+      const list = await loadProblems();
+      setProblems(list);
+      transition("problemList");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOpenProblem = async (id: string) => {
+    setLoading(true);
+    try {
+      const found = await loadProblem(id);
+      if (found) {
+        setSelectedProblem(found);
+        transition("problemDetail");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTriage = async (input: TriageInput) => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      const updated = await triageProblem(input);
+      setSelectedProblem(updated);
+      // 一覧キャッシュを最新化（棚卸し / 却下 / 統合がそのまま反映されるように）。
+      setProblems(await loadProblems());
+      if (input.action === "dismiss" || input.action === "merge") {
+        // 対象が消えたので一覧へ戻す。
+        transition("problemList");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDismissExtracted = async (problemId: string) => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      await triageProblem({ action: "dismiss", problemId });
+      setExtraction((prev) =>
+        prev
+          ? {
+              ...prev,
+              items: prev.items.filter((item) => item.grouping.problemId !== problemId),
+              newProblemCount: Math.max(0, prev.newProblemCount - 1),
+            }
+          : prev,
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateProblemPlan = async (problemId: string) => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      const updated = await createProblemPlan(problemId);
+      if (updated) setSelectedProblem(updated);
     } finally {
       setLoading(false);
     }
@@ -530,11 +745,17 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     setResult(null);
     setPlan(null);
     setSelectedHistory(null);
+    setExtraction(null);
+    setProblems([]);
+    setSelectedProblem(null);
     lastSpokenAssistantMessageIdRef.current = null;
     voiceCacheRef.current.clear();
     navigate(ROUTE_PATHS.onboarding, { replace: true });
-    window.location.assign(logoutUrl);
-  }, [logoutUrl, navigate, stopListening, stopSpeaking]);
+    // standalone（dev / mock デモ）は SWA の /logout が無いのでリダイレクトしない。
+    if (!standalone) {
+      window.location.assign(logoutUrl);
+    }
+  }, [logoutUrl, navigate, standalone, stopListening, stopSpeaking]);
 
   const isAuthenticated = authStatus === "authenticated";
   const currentRoute = React.useMemo<AppRoute>(() => {
@@ -559,6 +780,12 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
         return "paused";
       case ROUTE_PATHS.crisisSupport:
         return "crisisSupport";
+      case ROUTE_PATHS.extractReview:
+        return "extractReview";
+      case ROUTE_PATHS.problemList:
+        return "problemList";
+      case ROUTE_PATHS.problemDetail:
+        return "problemDetail";
       case ROUTE_PATHS.onboarding:
       default:
         return "onboarding";
@@ -594,7 +821,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
           >
             <Box
               component="img"
-              src="/fabicon.png"
+              src={`${import.meta.env.BASE_URL}fabicon.png`}
               alt=""
               sx={{ width: 28, height: 28, borderRadius: 1 }}
             />
@@ -663,6 +890,9 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
                 plan={plan}
                 histories={histories}
                 selectedHistory={selectedHistory}
+                extraction={extraction}
+                problems={problems}
+                selectedProblem={selectedProblem}
                 themeMode={themeMode}
                 onToggleTheme={onToggleTheme}
                 transition={transition}
@@ -675,9 +905,15 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
                 toggleTtsEnabled={toggleTtsEnabled}
                 stopSpeaking={stopSpeaking}
                 handleOrganize={handleOrganize}
+                handleExtract={handleExtract}
                 handleCreatePlan={handleCreatePlan}
                 handleSaveAndGoHistory={handleSaveAndGoHistory}
                 openHistoryResult={openHistoryResult}
+                handleOpenProblemList={handleOpenProblemList}
+                handleOpenProblem={handleOpenProblem}
+                handleTriage={handleTriage}
+                handleDismissExtracted={handleDismissExtracted}
+                handleCreateProblemPlan={handleCreateProblemPlan}
               />
             </>
           )}

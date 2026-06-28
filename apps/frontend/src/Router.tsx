@@ -5,8 +5,11 @@ import type { PaletteMode } from "@mui/material";
 import type {
   ActionPlan,
   ConsultationSession,
+  ExtractionResult,
   HistoryItem,
   OrganizedResult,
+  Problem,
+  TriageInput,
 } from "./mockApi";
 import { SessionScreen } from "./components/session/SessionScreen";
 import { OnboardingScreen } from "./components/screens/OnboardingScreen";
@@ -18,6 +21,9 @@ import { ResultScreen } from "./components/screens/ResultScreen";
 import { ActionPlanScreen } from "./components/screens/ActionPlanScreen";
 import { HistoryScreen } from "./components/screens/HistoryScreen";
 import { SettingsScreen } from "./components/screens/SettingsScreen";
+import { ExtractReviewScreen } from "./components/screens/ExtractReviewScreen";
+import { ProblemListScreen } from "./components/screens/ProblemListScreen";
+import { ProblemDetailScreen } from "./components/screens/ProblemDetailScreen";
 
 export type AuthStatus = "loading" | "authenticated" | "anonymous";
 
@@ -33,6 +39,9 @@ export const ROUTE_PATHS = {
   settings: "/settings",
   paused: "/consultations/current/paused",
   crisisSupport: "/consultations/current/crisis-support",
+  extractReview: "/consultations/current/extract",
+  problemList: "/problems",
+  problemDetail: "/problems/current",
 } as const;
 
 export type AppRoute = keyof typeof ROUTE_PATHS;
@@ -41,9 +50,7 @@ type AppRouterProps = {
   authStatus: AuthStatus;
   isAuthenticated: boolean;
   isDev: boolean;
-  DevSpecMdxPreview: React.LazyExoticComponent<
-    React.ComponentType<unknown>
-  > | null;
+  DevSpecMdxPreview: React.LazyExoticComponent<React.ComponentType<unknown>> | null;
   concern: string;
   loading: boolean;
   session: ConsultationSession | null;
@@ -58,6 +65,9 @@ type AppRouterProps = {
   plan: ActionPlan | null;
   histories: HistoryItem[];
   selectedHistory: HistoryItem | null;
+  extraction: ExtractionResult | null;
+  problems: Problem[];
+  selectedProblem: Problem | null;
   themeMode: PaletteMode;
   onToggleTheme: () => void;
   transition: (next: AppRoute) => void;
@@ -70,9 +80,15 @@ type AppRouterProps = {
   toggleTtsEnabled: () => void;
   stopSpeaking: () => void;
   handleOrganize: () => Promise<void>;
+  handleExtract: () => Promise<void>;
   handleCreatePlan: () => Promise<void>;
   handleSaveAndGoHistory: () => void;
   openHistoryResult: (item: HistoryItem) => void;
+  handleOpenProblemList: () => Promise<void>;
+  handleOpenProblem: (id: string) => Promise<void>;
+  handleTriage: (input: TriageInput) => Promise<void>;
+  handleDismissExtracted: (problemId: string) => Promise<void>;
+  handleCreateProblemPlan: (problemId: string) => Promise<void>;
 };
 
 function ProtectedRoute({
@@ -124,6 +140,9 @@ export function AppRouter({
   plan,
   histories,
   selectedHistory,
+  extraction,
+  problems,
+  selectedProblem,
   themeMode,
   onToggleTheme,
   transition,
@@ -136,9 +155,15 @@ export function AppRouter({
   toggleTtsEnabled,
   stopSpeaking,
   handleOrganize,
+  handleExtract,
   handleCreatePlan,
   handleSaveAndGoHistory,
   openHistoryResult,
+  handleOpenProblemList,
+  handleOpenProblem,
+  handleTriage,
+  handleDismissExtracted,
+  handleCreateProblemPlan,
 }: AppRouterProps) {
   return (
     <Routes>
@@ -157,11 +182,10 @@ export function AppRouter({
         element={
           <ProtectedRoute authStatus={authStatus}>
             <HomeScreen
-              onNewConsultation={() => transition("newConsultation")}
+              onNewConsultation={() => void handleStartConsultation()}
+              onProblemList={() => void handleOpenProblemList()}
               onHistory={() => transition("history")}
-              onSpecPreview={
-                isDev ? () => transition("specPreview") : undefined
-              }
+              onSpecPreview={isDev ? () => transition("specPreview") : undefined}
             />
           </ProtectedRoute>
         }
@@ -179,9 +203,7 @@ export function AppRouter({
                 >
                   ホームへ
                 </Button>
-                <React.Suspense
-                  fallback={<Typography>Loading UI specs...</Typography>}
-                >
+                <React.Suspense fallback={<Typography>Loading UI specs...</Typography>}>
                   <DevSpecMdxPreview />
                 </React.Suspense>
               </Stack>
@@ -209,10 +231,7 @@ export function AppRouter({
         path={ROUTE_PATHS.session}
         element={
           <ProtectedRoute authStatus={authStatus}>
-            <RouteStateGuard
-              when={session !== null}
-              redirectTo={ROUTE_PATHS.home}
-            >
+            <RouteStateGuard when={session !== null} redirectTo={ROUTE_PATHS.home}>
               <SessionScreen
                 session={session!}
                 draftMessage={draftMessage}
@@ -231,6 +250,7 @@ export function AppRouter({
                 onCrisisSupport={() => transition("crisisSupport")}
                 onPause={() => transition("paused")}
                 onOrganize={handleOrganize}
+                onExtract={handleExtract}
               />
             </RouteStateGuard>
           </ProtectedRoute>
@@ -240,10 +260,7 @@ export function AppRouter({
         path={ROUTE_PATHS.paused}
         element={
           <ProtectedRoute authStatus={authStatus}>
-            <RouteStateGuard
-              when={session !== null}
-              redirectTo={ROUTE_PATHS.home}
-            >
+            <RouteStateGuard when={session !== null} redirectTo={ROUTE_PATHS.home}>
               <PausedScreen onBackHome={() => transition("home")} />
             </RouteStateGuard>
           </ProtectedRoute>
@@ -253,13 +270,8 @@ export function AppRouter({
         path={ROUTE_PATHS.crisisSupport}
         element={
           <ProtectedRoute authStatus={authStatus}>
-            <RouteStateGuard
-              when={session !== null}
-              redirectTo={ROUTE_PATHS.home}
-            >
-              <CrisisSupportScreen
-                onBackSession={() => transition("session")}
-              />
+            <RouteStateGuard when={session !== null} redirectTo={ROUTE_PATHS.home}>
+              <CrisisSupportScreen onBackSession={() => transition("session")} />
             </RouteStateGuard>
           </ProtectedRoute>
         }
@@ -268,10 +280,7 @@ export function AppRouter({
         path={ROUTE_PATHS.result}
         element={
           <ProtectedRoute authStatus={authStatus}>
-            <RouteStateGuard
-              when={result !== null}
-              redirectTo={ROUTE_PATHS.home}
-            >
+            <RouteStateGuard when={result !== null} redirectTo={ROUTE_PATHS.home}>
               <ResultScreen
                 result={result!}
                 loading={loading}
@@ -312,20 +321,58 @@ export function AppRouter({
         path={ROUTE_PATHS.settings}
         element={
           <ProtectedRoute authStatus={authStatus}>
-            <SettingsScreen
-              themeMode={themeMode}
-              onToggleTheme={onToggleTheme}
+            <SettingsScreen themeMode={themeMode} onToggleTheme={onToggleTheme} />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path={ROUTE_PATHS.extractReview}
+        element={
+          <ProtectedRoute authStatus={authStatus}>
+            <RouteStateGuard when={extraction !== null} redirectTo={ROUTE_PATHS.home}>
+              <ExtractReviewScreen
+                extraction={extraction!}
+                loading={loading}
+                onDismiss={(problemId) => void handleDismissExtracted(problemId)}
+                onGoToList={() => void handleOpenProblemList()}
+              />
+            </RouteStateGuard>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path={ROUTE_PATHS.problemList}
+        element={
+          <ProtectedRoute authStatus={authStatus}>
+            <ProblemListScreen
+              problems={problems}
+              loading={loading}
+              onOpen={(id) => void handleOpenProblem(id)}
+              onBackHome={() => transition("home")}
             />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path={ROUTE_PATHS.problemDetail}
+        element={
+          <ProtectedRoute authStatus={authStatus}>
+            <RouteStateGuard when={selectedProblem !== null} redirectTo={ROUTE_PATHS.problemList}>
+              <ProblemDetailScreen
+                problem={selectedProblem!}
+                loading={loading}
+                onBack={() => void handleOpenProblemList()}
+                onTriage={(input) => void handleTriage(input)}
+                onCreatePlan={(id) => void handleCreateProblemPlan(id)}
+              />
+            </RouteStateGuard>
           </ProtectedRoute>
         }
       />
       <Route
         path="*"
         element={
-          <Navigate
-            to={isAuthenticated ? ROUTE_PATHS.home : ROUTE_PATHS.onboarding}
-            replace
-          />
+          <Navigate to={isAuthenticated ? ROUTE_PATHS.home : ROUTE_PATHS.onboarding} replace />
         }
       />
     </Routes>

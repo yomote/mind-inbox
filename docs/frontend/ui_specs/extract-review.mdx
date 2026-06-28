@@ -1,0 +1,49 @@
+---
+id: extract-review
+title: 抽出結果レビュー
+route: /consultations/current/extract
+status: implemented
+owner: frontend
+---
+
+import { ExtractReviewSpecPreview } from '../../../frontend/src/spec/previews/ExtractReviewSpecPreview'
+
+## 抽出結果レビュー
+
+吐き出し（Dump = 1セッション全文）から抽出した Mention 群と、その自動グルーピング結果を提示する画面。
+UC-01 の「段1 抽出 → 段2 グルーピング」の結果をユーザーに見せ、その場でトリアージできる。
+
+<ExtractReviewSpecPreview />
+
+## 実装対応
+
+- 画面キー: `extractReview`
+- 実装ファイル: `frontend/src/components/screens/ExtractReviewScreen.tsx`
+- 関連: `domain_model.md §3`（2段パイプライン）/ `use_cases.md` UC-01・UC-03
+
+## UI要素
+
+- 「N件見つけた」見出し（新規 / 既存に追加の内訳）
+- 各 Mention カード:
+  - 🆕 新規 Problem / 🔁 既存に追加（グルーピング結果）バッジ
+  - 主テーマチップ
+  - `🔁 N回目` バッジ（再出現の気づき / UC-03）・`再燃` バッジ（resolved/shelved から復活）
+  - 困りごとの本文（`statement`）と元発話の引用（`excerpt`）
+  - 感情チップ（`affect` の valence で色分け）
+  - その場トリアージ: 新規に対する「これは違う（却下）」
+- 「困りごと一覧へ」ボタン
+
+## 状態
+
+- 抽出0件: 「追跡する困りごとは見つかりませんでした。受け止めました。」（雑談・愚痴のみのケース。UC-01 代替フロー 2a）
+- 抽出あり: Mention カード一覧
+
+## 振る舞い
+
+- 自動グルーピング（A案）: 承認ゲートなしで Problem は `open` 生成 / 既存へ付与済み。本画面は**事後トリアージ**の入口。
+- 「却下」は誤抽出の新規 Problem を取り下げる（Mention は不変なので物理削除ではなくトリアージ操作）。
+
+## 遷移
+
+- 困りごと一覧へ -> `problemList`
+- （入口）対話セッションの「困りごとを抽出」-> `extractReview`
