@@ -84,8 +84,8 @@ GitHub → **Actions → "deploy" → Run workflow** → `action: up` / `environ
 
 ### up と 夜間 teardown が重なりうる
 
-- 原因: schedule teardown（JST 04:07）と手動 `up` がごく稀に重なると、同一 RG への並列操作になりうる（`concurrency.cancel-in-progress: false` でキューはされるが順序は保証しない）。
-- 対処: **teardown 時間帯（深夜）に `up` しない**。長時間使う日は使い終わりに再 `up` するか、その日は `deploy.yml` の `schedule` を一時コメントアウトする。
+- 原因: 並列実行ではない（同一 concurrency group + `cancel-in-progress: false` で直列化されるため並列にはならない）。実際の挙動は GitHub Actions の仕様で、**同一グループの pending は最新 1 件のみ保持**され、`up` が pending 中に schedule `down` が来ると **pending の up が置き換えられてキャンセル**されうる、という点。
+- 緩和: 「立てた直後に夜間 teardown で消える」は teardown 側の最小生存時間ガード（RG タグ `deployedAtEpoch` が 3h 未満なら schedule では skip）で防止済み。pending 置き換えの取りこぼしを避けたい場合は **teardown 時間帯（深夜）に `up` しない**、もしくはその日は `deploy.yml` の `schedule` を一時コメントアウトする。
 
 ### up が遅い / 毎回イメージビルドで時間がかかる
 
