@@ -33,6 +33,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - テスト名に `[L0]`/`[L1]`/`[L2]`/`[L3]` プレフィックスを付ける — CI sticky comment の集計と切り分けに使う (§1.3「失敗の局所化」)
 - `npm run test:fast` をローカルで緑にしてから PR を出す
 
+### PR を出したあとの追従
+
+PR を作成したら放置せず、**merge / close されるまで追従する**。
+
+- PR を作ったら `subscribe_pr_activity` で監視を有効化する
+- レビュー ([ADR 0008](docs/adr/0008-pr-review-via-cloud-routine.md) の Routine 含む) や CI コメントが付いたら調査し、**小さく確実な修正は push**、曖昧 / 重大な指摘は確認を取る。**再レビューが Resolve するまで追う**
+- webhook は CI 成功・新規 push・マージ遷移を配信しないので、定期チェックインで取りこぼしを補い、merge / close で監視を終える
+
 ## Commands
 
 ### BFF (Azure Functions + tRPC)
