@@ -27,7 +27,14 @@ need() {
     exit 1
   }
 }
+# 下流スクリプト（deploy-backend: npm/zip, deploy-frontend: swa/curl）が要るツールを
+# 先にまとめて検査し、途中で初めて落ちるのを防ぐ（PR #45 レビュー指摘）。
+# コンテナ系は `az acr build`（クラウドビルド）なので docker は不要。pnpm は任意（無ければ npm）。
 need az
+need npm
+need zip
+need curl
+need swa
 
 az account show >/dev/null
 

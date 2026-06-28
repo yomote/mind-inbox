@@ -48,12 +48,25 @@ fi
 
 echo "==> Role assignment: ${ROLE} @ /subscriptions/${SUBSCRIPTION_ID}"
 SP_OBJECT_ID="$(az ad sp show --id "$APP_ID" --query id -o tsv)"
-az role assignment create \
+SCOPE="/subscriptions/${SUBSCRIPTION_ID}"
+# 冪等: 既にあれば再利用。無ければ作成し、失敗（権限不足等）は握り潰さず exit する。
+# ここを飲み込むと「✅ 完了」と出たのに CD で AuthorizationFailed になる（PR #45 レビュー指摘）。
+EXISTING_ROLE="$(az role assignment list \
+  --assignee "$APP_ID" --role "$ROLE" --scope "$SCOPE" \
+  --query "[0].id" -o tsv 2>/dev/null || true)"
+if [[ -n "${EXISTING_ROLE}" ]]; then
+  echo "   既存のロール割当を再利用: ${ROLE}"
+elif az role assignment create \
   --assignee-object-id "$SP_OBJECT_ID" \
   --assignee-principal-type ServicePrincipal \
   --role "$ROLE" \
-  --scope "/subscriptions/${SUBSCRIPTION_ID}" >/dev/null 2>&1 || \
-  echo "   (role assignment は既存 or 権限不足の可能性。az role assignment list で確認)"
+  --scope "$SCOPE" -o none; then
+  echo "   ロール割当を作成: ${ROLE}"
+else
+  echo "ERROR: ロール付与に失敗しました（サブスクリプションへの権限不足の可能性）。" >&2
+  echo "       Owner 相当の権限で実行し直してください。付与されないと CD で AuthorizationFailed になります。" >&2
+  exit 1
+fi
 
 cat <<EOF
 

@@ -24,7 +24,7 @@ CI（`test.yml`: test / lint / build）は GitHub Actions に乗っているが�
 - 公開 URL で（スマホ含め）すぐ触れる環境を、必要な時に得られる
 - 普段は ¥0（使わない時に課金を残さない）/ 消し忘れの保険がある
 - 静的シークレットを保存しない（[ADR 0006](0006-azure-access-via-device-code.md) のドライバー継承）
-- 既存 Iact（2-phase Bicep）/ デプロイスクリプト / `cleanup-env.sh` を再利用し、二重管理しない
+- 既存 IaC（2-phase Bicep）/ デプロイスクリプト / `cleanup-env.sh` を再利用し、二重管理しない
 - 無人で「考える」エージェントは増やさない（0006 の見送りは維持）
 
 ## Considered Options
