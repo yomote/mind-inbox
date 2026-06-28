@@ -72,6 +72,9 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       # ---- DOWN: 手動 down または 夜間 schedule ----
+      # cleanup-env.sh は冪等（内部 rg_exists ガードで RG 不在なら group delete を skip）。
+      # よって既に撤収済みの夜でもジョブは緑のまま。`|| true` は付けない（purge 失敗等の
+      # 本当のエラーは赤くして気づきたいため）。
       - name: Tear down (cleanup-env)
         if: steps.guard.outputs.run == 'true' && (github.event_name == 'schedule' || github.event.inputs.action == 'down')
         run: |
@@ -95,7 +98,8 @@ jobs:
         if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up'
         run: |
           npm install -g @azure/static-web-apps-cli
-          sudo apt-get update && sudo apt-get install -y zip
+          # zip は ubuntu-latest に入っている想定。無い時だけ apt（毎回の update ~30-60s を回避）。
+          command -v zip >/dev/null || { sudo apt-get update && sudo apt-get install -y zip; }
 
       - name: Provision + deploy (up)
         if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up'
