@@ -1,0 +1,53 @@
+---
+id: problem-detail
+title: 困りごと詳細
+route: /problems/current
+status: implemented
+owner: frontend
+---
+
+import { ProblemDetailSpecPreview } from '../../../frontend/src/spec/previews/ProblemDetailSpecPreview'
+
+## 困りごと詳細（UC-03 / UC-04 / UC-05）
+
+1つの Problem の追跡画面。主役は **Mention タイムライン**（日付 + 引用 + 感情）＝ 再出現履歴と感情推移。
+棚卸し（解決 / もう気にしない / 再オープン）とトリアージ（テーマ・タイトル編集）、次の一歩（プラン）をここで行う。
+
+<ProblemDetailSpecPreview />
+
+## 実装対応
+
+- 画面キー: `problemDetail`
+- 実装ファイル: `frontend/src/components/screens/ProblemDetailScreen.tsx`
+- 関連: `use_cases.md` UC-03/04/05 / `domain_model.md §2.1`（affect は Mention に乗る）
+
+## UI要素
+
+- タイトル（インライン編集可 / トリアージ `editTitle`）+ 状態チップ
+- 要約（`summary`）
+- 主テーマ選択（固定7分類 + 未分類 / トリアージ `editTheme`）+ 下位タグ + 言及回数
+- **Mention タイムライン**（`mentions` を新しい順）:
+  - 日付 + 感情チップ（`affect.valence` で色分け = 感情推移）
+  - 最古の Mention に「種」バッジ
+  - 本文（`statement`）と元発話の引用（`excerpt`）
+- 次の一歩（`plans`。あれば表示。UC-05）
+- 操作:
+  - `open`: 「解決した」（→ resolved）/「もう気にしない」（→ shelved）
+  - `resolved`/`shelved`: 「また気になる（再オープン）」（→ open / 再燃 UC-03）
+  - 「次の一歩を作る」（プラン生成 / UC-05。状態は変えない＝派生物）
+
+## 状態
+
+- `open`: 棚卸しボタン（解決 / もう気にしない）を表示
+- `resolved` / `shelved`: 再オープンボタンを表示
+- `plans` 空: 次の一歩セクションは非表示
+
+## 振る舞い
+
+- Mention は不変・追記専用。誤グルーピングは「再リンク」で直す（v1 トリアージは relink/merge/dismiss/editTheme/editTitle と状態遷移。分割は後回し）。
+- 棚卸し（resolve/shelve）後、一覧の既定からは外れる（参照は可能）。
+
+## 遷移
+
+- 一覧へ -> `problemList`
+- 解決 / もう気にしない / 再オープン -> 状態遷移（同画面で反映）

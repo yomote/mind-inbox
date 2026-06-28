@@ -5,6 +5,7 @@ type SessionControlsProps = {
   onCrisisSupport: () => void;
   onPause: () => void;
   onOrganize: () => void;
+  onExtract?: () => void;
 };
 
 export function SessionControls({
@@ -12,9 +13,10 @@ export function SessionControls({
   onCrisisSupport,
   onPause,
   onOrganize,
+  onExtract,
 }: SessionControlsProps) {
   return (
-    <Stack direction="row" spacing={1}>
+    <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
       <Button variant="text" onClick={onCrisisSupport}>
         危機時サポート
       </Button>
@@ -22,6 +24,11 @@ export function SessionControls({
         一時保存 / 中断
       </Button>
       <Box sx={{ flex: 1 }} />
+      {onExtract && (
+        <Button variant="outlined" onClick={onExtract} disabled={loading}>
+          困りごとを抽出
+        </Button>
+      )}
       <Button variant="contained" onClick={onOrganize} disabled={loading}>
         整理結果へ
       </Button>

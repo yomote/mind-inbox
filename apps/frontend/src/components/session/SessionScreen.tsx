@@ -22,6 +22,7 @@ type SessionScreenProps = {
   onCrisisSupport: () => void;
   onPause: () => void;
   onOrganize: () => void;
+  onExtract?: () => void;
 };
 
 export function SessionScreen({
@@ -42,6 +43,7 @@ export function SessionScreen({
   onCrisisSupport,
   onPause,
   onOrganize,
+  onExtract,
 }: SessionScreenProps) {
   return (
     <Paper sx={{ p: 3, borderRadius: 3 }}>
@@ -71,6 +73,7 @@ export function SessionScreen({
           onCrisisSupport={onCrisisSupport}
           onPause={onPause}
           onOrganize={onOrganize}
+          onExtract={onExtract}
         />
       </Stack>
     </Paper>

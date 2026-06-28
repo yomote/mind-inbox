@@ -19,13 +19,26 @@ import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   createActionPlan,
+  createProblemPlan,
+  extractMentions,
   loadHistories,
+  loadProblem,
+  loadProblems,
   organizeResult,
   saveHistory,
   sendMessage,
   startNewConsultation,
+  triageProblem,
 } from "./api";
-import type { ActionPlan, ConsultationSession, HistoryItem, OrganizedResult } from "./api";
+import type {
+  ActionPlan,
+  ConsultationSession,
+  ExtractionResult,
+  HistoryItem,
+  OrganizedResult,
+  Problem,
+  TriageInput,
+} from "./api";
 import type { PaletteMode } from "@mui/material";
 import { AppRouter, ROUTE_PATHS } from "./Router";
 import type { AppRoute, AuthStatus } from "./Router";
@@ -59,6 +72,9 @@ const HEADER_BY_ROUTE: Record<AppRoute, string> = {
   settings: "設定",
   paused: "一時保存 / 中断",
   crisisSupport: "危機時サポート",
+  extractReview: "抽出結果レビュー",
+  problemList: "困りごと一覧",
+  problemDetail: "困りごと詳細",
 };
 
 function getClientPrincipal(payload: unknown): StaticWebAppsClientPrincipal | null {
@@ -115,6 +131,9 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const [histories, setHistories] = React.useState<HistoryItem[]>([]);
 
   const [selectedHistory, setSelectedHistory] = React.useState<HistoryItem | null>(null);
+  const [extraction, setExtraction] = React.useState<ExtractionResult | null>(null);
+  const [problems, setProblems] = React.useState<Problem[]>([]);
+  const [selectedProblem, setSelectedProblem] = React.useState<Problem | null>(null);
   const [accountMenuAnchorEl, setAccountMenuAnchorEl] = React.useState<null | HTMLElement>(null);
 
   const recognitionRef = React.useRef<SpeechRecognition | null>(null);
@@ -457,6 +476,89 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     }
   };
 
+  const handleExtract = async () => {
+    if (!session || loading) return;
+    setLoading(true);
+    try {
+      const res = await extractMentions(session.id);
+      setExtraction(res);
+      transition("extractReview");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOpenProblemList = async () => {
+    setLoading(true);
+    try {
+      const list = await loadProblems();
+      setProblems(list);
+      transition("problemList");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOpenProblem = async (id: string) => {
+    setLoading(true);
+    try {
+      const found = await loadProblem(id);
+      if (found) {
+        setSelectedProblem(found);
+        transition("problemDetail");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTriage = async (input: TriageInput) => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      const updated = await triageProblem(input);
+      setSelectedProblem(updated);
+      // 一覧キャッシュを最新化（棚卸し / 却下 / 統合がそのまま反映されるように）。
+      setProblems(await loadProblems());
+      if (input.action === "dismiss" || input.action === "merge") {
+        // 対象が消えたので一覧へ戻す。
+        transition("problemList");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDismissExtracted = async (problemId: string) => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      await triageProblem({ action: "dismiss", problemId });
+      setExtraction((prev) =>
+        prev
+          ? {
+              ...prev,
+              items: prev.items.filter((item) => item.grouping.problemId !== problemId),
+              newProblemCount: Math.max(0, prev.newProblemCount - 1),
+            }
+          : prev,
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateProblemPlan = async (problemId: string) => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      const updated = await createProblemPlan(problemId);
+      if (updated) setSelectedProblem(updated);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleCreatePlan = async () => {
     if (!result || loading) return;
     setLoading(true);
@@ -530,6 +632,9 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     setResult(null);
     setPlan(null);
     setSelectedHistory(null);
+    setExtraction(null);
+    setProblems([]);
+    setSelectedProblem(null);
     lastSpokenAssistantMessageIdRef.current = null;
     voiceCacheRef.current.clear();
     navigate(ROUTE_PATHS.onboarding, { replace: true });
@@ -559,6 +664,12 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
         return "paused";
       case ROUTE_PATHS.crisisSupport:
         return "crisisSupport";
+      case ROUTE_PATHS.extractReview:
+        return "extractReview";
+      case ROUTE_PATHS.problemList:
+        return "problemList";
+      case ROUTE_PATHS.problemDetail:
+        return "problemDetail";
       case ROUTE_PATHS.onboarding:
       default:
         return "onboarding";
@@ -663,6 +774,9 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
                 plan={plan}
                 histories={histories}
                 selectedHistory={selectedHistory}
+                extraction={extraction}
+                problems={problems}
+                selectedProblem={selectedProblem}
                 themeMode={themeMode}
                 onToggleTheme={onToggleTheme}
                 transition={transition}
@@ -675,9 +789,15 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
                 toggleTtsEnabled={toggleTtsEnabled}
                 stopSpeaking={stopSpeaking}
                 handleOrganize={handleOrganize}
+                handleExtract={handleExtract}
                 handleCreatePlan={handleCreatePlan}
                 handleSaveAndGoHistory={handleSaveAndGoHistory}
                 openHistoryResult={openHistoryResult}
+                handleOpenProblemList={handleOpenProblemList}
+                handleOpenProblem={handleOpenProblem}
+                handleTriage={handleTriage}
+                handleDismissExtracted={handleDismissExtracted}
+                handleCreateProblemPlan={handleCreateProblemPlan}
               />
             </>
           )}
