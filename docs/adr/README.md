@@ -74,4 +74,4 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0006](0006-azure-access-via-device-code.md) — 開発・運用での Azure アクセスは device-code を主とする
 - [0007](0007-problem-centric-two-layer-domain-model.md) — 困りごとを Problem 集約とする 2層ドメインモデル (Mention → Problem)
 - [0008](0008-pr-review-via-cloud-routine.md) — PR レビューを Claude Code on the web の Routine で行う
-- [0009](0009-on-demand-cd-via-github-actions-oidc.md) — デプロイは GitHub Actions のオンデマンド CD（手動 up/down + 夜間 teardown, OIDC）で行う _(Proposed)_
+- [0009](0009-on-demand-cd-via-github-actions-oidc.md) — デプロイは GitHub Actions のオンデマンド CD（手動 up/down + 夜間 teardown, OIDC）で行う

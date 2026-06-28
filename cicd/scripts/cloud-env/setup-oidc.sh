@@ -50,7 +50,8 @@ echo "==> Role assignment: ${ROLE} @ /subscriptions/${SUBSCRIPTION_ID}"
 SP_OBJECT_ID="$(az ad sp show --id "$APP_ID" --query id -o tsv)"
 SCOPE="/subscriptions/${SUBSCRIPTION_ID}"
 # 冪等: 既にあれば再利用。無ければ作成し、失敗（権限不足等）は握り潰さず exit する。
-# ここを飲み込むと「✅ 完了」と出たのに CD で AuthorizationFailed になる（PR #45 レビュー指摘）。
+# ここを飲み込むと「✅ 完了」と表示されたまま、後段 CD で初めて AuthorizationFailed として顕在化し、
+# ユーザーが原因（ロール未付与）にたどり着けなくなるため、確実に exit させる。
 EXISTING_ROLE="$(az role assignment list \
   --assignee "$APP_ID" --role "$ROLE" --scope "$SCOPE" \
   --query "[0].id" -o tsv 2>/dev/null || true)"

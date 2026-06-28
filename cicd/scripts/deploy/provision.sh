@@ -27,11 +27,14 @@ need() {
     exit 1
   }
 }
-# 下流スクリプト（deploy-backend: npm/zip, deploy-frontend: swa/curl）が要るツールを
-# 先にまとめて検査し、途中で初めて落ちるのを防ぐ（PR #45 レビュー指摘）。
-# コンテナ系は `az acr build`（クラウドビルド）なので docker は不要。pnpm は任意（無ければ npm）。
+# 下流スクリプト（deploy-backend: npm/zip, deploy-frontend: pnpm/swa/curl）が要るツールを
+# 先にまとめて検査し、途中の別スクリプトで初めて落ちて原因特定が遅れるのを防ぐ。
+# コンテナ系は `az acr build`（クラウドビルド）なので docker は不要。
+# frontend は pnpm-lock.yaml 前提（package-lock.json を置かない方針）なので pnpm は必須。
+# deploy-frontend.sh の `npm ci` フォールバックはこのリポでは lockfile 不在で失敗するため当てにしない。
 need az
 need npm
+need pnpm
 need zip
 need curl
 need swa

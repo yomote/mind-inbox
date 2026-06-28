@@ -10,6 +10,9 @@
 - 対象サブスクリプションの**所有者/管理者相当**（ロール付与と Entra アプリ作成のため。初回設定のみ）
 - このセッションから Azure を触る準備（[claude-web-azure-access.md](./claude-web-azure-access.md) = device-code）
 - GitHub リポジトリの **Settings → Variables** を編集できる権限
+- CD（Actions）経由なら追加ツール不要。**device-code セッションから `provision.sh` を直接叩く場合**は
+  `az` / `node`(npm) / `pnpm` / `zip` / `curl` に加え **SWA CLI** が必要:
+  `npm i -g @azure/static-web-apps-cli`
 
 ## Steps
 

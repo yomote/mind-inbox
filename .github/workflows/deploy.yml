@@ -50,8 +50,10 @@ jobs:
       # OIDC 未設定（repo Variables 未登録）の間は、誤実行や夜間 schedule を赤くせず skip。
       - name: Guard — OIDC 設定済みか
         id: guard
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
         run: |
-          if [ -n "${{ vars.AZURE_CLIENT_ID }}" ]; then
+          if [ -n "$AZURE_CLIENT_ID" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"

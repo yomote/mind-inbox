@@ -1,6 +1,6 @@
 # 0009. デプロイは GitHub Actions のオンデマンド CD（手動 up/down + 夜間 teardown）で行う
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-28
 - Deciders: omoteforlab
 - Consulted: —
