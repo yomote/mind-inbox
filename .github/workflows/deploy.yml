@@ -102,3 +102,17 @@ jobs:
         run: |
           RG="$RG" ENVIRONMENT="$ENVIRONMENT" DEPLOYMENT="$DEPLOYMENT" \
             ./cicd/scripts/deploy/provision.sh
+
+      - name: SWA URL を Actions サマリに出す
+        if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up'
+        run: |
+          HOST="$(az staticwebapp list -g "$RG" --query '[0].defaultHostname' -o tsv 2>/dev/null || true)"
+          if [ -n "$HOST" ]; then
+            {
+              echo "### 🌐 公開 URL（スマホからアクセス）"
+              echo ""
+              echo "https://$HOST"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::SWA の defaultHostname を取得できませんでした。deploy-frontend のログを参照してください。"
+          fi

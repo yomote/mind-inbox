@@ -9,6 +9,9 @@ set -euo pipefail
 # NOTE: このスクリプトは IaC/README のコマンドから機械的に組んだもの。初回は region/quota の
 #       影響が出るため、device-code で対話実行して通ることを確認してから CD に委ねること。
 
+# RG 名は既存スクリプト（deploy-all.sh / cleanup-env.sh）の既定に合わせ rg-dev-mind-inbox とする。
+# （CLAUDE.md の命名規約 {type}-{env}-{appname} は bicep が作る“中身のリソース名”の話で、
+#  RG 名そのものは別。up/down を既存スクリプトと同じ RG に揃えるため意図的にこの値。）
 RG="${RG:-rg-dev-mind-inbox}"
 LOCATION="${LOCATION:-japaneast}"
 APP_NAME="${APP_NAME:-mind-box}"
