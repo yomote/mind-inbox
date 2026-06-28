@@ -39,6 +39,11 @@ jobs:
       - name: Install frontend deps
         run: pnpm --dir apps/frontend install --frozen-lockfile
 
+      # frontend の tsc -b は tsconfig.app.json で ../bff/src/trpc/router.ts も型検査するため、
+      # BFF の型依存（zod / @trpc/server / @azure/functions）が必要。
+      - name: Install bff deps (for shared trpc types)
+        run: npm --prefix apps/bff ci
+
       - name: Build (mock + subpath)
         env:
           VITE_USE_MOCK: "true"
