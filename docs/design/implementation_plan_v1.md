@@ -54,7 +54,7 @@ Phase A: AI Agent（抽出 + グルーピング + テーマ分類）
 Phase B: BFF（新ルーター + in-memory リポジトリ）
  ├─ B1. Mention / Problem リポジトリ（in-memory）
  ├─ B2. aiAgentClient に extract/group 追加（stub fallback）
- └─ B3. tRPC: problem.list / problem.get / mention.create / problem.triage / problem.createPlan
+ └─ B3. tRPC: consultation.extract / problem.list / problem.get / problem.triage / problem.createPlan
 
 Phase C: 結線・後片付け
  ├─ C1. フロント api/ 層を mock→real に切り替え
@@ -152,6 +152,7 @@ Phase C: 結線・後片付け
 
 - **Dump の境界**（①）— **1 consultation セッション = 1 Dump**。抽出トリガは `organize` の瞬間（セッション終了）。`consultation.organize` を `consultation.extract({sessionId}) → {mentions, affectedProblems}` に置換。入力はセッション全文、Mention はユーザー発話に帰属。**v1 は organize 時にまとめてコミット**（ライブ暫定表示は Phase D の UX 探索に留める）。
   - **ADR 要否**: `organize → extract` 置換は [ADR 0007](../adr/0007-problem-centric-two-layer-domain-model.md)（集約ルート転換）の**実装詳細であり、新規 ADR は不要**。API は BFF ↔ フロントの内部 tRPC 契約（外部公開 API ではない）で、0007 が定めた「Session を Mention を生むイベントに格下げ」の直接的帰結。
+  - **設計根拠（補足）**: `consultation.extract` はクライアント提供の `dumpText` を受け取らず、`sessionId` からサーバ側でセッション全文を取得する。これは入力制御の境界を狭める（攻撃面の縮小・改竄防止）意図も兼ねる。
 - **新画面の UX**（②）— 画面: 抽出結果レビュー / 困りごと一覧 / 困りごと詳細。
   - 一覧: デフォルト**直近言及順** + 再出現を視覚で常時強調（`🔁N回`バッジ、再燃ハイライト）+「よく出る順」トグル。合成スコアは Phase 2。
   - トリアージ: 抽出結果レビュー（その場）＋ 詳細（後から）の**両方**。
