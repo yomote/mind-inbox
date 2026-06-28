@@ -52,12 +52,15 @@ jobs:
         id: guard
         env:
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
         run: |
-          if [ -n "$AZURE_CLIENT_ID" ]; then
+          # 3 変数すべて揃って初めて run=true。partial 登録を後段 azure/login まで持ち越さない。
+          if [ -n "$AZURE_CLIENT_ID" ] && [ -n "$AZURE_TENANT_ID" ] && [ -n "$AZURE_SUBSCRIPTION_ID" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::OIDC 未設定（AZURE_CLIENT_ID 空）。docs/runbooks/azure-oidc-cd-setup.md を実施してください。今回はスキップします。"
+            echo "::warning::OIDC 未設定（AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID のいずれか空）。docs/runbooks/azure-oidc-cd-setup.md で3変数すべてを Variables に登録してください。今回はスキップします。"
           fi
 
       - name: Azure login (OIDC, no stored secret)
