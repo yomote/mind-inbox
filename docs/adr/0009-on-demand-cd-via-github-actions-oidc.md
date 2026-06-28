@@ -55,7 +55,7 @@ Chosen option: **Option A（オンデマンド CD + OIDC + 夜間 teardown ガ�
 ### Negative Consequences
 
 - 一度きりの OIDC 連携設定（Entra アプリ + federated credential + ロール付与）が要る（管理権限）
-- federated SP に **Contributor（サブスクリプションスコープ）** を与える = 権限は広め（RG 作成/削除のため）。スコープ最小化は将来課題
+- federated SP に **Contributor（サブスクリプションスコープ）** を与える = 権限は広め（RG 作成/削除のため）。スコープ最小化は将来課題 → [#46](https://github.com/yomote/mind-inbox/issues/46) で追跡（Custom Role / RG 単位へ）
 - `up` は初回 ~20〜40 分（IaC + イメージビルド + コンテナ反映）。所要時間は別途 Runbook に明記
 - schedule teardown は「立てっぱなしで翌朝消える」挙動。長時間使いたい時は再 `up` するか schedule を一時無効化する運用が要る
 

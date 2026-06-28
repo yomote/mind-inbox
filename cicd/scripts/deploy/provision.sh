@@ -17,8 +17,9 @@ LOCATION="${LOCATION:-japaneast}"
 APP_NAME="${APP_NAME:-mind-box}"
 ENVIRONMENT="${ENVIRONMENT:-dev}"
 DEPLOYMENT="${DEPLOYMENT:-main-bootstrap}"
-# Entra 認証(main-config)はUAMI事前準備が要るので既定では走らせない（個人デモは匿名SWAで可）。
-ENABLE_ENTRA_AUTH="${ENABLE_ENTRA_AUTH:-false}"
+# Entra 認証(main-config)はUAMI事前準備が要るのでここでは有効化しない（個人デモは匿名SWAで可）。
+# true でも実際の有効化はせず案内ログのみ出す（変数名はその挙動を表す）。
+PRINT_ENTRA_AUTH_HINT="${PRINT_ENTRA_AUTH_HINT:-false}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 IAC_DIR="$ROOT_DIR/cicd/iac"
@@ -56,8 +57,8 @@ az deployment group create \
   -p appName="$APP_NAME" environmentName="$ENVIRONMENT" \
   -o none
 
-if [[ "$ENABLE_ENTRA_AUTH" == "true" ]]; then
-  echo "==> [opt] Entra 認証(main-config) は手順が要るため iac/README §3 を参照（ここではスキップ）"
+if [[ "$PRINT_ENTRA_AUTH_HINT" == "true" ]]; then
+  echo "==> [hint] Entra 認証(main-config) は UAMI 事前準備が要る。手順は iac/README §3 を参照（ここでは有効化しない）"
 fi
 
 # コンテナは BFF より先に（deploy-backend が wrapper/ai-agent の FQDN を func 設定へ配線するため）。

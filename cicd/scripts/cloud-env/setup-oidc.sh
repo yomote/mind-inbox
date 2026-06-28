@@ -42,8 +42,9 @@ az ad sp show --id "$APP_ID" >/dev/null 2>&1 || az ad sp create --id "$APP_ID" >
 
 echo "==> Federated credential (subject = repo:${REPO}:ref:refs/heads/${BRANCH})"
 SUBJECT="repo:${REPO}:ref:refs/heads/${BRANCH}"
-EXISTING="$(az ad app federated-credential list --id "$APP_ID" \
-  --query "[?subject=='${SUBJECT}'].name | [0]" -o tsv 2>/dev/null || true)"
+# 既存判定も jq でフィルタ（subject に ' 等が入っても JMESPath 直展開で壊れないように）。
+EXISTING="$(az ad app federated-credential list --id "$APP_ID" -o json 2>/dev/null \
+  | jq -r --arg s "$SUBJECT" '[.[] | select(.subject == $s) | .name][0] // empty' 2>/dev/null || true)"
 if [[ -z "${EXISTING}" ]]; then
   # JSON は jq で生成（ブランチ名に "や\ が入っても壊れないように raw 展開を避ける）。
   FED_PARAMS="$(jq -n --arg name "gha-${BRANCH}" --arg subject "$SUBJECT" \
