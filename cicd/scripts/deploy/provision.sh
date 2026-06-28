@@ -47,6 +47,8 @@ az account show >/dev/null
 
 echo "==> [1/5] Resource group: $RG ($LOCATION)"
 az group create -n "$RG" -l "$LOCATION" >/dev/null
+# 立ち上げ時刻を RG タグに記録 → 夜間 schedule teardown が「最小生存時間」ガードで参照する。
+az group update -n "$RG" --set "tags.deployedAtEpoch=$(date +%s)" -o none >/dev/null 2>&1 || true
 
 echo "==> [2/5] Bootstrap infra (main-bootstrap.bicep)"
 az deployment group create \

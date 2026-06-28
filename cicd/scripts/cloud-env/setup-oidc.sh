@@ -46,8 +46,10 @@ SUBJECT="repo:${REPO}:ref:refs/heads/${BRANCH}"
 EXISTING="$(az ad app federated-credential list --id "$APP_ID" -o json 2>/dev/null \
   | jq -r --arg s "$SUBJECT" '[.[] | select(.subject == $s) | .name][0] // empty' 2>/dev/null || true)"
 if [[ -z "${EXISTING}" ]]; then
+  # credential 名は Azure リソース名制約があるため英数._- 以外を - に正規化（ブランチに / 等が入る場合）。
+  CRED_NAME="gha-$(printf '%s' "$BRANCH" | tr -c 'A-Za-z0-9_.-' '-')"
   # JSON は jq で生成（ブランチ名に "や\ が入っても壊れないように raw 展開を避ける）。
-  FED_PARAMS="$(jq -n --arg name "gha-${BRANCH}" --arg subject "$SUBJECT" \
+  FED_PARAMS="$(jq -n --arg name "$CRED_NAME" --arg subject "$SUBJECT" \
     '{name: $name, issuer: "https://token.actions.githubusercontent.com", subject: $subject, audiences: ["api://AzureADTokenExchange"]}')"
   az ad app federated-credential create --id "$APP_ID" --parameters "$FED_PARAMS" >/dev/null
 fi

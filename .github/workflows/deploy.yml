@@ -33,6 +33,11 @@ permissions:
   contents: read
 
 concurrency:
+  # up / down / schedule を RG 単位で「同一グループ」に入れて直列化する。
+  # これは意図的: 別グループにすると手動 up と夜間 down が並列実行され、deployment 中に
+  # group delete が走って RG が壊れる（= per-action グループ案より危険）。直列化が安全側。
+  # 「立てた直後に夜間 teardown で消える」問題は、teardown ステップ側の最小生存時間ガード
+  # （RG タグ deployedAtEpoch を見て若い環境は schedule では skip）で防ぐ。
   group: deploy-${{ github.event.inputs.environment || 'dev' }}
   cancel-in-progress: false
 
@@ -76,9 +81,23 @@ jobs:
       # cleanup-env.sh は冪等（内部 rg_exists ガードで RG 不在なら group delete を skip）。
       # よって既に撤収済みの夜でもジョブは緑のまま。`|| true` は付けない（purge 失敗等の
       # 本当のエラーは赤くして気づきたいため）。
+      # 夜間 schedule のみ「最小生存時間」ガード: 立てたばかり(< MIN_LIFETIME_SECONDS)の環境は
+      # 即撤収しない（手動 down は明示意図なので常に実行）。
       - name: Tear down (cleanup-env)
         if: steps.guard.outputs.run == 'true' && (github.event_name == 'schedule' || github.event.inputs.action == 'down')
+        env:
+          MIN_LIFETIME_SECONDS: "10800" # 3h
         run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            DEPLOYED_AT="$(az group show -n "$RG" --query "tags.deployedAtEpoch" -o tsv 2>/dev/null || true)"
+            if [ -n "$DEPLOYED_AT" ]; then
+              AGE=$(( $(date +%s) - DEPLOYED_AT ))
+              if [ "$AGE" -lt "$MIN_LIFETIME_SECONDS" ]; then
+                echo "環境が新しい（${AGE}s < ${MIN_LIFETIME_SECONDS}s）ため夜間 teardown を skip。"
+                exit 0
+              fi
+            fi
+          fi
           echo "Tearing down $RG ..."
           RG="$RG" ./cicd/scripts/env/cleanup-env.sh
 
@@ -111,7 +130,7 @@ jobs:
       - name: SWA URL を Actions サマリに出す
         if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up'
         run: |
-          HOST="$(az staticwebapp list -g "$RG" --query '[0].defaultHostname' -o tsv 2>/dev/null || true)"
+          HOST="$(az staticwebapp list -g "$RG" --query "[?starts_with(name, 'swa-')].defaultHostname | [0]" -o tsv 2>/dev/null || true)"
           if [ -n "$HOST" ]; then
             {
               echo "### 🌐 公開 URL（スマホからアクセス）"
