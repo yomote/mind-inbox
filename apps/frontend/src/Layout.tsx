@@ -141,6 +141,10 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const [accountMenuAnchorEl, setAccountMenuAnchorEl] = React.useState<null | HTMLElement>(null);
 
   const recognitionRef = React.useRef<SpeechRecognition | null>(null);
+  // ユーザーが「聞き続けてほしい」状態か（沈黙で勝手に止まったら再開する判定に使う）。
+  const shouldListenRef = React.useRef(false);
+  // 認識エンジンが実際に走っているか（二重 start による InvalidStateError を防ぐ）。
+  const recognitionRunningRef = React.useRef(false);
   const activeAudioRef = React.useRef<HTMLAudioElement | null>(null);
   const activeAudioUrlRef = React.useRef<string | null>(null);
   const lastSpokenAssistantMessageIdRef = React.useRef<string | null>(null);
@@ -332,15 +336,24 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   );
 
   const stopListening = React.useCallback(() => {
+    // 意図を先に落とす → onend が再開しないようにしてから停止。
+    shouldListenRef.current = false;
+    setListening(false);
+    setInterimTranscript("");
     const recognition = recognitionRef.current;
     if (!recognition) return;
-    recognition.stop();
+    try {
+      recognition.stop();
+    } catch {
+      // 既に停止済みなどは無視。
+    }
   }, []);
 
   const startListening = React.useCallback(() => {
-    if (!speechRecognitionCtor || loading) return;
+    if (!speechRecognitionCtor) return;
 
     setVoiceError(null);
+    shouldListenRef.current = true;
 
     if (!recognitionRef.current) {
       const recognition = new speechRecognitionCtor();
@@ -348,6 +361,11 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => {
+        recognitionRunningRef.current = true;
+        setListening(true);
+      };
 
       recognition.onresult = (event: SpeechRecognitionEvent) => {
         let finalText = "";
@@ -373,20 +391,52 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
       };
 
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-        setVoiceError(`音声認識エラー: ${event.error}`);
+        const err = event.error;
+        // continuous モードでは沈黙や中断で頻繁に出る。無害なので握り潰し、
+        // 継続は onend → 自動再開に任せる（「エラー表示で固まった」体験を防ぐ）。
+        if (err === "no-speech" || err === "aborted") {
+          return;
+        }
+        // マイク権限・デバイス起因は復帰不能なので意図を落として明示する。
+        if (err === "not-allowed" || err === "service-not-allowed" || err === "audio-capture") {
+          shouldListenRef.current = false;
+          setVoiceError("マイクを使えませんでした。ブラウザのマイク許可を確認してください。");
+          return;
+        }
+        setVoiceError(`音声認識エラー: ${err}`);
       };
 
       recognition.onend = () => {
-        setListening(false);
+        recognitionRunningRef.current = false;
         setInterimTranscript("");
+        // 継続意図があるのに止まった（沈黙タイムアウト等）→ 自動再開。
+        // sync 再開は InvalidStateError を起こしやすいので次 tick で。
+        if (shouldListenRef.current) {
+          window.setTimeout(() => {
+            if (!shouldListenRef.current || recognitionRunningRef.current) return;
+            try {
+              recognition.start();
+            } catch {
+              // まだ停止しきっていない場合などは次の onend で再試行される。
+            }
+          }, 150);
+          return;
+        }
+        setListening(false);
       };
 
       recognitionRef.current = recognition;
     }
 
-    recognitionRef.current.start();
+    if (!recognitionRunningRef.current) {
+      try {
+        recognitionRef.current.start();
+      } catch {
+        // 既に開始中なら無視（onstart で listening は同期される）。
+      }
+    }
     setListening(true);
-  }, [loading, speechRecognitionCtor]);
+  }, [speechRecognitionCtor]);
 
   const toggleListening = React.useCallback(() => {
     if (listening) {
