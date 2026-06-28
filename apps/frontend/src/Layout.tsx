@@ -159,6 +159,8 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const activeAudioUrlRef = React.useRef<string | null>(null);
   const lastSpokenAssistantMessageIdRef = React.useRef<string | null>(null);
   const voiceCacheRef = React.useRef<Map<string, Blob>>(new Map());
+  // iOS は最初のタップ起点でしか音を出せないため、一度ジェスチャ内で「解錠」しておく。
+  const audioUnlockedRef = React.useRef(false);
 
   const speechRecognitionCtor = React.useMemo<SpeechRecognitionConstructor | undefined>(() => {
     if (typeof window === "undefined") return undefined;
@@ -302,6 +304,21 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     utterance.onend = () => setSpeaking(false);
     utterance.onerror = () => setSpeaking(false);
     window.speechSynthesis.speak(utterance);
+  }, []);
+
+  // ユーザー操作（タップ）の中で一度だけ音声出力を解錠する。
+  // iOS は最初のジェスチャ内で発話/再生しておかないと、以降の自動読み上げが無音になる。
+  const unlockAudioPlayback = React.useCallback(() => {
+    if (audioUnlockedRef.current) return;
+    audioUnlockedRef.current = true;
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    try {
+      const u = new SpeechSynthesisUtterance(" ");
+      u.volume = 0;
+      window.speechSynthesis.speak(u);
+    } catch {
+      // 解錠失敗は致命ではない。
+    }
   }, []);
 
   const speakText = React.useCallback(
@@ -473,14 +490,16 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   }, [speechRecognitionCtor]);
 
   const toggleListening = React.useCallback(() => {
+    unlockAudioPlayback();
     if (listening) {
       stopListening();
       return;
     }
     startListening();
-  }, [listening, startListening, stopListening]);
+  }, [listening, startListening, stopListening, unlockAudioPlayback]);
 
   const toggleTtsEnabled = React.useCallback(() => {
+    unlockAudioPlayback();
     setTtsEnabled((prev) => {
       const next = !prev;
       if (!next) {
@@ -488,7 +507,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
       }
       return next;
     });
-  }, [stopSpeaking]);
+  }, [stopSpeaking, unlockAudioPlayback]);
 
   React.useEffect(() => {
     return () => {
@@ -498,6 +517,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   }, [stopListening, stopSpeaking]);
 
   const handleStartConsultation = async () => {
+    unlockAudioPlayback(); // タップ起点で音声を解錠（iOS の自動再生ブロック対策）
     setLoading(true);
     try {
       const newSession = await startNewConsultation(concern.trim());
@@ -513,6 +533,8 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
   const handleSendMessage = async () => {
     if (!session || !draftMessage.trim() || loading) return;
+
+    unlockAudioPlayback(); // タップ起点で音声を解錠（iOS の自動再生ブロック対策）
 
     const userMessage = {
       id: `u-${Date.now()}`,
