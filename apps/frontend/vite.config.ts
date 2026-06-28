@@ -4,7 +4,10 @@ import mdx from "@mdx-js/rollup";
 import { fileURLToPath, URL } from "node:url";
 
 // https://vite.dev/config/
+// base: GitHub Pages のプロジェクトサイトはサブパス配信なので VITE_BASE で上書きする
+//       （例: /mind-inbox/）。未指定なら "/"（SWA / dev）。
 export default defineConfig({
+  base: process.env.VITE_BASE || "/",
   plugins: [mdx(), react()],
   resolve: {
     alias: {

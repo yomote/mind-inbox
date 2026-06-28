@@ -108,6 +108,10 @@ function getClientPrincipal(payload: unknown): StaticWebAppsClientPrincipal | nu
 
 export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const isDev = import.meta.env.DEV;
+  // mock モード（VITE_USE_MOCK=true）は BFF も SWA 認証も無い自己完結デモ。
+  // 認証ゲート（/.auth/me）と login/logout リダイレクトをスキップして触れるようにする。
+  const useMock = import.meta.env.VITE_USE_MOCK === "true";
+  const standalone = isDev || useMock;
   const location = useLocation();
   const navigate = useNavigate();
   const voicevoxSpeaker = Number(import.meta.env.VITE_VOICEVOX_SPEAKER || "3");
@@ -159,7 +163,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   React.useEffect(() => {
     let active = true;
 
-    if (isDev) {
+    if (standalone) {
       setAuthStatus("authenticated");
       return () => {
         active = false;
@@ -193,7 +197,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     return () => {
       active = false;
     };
-  }, [isDev]);
+  }, [standalone]);
 
   const transition = React.useCallback(
     (next: AppRoute) => {
@@ -638,8 +642,11 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     lastSpokenAssistantMessageIdRef.current = null;
     voiceCacheRef.current.clear();
     navigate(ROUTE_PATHS.onboarding, { replace: true });
-    window.location.assign(logoutUrl);
-  }, [logoutUrl, navigate, stopListening, stopSpeaking]);
+    // standalone（dev / mock デモ）は SWA の /logout が無いのでリダイレクトしない。
+    if (!standalone) {
+      window.location.assign(logoutUrl);
+    }
+  }, [logoutUrl, navigate, standalone, stopListening, stopSpeaking]);
 
   const isAuthenticated = authStatus === "authenticated";
   const currentRoute = React.useMemo<AppRoute>(() => {
@@ -705,7 +712,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
           >
             <Box
               component="img"
-              src="/fabicon.png"
+              src={`${import.meta.env.BASE_URL}fabicon.png`}
               alt=""
               sx={{ width: 28, height: 28, borderRadius: 1 }}
             />
