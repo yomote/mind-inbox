@@ -106,6 +106,16 @@ function getClientPrincipal(payload: unknown): StaticWebAppsClientPrincipal | nu
   return null;
 }
 
+/**
+ * 最初の発話からセッションのタイトルを自動生成する（mock の簡易 AI タイトル）。
+ * タイトルは最初に聞かず、内容から後付けする方針。実 AI 生成は Phase A で差し替え。
+ */
+function deriveSessionTitle(text: string): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  if (!oneLine) return "新しい相談";
+  return oneLine.length > 18 ? `${oneLine.slice(0, 18)}…` : oneLine;
+}
+
 export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const isDev = import.meta.env.DEV;
   // mock モード（VITE_USE_MOCK=true）は BFF も SWA 認証も無い自己完結デモ。
@@ -271,12 +281,43 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     [voicevoxSpeaker],
   );
 
+  // ブラウザ内蔵の音声合成で読み上げる（VOICEVOX が無い時のフォールバック / mock デモ用）。
+  const speakWithBrowser = React.useCallback((text: string) => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      setSpeaking(false);
+      setVoiceError("このブラウザは音声読み上げに対応していません。");
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "ja-JP";
+    // 日本語ボイスがあれば優先（無ければ既定ボイス + lang ヒント）。
+    const jaVoice = window.speechSynthesis
+      .getVoices()
+      .find((v) => v.lang?.toLowerCase().startsWith("ja"));
+    if (jaVoice) utterance.voice = jaVoice;
+    utterance.rate = 1;
+    setSpeaking(true);
+    utterance.onend = () => setSpeaking(false);
+    utterance.onerror = () => setSpeaking(false);
+    window.speechSynthesis.speak(utterance);
+  }, []);
+
   const speakText = React.useCallback(
     async (text: string) => {
       if (!ttsEnabled || !text.trim()) return;
 
       setVoiceError(null);
       stopSpeaking();
+
+      // standalone（mock デモ）は BFF/VOICEVOX が無いので、ネットワークを叩かず
+      // ブラウザ内蔵 TTS で直接読み上げる（/api/tts の 404 待ちで詰まらせない）。
+      if (standalone) {
+        speakWithBrowser(text);
+        return;
+      }
+
       setSpeaking(true);
 
       try {
@@ -314,25 +355,18 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
         await audio.play();
       } catch {
-        if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-          setSpeaking(false);
-          setVoiceError("音声合成に失敗しました。VOICEVOX接続を確認してください。");
-          return;
-        }
-
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = "ja-JP";
-        utterance.rate = 1;
-        utterance.onend = () => setSpeaking(false);
-        utterance.onerror = () => {
-          setSpeaking(false);
-          setVoiceError("音声合成に失敗しました。VOICEVOX接続を確認してください。");
-        };
-
-        window.speechSynthesis.speak(utterance);
+        // VOICEVOX 失敗時はブラウザ TTS にフォールバック。
+        speakWithBrowser(text);
       }
     },
-    [stopSpeaking, synthesizeWithVoicevox, ttsEnabled, voicevoxSpeaker],
+    [
+      speakWithBrowser,
+      standalone,
+      stopSpeaking,
+      synthesizeWithVoicevox,
+      ttsEnabled,
+      voicevoxSpeaker,
+    ],
   );
 
   const stopListening = React.useCallback(() => {
@@ -488,8 +522,11 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     };
 
     setDraftMessage("");
+    // 最初のユーザー発話でタイトルを内容から自動生成（ChatGPT 風: 開始時は聞かない）。
+    const isFirstUserMessage = !session.messages.some((m) => m.role === "user");
+    const nextTitle = isFirstUserMessage ? deriveSessionTitle(userMessage.text) : session.title;
     const nextMessages = [...session.messages, userMessage];
-    setSession({ ...session, messages: nextMessages });
+    setSession({ ...session, title: nextTitle, messages: nextMessages });
 
     setLoading(true);
     try {

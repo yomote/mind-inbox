@@ -79,7 +79,8 @@ export async function startNewConsultation(concern: string): Promise<Consultatio
 
   return {
     id: uid(),
-    title: concern || "相談セッション",
+    // タイトルは最初の発話から自動生成する方針。開始時は仮の見出しのみ。
+    title: concern || "新しい相談",
     messages: [
       {
         id: uid(),

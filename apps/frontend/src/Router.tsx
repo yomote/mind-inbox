@@ -182,7 +182,7 @@ export function AppRouter({
         element={
           <ProtectedRoute authStatus={authStatus}>
             <HomeScreen
-              onNewConsultation={() => transition("newConsultation")}
+              onNewConsultation={() => void handleStartConsultation()}
               onProblemList={() => void handleOpenProblemList()}
               onHistory={() => transition("history")}
               onSpecPreview={isDev ? () => transition("specPreview") : undefined}
