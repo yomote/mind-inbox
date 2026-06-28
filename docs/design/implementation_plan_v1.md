@@ -42,9 +42,9 @@ PoC は **Session 中心**（`OrganizedResult.priorities: string[]` / `HistoryIt
 ```text
 Phase D: 型 & モック先行（フロントだけで新体験が見える）
  ├─ D1. ドメイン型定義（Mention / Problem / Theme）
- ├─ D2. UI 仕様 MDX（困りごと一覧 / 詳細 / トリアージ）← 先に書く
+ ├─ D2. UI 仕様 MDX（抽出結果レビュー / 一覧 / 詳細）← 先に書く
  ├─ D3. mockApi に Mention/Problem モック + 新画面の mock 挙動
- └─ D4. 新画面実装（mock で動作）: 一覧(UC-02) / 詳細 / 棚卸し(UC-04) / トリアージ
+ └─ D4. 新画面実装（mock で動作）: 抽出結果レビュー / 一覧(UC-02) / 詳細(UC-03/04/05) / トリアージ
 
 Phase A: AI Agent（抽出 + グルーピング + テーマ分類）
  ├─ A1. /extract（Dump → Mention[]、§9-2 粒度ルール）
@@ -54,7 +54,7 @@ Phase A: AI Agent（抽出 + グルーピング + テーマ分類）
 Phase B: BFF（新ルーター + in-memory リポジトリ）
  ├─ B1. Mention / Problem リポジトリ（in-memory）
  ├─ B2. aiAgentClient に extract/group 追加（stub fallback）
- └─ B3. tRPC: problem.list / problem.get / mention.create / problem.triage / problem.createPlan
+ └─ B3. tRPC: consultation.extract / problem.list / problem.get / problem.triage / problem.createPlan
 
 Phase C: 結線・後片付け
  ├─ C1. フロント api/ 層を mock→real に切り替え
@@ -76,8 +76,11 @@ Phase C: 結線・後片付け
 
 ### D2. UI 仕様 MDX（先に書く）
 
-- **変更対象**: `docs/frontend/ui_specs/` に `problem-list.mdx` / `problem-detail.mdx` / `triage.mdx` を新設。
-- **要点**: UC-02（一覧: テーマ/状態/再出現回数で並べる）/ UC-03（再出現の気づき提示）/ UC-04（棚卸し）/ トリアージ（分割・統合・別 Problem 化・再リンク）の画面を仕様化。
+- **変更対象**: `docs/frontend/ui_specs/` に `extract-review.mdx` / `problem-list.mdx` / `problem-detail.mdx` を新設（トリアージは各画面に組み込み）。
+- **要点（宿題②で確定）**:
+  - **抽出結果レビュー**: 「N件見つけた」+ 🆕新規 / 🔁既存に追加 + その場トリアージ + 再出現の気づき。
+  - **一覧（UC-02）**: デフォルト直近言及順 + `🔁N回`バッジで再出現を常時強調 +「よく出る順」トグル。テーマ/状態/期間フィルタ。
+  - **詳細（UC-03/04/05）**: Mention タイムライン（日付 + excerpt + affect）が主役 + 棚卸し + プラン + トリアージ。
 - **完了条件**: 新画面の MDX プレビューがレビュー可能。
 
 ### D3. mockApi 拡張
@@ -88,17 +91,17 @@ Phase C: 結線・後片付け
 
 ### D4. 新画面実装（mock 動作）
 
-- **変更対象**: `apps/frontend/src/components/screens/`（新規）+ `Router.tsx` / `Layout.tsx`。
-- **完了条件**: `VITE_USE_MOCK=true` で UC-02/03/04 + トリアージが触れる。
+- **変更対象**: `apps/frontend/src/components/screens/`（抽出結果レビュー / 一覧 / 詳細）+ `Router.tsx` / `Layout.tsx`。
+- **完了条件**: `VITE_USE_MOCK=true` で 吐き出し → 抽出結果レビュー → 一覧 → 詳細 → トリアージ → 棚卸し が一周する。
 
 ---
 
 ## 3. Phase A: AI Agent（抽出 + グルーピング + テーマ分類）
 
-### A1. `/extract`（Dump → Mention[]）
+### A1. `/extract`（Dump = セッション全文 → Mention[]）
 
-- **変更対象**: `apps/services/ai-agent/app/`（`extractor.py` 新設 + `main.py` にエンドポイント）。
-- **要点**: 粒度は「独立して再出現・独立して解決しうるか」（domain_model §6）。facet は親 Mention の文脈に抱える。出力に `statement` / `excerpt` / `affect` / `proposedTheme` / `proposedTags`。
+- **変更対象**: `apps/services/ai-agent/app/`（`extractor.py` 新設 + `main.py` にエンドポイント）。**既存 `/organize` を置換**。
+- **要点**: Dump は 1 セッション全文（既存 organizer と同じ入力）。粒度は「独立して再出現・独立して解決しうるか」（domain_model §6）。facet は親 Mention の文脈に抱える。出力に `statement` / `excerpt`（ユーザー発話の引用）/ `affect` / `proposedTheme` / `proposedTags`。
 - **完了条件**: 1 Dump → 0..N Mention が返る（例: 「転職…睡眠…」→ 2 Mention）。
 
 ### A2. グルーピング（v1 簡易）
@@ -126,10 +129,10 @@ Phase C: 結線・後片付け
 ### B3. tRPC ルーター
 
 - **手続き（提案シェイプ）**:
-  - `mention.create({ sessionId, dumpText })` → `{ mentions, affectedProblems }`（抽出 + 自動グルーピング）
+  - `consultation.extract({ sessionId })` → `{ mentions, affectedProblems }`（**organize を置換**。セッション全文を抽出 + 自動グルーピング）
   - `problem.list({ theme?, status?, range? })` → `Problem[]`
   - `problem.get({ id })` → `Problem`（mentions / plans 含む）
-  - `problem.triage({ action, ... })` → 分割 / 統合 / 再リンク / 状態遷移（resolve / shelve / reopen）
+  - `problem.triage({ action, ... })` → 統合 / 再リンク / 却下 / テーマ・タイトル編集 / 状態遷移（resolve / shelve / reopen）。分割は後回し
   - `problem.createPlan({ problemIds })` → `ActionPlan`（既存 `/plan` 再利用）
 - **完了条件**: 全手続きが stub でも 200 応答。
 
@@ -143,9 +146,20 @@ Phase C: 結線・後片付け
 
 ---
 
-## 6. 未決 / 要設計（着手前に詰める）
+## 6. 設計の宿題 — 決定 / 残
 
-- **新画面の UI 設計**（D2）— 一覧の並び（再出現重点の見せ方）/ トリアージの操作粒度。
-- **グルーピングの v1 アルゴリズム**（A2）— ルールベースか LLM 単発か。閾値の置き方。
-- **吐き出し（Dump）の境界**（A1）— 既存 `consultation`（対話）と Mention 抽出の接続点。セッション終了をどうトリガするか。
-- **既存 `OrganizedResult` / `HistoryItem` の移行**（C3）— 併存期間と廃止タイミング。
+### 決定済み（外部設計の続きで確定）
+
+- **Dump の境界**（①）— **1 consultation セッション = 1 Dump**。抽出トリガは `organize` の瞬間（セッション終了）。`consultation.organize` を `consultation.extract({sessionId}) → {mentions, affectedProblems}` に置換。入力はセッション全文、Mention はユーザー発話に帰属。**v1 は organize 時にまとめてコミット**（ライブ暫定表示は Phase D の UX 探索に留める）。
+  - **ADR 要否**: `organize → extract` 置換は [ADR 0007](../adr/0007-problem-centric-two-layer-domain-model.md)（集約ルート転換）の**実装詳細であり、新規 ADR は不要**。API は BFF ↔ フロントの内部 tRPC 契約（外部公開 API ではない）で、0007 が定めた「Session を Mention を生むイベントに格下げ」の直接的帰結。
+  - **設計根拠（補足）**: `consultation.extract` はクライアント提供の `dumpText` を受け取らず、`sessionId` からサーバ側でセッション全文を取得する（セッションは既にサーバ側に保持されており、クライアントが本文を再送する必要がないため）。
+- **新画面の UX**（②）— 画面: 抽出結果レビュー / 困りごと一覧 / 困りごと詳細。
+  - 一覧: デフォルト**直近言及順** + 再出現を視覚で常時強調（`🔁N回`バッジ、再燃ハイライト）+「よく出る順」トグル。合成スコアは Phase 2。
+  - トリアージ: 抽出結果レビュー（その場）＋ 詳細（後から）の**両方**。
+  - v1 操作: 再リンク / 統合 / 却下 / テーマ・タイトル編集（**分割は後回し**）。状態遷移（解決/棚卸し）は詳細。
+  - 詳細の核: **Mention タイムライン**（日付 + excerpt + affect）= 再出現履歴 + 感情推移。
+
+### 残（実装時 / Phase A 着手時に詰める）
+
+- **グルーピングの v1 アルゴリズム**（A2）— ルールベース or LLM 単発判定。閾値の置き方。embedding は Phase 2。
+- **既存 `OrganizedResult` / `HistoryItem` の移行**（C3）— `organize → extract` 置換は決定済み。`history.save`（per-session）→ Problem 永続化への移行・併存期間は実装時に詰める。
