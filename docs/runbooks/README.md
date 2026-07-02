@@ -50,6 +50,8 @@ Runbook PR は実際にその手順を**踏んだ人**が書くか、レビュ�
 
 ## 既存 Runbook
 
+- `azure-oidc-cd-setup.md` — オンデマンド CD（GitHub Actions + OIDC）の初回設定と up/down 運用
+- `claude-web-azure-access.md` — Claude Code (web) セッションから device-code で Azure を操作する
 - `local-fullstack-dev.md` — ローカルで VOICEVOX+BFF+frontend を起動し声の UX を評価する
 - `claude-pr-review.md` — Claude PR 自動レビュー (LLM-as-a-judge) を Routine で動かす / 観点変更 / 停止
 
