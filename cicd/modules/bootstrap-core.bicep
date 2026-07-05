@@ -92,6 +92,13 @@ param functionLocation string = staticSiteLocation
 @description('Enable VOICEVOX on Azure Container Apps (Serverless GPU).')
 param enableVoicevoxAca bool = false
 
+@allowed([
+  'cpu'
+  'gpu'
+])
+@description('VOICEVOX tier (ADR 0010). cpu = Consumption プロファイルで速く安く立てる（既定）/ gpu = T4 で喋りが速い。cpu 時は GPU プロファイル・GPU イメージを使わない。')
+param voicevoxTier string = 'cpu'
+
 @description('Azure region for VOICEVOX Container Apps environment/app.')
 param voicevoxLocation string = location
 
@@ -563,67 +570,80 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
   )
 }
 
+// VOICEVOX tier(ADR 0010) による実効値。gpu 以外は Consumption ベースの CPU 構成にフォールバック。
+var voicevoxIsGpu = voicevoxTier == 'gpu'
+var voicevoxEffectiveImage = voicevoxIsGpu ? voicevoxImage : 'voicevox/voicevox_engine:cpu-latest'
+var voicevoxEffectiveCpu = voicevoxIsGpu ? voicevoxCpu : 2
+var voicevoxEffectiveMemory = voicevoxIsGpu ? voicevoxMemory : '4Gi'
+// GPU 時のみ GPU ワークロードプロファイルを足す。cpu 時は組み込みの Consumption だけ使う
+// （ACA の Consumption は環境に1つの特別枠。CPU アプリは workloadProfileName を指定しない）。
+var voicevoxGpuWorkloadProfiles = [
+  {
+    name: 'Consumption'
+    workloadProfileType: 'Consumption'
+  }
+  {
+    name: voicevoxWorkloadProfileName
+    workloadProfileType: voicevoxWorkloadProfileType
+  }
+]
+
 resource voicevoxManagedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = if (enableVoicevoxAca) {
   name: voicevoxContainerAppsEnvironmentName
   location: voicevoxLocation
-  properties: {
-    appLogsConfiguration: {
-      destination: 'log-analytics'
-      logAnalyticsConfiguration: {
-        customerId: law.properties.customerId
-        sharedKey: law.listKeys().primarySharedKey
+  properties: union(
+    {
+      appLogsConfiguration: {
+        destination: 'log-analytics'
+        logAnalyticsConfiguration: {
+          customerId: law.properties.customerId
+          sharedKey: law.listKeys().primarySharedKey
+        }
       }
-    }
-    workloadProfiles: [
-      {
-        name: 'Consumption'
-        workloadProfileType: 'Consumption'
-      }
-      {
-        name: voicevoxWorkloadProfileName
-        workloadProfileType: voicevoxWorkloadProfileType
-      }
-    ]
-  }
+    },
+    voicevoxIsGpu ? { workloadProfiles: voicevoxGpuWorkloadProfiles } : {}
+  )
 }
 
 resource voicevoxContainerApp 'Microsoft.App/containerApps@2024-03-01' = if (enableVoicevoxAca) {
   name: voicevoxContainerAppName
   location: voicevoxLocation
-  properties: {
-    managedEnvironmentId: voicevoxManagedEnvironment.id
-    workloadProfileName: voicevoxWorkloadProfileName
-    configuration: {
-      activeRevisionsMode: 'Single'
-      ingress: {
-        external: true
-        targetPort: 50021
-        transport: 'http'
-      }
-    }
-    template: {
-      containers: [
-        {
-          name: 'voicevox-engine'
-          image: voicevoxImage
-          env: [
-            {
-              name: 'MALLOC_ARENA_MAX'
-              value: '2'
-            }
-          ]
-          resources: {
-            cpu: voicevoxCpu
-            memory: voicevoxMemory
-          }
+  properties: union(
+    {
+      managedEnvironmentId: voicevoxManagedEnvironment.id
+      configuration: {
+        activeRevisionsMode: 'Single'
+        ingress: {
+          external: true
+          targetPort: 50021
+          transport: 'http'
         }
-      ]
-      scale: {
-        minReplicas: voicevoxMinReplicas
-        maxReplicas: voicevoxMaxReplicas
       }
-    }
-  }
+      template: {
+        containers: [
+          {
+            name: 'voicevox-engine'
+            image: voicevoxEffectiveImage
+            env: [
+              {
+                name: 'MALLOC_ARENA_MAX'
+                value: '2'
+              }
+            ]
+            resources: {
+              cpu: voicevoxEffectiveCpu
+              memory: voicevoxEffectiveMemory
+            }
+          }
+        ]
+        scale: {
+          minReplicas: voicevoxMinReplicas
+          maxReplicas: voicevoxMaxReplicas
+        }
+      }
+    },
+    voicevoxIsGpu ? { workloadProfileName: voicevoxWorkloadProfileName } : {}
+  )
 }
 
 // -------------------- Azure OpenAI --------------------

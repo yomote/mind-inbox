@@ -1,0 +1,40 @@
+name: iac-validate
+
+# Bicep のコンパイル検証（構文・型・参照エラー）。
+# ローカルの agent 環境では bicep CLI の取得が egress ポリシーで塞がれるため、
+# GitHub runner（bicep 同梱・プロキシ外）でビルドして IaC 変更を自動検証する。
+# 注: これは `az deployment ... what-if`（実 Azure 差分）ではなくコンパイル検証まで。
+
+on:
+  pull_request:
+    paths:
+      - "cicd/iac/**"
+      - "cicd/modules/**"
+      - ".github/workflows/iac-validate.yml"
+  push:
+    branches: [main]
+    paths:
+      - "cicd/iac/**"
+      - "cicd/modules/**"
+
+permissions:
+  contents: read
+
+jobs:
+  bicep-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: az bicep version
+        run: az bicep version || az bicep install
+
+      - name: Build all bicep entrypoints
+        run: |
+          set -euo pipefail
+          for f in cicd/iac/main-bootstrap.bicep cicd/iac/main-config.bicep; do
+            echo "==> az bicep build $f"
+            az bicep build --file "$f" --stdout > /dev/null
+          done
+          echo "✅ bicep build OK（main-bootstrap は modules/bootstrap-core.bicep も含めて検証）"

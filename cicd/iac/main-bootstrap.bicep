@@ -27,6 +27,13 @@ param functionLocation string = staticSiteLocation
 @description('Enable VOICEVOX on Azure Container Apps (Serverless GPU).')
 param enableVoicevoxAca bool = false
 
+@allowed([
+  'cpu'
+  'gpu'
+])
+@description('VOICEVOX tier (ADR 0010). cpu = 速く安く（Consumption, 既定）/ gpu = T4 で喋りが速い。')
+param voicevoxTier string = 'cpu'
+
 @description('Azure region for VOICEVOX Container Apps resources.')
 param voicevoxLocation string = functionLocation
 
@@ -81,6 +88,7 @@ module infra '../modules/bootstrap-core.bicep' = {
     functionLocation: functionLocation
     functionPlanSkuName: functionPlanSkuName
     enableVoicevoxAca: enableVoicevoxAca
+    voicevoxTier: voicevoxTier
     voicevoxLocation: voicevoxLocation
     enableStaticSiteEntraAuth: false
     autoCreateStaticSiteEntraAppRegistration: false

@@ -17,6 +17,8 @@ LOCATION="${LOCATION:-japaneast}"
 APP_NAME="${APP_NAME:-mind-box}"
 ENVIRONMENT="${ENVIRONMENT:-dev}"
 DEPLOYMENT="${DEPLOYMENT:-main-bootstrap}"
+# VOICEVOX tier(ADR 0010): cpu = 速く安く（既定）/ gpu = T4 で喋りが速い。
+VOICEVOX_TIER="${VOICEVOX_TIER:-cpu}"
 # Entra 認証(main-config)はUAMI事前準備が要るのでここでは有効化しない（個人デモは匿名SWAで可）。
 # true でも実際の有効化はせず案内ログのみ出す（変数名はその挙動を表す）。
 PRINT_ENTRA_AUTH_HINT="${PRINT_ENTRA_AUTH_HINT:-false}"
@@ -54,13 +56,13 @@ if ! az group update -n "$RG" --set "tags.deployedAtEpoch=$(date +%s)" -o none >
   echo "      立てた直後でも夜間 schedule で撤収される可能性があります。" >&2
 fi
 
-echo "==> [2/5] Bootstrap infra (main-bootstrap.bicep)"
+echo "==> [2/5] Bootstrap infra (main-bootstrap.bicep) — voicevoxTier=$VOICEVOX_TIER"
 az deployment group create \
   -g "$RG" \
   -n "$DEPLOYMENT" \
   -f "$IAC_DIR/main-bootstrap.bicep" \
   -p @"$IAC_DIR/main-bootstrap.parameters.json" \
-  -p appName="$APP_NAME" environmentName="$ENVIRONMENT" \
+  -p appName="$APP_NAME" environmentName="$ENVIRONMENT" voicevoxTier="$VOICEVOX_TIER" \
   -o none
 
 if [[ "$PRINT_ENTRA_AUTH_HINT" == "true" ]]; then
