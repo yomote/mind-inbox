@@ -3,6 +3,11 @@ set -euo pipefail
 
 RG="${RG:-rg-dev-mind-inbox}"
 DEPLOYMENT="${DEPLOYMENT:-main-bootstrap}"
+# FRONTEND_PROFILE:
+#   full (既定) = Entra 認証あり本番経路。SWA に AZURE_CLIENT_ID/SECRET が要る。
+#   mock        = 匿名スタンドアロンデモ。BFF も認証も無く、mockApi で自己完結。
+#                 スマホから即触れる検証用（on-demand env の既定）。
+FRONTEND_PROFILE="${FRONTEND_PROFILE:-full}"
 
 need() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -120,11 +125,17 @@ fi
 echo "RG=$RG"
 echo "DEPLOYMENT=$DEPLOYMENT"
 echo "SWA_NAME=$SWA_NAME"
+echo "FRONTEND_PROFILE=$FRONTEND_PROFILE"
 
-AUTH_TENANT_ID="$(resolve_auth_tenant_id)"
-echo "AUTH_TENANT_ID=$AUTH_TENANT_ID"
-
-sync_swa_auth_app_settings "$AUTH_TENANT_ID"
+# mock プロファイルは匿名デモなので Entra 認証の解決/同期をまるごと skip する
+# （SWA に AZURE_CLIENT_ID/SECRET が無くても成立させる）。
+if [[ "$FRONTEND_PROFILE" == "full" ]]; then
+  AUTH_TENANT_ID="$(resolve_auth_tenant_id)"
+  echo "AUTH_TENANT_ID=$AUTH_TENANT_ID"
+  sync_swa_auth_app_settings "$AUTH_TENANT_ID"
+else
+  echo "mock プロファイル: Entra 認証の同期を skip（匿名デモ）"
+fi
 
 TOKEN="$(az staticwebapp secrets list -g "$RG" -n "$SWA_NAME" --query 'properties.apiKey' -o tsv)"
 if [[ -z "$TOKEN" ]]; then
@@ -132,14 +143,19 @@ if [[ -z "$TOKEN" ]]; then
   exit 1
 fi
 
-echo "--- build frontend ---"
+echo "--- build frontend (profile=$FRONTEND_PROFILE) ---"
 cd "$FRONTEND_DIR"
+# mock プロファイルは VITE_USE_MOCK=true で「BFF も認証も無い自己完結デモ」をビルドする。
+BUILD_ENV=()
+if [[ "$FRONTEND_PROFILE" != "full" ]]; then
+  BUILD_ENV=(VITE_USE_MOCK=true)
+fi
 if command -v pnpm >/dev/null 2>&1; then
   pnpm install --frozen-lockfile
-  pnpm build
+  env "${BUILD_ENV[@]}" pnpm build
 else
   npm ci
-  npm run build
+  env "${BUILD_ENV[@]}" npm run build
 fi
 
 DIST_DIR="$FRONTEND_DIR/dist"
@@ -149,16 +165,25 @@ if [[ ! -d "$DIST_DIR" ]]; then
 fi
 
 CONFIG_FILE="$DIST_DIR/staticwebapp.config.json"
-if [[ ! -f "$CONFIG_FILE" ]]; then
-  echo "ERROR: staticwebapp.config.json not found at $CONFIG_FILE" >&2
-  exit 1
-fi
-
-sed -i "s|<TENANT_ID>|$AUTH_TENANT_ID|g" "$CONFIG_FILE"
-
-if grep -q '<TENANT_ID>' "$CONFIG_FILE"; then
-  echo "ERROR: failed to replace <TENANT_ID> in $CONFIG_FILE" >&2
-  exit 1
+if [[ "$FRONTEND_PROFILE" == "full" ]]; then
+  if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo "ERROR: staticwebapp.config.json not found at $CONFIG_FILE" >&2
+    exit 1
+  fi
+  sed -i "s|<TENANT_ID>|$AUTH_TENANT_ID|g" "$CONFIG_FILE"
+  if grep -q '<TENANT_ID>' "$CONFIG_FILE"; then
+    echo "ERROR: failed to replace <TENANT_ID> in $CONFIG_FILE" >&2
+    exit 1
+  fi
+else
+  # mock: 認証ゲート無しの匿名 config に差し替える（本番 config の allowedRoles:authenticated を外す）。
+  MOCK_CONFIG="$DIST_DIR/staticwebapp.mock.config.json"
+  if [[ ! -f "$MOCK_CONFIG" ]]; then
+    echo "ERROR: staticwebapp.mock.config.json not found at $MOCK_CONFIG (public/ から dist へコピーされていない)" >&2
+    exit 1
+  fi
+  cp "$MOCK_CONFIG" "$CONFIG_FILE"
+  echo "mock プロファイル: 匿名 staticwebapp.config.json を適用"
 fi
 
 echo "--- deploy to SWA (production) ---"

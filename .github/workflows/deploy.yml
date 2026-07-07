@@ -29,6 +29,12 @@ on:
         options: [cpu, gpu]
         default: cpu
         required: true
+      profile:
+        description: "デプロイ profile（up 時のみ）: mock=匿名スタンドアロン(スマホ即検証) / full=実backend+認証"
+        type: choice
+        options: [mock, full]
+        default: mock
+        required: true
   schedule:
     # 夜間 teardown ガード: 毎日 JST 04:07 (= UTC 19:07) に down。消し忘れでも ¥0 に戻る。
     # 立ち上げは常に手動 up なので、この自動 down で困らない（必要なら再度 up）。
@@ -131,8 +137,10 @@ jobs:
         if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up'
         env:
           VOICEVOX_TIER: ${{ github.event.inputs.voicevox }}
+          DEPLOY_PROFILE: ${{ github.event.inputs.profile || 'mock' }}
         run: |
-          RG="$RG" ENVIRONMENT="$ENVIRONMENT" DEPLOYMENT="$DEPLOYMENT" VOICEVOX_TIER="$VOICEVOX_TIER" \
+          RG="$RG" ENVIRONMENT="$ENVIRONMENT" DEPLOYMENT="$DEPLOYMENT" \
+            VOICEVOX_TIER="$VOICEVOX_TIER" DEPLOY_PROFILE="$DEPLOY_PROFILE" \
             ./cicd/scripts/deploy/provision.sh
 
       - name: SWA URL を Actions サマリに出す
