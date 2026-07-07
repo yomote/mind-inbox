@@ -143,6 +143,15 @@ if [[ -z "$TOKEN" ]]; then
   exit 1
 fi
 
+# frontend の `tsc -b` は tsconfig.app.json 経由で ../bff/src/trpc/router.ts も型検査するため、
+# bff の依存が要る（未導入だと tRPC/domain 型が any に落ち、implicit-any で build が失敗する）。
+# full profile は deploy-backend が先に bff を npm ci するが、mock profile は backend を経由しないので
+# ここで担保する。既に導入済みなら skip。
+if [[ ! -d "$ROOT_DIR/apps/bff/node_modules" ]]; then
+  echo "--- install bff deps (shared trpc types) ---"
+  npm --prefix "$ROOT_DIR/apps/bff" ci
+fi
+
 echo "--- build frontend (profile=$FRONTEND_PROFILE) ---"
 cd "$FRONTEND_DIR"
 # mock プロファイルは VITE_USE_MOCK=true で「BFF も認証も無い自己完結デモ」をビルドする。
