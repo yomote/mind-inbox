@@ -67,7 +67,12 @@ az acr build \
   --image "ai-agent:${IMAGE_TAG}" \
   "$SOURCE_DIR"
 
-# ── Deploy Container App (create or update; FQDN captured from output) ────────
+# ── Deploy Container App (robust create/update; ACR pull via MI) ──────────────
+# 鶏卵問題の回避（deploy-voicevox-wrapper.sh と同じ）: system-assigned MI + プライベート
+# ACR では create 時点で MI がまだ AcrPull を持たず、--registry-identity system で
+# プライベートイメージを pull しようとすると create がハングする。まず public の
+# プレースホルダ画像 + system MI で作成 → AcrPull 付与 → registry を MI 経由に設定して
+# 本物の ACR イメージへ update する。
 echo ""
 echo "=== Deploying Container App ==="
 
@@ -78,15 +83,19 @@ ENV_VARS=(
   "LOG_LEVEL=INFO"
 )
 
+# min-replicas 0（scale-to-zero）なので、本物のイメージ pull は初回リクエスト時に走る。
+# その頃には AcrPull の RBAC 伝播は完了している。
+PLACEHOLDER_IMAGE="mcr.microsoft.com/k8se/quickstart:latest"
+
 CA_EXISTS="$(az containerapp show -g "$RG" -n "$CA_NAME" --query name -o tsv 2>/dev/null || true)"
 
 if [[ -z "$CA_EXISTS" ]]; then
-  echo "Creating Container App '$CA_NAME'..."
-  FQDN="$(az containerapp create \
+  echo "Creating Container App '$CA_NAME' (placeholder image; ACR は identity+role 付与後に配線)..."
+  az containerapp create \
     --resource-group "$RG" \
     --name "$CA_NAME" \
     --environment "$CAE_NAME" \
-    --image "$IMAGE" \
+    --image "$PLACEHOLDER_IMAGE" \
     --ingress external \
     --target-port "$TARGET_PORT" \
     --transport http \
@@ -95,34 +104,18 @@ if [[ -z "$CA_EXISTS" ]]; then
     --cpu 0.5 \
     --memory 1Gi \
     --system-assigned \
-    --registry-server "${ACR_NAME}.azurecr.io" \
-    --registry-identity system \
     --env-vars "${ENV_VARS[@]}" \
-    --query 'properties.configuration.ingress.fqdn' -o tsv)"
+    --output none
 else
-  echo "Updating Container App '$CA_NAME'..."
-  # MI を system-assigned に（既に有効なら no-op）
+  echo "Container App '$CA_NAME' exists; ensuring system-assigned identity..."
   az containerapp identity assign \
     --resource-group "$RG" \
     --name "$CA_NAME" \
     --system-assigned \
     --output none
-  # ACR registry を identity 経由で設定（既に設定済みなら no-op）
-  az containerapp registry set \
-    --resource-group "$RG" \
-    --name "$CA_NAME" \
-    --server "${ACR_NAME}.azurecr.io" \
-    --identity system \
-    --output none
-  FQDN="$(az containerapp update \
-    --resource-group "$RG" \
-    --name "$CA_NAME" \
-    --image "$IMAGE" \
-    --set-env-vars "${ENV_VARS[@]}" \
-    --query 'properties.configuration.ingress.fqdn' -o tsv)"
 fi
 
-# ── Role assignments ──────────────────────────────────────────────────────────
+# ── Role assignments（本物のイメージを pull する前に AcrPull を付与）──────────────
 echo ""
 echo "=== Assigning roles ==="
 
@@ -157,6 +150,22 @@ if [[ -n "$OPENAI_ACCOUNT_NAME" ]]; then
     echo "  WARNING: OpenAI account '$OPENAI_ACCOUNT_NAME' not found. Skipping OpenAI role." >&2
   fi
 fi
+
+# ── ACR を MI 経由に配線し、本物のイメージへ切り替え ─────────────────────────────
+echo ""
+echo "=== Wiring ACR (identity) + deploying real image ==="
+az containerapp registry set \
+  --resource-group "$RG" \
+  --name "$CA_NAME" \
+  --server "${ACR_NAME}.azurecr.io" \
+  --identity system \
+  --output none
+FQDN="$(az containerapp update \
+  --resource-group "$RG" \
+  --name "$CA_NAME" \
+  --image "$IMAGE" \
+  --set-env-vars "${ENV_VARS[@]}" \
+  --query 'properties.configuration.ingress.fqdn' -o tsv)"
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
