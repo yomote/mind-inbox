@@ -365,9 +365,14 @@ resource sqlAdminKeyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
       }
       enableRbacAuthorization: true
       publicNetworkAccess: 'Enabled'
-      softDeleteRetentionInDays: 90
-      enablePurgeProtection: true
+      // Key Vault は soft-delete を無効化できない。dev/stg は on-demand で down→up を繰り返すため、
+      // purge protection を付けると cleanup-env の `az keyvault purge` が MethodNotAllowed で失敗し、
+      // 同名 vault が soft-deleted のまま残って次の up が VaultAlreadyExists で落ちる。
+      // よって purge protection は prod のみに限定し、非 prod は cleanup で purge できるようにする。
+      // 保持日数も非 prod は最小(7)にして残骸ウィンドウを短くする。
+      softDeleteRetentionInDays: environmentName == 'prod' ? 90 : 7
     },
+    environmentName == 'prod' ? { enablePurgeProtection: true } : {},
     recoverSqlAdminKeyVault ? { createMode: 'recover' } : {}
   )
 }

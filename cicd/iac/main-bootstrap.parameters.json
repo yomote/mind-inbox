@@ -45,10 +45,10 @@
       "value": "japaneast"
     },
     "sqlAdminKeyVaultName": {
-      "value": "kv-dev-mindbox-sql2"
+      "value": "kv-dev-mindbox-sql3"
     },
     "recoverSqlAdminKeyVault": {
-      "value": true
+      "value": false
     }
   }
 }
