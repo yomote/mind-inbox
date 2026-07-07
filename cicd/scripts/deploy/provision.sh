@@ -73,8 +73,19 @@ fi
 echo "==> [3/5] VOICEVOX wrapper (Container App)"
 RG="$RG" DEPLOYMENT="$DEPLOYMENT" "$DEPLOY_DIR/deploy-voicevox-wrapper.sh"
 
-echo "==> [4/5] AI Agent (Container App)"
-RG="$RG" DEPLOYMENT="$DEPLOYMENT" "$DEPLOY_DIR/deploy-ai-agent.sh"
+# AI Agent は enableAiAgentAca=false のとき bootstrap がリソースを作らない（= 出力 aiAgentEnabled=false）。
+# その場合 deploy-ai-agent.sh は CA 名/OpenAI endpoint 不在で必ず落ちるので、ここでスキップする。
+# BFF は AI_AGENT_BASE_URL 未設定ならスタック応答で回る（deploy-backend.sh 参照）ので声/UX 検証は成立する。
+# NOTE: gpt-4o 系は全バージョンが Azure 上で Deprecating（新規デプロイ不可）。実 AI を戻すときは
+#       GA モデル（gpt-5 系）へ移行してから enableOpenAi/enableAiAgentAca を true に戻すこと。
+AI_AGENT_ENABLED="$(az deployment group show -g "$RG" -n "$DEPLOYMENT" \
+  --query 'properties.outputs.aiAgentEnabled.value' -o tsv 2>/dev/null || echo false)"
+if [[ "$AI_AGENT_ENABLED" == "true" ]]; then
+  echo "==> [4/5] AI Agent (Container App)"
+  RG="$RG" DEPLOYMENT="$DEPLOYMENT" "$DEPLOY_DIR/deploy-ai-agent.sh"
+else
+  echo "==> [4/5] AI Agent — スキップ（enableAiAgentAca=false / aiAgentEnabled=$AI_AGENT_ENABLED）。BFF はスタック応答で回る。"
+fi
 
 echo "==> [5/5] Backend(BFF) + Frontend(SWA)"
 RG="$RG" DEPLOYMENT="$DEPLOYMENT" "$DEPLOY_DIR/deploy-all.sh"
