@@ -24,8 +24,13 @@ az account set --subscription "<subscription-name-or-id>"
 REPO=yomote/mind-inbox ./cicd/scripts/cloud-env/setup-oidc.sh
 ```
 
-スクリプトが Entra アプリ + federated credential + ロール付与（Contributor / サブスクリプションスコープ）を作り、
-最後に **3 つの ID** を出力する。
+スクリプトが Entra アプリ + federated credential + ロール付与を作り、最後に **3 つの ID** を出力する。
+サブスクリプションスコープで付与するロールは 2 つ:
+
+- **Contributor** — up の RG 作成 / down の RG 削除 / 各リソース作成
+- **User Access Administrator** — deploy スクリプトが Container App の Managed Identity に AcrPull を、
+  ai-agent の MI に「Cognitive Services OpenAI User」を付与する（`roleAssignments/write`）。
+  Contributor 単独では `AuthorizationFailed` になるため必須。
 
 ### 2. 一度きり: GitHub に Variables を登録
 
@@ -74,8 +79,11 @@ GitHub → **Actions → "deploy" → Run workflow** → `action: up` / `environ
 
 ### `AuthorizationFailed`（デプロイ中に権限エラー）
 
-- 原因: SP のロール不足。RG 作成/削除や Key Vault purge にはサブスクリプションスコープの権限が要る。
-- 対処: `setup-oidc.sh` の `ROLE=Contributor`（既定）でサブスクリプションに付与されているか `az role assignment list --assignee <AZURE_CLIENT_ID>` で確認。
+- 原因: SP のロール不足。RG 作成/削除や Key Vault purge には Contributor、Container App の MI への
+  AcrPull / OpenAI User 付与には User Access Administrator（`roleAssignments/write`）が要る。
+- 対処: `az role assignment list --assignee <AZURE_CLIENT_ID> --scope /subscriptions/<sub>` で
+  **Contributor と User Access Administrator の両方**が付いているか確認。無ければ `setup-oidc.sh` を再実行
+  （`ROLES` 既定で両方付与）、または不足ロールを手動付与。
 
 ### 夜間に消えて困る（長時間使いたい）
 

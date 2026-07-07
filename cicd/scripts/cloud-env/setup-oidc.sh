@@ -4,7 +4,11 @@ set -euo pipefail
 # 一度きり: GitHub Actions(deploy.yml) が Azure へ OIDC ログインするための連携を作る。
 #   1. Entra アプリ登録(+ SP)
 #   2. federated credential（GitHub の OIDC subject を信頼）
-#   3. ロール付与（up は RG 作成、down は RG 削除するためサブスクリプションスコープ）
+#   3. ロール付与（サブスクリプションスコープ）:
+#      - Contributor: up の RG 作成 / down の RG 削除 / 各リソース作成
+#      - User Access Administrator: deploy スクリプトが Container App の MI に AcrPull を、
+#        ai-agent の MI に OpenAI User を付与する（= roleAssignments/write）。Contributor 単独では
+#        AuthorizationFailed になるため必須。
 # 実行: device-code でログイン後（管理権限が要る）。出力の3変数を GitHub の repo Variables に登録する。
 #
 # 関連: docs/runbooks/azure-oidc-cd-setup.md / ADR 0009
@@ -12,7 +16,8 @@ set -euo pipefail
 REPO="${REPO:-yomote/mind-inbox}"
 APP_NAME="${APP_NAME:-gha-oidc-mind-inbox-cd}"
 BRANCH="${BRANCH:-main}"
-ROLE="${ROLE:-Contributor}"
+# サブスクリプションスコープで付与するロール群（スペース区切りで上書き可）。
+ROLES="${ROLES:-Contributor|User Access Administrator}"
 
 need() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -54,28 +59,32 @@ if [[ -z "${EXISTING}" ]]; then
   az ad app federated-credential create --id "$APP_ID" --parameters "$FED_PARAMS" >/dev/null
 fi
 
-echo "==> Role assignment: ${ROLE} @ /subscriptions/${SUBSCRIPTION_ID}"
 SP_OBJECT_ID="$(az ad sp show --id "$APP_ID" --query id -o tsv)"
 SCOPE="/subscriptions/${SUBSCRIPTION_ID}"
 # 冪等: 既にあれば再利用。無ければ作成し、失敗（権限不足等）は握り潰さず exit する。
 # ここを飲み込むと「✅ 完了」と表示されたまま、後段 CD で初めて AuthorizationFailed として顕在化し、
 # ユーザーが原因（ロール未付与）にたどり着けなくなるため、確実に exit させる。
-EXISTING_ROLE="$(az role assignment list \
-  --assignee "$APP_ID" --role "$ROLE" --scope "$SCOPE" \
-  --query "[0].id" -o tsv 2>/dev/null || true)"
-if [[ -n "${EXISTING_ROLE}" ]]; then
-  echo "   既存のロール割当を再利用: ${ROLE}"
-elif az role assignment create \
-  --assignee-object-id "$SP_OBJECT_ID" \
-  --assignee-principal-type ServicePrincipal \
-  --role "$ROLE" \
-  --scope "$SCOPE" -o none; then
-  echo "   ロール割当を作成: ${ROLE}"
-else
-  echo "ERROR: ロール付与に失敗しました（サブスクリプションへの権限不足の可能性）。" >&2
-  echo "       Owner 相当の権限で実行し直してください。付与されないと CD で AuthorizationFailed になります。" >&2
-  exit 1
-fi
+# ROLES は '|' 区切り（ロール名にスペースを含むため空白区切りにできない）。
+IFS='|' read -r -a _ROLE_LIST <<< "$ROLES"
+for ROLE in "${_ROLE_LIST[@]}"; do
+  echo "==> Role assignment: ${ROLE} @ /subscriptions/${SUBSCRIPTION_ID}"
+  EXISTING_ROLE="$(az role assignment list \
+    --assignee "$APP_ID" --role "$ROLE" --scope "$SCOPE" \
+    --query "[0].id" -o tsv 2>/dev/null || true)"
+  if [[ -n "${EXISTING_ROLE}" ]]; then
+    echo "   既存のロール割当を再利用: ${ROLE}"
+  elif az role assignment create \
+    --assignee-object-id "$SP_OBJECT_ID" \
+    --assignee-principal-type ServicePrincipal \
+    --role "$ROLE" \
+    --scope "$SCOPE" -o none; then
+    echo "   ロール割当を作成: ${ROLE}"
+  else
+    echo "ERROR: ロール付与に失敗しました（${ROLE} / サブスクリプションへの権限不足の可能性）。" >&2
+    echo "       Owner 相当の権限で実行し直してください。付与されないと CD で AuthorizationFailed になります。" >&2
+    exit 1
+  fi
+done
 
 cat <<EOF
 
