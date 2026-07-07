@@ -46,6 +46,9 @@
     },
     "sqlAdminKeyVaultName": {
       "value": "kv-dev-mindbox-sql2"
+    },
+    "recoverSqlAdminKeyVault": {
+      "value": true
     }
   }
 }
