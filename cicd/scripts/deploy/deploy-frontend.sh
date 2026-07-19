@@ -154,6 +154,14 @@ fi
 
 echo "--- build frontend (profile=$FRONTEND_PROFILE) ---"
 cd "$FRONTEND_DIR"
+# mock: swa CLI は public/staticwebapp.config.json を自動検出して使う（dist だけ差し替えても
+# 無視され、本番 config の allowedRoles:authenticated が残って匿名アクセスが 401→ログインへ飛び 404 化する）。
+# そこで build 前に source(public) を匿名 config に差し替える。vite が dist へコピーし、swa の探索も
+# 匿名版を拾う。CI は fresh checkout なので source の書き換えは commit されず問題ない。
+if [[ "$FRONTEND_PROFILE" != "full" ]]; then
+  cp "$FRONTEND_DIR/public/staticwebapp.mock.config.json" "$FRONTEND_DIR/public/staticwebapp.config.json"
+  echo "mock プロファイル: public/staticwebapp.config.json を匿名版に差し替え"
+fi
 # mock プロファイルは VITE_USE_MOCK=true で「BFF も認証も無い自己完結デモ」をビルドする。
 BUILD_ENV=()
 if [[ "$FRONTEND_PROFILE" != "full" ]]; then
@@ -185,14 +193,13 @@ if [[ "$FRONTEND_PROFILE" == "full" ]]; then
     exit 1
   fi
 else
-  # mock: 認証ゲート無しの匿名 config に差し替える（本番 config の allowedRoles:authenticated を外す）。
-  MOCK_CONFIG="$DIST_DIR/staticwebapp.mock.config.json"
-  if [[ ! -f "$MOCK_CONFIG" ]]; then
-    echo "ERROR: staticwebapp.mock.config.json not found at $MOCK_CONFIG (public/ から dist へコピーされていない)" >&2
+  # mock: public を差し替え済みなので dist の config は既に匿名版。念のため認証ゲートが
+  # 残っていないことを assert（allowedRoles が残っていると匿名アクセスが 404 化する）。
+  if grep -q 'allowedRoles' "$CONFIG_FILE" 2>/dev/null; then
+    echo "ERROR: dist の staticwebapp.config.json に allowedRoles が残存（匿名化に失敗）" >&2
     exit 1
   fi
-  cp "$MOCK_CONFIG" "$CONFIG_FILE"
-  echo "mock プロファイル: 匿名 staticwebapp.config.json を適用"
+  echo "mock プロファイル: 匿名 staticwebapp.config.json を確認"
 fi
 
 echo "--- deploy to SWA (production) ---"
@@ -201,4 +208,13 @@ swa deploy "$DIST_DIR" --deployment-token "$TOKEN" --env production
 
 SWA_HOST="$(az staticwebapp show -g "$RG" -n "$SWA_NAME" --query defaultHostname -o tsv)"
 echo "--- smoke (frontend) ---"
-curl -fsS "https://$SWA_HOST" >/dev/null && echo "OK: https://$SWA_HOST"
+# -L を付けず、生の HTTP コードを確認する。認証ゲートが残っていると 200 ではなく
+# 302(→/.auth/login) や 401 が返る。`curl -fsS` だけだと 3xx を成功扱いして誤検知するので、
+# 明示的に 200 を要求する。
+SMOKE_CODE="$(curl -sS -o /dev/null -w '%{http_code}' "https://$SWA_HOST" || echo 000)"
+echo "smoke: http=$SMOKE_CODE https://$SWA_HOST"
+if [[ "$SMOKE_CODE" != "200" ]]; then
+  echo "ERROR: 匿名アクセスで 200 が返りません（http=$SMOKE_CODE）。認証ゲート残存か配信未反映の可能性。" >&2
+  exit 1
+fi
+echo "OK: https://$SWA_HOST"
