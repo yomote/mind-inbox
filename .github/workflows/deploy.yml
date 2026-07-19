@@ -30,10 +30,10 @@ on:
         default: cpu
         required: true
       profile:
-        description: "デプロイ profile（up 時のみ）: mock=匿名スタンドアロン(スマホ即検証) / full=実backend+認証"
+        description: "profile（up時のみ）: mock=匿名(ブラウザ音声) / mockvoice=匿名+ずんだもん(VOICEVOX直) / full=実backend+認証"
         type: choice
-        options: [mock, full]
-        default: mock
+        options: [mock, mockvoice, full]
+        default: mockvoice
         required: true
   schedule:
     # 夜間 teardown ガード: 毎日 JST 04:07 (= UTC 19:07) に down。消し忘れでも ¥0 に戻る。

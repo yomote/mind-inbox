@@ -167,6 +167,12 @@ BUILD_ENV=()
 if [[ "$FRONTEND_PROFILE" != "full" ]]; then
   BUILD_ENV=(VITE_USE_MOCK=true)
 fi
+# VITE_VOICEVOX_BASE_URL が渡っていれば、standalone でも VOICEVOX wrapper を直接叩いて
+# ずんだもんで読み上げる（mockvoice profile）。空なら frontend はブラウザ TTS にフォールバック。
+if [[ -n "${VITE_VOICEVOX_BASE_URL:-}" ]]; then
+  BUILD_ENV+=("VITE_VOICEVOX_BASE_URL=$VITE_VOICEVOX_BASE_URL")
+  echo "VOICEVOX 直叩き URL: $VITE_VOICEVOX_BASE_URL"
+fi
 if command -v pnpm >/dev/null 2>&1; then
   pnpm install --frozen-lockfile
   env "${BUILD_ENV[@]}" pnpm build

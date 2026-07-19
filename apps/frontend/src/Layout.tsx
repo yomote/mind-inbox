@@ -125,6 +125,10 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const voicevoxSpeaker = Number(import.meta.env.VITE_VOICEVOX_SPEAKER || "3");
+  // standalone（mock）でも、この URL が指定されていれば VOICEVOX wrapper を直接叩いて
+  // ずんだもんで読み上げる（BFF/認証なしの匿名デモ + 実 VOICEVOX = mockvoice profile）。
+  // 未指定ならブラウザ内蔵 TTS にフォールバック。
+  const voicevoxBaseUrl = (import.meta.env.VITE_VOICEVOX_BASE_URL || "").replace(/\/$/, "");
   const loginUrl = "/login";
   const logoutUrl = "/logout";
 
@@ -263,14 +267,18 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
   const synthesizeWithVoicevox = React.useCallback(
     async (text: string): Promise<Blob> => {
-      const res = await fetch("/api/tts", {
+      // standalone + VOICEVOX base URL 指定時は wrapper を直接叩く（BFF を経由しない匿名デモ）。
+      // それ以外は BFF 経由（/api/tts）。どちらも {text, speaker} を受け取り audio/wav を返す。
+      const endpoint =
+        standalone && voicevoxBaseUrl ? `${voicevoxBaseUrl}/synthesize` : "/api/tts";
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, speaker: voicevoxSpeaker }),
       });
 
       if (res.status === 204) {
-        // VOICEVOX_BASE_URL 未設定時の stub。フォールバックをトリガーする。
+        // VOICEVOX_BASE_URL 未設定時の stub（BFF 経路）。フォールバックをトリガーする。
         throw new Error("TTS_STUB");
       }
 
@@ -280,7 +288,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
       return await res.blob();
     },
-    [voicevoxSpeaker],
+    [voicevoxSpeaker, standalone, voicevoxBaseUrl],
   );
 
   // ブラウザ内蔵の音声合成で読み上げる（VOICEVOX が無い時のフォールバック / mock デモ用）。
@@ -328,9 +336,11 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
       setVoiceError(null);
       stopSpeaking();
 
-      // standalone（mock デモ）は BFF/VOICEVOX が無いので、ネットワークを叩かず
+      // standalone（mock デモ）で VOICEVOX base URL が無い場合は、ネットワークを叩かず
       // ブラウザ内蔵 TTS で直接読み上げる（/api/tts の 404 待ちで詰まらせない）。
-      if (standalone) {
+      // base URL がある場合（mockvoice）は下の VOICEVOX 経路へ落として実ずんだもんで読み上げる
+      // （失敗時は catch 内でブラウザ TTS にフォールバック）。
+      if (standalone && !voicevoxBaseUrl) {
         speakWithBrowser(text);
         return;
       }
@@ -383,6 +393,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
       synthesizeWithVoicevox,
       ttsEnabled,
       voicevoxSpeaker,
+      voicevoxBaseUrl,
     ],
   );
 

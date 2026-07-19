@@ -75,11 +75,30 @@ if [[ "$PRINT_ENTRA_AUTH_HINT" == "true" ]]; then
   echo "==> [hint] Entra 認証(main-config) は UAMI 事前準備が要る。手順は iac/README §3 を参照（ここでは有効化しない）"
 fi
 
-if [[ "$DEPLOY_PROFILE" == "mock" ]]; then
-  # mock: 匿名スタンドアロン。bootstrap で出来た SWA に frontend(mockApi) を配信するだけ。
-  # BFF/ai-agent/VOICEVOX wrapper のデプロイは不要（mockApi で自己完結、スマホ即検証）。
-  echo "==> [3/3] Frontend (SWA, mock standalone) — profile=mock"
-  RG="$RG" DEPLOYMENT="$DEPLOYMENT" FRONTEND_PROFILE=mock "$DEPLOY_DIR/deploy-frontend.sh"
+if [[ "$DEPLOY_PROFILE" == "mock" || "$DEPLOY_PROFILE" == "mockvoice" ]]; then
+  # mock:      匿名スタンドアロン。bootstrap で出来た SWA に frontend(mockApi) を配信するだけ。
+  #            TTS はブラウザ内蔵音声（ずんだもんではない）。BFF/ai-agent/wrapper 不要で最安・最速。
+  # mockvoice: 上記に加え VOICEVOX wrapper を配信し、frontend が wrapper を直接叩いてずんだもんで
+  #            読み上げる（BFF/認証は無いまま）。engine cold-start で初回だけ数秒待つことがある。
+  VITE_VOICEVOX_BASE_URL=""
+  if [[ "$DEPLOY_PROFILE" == "mockvoice" ]]; then
+    echo "==> [3/4] VOICEVOX wrapper (Container App) — mockvoice"
+    RG="$RG" DEPLOYMENT="$DEPLOYMENT" "$DEPLOY_DIR/deploy-voicevox-wrapper.sh"
+    VV_WRAP_NAME="$(az deployment group show -g "$RG" -n "$DEPLOYMENT" \
+      --query 'properties.outputs.voicevoxWrapperContainerAppName.value' -o tsv 2>/dev/null || true)"
+    VV_FQDN="$(az containerapp show -g "$RG" -n "$VV_WRAP_NAME" \
+      --query 'properties.configuration.ingress.fqdn' -o tsv 2>/dev/null || true)"
+    if [[ -z "$VV_FQDN" ]]; then
+      echo "ERROR: VOICEVOX wrapper の FQDN を取得できませんでした（mockvoice には必須）。" >&2
+      exit 1
+    fi
+    VITE_VOICEVOX_BASE_URL="https://$VV_FQDN"
+    echo "==> [4/4] Frontend (SWA, mock standalone + VOICEVOX ずんだもん) — profile=mockvoice"
+  else
+    echo "==> [3/3] Frontend (SWA, mock standalone) — profile=mock"
+  fi
+  RG="$RG" DEPLOYMENT="$DEPLOYMENT" FRONTEND_PROFILE=mock \
+    VITE_VOICEVOX_BASE_URL="$VITE_VOICEVOX_BASE_URL" "$DEPLOY_DIR/deploy-frontend.sh"
 else
   # コンテナは BFF より先に（deploy-backend が wrapper/ai-agent の FQDN を func 設定へ配線するため）。
   echo "==> [3/5] VOICEVOX wrapper (Container App)"

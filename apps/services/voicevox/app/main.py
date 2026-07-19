@@ -1,7 +1,10 @@
 import logging
 
+import os
+
 import httpx
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from .schemas import AudioQueryRequest, SynthesizeRequest
@@ -11,6 +14,17 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="voicevox-wrapper", version="0.1.0")
+
+# CORS: 匿名 mock デモ（SWA の静的フロント）がブラウザから直接 /synthesize を叩けるようにする。
+# 既定は全許可（個人デモ向け）。CORS_ALLOW_ORIGINS を "," 区切りで渡せば絞れる。
+_cors_origins = [o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins or ["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/health")
