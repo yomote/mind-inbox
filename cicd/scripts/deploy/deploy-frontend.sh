@@ -219,8 +219,20 @@ echo "--- smoke (frontend) ---"
 # 明示的に 200 を要求する。
 SMOKE_CODE="$(curl -sS -o /dev/null -w '%{http_code}' "https://$SWA_HOST" || echo 000)"
 echo "smoke: http=$SMOKE_CODE https://$SWA_HOST"
-if [[ "$SMOKE_CODE" != "200" ]]; then
-  echo "ERROR: 匿名アクセスで 200 が返りません（http=$SMOKE_CODE）。認証ゲート残存か配信未反映の可能性。" >&2
-  exit 1
+if [[ "$FRONTEND_PROFILE" == "full" ]]; then
+  # 認証あり: 匿名アクセスは 302(→/.auth/login) が正常。200/302/401 を許容し、404/500/000 のみ失敗。
+  case "$SMOKE_CODE" in
+    200 | 302 | 401)
+      echo "OK(認証ゲート動作中): http=$SMOKE_CODE https://$SWA_HOST" ;;
+    *)
+      echo "ERROR: 予期しない応答 http=$SMOKE_CODE（配信未反映/500 の可能性）。" >&2
+      exit 1 ;;
+  esac
+else
+  # mock/mockvoice: 匿名で 200 必須（認証ゲートが残っていれば 302 になり 404 化する）。
+  if [[ "$SMOKE_CODE" != "200" ]]; then
+    echo "ERROR: 匿名アクセスで 200 が返りません（http=$SMOKE_CODE）。認証ゲート残存か配信未反映の可能性。" >&2
+    exit 1
+  fi
+  echo "OK: https://$SWA_HOST"
 fi
-echo "OK: https://$SWA_HOST"
