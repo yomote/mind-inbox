@@ -171,19 +171,27 @@ FQDN="$(az containerapp update \
 # AI_AGENT_SMOKE=false でスキップ可。既定は実行して「本当に喋る」を確認する。
 if [[ "${AI_AGENT_SMOKE:-true}" == "true" ]]; then
   echo ""
-  echo "=== Smoke: POST /chat（初回は scale-to-zero cold-start + LLM 呼び出しで最大 ~2 分）==="
+  echo "=== Smoke 1/2: warm-up GET /health（scale-to-zero からの cold-start を先に済ませる）==="
+  # cold-start を /health で先に踏んでおく（replica 起動 + kernel ロード）。/chat の時間予算を実処理に使う。
+  H_CODE="$(curl -sS -m 120 -o /dev/null -w '%{http_code}' "https://${FQDN}/health" 2>/dev/null || echo 000)"
+  echo "health http=$H_CODE"
+
+  echo ""
+  echo "=== Smoke 2/2: POST /chat（gpt-5-mini は推論モデルで遅め。workflow が複数回 LLM を呼ぶ）==="
   SMOKE_JSON="$(mktemp)"
-  SMOKE_CODE="$(curl -sS -m 150 -o "$SMOKE_JSON" -w '%{http_code}' \
+  # 推論モデル + 複数呼び出し + cold-start 残りを見て時間を厚めに（300s）。500 等は body に出るので必ず表示。
+  SMOKE_CODE="$(curl -sS -m 300 -o "$SMOKE_JSON" -w '%{http_code}' \
     -X POST "https://${FQDN}/chat" \
     -H 'Content-Type: application/json' \
     -d '{"session_id":"smoke","message":"こんにちは。これは接続テストです。ひとことで返してください。"}' \
     2>/dev/null || echo 000)"
   echo "smoke /chat http=$SMOKE_CODE"
-  echo "--- reply (先頭 600 文字) ---"
-  head -c 600 "$SMOKE_JSON" 2>/dev/null; echo
+  echo "--- reply (先頭 800 文字) ---"
+  head -c 800 "$SMOKE_JSON" 2>/dev/null; echo
   rm -f "$SMOKE_JSON"
   if [[ "$SMOKE_CODE" != "200" ]]; then
-    echo "ERROR: /chat が 200 を返しません（http=$SMOKE_CODE）。上の応答/ai-agent ログで LLM 呼び出しエラーを確認。" >&2
+    echo "ERROR: /chat が 200 を返しません（http=$SMOKE_CODE）。上の body に 500 の例外詳細が出ていれば LLM 呼び出しエラー、" >&2
+    echo "       000 なら 300s でも応答なし（推論が長すぎ/ハング）。ai-agent ログ（Log Analytics）も参照。" >&2
     exit 1
   fi
 fi
