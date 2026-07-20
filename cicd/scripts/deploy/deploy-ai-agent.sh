@@ -83,8 +83,10 @@ ENV_VARS=(
   "LOG_LEVEL=INFO"
 )
 
-# min-replicas 0（scale-to-zero）なので、本物のイメージ pull は初回リクエスト時に走る。
-# その頃には AcrPull の RBAC 伝播は完了している。
+# min-replicas: 既定 1（warm 維持）。scale-to-zero(0) だと初回リクエストで cold-start が走り、
+# 相談の1発目が ~1-2 分固まって見える（実測: ボタンが無反応に見える）。UX 優先で常時 1 レプリカ。
+# コスト最優先なら AI_AGENT_MIN_REPLICAS=0 で従来の scale-to-zero に戻せる（on-demand env は down 時 ¥0）。
+AI_AGENT_MIN_REPLICAS="${AI_AGENT_MIN_REPLICAS:-1}"
 PLACEHOLDER_IMAGE="mcr.microsoft.com/k8se/quickstart:latest"
 
 CA_EXISTS="$(az containerapp show -g "$RG" -n "$CA_NAME" --query name -o tsv 2>/dev/null || true)"
@@ -99,7 +101,7 @@ if [[ -z "$CA_EXISTS" ]]; then
     --ingress external \
     --target-port "$TARGET_PORT" \
     --transport http \
-    --min-replicas 0 \
+    --min-replicas "$AI_AGENT_MIN_REPLICAS" \
     --max-replicas 3 \
     --cpu 0.5 \
     --memory 1Gi \
@@ -164,6 +166,8 @@ FQDN="$(az containerapp update \
   --resource-group "$RG" \
   --name "$CA_NAME" \
   --image "$IMAGE" \
+  --min-replicas "$AI_AGENT_MIN_REPLICAS" \
+  --max-replicas 3 \
   --set-env-vars "${ENV_VARS[@]}" \
   --query 'properties.configuration.ingress.fqdn' -o tsv)"
 
