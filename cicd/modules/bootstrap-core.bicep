@@ -561,10 +561,10 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
               name: 'WEBSITE_NODE_DEFAULT_VERSION'
               value: '~22'
             }
-            {
-              name: 'WEBSITE_RUN_FROM_PACKAGE'
-              value: '1'
-            }
+            // NOTE: WEBSITE_RUN_FROM_PACKAGE はここで設定しない。Linux Consumption では '1' が
+            // 非対応で func が 503（The service is unavailable）になり、かつ deploy-backend が
+            // 設定する blob SAS URL を bootstrap の度に上書きしてしまうため。デプロイ方式は
+            // deploy-backend.sh の run-from-package（blob SAS URL）に一元化する。
             {
               name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING'
               value: functionStorageConnectionString

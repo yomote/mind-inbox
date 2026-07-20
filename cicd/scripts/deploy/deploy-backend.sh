@@ -181,7 +181,29 @@ else
 fi
 
 # ── Smoke ─────────────────────────────────────────────────────────────────────
+# run-from-package は restart 後にパッケージを blob から取得＆マウントするまで時間がかかり、
+# その間 func は 503（The service is unavailable）を返す。マウント完了＝非503 を待つ。
+# 503 のまま抜けたらパッケージ起動失敗として fail（BFF が死んでいる＝相談が返らない元凶）。
 echo ""
-echo "--- smoke (direct function) ---"
-# Even if EasyAuth returns 401, status line is what we care about (not 404 / 500).
-curl -sS -D- -o /dev/null "https://$FUNC_APP_NAME.azurewebsites.net/api/trpc/health.ping" | sed -n '1,10p' || true
+echo "--- smoke: BFF がパッケージから起動して応答するか（503 マウント待ち）---"
+FUNC_URL="https://$FUNC_APP_NAME.azurewebsites.net/api/trpc/health.ping"
+ready=""
+for i in $(seq 1 24); do
+  code="$(curl -sS -m 20 -o /dev/null -w '%{http_code}' "$FUNC_URL" 2>/dev/null || echo 000)"
+  echo "  [$i] GET health.ping http=$code"
+  # 非 503/000 なら host は起動している（400/404/200 等いずれでも「生きてる」）。
+  if [[ "$code" != "503" && "$code" != "000" ]]; then ready=1; break; fi
+  sleep 10
+done
+if [[ -z "$ready" ]]; then
+  echo "ERROR: BFF が 503/000 のまま起動しません。run-from-package のマウント失敗の可能性。" >&2
+  echo "       WEBSITE_RUN_FROM_PACKAGE が blob SAS URL になっているか、blob が読めるかを確認。" >&2
+  exit 1
+fi
+echo "  → BFF host is up (http=$code)"
+
+echo "--- smoke: consultation.start（BFF→ai-agent 疎通, 非致命）---"
+curl -sS -m 150 -w '\n  http=%{http_code}\n' -X POST \
+  "https://$FUNC_APP_NAME.azurewebsites.net/api/trpc/consultation.start?batch=1" \
+  -H 'Content-Type: application/json' -d '{"0":{"concern":"接続テストです。ひとことで返してください。"}}' \
+  2>/dev/null | head -c 700 || true
