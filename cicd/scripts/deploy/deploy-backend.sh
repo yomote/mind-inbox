@@ -53,14 +53,9 @@ echo "FUNC_APP_NAME=$FUNC_APP_NAME"
 echo "AI_AGENT_CA_NAME=${AI_AGENT_CA_NAME:-<unset>}"
 echo "VV_WRAPPER_CA_NAME=${VV_WRAPPER_CA_NAME:-<unset>}"
 
-# ── Preflight: clean WEBSITE_RUN_FROM_PACKAGE if pointing at a URL ───────────
-echo "--- preflight (app settings) ---"
-RUN_FROM_PACKAGE_VALUE="$(az functionapp config appsettings list -g "$RG" -n "$FUNC_APP_NAME" --query "[?name=='WEBSITE_RUN_FROM_PACKAGE'].value | [0]" -o tsv)"
-if [[ -n "$RUN_FROM_PACKAGE_VALUE" && "$RUN_FROM_PACKAGE_VALUE" == http* ]]; then
-  echo "Deleting URL-based WEBSITE_RUN_FROM_PACKAGE (conflicts with config-zip)"
-  az functionapp config appsettings delete -g "$RG" -n "$FUNC_APP_NAME" --setting-names WEBSITE_RUN_FROM_PACKAGE >/dev/null
-fi
-echo "Track deployment: https://$FUNC_APP_NAME.scm.azurewebsites.net/api/deployments/latest"
+# NOTE: Linux Consumption(Y1) は config-zip(Kudu zipdeploy) 非対応で "Bad Request" になる。
+# 正攻法は run-from-package（zip を storage blob に上げ SAS URL を WEBSITE_RUN_FROM_PACKAGE に設定）。
+# 旧 preflight（URL 版 RFP を消す処理）は config-zip 前提だったので撤去した。
 
 # ── Build BFF ─────────────────────────────────────────────────────────────────
 echo ""
@@ -99,11 +94,49 @@ zip -qr "$ZIP_PATH" \
 ZIP_BYTES="$(stat -c%s "$ZIP_PATH" 2>/dev/null || stat -f%z "$ZIP_PATH")"
 echo "Zip size: $ZIP_BYTES bytes ($ZIP_PATH)"
 
-# ── Deploy ────────────────────────────────────────────────────────────────────
+# ── Deploy: run-from-package via storage blob SAS（Linux Consumption 正攻法）────
 echo ""
-echo "=== Deploying to Function App ==="
+echo "=== Deploying to Function App (run-from-package via blob SAS) ==="
 cd "$ROOT_DIR"
-az functionapp deployment source config-zip -g "$RG" -n "$FUNC_APP_NAME" --src "$ZIP_PATH"
+
+# Function App が使う storage account 名を AzureWebJobsStorage 接続文字列から取得。
+STG_CONN="$(az functionapp config appsettings list -g "$RG" -n "$FUNC_APP_NAME" \
+  --query "[?name=='AzureWebJobsStorage'].value | [0]" -o tsv 2>/dev/null || true)"
+STG_ACCOUNT="$(printf '%s' "$STG_CONN" | sed -n 's/.*AccountName=\([^;]*\).*/\1/p')"
+if [[ -z "$STG_ACCOUNT" ]]; then
+  # フォールバック: RG 内の st{...}func 命名の storage を拾う。
+  STG_ACCOUNT="$(az storage account list -g "$RG" --query "[?starts_with(name,'st') && ends_with(name,'func')].name | [0]" -o tsv 2>/dev/null || true)"
+fi
+if [[ -z "$STG_ACCOUNT" ]]; then
+  echo "ERROR: Function App の storage account 名を特定できませんでした。" >&2
+  exit 1
+fi
+echo "Storage account: $STG_ACCOUNT"
+
+STG_KEY="$(az storage account keys list -g "$RG" -n "$STG_ACCOUNT" --query "[0].value" -o tsv)"
+if [[ -z "$STG_KEY" ]]; then
+  echo "ERROR: storage account key を取得できませんでした（Shared Key 無効化の可能性）。" >&2
+  exit 1
+fi
+
+CONTAINER="function-releases"
+BLOB="bff-$(date -u +%Y%m%d%H%M%S).zip"
+az storage container create --account-name "$STG_ACCOUNT" --account-key "$STG_KEY" \
+  --name "$CONTAINER" -o none
+az storage blob upload --account-name "$STG_ACCOUNT" --account-key "$STG_KEY" \
+  --container-name "$CONTAINER" --name "$BLOB" --file "$ZIP_PATH" --overwrite -o none
+echo "Uploaded: $CONTAINER/$BLOB"
+
+# 読み取り専用 SAS（長め）。Function App がこの URL からパッケージを読んで実行する。
+SAS_EXPIRY="$(date -u -d '+2 years' '+%Y-%m-%dT%H:%MZ' 2>/dev/null || date -u -v+2y '+%Y-%m-%dT%H:%MZ')"
+SAS="$(az storage blob generate-sas --account-name "$STG_ACCOUNT" --account-key "$STG_KEY" \
+  --container-name "$CONTAINER" --name "$BLOB" --permissions r --expiry "$SAS_EXPIRY" -o tsv)"
+PKG_URL="https://${STG_ACCOUNT}.blob.core.windows.net/${CONTAINER}/${BLOB}?${SAS}"
+
+echo "Setting WEBSITE_RUN_FROM_PACKAGE and restarting..."
+az functionapp config appsettings set -g "$RG" -n "$FUNC_APP_NAME" \
+  --settings "WEBSITE_RUN_FROM_PACKAGE=$PKG_URL" >/dev/null
+az functionapp restart -g "$RG" -n "$FUNC_APP_NAME" >/dev/null
 
 # ── Wire BFF env vars to live Container Apps ──────────────────────────────────
 echo ""
