@@ -198,6 +198,29 @@ if [[ "${AI_AGENT_SMOKE:-true}" == "true" ]]; then
     echo "       000 なら 300s でも応答なし（推論が長すぎ/ハング）。ai-agent ログ（Log Analytics）も参照。" >&2
     exit 1
   fi
+
+  # ── 統合 smoke（診断）: BFF(func) → ai-agent の疎通を func 直叩きで確認 ──────────
+  # func の trpc は authLevel=anonymous なので SWA 認証を迂回して BFF→ai-agent 経路だけ検証できる。
+  # 非致命（ai-agent デプロイ自体は成功済み）。full では ai-agent が backend より先なので func 側は
+  # 旧 BFF の可能性がある点に注意（あくまで現時点の疎通確認用）。
+  FUNC_HOST="$(_val functionAppDefaultHostname)"
+  if [[ -n "$FUNC_HOST" ]]; then
+    echo ""
+    echo "=== 統合 smoke: BFF(func) → ai-agent（POST /api/trpc/consultation.start 直叩き, anonymous）==="
+    BFF_JSON="$(mktemp)"
+    BFF_CODE="$(curl -sS -m 200 -o "$BFF_JSON" -w '%{http_code}' \
+      -X POST "https://${FUNC_HOST}/api/trpc/consultation.start?batch=1" \
+      -H 'Content-Type: application/json' \
+      -d '{"0":{"concern":"接続テストです。ひとことで返してください。"}}' \
+      2>/dev/null || echo 000)"
+    echo "BFF consultation.start http=$BFF_CODE （func=$FUNC_HOST）"
+    echo "--- body (先頭 1000 文字) ---"
+    head -c 1000 "$BFF_JSON" 2>/dev/null; echo
+    rm -f "$BFF_JSON"
+    if [[ "$BFF_CODE" != "200" ]]; then
+      echo "WARN: BFF 経由が 200 になりません（http=$BFF_CODE）。SWA↔func↔ai-agent のどこかで詰まっている可能性。" >&2
+    fi
+  fi
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
