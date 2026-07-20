@@ -167,6 +167,27 @@ FQDN="$(az containerapp update \
   --set-env-vars "${ENV_VARS[@]}" \
   --query 'properties.configuration.ingress.fqdn' -o tsv)"
 
+# ── Smoke: /chat が実 LLM で応答するか（cold-start + モデル呼び出しで時間がかかる）──────
+# AI_AGENT_SMOKE=false でスキップ可。既定は実行して「本当に喋る」を確認する。
+if [[ "${AI_AGENT_SMOKE:-true}" == "true" ]]; then
+  echo ""
+  echo "=== Smoke: POST /chat（初回は scale-to-zero cold-start + LLM 呼び出しで最大 ~2 分）==="
+  SMOKE_JSON="$(mktemp)"
+  SMOKE_CODE="$(curl -sS -m 150 -o "$SMOKE_JSON" -w '%{http_code}' \
+    -X POST "https://${FQDN}/chat" \
+    -H 'Content-Type: application/json' \
+    -d '{"session_id":"smoke","message":"こんにちは。これは接続テストです。ひとことで返してください。"}' \
+    2>/dev/null || echo 000)"
+  echo "smoke /chat http=$SMOKE_CODE"
+  echo "--- reply (先頭 600 文字) ---"
+  head -c 600 "$SMOKE_JSON" 2>/dev/null; echo
+  rm -f "$SMOKE_JSON"
+  if [[ "$SMOKE_CODE" != "200" ]]; then
+    echo "ERROR: /chat が 200 を返しません（http=$SMOKE_CODE）。上の応答/ai-agent ログで LLM 呼び出しエラーを確認。" >&2
+    exit 1
+  fi
+fi
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
 echo "=== Done ==="

@@ -30,9 +30,9 @@ on:
         default: cpu
         required: true
       profile:
-        description: "profile（up時のみ）: mock=匿名(ブラウザ音声) / mockvoice=匿名+ずんだもん(VOICEVOX直) / full=実backend+認証"
+        description: "profile（up時のみ）: mock/mockvoice=匿名デモ / aiagent=実AI疎通確認(stage1) / full=実backend+認証"
         type: choice
-        options: [mock, mockvoice, full]
+        options: [mock, mockvoice, aiagent, full]
         default: mockvoice
         required: true
   schedule:

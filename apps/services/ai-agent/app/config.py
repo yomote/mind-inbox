@@ -9,12 +9,14 @@ class Settings(BaseSettings):
     # Azure OpenAI (primary)
     azure_openai_endpoint: str = ""
     azure_openai_api_key: str = ""
-    azure_openai_deployment: str = "gpt-4o"
-    azure_openai_api_version: str = "2024-02-01"
+    # gpt-4o は Azure で新規デプロイ不可。GA は gpt-5 / gpt-5-mini（推論モデル）。
+    azure_openai_deployment: str = "gpt-5-mini"
+    # 推論モデル（max_completion_tokens 等）に対応する api_version。古い 2024-02-01 では通らない。
+    azure_openai_api_version: str = "2025-04-01-preview"
 
     # OpenAI (fallback when Azure is not configured)
     openai_api_key: str = ""
-    openai_model: str = "gpt-4o"
+    openai_model: str = "gpt-5-mini"
 
     # Set to true in ACA (managed identity); false for local dev with API key
     use_managed_identity: bool = False

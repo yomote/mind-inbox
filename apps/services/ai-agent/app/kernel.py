@@ -31,12 +31,23 @@ def get_kernel() -> Kernel:
     return _kernel
 
 
+def _is_reasoning_model(name: str) -> bool:
+    """推論モデル（o1/o3/gpt-5 系）は temperature!=1 や max_tokens を受け付けない。"""
+    n = (name or "").lower()
+    return n.startswith(("o1", "o3", "o4", "gpt-5"))
+
+
 def get_execution_settings() -> (
     AzureChatPromptExecutionSettings | OpenAIChatPromptExecutionSettings
 ):
     settings = get_settings()
     if settings.azure_openai_endpoint:
+        if _is_reasoning_model(settings.azure_openai_deployment):
+            # 推論モデル: temperature/max_tokens を送らず既定に委ねる（送ると 400 になる）。
+            return AzureChatPromptExecutionSettings()
         return AzureChatPromptExecutionSettings(temperature=0.7, max_tokens=1024)
+    if _is_reasoning_model(settings.openai_model):
+        return OpenAIChatPromptExecutionSettings()
     return OpenAIChatPromptExecutionSettings(temperature=0.7, max_tokens=1024)
 
 

@@ -149,13 +149,20 @@ param openAiAccountName string = toLower('oai-${environmentName}-${replace(repla
 param openAiSkuName string = 'S0'
 
 @description('Model deployment name (used as the deployment identifier in API calls).')
-param openAiDeploymentName string = 'gpt-4o'
+param openAiDeploymentName string = 'gpt-5-mini'
 
 @description('OpenAI model name.')
-param openAiModelName string = 'gpt-4o'
+param openAiModelName string = 'gpt-5-mini'
 
 @description('OpenAI model version.')
-param openAiModelVersion string = '2024-11-20'
+param openAiModelVersion string = '2025-08-07'
+
+// NOTE: gpt-4o / gpt-4.1 / gpt-5-chat は Azure 上で Deprecating/Deprecated（新規デプロイ不可）。
+// GA なのは gpt-5 / gpt-5-mini（いずれも推論モデル, GlobalStandard SKU, version 2025-08-07）。
+// gpt-5-mini は安価で会話に十分。推論モデルなので ai-agent 側の kernel 設定を temperature 非送出＋
+// max_completion_tokens に合わせてある（apps/services/ai-agent/app/kernel.py）。
+@description('Model deployment SKU. gpt-5 系は GlobalStandard のみ（Standard 枠には無い）。')
+param openAiDeploymentSku string = 'GlobalStandard'
 
 @minValue(1)
 @description('Deployment capacity in units of 1,000 tokens-per-minute (TPM). Subject to regional quota.')
@@ -676,7 +683,7 @@ resource openAiDeployment 'Microsoft.CognitiveServices/accounts/deployments@2023
   parent: openAiAccount
   name: openAiDeploymentName
   sku: {
-    name: 'Standard'
+    name: openAiDeploymentSku
     capacity: openAiCapacity
   }
   properties: {

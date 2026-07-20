@@ -99,6 +99,12 @@ if [[ "$DEPLOY_PROFILE" == "mock" || "$DEPLOY_PROFILE" == "mockvoice" ]]; then
   fi
   RG="$RG" DEPLOYMENT="$DEPLOYMENT" FRONTEND_PROFILE=mock \
     VITE_VOICEVOX_BASE_URL="$VITE_VOICEVOX_BASE_URL" "$DEPLOY_DIR/deploy-frontend.sh"
+elif [[ "$DEPLOY_PROFILE" == "aiagent" ]]; then
+  # stage1（B 前哨）: 実 AI を存在させて /chat が本当に喋るかだけ確認する診断 profile。
+  # bootstrap(enableOpenAi/enableAiAgentAca=true で OpenAI アカウント+gpt-5-mini+ai-agent env を作成) の後、
+  # ai-agent をデプロイし deploy-ai-agent.sh 内の /chat smoke で実応答を検証する。BFF/frontend は触らない。
+  echo "==> [3/3] AI Agent (Container App) + /chat smoke — profile=aiagent（stage1）"
+  RG="$RG" DEPLOYMENT="$DEPLOYMENT" "$DEPLOY_DIR/deploy-ai-agent.sh"
 else
   # コンテナは BFF より先に（deploy-backend が wrapper/ai-agent の FQDN を func 設定へ配線するため）。
   echo "==> [3/5] VOICEVOX wrapper (Container App)"
