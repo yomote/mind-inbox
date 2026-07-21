@@ -62,6 +62,23 @@ if ! az group update -n "$RG" --set "tags.deployedAtEpoch=$(date +%s)" -o none >
   echo "      立てた直後でも夜間 schedule で撤収される可能性があります。" >&2
 fi
 
+# teardown 後に soft-delete で残る OpenAI アカウント / Key Vault を、bootstrap の前に purge する。
+# これらが soft-deleted のまま残っていると bootstrap の作成が FlagMustBeSetForRestore /
+# VaultAlreadyExists で失敗する（cleanup-env の自動 purge が取りこぼしても up を自己修復する）。
+# 名前は bicep の既定命名に一致させる。非致命（無ければ何もしない）。
+OAI_NAME="oai-${ENVIRONMENT}-$(printf '%s' "$APP_NAME" | tr -d '-_')"
+if az cognitiveservices account list-deleted --query "[?name=='$OAI_NAME'] | [0].name" -o tsv 2>/dev/null | grep -q .; then
+  echo "==> soft-deleted OpenAI アカウント '$OAI_NAME' を purge（teardown 残骸の自己修復）"
+  az cognitiveservices account purge --name "$OAI_NAME" --resource-group "$RG" --location "$LOCATION" -o none 2>&1 | tail -2 || \
+    echo "WARN: OpenAI purge に失敗（権限/伝播）。bootstrap が失敗する場合は手動 purge を検討。" >&2
+fi
+KV_NAME="$(python3 -c "import json;print(json.load(open('$IAC_DIR/main-bootstrap.parameters.json'))['parameters'].get('sqlAdminKeyVaultName',{}).get('value',''))" 2>/dev/null || true)"
+if [[ -n "$KV_NAME" ]] && az keyvault list-deleted --query "[?name=='$KV_NAME'] | [0].name" -o tsv 2>/dev/null | grep -q .; then
+  echo "==> soft-deleted Key Vault '$KV_NAME' を purge（teardown 残骸の自己修復）"
+  az keyvault purge --name "$KV_NAME" -o none 2>&1 | tail -2 || \
+    echo "WARN: KV purge に失敗（purge protection の可能性）。" >&2
+fi
+
 echo "==> [2/5] Bootstrap infra (main-bootstrap.bicep) — voicevoxTier=$VOICEVOX_TIER"
 az deployment group create \
   -g "$RG" \
