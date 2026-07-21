@@ -85,10 +85,14 @@ sync_swa_auth_app_settings() {
   existing_client_secret="$(az staticwebapp appsettings list -g "$RG" -n "$SWA_NAME" --query 'properties.AZURE_CLIENT_SECRET' -o tsv 2>/dev/null || true)"
 
   if [[ -z "$existing_client_id" || -z "$existing_client_secret" ]]; then
-    echo "ERROR: SWA app settings AZURE_CLIENT_ID / AZURE_CLIENT_SECRET are missing." >&2
-    echo "       Either set them beforehand or provide Key Vault env vars for this deploy:" >&2
-    echo "       ENTRA_APP_KEYVAULT_NAME, ENTRA_APP_CLIENT_ID_SECRET_NAME, ENTRA_APP_CLIENT_SECRET_SECRET_NAME" >&2
-    exit 1
+    # 非致命: on-demand で SWA を作り直した直後は認証設定がまだ無い（ホスト名も変わる）。
+    # ここで落とすと up が完走せず frontend も出ない。認証は SWA 生成後に別途
+    # setup-swa-auth.sh（管理者権限 / 現ホスト名でリダイレクト URI 登録 + client id/secret 設定）で
+    # 配線する運用（A 方式）。SWA は app settings を実行時に読むので、デプロイ後の設定でも有効になる。
+    echo "WARN: SWA に AZURE_CLIENT_ID/SECRET が未設定。認証未配線のまま frontend をデプロイします。" >&2
+    echo "      デプロイ後に cicd/scripts/cloud-env/setup-swa-auth.sh を実行して認証を有効化してください。" >&2
+    echo "      （Key Vault 経由にする場合は ENTRA_APP_KEYVAULT_NAME 等を指定）" >&2
+    return 0
   fi
 
   az staticwebapp appsettings set \
