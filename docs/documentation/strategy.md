@@ -34,6 +34,7 @@
 | AI Agent / VOICEVOX | **FastAPI コード**                  | OpenAPI (`docs/api/{ai-agent,voicevox}.yaml` 自動生成) |
 | アーキテクチャ判断  | **ADR (`docs/adr/`)**               | CLAUDE.md 内のリンクのみ                               |
 | 運用手順            | **Runbook (`docs/runbooks/`)**      | (なし)                                                 |
+| 実行状態 (計画・進捗) | **GitHub Issues + Projects**      | docs へのリンクのみ (設計内容は board に書かない, ADR 0011) |
 | コンセプト          | `docs/concept_deck.md`              | (現状維持)                                             |
 | 基本設計            | `docs/design/`                      | (現状維持)                                             |
 | テスト戦略          | `docs/testing/strategy.md`          | (現状維持)                                             |
