@@ -27,11 +27,12 @@ Mind Inbox の実行状態 (今どこまで進み・次に何をやり・どの�
 | フィールド | 型 | 選択肢 | 用途 |
 | --- | --- | --- | --- |
 | `Status` | Single select (既定) | `Backlog` / `Next` / `In progress` / `In review` / `Done` | 実行状態。PR と自動連動 |
-| `Phase` | Single select | `D (done)` / `A: AI Agent` / `B: BFF` / `C: 結線` / `Ops` / `Docs/Test` | `implementation_plan_v1` の Phase と 1:1。doc ロードマップとの唯一の接続点 |
+| `Phase` | Single select | `D (done)` / `A: AI Agent` / `B: BFF` / `C: 結線` | `implementation_plan_v1` の Phase と **1:1**。doc ロードマップとの唯一の接続点 |
 | `Area` | Single select | `frontend` / `bff` / `ai-agent` / `voicevox` / `infra` / `docs` | 並行セッションの担当領域の衝突可視化。既存ラベルと対応 |
 
 - `Status` の選択肢は上記 5 つに揃える (Built-in Workflow がこの名前を参照する)。
-- `Phase` は `implementation_plan_v1` の Phase 見出しと文言を合わせる。Phase が増えたら doc を直してから選択肢を足す。
+- `Phase` の選択肢は `implementation_plan_v1` の Phase 見出しと**文言も個数も 1:1**にする (ADR 0011)。Phase が増えたら **doc を直してから**選択肢を足す。
+- **ロードマップ外の作業** (infra/ops、テスト/ドキュメント epic の #7 / #14 / #46 / #47 等) は `Phase` を**空**のままにし、`Area` (`infra` / `docs` 等) で仕分ける。Phase バケットに横断作業を混ぜない (1:1 を厳密に保つ)。Table (by Phase) ビューでは "No Phase" グループにまとまる。
 
 ### 3. Built-in Workflows で状態遷移を自動化する
 
