@@ -13,9 +13,9 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: "up = 立ち上げ / down = 撤収(¥0化)"
+        description: "up = 立ち上げ / down = 撤収(¥0化) / verify = ライブE2E検証(実AI応答を採取)"
         type: choice
-        options: [up, down]
+        options: [up, down, verify]
         required: true
       environment:
         description: 対象環境
@@ -115,25 +115,31 @@ jobs:
           echo "Tearing down $RG ..."
           RG="$RG" ./cicd/scripts/env/cleanup-env.sh
 
-      # ---- UP: 手動 up のみ ----
+      # ---- UP / VERIFY: フロントビルド系ツールが要る ----
       - name: Setup Node 22
-        if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up'
+        if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && (github.event.inputs.action == 'up' || github.event.inputs.action == 'verify')
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
       - name: Setup pnpm
-        if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up'
+        if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && (github.event.inputs.action == 'up' || github.event.inputs.action == 'verify')
         uses: pnpm/action-setup@v4
         with:
           version: 9
 
       - name: Install deploy tooling (swa CLI, zip)
-        if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up'
+        if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && (github.event.inputs.action == 'up' || github.event.inputs.action == 'verify')
         run: |
           npm install -g @azure/static-web-apps-cli
           # zip は ubuntu-latest に入っている想定。無い時だけ apt（毎回の update ~30-60s を回避）。
           command -v zip >/dev/null || { sudo apt-get update && sudo apt-get install -y zip; }
+
+      # ---- VERIFY: ライブ E2E（/api を一時開放→実AI応答採取→再ロック）----
+      - name: Verify live (E2E, real AI reply)
+        if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'verify'
+        run: |
+          RG="$RG" DEPLOYMENT="$DEPLOYMENT" ./cicd/scripts/smoke-test/verify-live.sh
 
       - name: Provision + deploy (up)
         if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up'
