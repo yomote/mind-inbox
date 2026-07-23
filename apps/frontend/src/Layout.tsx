@@ -595,13 +595,21 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     void speakText(lastAssistantMessage.text);
   }, [session, speakText, ttsEnabled]);
 
+  // 失敗時に catch が無いと「ボタン無反応（遷移もエラーも無い）」になる。
+  // start/send と同様、全ての非同期ハンドラで失敗を setVoiceError で必ず可視化する。
+  const surface = (label: string, e: unknown) =>
+    setVoiceError(`${label}: ${e instanceof Error ? e.message : String(e)}`);
+
   const handleOrganize = async () => {
     if (!session || loading) return;
     setLoading(true);
+    setVoiceError(null);
     try {
       const organized = await organizeResult(session.id);
       setResult(organized);
       transition("result");
+    } catch (e) {
+      surface("結果の整理に失敗しました", e);
     } finally {
       setLoading(false);
     }
@@ -610,10 +618,13 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const handleExtract = async () => {
     if (!session || loading) return;
     setLoading(true);
+    setVoiceError(null);
     try {
       const res = await extractMentions(session.id);
       setExtraction(res);
       transition("extractReview");
+    } catch (e) {
+      surface("抽出に失敗しました", e);
     } finally {
       setLoading(false);
     }
@@ -621,10 +632,13 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
   const handleOpenProblemList = async () => {
     setLoading(true);
+    setVoiceError(null);
     try {
       const list = await loadProblems();
       setProblems(list);
       transition("problemList");
+    } catch (e) {
+      surface("困りごと一覧の読み込みに失敗しました", e);
     } finally {
       setLoading(false);
     }
@@ -632,12 +646,15 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
   const handleOpenProblem = async (id: string) => {
     setLoading(true);
+    setVoiceError(null);
     try {
       const found = await loadProblem(id);
       if (found) {
         setSelectedProblem(found);
         transition("problemDetail");
       }
+    } catch (e) {
+      surface("困りごとの読み込みに失敗しました", e);
     } finally {
       setLoading(false);
     }
@@ -646,6 +663,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const handleTriage = async (input: TriageInput) => {
     if (loading) return;
     setLoading(true);
+    setVoiceError(null);
     try {
       const updated = await triageProblem(input);
       setSelectedProblem(updated);
@@ -655,6 +673,8 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
         // 対象が消えたので一覧へ戻す。
         transition("problemList");
       }
+    } catch (e) {
+      surface("更新に失敗しました", e);
     } finally {
       setLoading(false);
     }
@@ -663,6 +683,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const handleDismissExtracted = async (problemId: string) => {
     if (loading) return;
     setLoading(true);
+    setVoiceError(null);
     try {
       await triageProblem({ action: "dismiss", problemId });
       setExtraction((prev) =>
@@ -674,6 +695,8 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
             }
           : prev,
       );
+    } catch (e) {
+      surface("却下に失敗しました", e);
     } finally {
       setLoading(false);
     }
@@ -682,9 +705,12 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const handleCreateProblemPlan = async (problemId: string) => {
     if (loading) return;
     setLoading(true);
+    setVoiceError(null);
     try {
       const updated = await createProblemPlan(problemId);
       if (updated) setSelectedProblem(updated);
+    } catch (e) {
+      surface("プラン作成に失敗しました", e);
     } finally {
       setLoading(false);
     }
@@ -693,10 +719,13 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const handleCreatePlan = async () => {
     if (!result || loading) return;
     setLoading(true);
+    setVoiceError(null);
     try {
       const nextPlan = await createActionPlan(result);
       setPlan(nextPlan);
       transition("actionPlan");
+    } catch (e) {
+      surface("アクションプラン作成に失敗しました", e);
     } finally {
       setLoading(false);
     }
@@ -706,6 +735,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     if (!result || !plan || !session) return;
 
     setLoading(true);
+    setVoiceError(null);
     try {
       const item = await saveHistory({
         sessionId: session.id,
@@ -717,6 +747,8 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
       setHistories((prev) => [item, ...prev]);
       setSelectedHistory(item);
       transition("history");
+    } catch (e) {
+      surface("履歴の保存に失敗しました", e);
     } finally {
       setLoading(false);
     }
