@@ -35,10 +35,12 @@ on:
         options: [mock, mockvoice, aiagent, full]
         default: mockvoice
         required: true
-  schedule:
-    # 夜間 teardown ガード: 毎日 JST 04:07 (= UTC 19:07) に down。消し忘れでも ¥0 に戻る。
-    # 立ち上げは常に手動 up なので、この自動 down で困らない（必要なら再度 up）。
-    - cron: "7 19 * * *"
+  # 【検証中は一時停止】夜間 teardown ガード（毎日 JST 04:07 = UTC 19:07 に down）。
+  # 検証を跨日でやると毎晩これに環境を消され、翌日 ~20分の再構築＋認証再配線が必要になるため、
+  # 動作確認フェーズの間だけ無効化する。env は手動 down するまで立ちっぱなし（小額の常時コスト）。
+  # 検証が済んだら下の schedule 行のコメントを外して ¥0 の on-demand 運用へ戻すこと。
+  # schedule:
+  #   - cron: "7 19 * * *"
 
 permissions:
   id-token: write # OIDC トークン取得に必須
