@@ -53,6 +53,25 @@ need swa
 
 az account show >/dev/null
 
+# ── 高速パス: frontend だけ差し替え（既存 env 前提）────────────────────────────
+# フロント（staticwebapp.config.json / UI）だけ直したときに、bootstrap・コンテナ
+# ビルド(acr build)・BFF を丸ごとやり直す必要はない。それらが ~20分の主因なので、
+# frontend profile では deploy-frontend.sh だけを既存 env に対して回す（~2分）。
+# 前提: 既に up 済み（main-bootstrap deployment が RG に存在する）。無ければ通常の
+# フル up を促して終わる（ここで bootstrap を勝手に始めない＝意図しない再構築を防ぐ）。
+if [[ "$DEPLOY_PROFILE" == "frontend" ]]; then
+  echo "==> [frontend-only] 既存 env にフロントだけ再デプロイ（bootstrap/コンテナ/BFF はスキップ）"
+  if ! az deployment group show -g "$RG" -n "$DEPLOYMENT" -o none >/dev/null 2>&1; then
+    echo "ERROR: '$DEPLOYMENT' deployment が RG '$RG' に見つかりません（env が未 up）。" >&2
+    echo "       まず profile=full で up してから frontend で差し替えてください。" >&2
+    exit 1
+  fi
+  RG="$RG" DEPLOYMENT="$DEPLOYMENT" FRONTEND_PROFILE=full "$DEPLOY_DIR/deploy-frontend.sh"
+  echo
+  echo "✅ Frontend 再デプロイ完了（profile=frontend）。SWA の URL は上の deploy-frontend 出力を参照。"
+  exit 0
+fi
+
 echo "==> [1/5] Resource group: $RG ($LOCATION)"
 az group create -n "$RG" -l "$LOCATION" >/dev/null
 # 立ち上げ時刻を RG タグに記録 → 夜間 schedule teardown が「最小生存時間」ガードで参照する。

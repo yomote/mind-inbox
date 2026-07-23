@@ -30,9 +30,9 @@ on:
         default: cpu
         required: true
       profile:
-        description: "profile（up時のみ）: mock/mockvoice=匿名デモ / aiagent=実AI疎通確認(stage1) / full=実backend+認証"
+        description: "profile（up時のみ）: frontend=フロントのみ高速差し替え(~2分/既存env前提) / mock/mockvoice=匿名デモ / aiagent=実AI疎通確認(stage1) / full=実backend+認証"
         type: choice
-        options: [mock, mockvoice, aiagent, full]
+        options: [frontend, mock, mockvoice, aiagent, full]
         default: mockvoice
         required: true
   # 【検証中は一時停止】夜間 teardown ガード（毎日 JST 04:07 = UTC 19:07 に down）。
