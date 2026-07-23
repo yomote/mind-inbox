@@ -530,6 +530,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const handleStartConsultation = async () => {
     unlockAudioPlayback(); // タップ起点で音声を解錠（iOS の自動再生ブロック対策）
     setLoading(true);
+    setVoiceError(null);
     try {
       const newSession = await startNewConsultation(concern.trim());
       setSession(newSession);
@@ -537,6 +538,9 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
       setPlan(null);
       setSelectedHistory(null);
       transition("session");
+    } catch (e) {
+      // catch が無いと API 失敗時に遷移せず・エラーも出ず「ボタン無反応」に見える。必ず表示する。
+      setVoiceError(`対話の開始に失敗しました: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setLoading(false);
     }
@@ -562,11 +566,14 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     setSession({ ...session, title: nextTitle, messages: nextMessages });
 
     setLoading(true);
+    setVoiceError(null);
     try {
       const assistantMessage = await sendMessage(session.id, userMessage.text);
       setSession((prev) =>
         prev ? { ...prev, messages: [...prev.messages, assistantMessage] } : prev,
       );
+    } catch (e) {
+      setVoiceError(`メッセージ送信に失敗しました: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setLoading(false);
     }
