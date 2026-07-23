@@ -32,15 +32,27 @@ SWA="https://$SWA_HOST"
 echo "SWA_NAME=$SWA_NAME"
 echo "SWA=$SWA"
 
+# consultation.start は BFF が gpt-5-mini(推論)を複数回叩くワークフローで遅い（>60s あり）。
+# タイムアウトは長めに取る。
 anon_post() {
-  curl -sS -m 60 -w '\n__HTTP__%{http_code}' -X POST \
+  curl -sS -m 200 -w '\n__HTTP__%{http_code}' -X POST \
     "$SWA/api/trpc/consultation.start?batch=1" \
     -H 'content-type: application/json' \
     -d '{"0":{"concern":"接続テストです。ひとことで返してください。"}}' 2>/dev/null
 }
 anon_code() {
-  curl -sS -m 20 -o /dev/null -w '%{http_code}' -X POST "$SWA/api/trpc/consultation.start?batch=1" \
+  curl -sS -m 25 -o /dev/null -w '%{http_code}' -X POST "$SWA/api/trpc/consultation.start?batch=1" \
     -H 'content-type: application/json' -d '{"0":{"concern":"x"}}' 2>/dev/null || echo 000
+}
+
+# ai-agent(scale-to-zero) を先に温める。cold-start を検証窓の外で済ませ、開放時間を短くする。
+warm_ai_agent() {
+  local ca fqdn
+  ca="$(az deployment group show -g "$RG" -n "$DEPLOYMENT" --query 'properties.outputs.aiAgentContainerAppName.value' -o tsv 2>/dev/null || true)"
+  [[ -z "$ca" ]] && return 0
+  fqdn="$(az containerapp show -g "$RG" -n "$ca" --query 'properties.configuration.ingress.fqdn' -o tsv 2>/dev/null || true)"
+  [[ -z "$fqdn" ]] && return 0
+  echo "  ai-agent warm-up GET https://$fqdn/health http=$(curl -sS -m 120 -o /dev/null -w '%{http_code}' "https://$fqdn/health" 2>/dev/null || echo 000)"
 }
 
 restore() {
@@ -52,14 +64,24 @@ restore() {
   else
     echo "::error::復元デプロイに失敗。profile=full で up し直して認証ゲートを戻すこと。"
   fi
-  sleep 8
-  echo "  復元後 anon POST http=$(anon_code)（401/302 期待）"
+  # SWA の config 伝播にラグがあるので、401/302 に戻るまで数回ポーリングする。
+  local rc
+  for _ in $(seq 1 6); do
+    rc="$(anon_code)"
+    echo "  復元後 anon POST http=$rc（401/302 期待）"
+    [[ "$rc" == "401" || "$rc" == "302" ]] && break
+    sleep 10
+  done
 }
 trap restore EXIT
 
 echo ""
 echo "=== 事前 anon チェック（ゲートが閉じているはず: 401/302）==="
 echo "  事前 anon POST http=$(anon_code)"
+
+echo ""
+echo "=== ai-agent を温める（cold-start を検証窓の外で消化）==="
+warm_ai_agent
 
 echo ""
 echo "=== /api/* を一時 anonymous 化した config を配信（検証窓を開く）==="
@@ -75,13 +97,13 @@ RG="$RG" DEPLOYMENT="$DEPLOYMENT" FRONTEND_PROFILE=full "$DEPLOY_DIR/deploy-fron
 echo ""
 echo "=== 公開 URL 経由で実 AI 応答を採取（伝播待ち込み）==="
 reply=""
-for i in $(seq 1 15); do
+for i in $(seq 1 4); do
   out="$(anon_post)"
   code="${out##*__HTTP__}"
   body="${out%__HTTP__*}"
   echo "  [$i] consultation.start http=$code"
   if [[ "$code" == "200" ]]; then reply="$body"; break; fi
-  sleep 10
+  sleep 5
 done
 
 echo ""
