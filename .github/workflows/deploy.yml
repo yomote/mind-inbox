@@ -131,7 +131,15 @@ jobs:
       - name: Install deploy tooling (swa CLI, zip)
         if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && (github.event.inputs.action == 'up' || github.event.inputs.action == 'verify')
         run: |
-          npm install -g @azure/static-web-apps-cli
+          # swa CLI は native 依存 keytar を持ち、prebuilt 取得に失敗すると libsecret-1 で
+          # ソースビルドを試みて runner に無くて落ちることがある（--deployment-token 運用では
+          # keytar は不要だが hard dep なので install 自体が中断する）。1回目が落ちたら
+          # libsecret-1-dev を入れて再試行し、フレークを吸収する。
+          npm install -g @azure/static-web-apps-cli || {
+            echo "swa CLI install 失敗 → libsecret-1-dev を入れて再試行"
+            sudo apt-get update && sudo apt-get install -y libsecret-1-dev
+            npm install -g @azure/static-web-apps-cli
+          }
           # zip は ubuntu-latest に入っている想定。無い時だけ apt（毎回の update ~30-60s を回避）。
           command -v zip >/dev/null || { sudo apt-get update && sudo apt-get install -y zip; }
 
