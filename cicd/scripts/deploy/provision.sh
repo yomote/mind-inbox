@@ -66,7 +66,9 @@ fi
 # これらが soft-deleted のまま残っていると bootstrap の作成が FlagMustBeSetForRestore /
 # VaultAlreadyExists で失敗する（cleanup-env の自動 purge が取りこぼしても up を自己修復する）。
 # 名前は bicep の既定命名に一致させる。非致命（無ければ何もしない）。
-OAI_NAME="oai-${ENVIRONMENT}-$(printf '%s' "$APP_NAME" | tr -d '-_')"
+# bicep は appName から '-' と '_' を除去して命名する（例: mind-box → mindbox）。
+# bash パラメータ展開で同じ正規化をする（tr -d '-_' は '-' がオプション扱いされ壊れるため使わない）。
+OAI_NAME="oai-${ENVIRONMENT}-${APP_NAME//[-_]/}"
 if az cognitiveservices account list-deleted --query "[?name=='$OAI_NAME'] | [0].name" -o tsv 2>/dev/null | grep -q .; then
   echo "==> soft-deleted OpenAI アカウント '$OAI_NAME' を purge（teardown 残骸の自己修復）"
   az cognitiveservices account purge --name "$OAI_NAME" --resource-group "$RG" --location "$LOCATION" -o none 2>&1 | tail -2 || \
