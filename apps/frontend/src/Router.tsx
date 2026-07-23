@@ -220,6 +220,7 @@ export function AppRouter({
             <NewConsultationScreen
               concern={concern}
               loading={loading}
+              voiceError={voiceError}
               onConcernChange={setConcern}
               onBack={() => transition("home")}
               onStart={handleStartConsultation}

@@ -1,4 +1,5 @@
 import {
+  Alert,
   Button,
   CircularProgress,
   Paper,
@@ -9,6 +10,7 @@ import {
 type NewConsultationScreenProps = {
   concern: string;
   loading: boolean;
+  voiceError?: string | null;
   onConcernChange: (value: string) => void;
   onBack: () => void;
   onStart: () => void;
@@ -17,6 +19,7 @@ type NewConsultationScreenProps = {
 export function NewConsultationScreen({
   concern,
   loading,
+  voiceError,
   onConcernChange,
   onBack,
   onStart,
@@ -24,6 +27,7 @@ export function NewConsultationScreen({
   return (
     <Paper sx={{ p: 3, borderRadius: 3 }}>
       <Stack spacing={2}>
+        {voiceError ? <Alert severity="error">{voiceError}</Alert> : null}
         <TextField
           label="相談テーマ"
           value={concern}
