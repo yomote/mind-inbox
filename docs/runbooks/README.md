@@ -54,6 +54,7 @@ Runbook PR は実際にその手順を**踏んだ人**が書くか、レビュ�
 - `claude-web-azure-access.md` — Claude Code (web) セッションから device-code で Azure を操作する
 - `local-fullstack-dev.md` — ローカルで VOICEVOX+BFF+frontend を起動し声の UX を評価する
 - `claude-pr-review.md` — Claude PR 自動レビュー (LLM-as-a-judge) を Routine で動かす / 観点変更 / 停止
+- `github-projects-setup.md` — GitHub Projects (実行ダッシュボード) のフィールド / Workflow セットアップ (ADR 0011)
 
 (初期 4 本は #12 で起こす)
 
