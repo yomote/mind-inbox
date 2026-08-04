@@ -30,9 +30,9 @@ GitHub MCP ツール（`mcp__github__*`。ToolSearch で `select:` して読み�
 
 1. **Open Issue 一覧** — `list_issues` (state OPEN, perPage 40, fields: number/title/labels/updated_at)。
 2. **直近マージ PR** — `list_pull_requests` (state closed, sort updated desc, perPage 10) から `merged_at` のあるものを数件。
-3. **Epic の sub-issue rollup** — Open Issue のうちタイトルが `[epic]` で始まるものについて `issue_read` で `sub_issues_summary`（completed / total）を取る。特に v1 本流 Epic（タイトルに「Problem 中心」を含む、現状 #50）。
+3. **Epic の sub-issue rollup** — Open Issue のうちタイトルが `[epic]` で始まるものについて `issue_read` で `sub_issues_summary`（completed / total）を取る。特に v1 本流 Epic（タイトルに「Problem 中心」を含むもの）。
 
-> 番号は変わりうるので**タイトル接頭辞で発見**する: `[epic]` = エピック、`[v1][Phase A/B/C]` = v1 フェーズ、ラベル `infra`/`security` = インフラ、`enhancement`+`ai-agent` 等で技術負債。
+> Issue 番号は変わりうるので**タイトル接頭辞で発見**する（番号をこの skill に固定しない）: `[epic]` = エピック、`[v1][Phase A/B/C]` = v1 フェーズ、ラベル `infra`/`security` = インフラ、`[tech-debt]` = 技術負債。
 
 ### Step 2 — 構造にマッピング
 
