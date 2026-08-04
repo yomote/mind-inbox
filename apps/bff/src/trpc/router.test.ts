@@ -409,6 +409,39 @@ describe("[L2] consultation.extract", () => {
     expect(problem.lastMentionedAt).toBe("2026-02-01T00:00:00.000Z");
   });
 
+  it("creates a consistent new problem when an 'existing' grouping references an unknown id", async () => {
+    // 無いと: 候補集合との齟齬（existing だが repo に無い）で mentionCount=2 のまま
+    //         mentions.length=1 の不整合 Problem が作られる退行が静かに通る
+    const caller = makeCaller();
+    vi.mocked(extractAiAgent).mockResolvedValue({
+      sessionId: "s1",
+      items: [
+        {
+          mention: makeMention({ problemId: "prob-orphan" }),
+          grouping: {
+            kind: "existing",
+            problemId: "prob-orphan", // repo に存在しない
+            problemTitle: "転職の迷い",
+            problemTheme: "仕事・キャリア",
+            isRecurrence: true,
+            mentionCount: 2, // 既存追記前提の値。フォールバックでは採用しない
+            reignited: false,
+            groupingConfidence: 0.9,
+          },
+        },
+      ],
+      newProblemCount: 0,
+      updatedProblemCount: 1,
+    });
+
+    await caller.consultation.extract({ sessionId: "s1" });
+
+    const problem = await caller.problem.get({ id: "prob-orphan" });
+    expect(problem.mentions).toHaveLength(1);
+    expect(problem.mentionCount).toBe(1); // mentions.length と一致
+    expect(problem.status).toBe("open");
+  });
+
   it("rejects empty sessionId with zod validation", async () => {
     await expect(makeCaller().consultation.extract({ sessionId: "" })).rejects.toBeInstanceOf(
       TRPCError,

@@ -90,6 +90,9 @@ async function materializeExtraction(
       }
       // 既存が見つからない（候補集合との齟齬）→ 取りこぼさず新規として作る
     }
+    // 新規 Problem（new、または existing だが候補が見つからないフォールバック）。
+    // Mention は1件なので mentionCount は必ず 1（mentions.length と一致させる。
+    // grouping.mentionCount は既存追記前提の値なのでここでは使わない）。
     const problem: Problem = {
       id: grouping.problemId,
       title: grouping.problemTitle,
@@ -98,7 +101,7 @@ async function materializeExtraction(
       tags: mention.proposedTags,
       status: "open",
       mentions: [mention],
-      mentionCount: grouping.kind === "existing" ? grouping.mentionCount : 1,
+      mentionCount: 1,
       plans: [],
       createdAt: mention.createdAt,
       lastMentionedAt: mention.createdAt,
