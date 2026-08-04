@@ -196,6 +196,8 @@ async def extract(
             running_count[problem_id] = (
                 running_count.get(problem_id, ref.mention_count) + 1
             )
+            # 既存への寄せは「既存との類似度スコア」を持つ
+            grouping_conf = confidence
             outcome = GroupingOutcome(
                 kind="existing",
                 problem_id=problem_id,
@@ -204,7 +206,7 @@ async def extract(
                 is_recurrence=True,
                 mention_count=running_count[problem_id],
                 reignited=ref.status != "open",
-                grouping_confidence=confidence,
+                grouping_confidence=grouping_conf,
             )
             updated_ids.add(problem_id)
         else:
@@ -212,6 +214,8 @@ async def extract(
             problem_id = f"prob-{uuid.uuid4()}"
             running_count[problem_id] = 1
             title = grouping_raw.get("newProblemTitle") or m.get("statement", "")
+            # 新規は既存 Problem との類似度が無いため null (domain.ts: new なら null)
+            grouping_conf = None
             outcome = GroupingOutcome(
                 kind="new",
                 problem_id=problem_id,
@@ -220,7 +224,7 @@ async def extract(
                 is_recurrence=False,
                 mention_count=1,
                 reignited=False,
-                grouping_confidence=confidence,
+                grouping_confidence=grouping_conf,
             )
             new_count += 1
 
@@ -235,7 +239,7 @@ async def extract(
             proposed_theme=theme,
             proposed_tags=[str(t) for t in m.get("tags", []) if t],
             problem_id=problem_id,
-            grouping_confidence=confidence,
+            grouping_confidence=grouping_conf,
         )
         items.append(ExtractedItem(mention=mention, grouping=outcome))
 

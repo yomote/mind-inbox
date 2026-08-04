@@ -65,6 +65,9 @@ class TestExtractNew:
         assert item.mention.proposed_tags == ["転職"]
         assert item.mention.affect.valence == "negative"
         assert item.mention.dump_id == "s1"
+        # 新規は既存との類似度が無いため grouping_confidence は null (domain.ts 契約)
+        assert item.grouping.grouping_confidence is None
+        assert item.mention.grouping_confidence is None
         assert result.new_problem_count == 1
         assert result.updated_problem_count == 0
 
@@ -130,6 +133,9 @@ class TestExtractExisting:
         assert item.grouping.is_recurrence is True
         assert item.grouping.mention_count == 3  # 既存 2 + 今回 1
         assert item.grouping.reignited is False  # status == open
+        # 既存への寄せは類似度スコアを保持する (new と対照的に非 null)
+        assert item.grouping.grouping_confidence == 0.9
+        assert item.mention.grouping_confidence == 0.9
         assert result.new_problem_count == 0
         assert result.updated_problem_count == 1
 
