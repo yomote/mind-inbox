@@ -174,6 +174,9 @@ async def extract(
     known = {p.id: p for p in existing_problems}
     now = datetime.now(timezone.utc).isoformat()
     items: list[ExtractedItem] = []
+    # problem_id -> このバッチ反映後の mention_count。同一 Dump 内で同じ既存 Problem に
+    # 複数 Mention が寄る場合に累積させる (ref は共有オブジェクトで更新されないため)。
+    running_count: dict[str, int] = {}
     updated_ids: set[str] = set()
     new_count = 0
 
@@ -188,15 +191,18 @@ async def extract(
         ref = known.get(existing_id) if existing_id else None
 
         if ref is not None:
-            # 既存 Problem への再出現
+            # 既存 Problem への再出現。同一バッチ内の重複ヒットを累積する。
             problem_id = ref.id
+            running_count[problem_id] = (
+                running_count.get(problem_id, ref.mention_count) + 1
+            )
             outcome = GroupingOutcome(
                 kind="existing",
                 problem_id=problem_id,
                 problem_title=ref.title,
                 problem_theme=ref.theme,
                 is_recurrence=True,
-                mention_count=ref.mention_count + 1,
+                mention_count=running_count[problem_id],
                 reignited=ref.status != "open",
                 grouping_confidence=confidence,
             )
@@ -204,6 +210,7 @@ async def extract(
         else:
             # 新規 Problem を起こす
             problem_id = f"prob-{uuid.uuid4()}"
+            running_count[problem_id] = 1
             title = grouping_raw.get("newProblemTitle") or m.get("statement", "")
             outcome = GroupingOutcome(
                 kind="new",

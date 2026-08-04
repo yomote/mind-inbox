@@ -133,6 +133,58 @@ class TestExtractExisting:
         assert result.new_problem_count == 0
         assert result.updated_problem_count == 1
 
+    async def test_l1_accumulates_mention_count_within_same_dump(
+        self, session_repo, make_kernel
+    ):
+        # 同一 Dump 内で複数 Mention が同じ既存 Problem に寄る時、mention_count を累積する契約を pin する。
+        # 無いと: 2件目以降も ref.mention_count + 1 のまま (過小カウント) になり「今月N回目」表示が狂う
+        await _seed(session_repo)
+        existing = [
+            ExistingProblemRef(
+                id="p1",
+                title="睡眠不足",
+                theme="心と体",
+                mention_count=2,
+                status="open",
+            )
+        ]
+        payload = {
+            "mentions": [
+                {
+                    "statement": "また眠れない",
+                    "excerpt": "眠れなくて",
+                    "affect": {
+                        "label": "疲労",
+                        "valence": "negative",
+                        "intensity": 0.5,
+                    },
+                    "theme": "心と体",
+                    "tags": [],
+                    "grouping": {"existingProblemId": "p1", "confidence": 0.9},
+                },
+                {
+                    "statement": "夜中に何度も目が覚める",
+                    "excerpt": "何度も目が覚める",
+                    "affect": {
+                        "label": "疲労",
+                        "valence": "negative",
+                        "intensity": 0.4,
+                    },
+                    "theme": "心と体",
+                    "tags": [],
+                    "grouping": {"existingProblemId": "p1", "confidence": 0.8},
+                },
+            ]
+        }
+        kernel = make_kernel(json.dumps(payload))
+
+        result = await extract("s1", existing, session_repo, kernel)
+
+        counts = [item.grouping.mention_count for item in result.items]
+        assert counts == [3, 4]  # 既存 2 → 3 → 4 と累積
+        assert result.updated_problem_count == 1  # 同じ Problem なので 1
+        assert result.new_problem_count == 0
+
     async def test_l1_reignited_when_existing_problem_not_open(
         self, session_repo, make_kernel
     ):
