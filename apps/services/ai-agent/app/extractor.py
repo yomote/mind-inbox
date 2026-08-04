@@ -94,7 +94,9 @@ def _format_existing(problems: list[ExistingProblemRef]) -> str:
         return "(なし)"
     lines = []
     for p in problems:
-        lines.append(f'- id={p.id} / {p.title} [テーマ: {p.theme}] {p.summary}'.rstrip())
+        lines.append(
+            f"- id={p.id} / {p.title} [テーマ: {p.theme}] {p.summary}".rstrip()
+        )
     return "\n".join(lines)
 
 
@@ -114,7 +116,9 @@ def _coerce_affect(raw: object) -> Affect:
     except (TypeError, ValueError):
         intensity = 0.0
     intensity = min(1.0, max(0.0, intensity))
-    return Affect(label=str(data.get("label", "")), valence=valence, intensity=intensity)
+    return Affect(
+        label=str(data.get("label", "")), valence=valence, intensity=intensity
+    )
 
 
 def _clamp_confidence(value: object) -> float | None:
@@ -161,7 +165,10 @@ async def extract(
     except json.JSONDecodeError:
         logger.warning("Extract JSON parse failed: %r", raw)
         return ExtractionResult(
-            session_id=session_id, items=[], new_problem_count=0, updated_problem_count=0
+            session_id=session_id,
+            items=[],
+            new_problem_count=0,
+            updated_problem_count=0,
         )
 
     known = {p.id: p for p in existing_problems}

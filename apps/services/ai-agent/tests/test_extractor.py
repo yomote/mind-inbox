@@ -92,7 +92,11 @@ class TestExtractExisting:
         await _seed(session_repo)
         existing = [
             ExistingProblemRef(
-                id="p1", title="睡眠不足", theme="心と体", mention_count=2, status="open"
+                id="p1",
+                title="睡眠不足",
+                theme="心と体",
+                mention_count=2,
+                status="open",
             )
         ]
         payload = {
@@ -100,7 +104,11 @@ class TestExtractExisting:
                 {
                     "statement": "また眠れない",
                     "excerpt": "最近眠れなくて",
-                    "affect": {"label": "疲労", "valence": "negative", "intensity": 0.5},
+                    "affect": {
+                        "label": "疲労",
+                        "valence": "negative",
+                        "intensity": 0.5,
+                    },
                     "theme": "心と体",
                     "tags": ["睡眠"],
                     "grouping": {
@@ -133,7 +141,11 @@ class TestExtractExisting:
         await _seed(session_repo)
         existing = [
             ExistingProblemRef(
-                id="p1", title="睡眠不足", theme="心と体", mention_count=1, status="shelved"
+                id="p1",
+                title="睡眠不足",
+                theme="心と体",
+                mention_count=1,
+                status="shelved",
             )
         ]
         payload = {
@@ -141,7 +153,11 @@ class TestExtractExisting:
                 {
                     "statement": "また眠れない",
                     "excerpt": "眠れない",
-                    "affect": {"label": "疲労", "valence": "negative", "intensity": 0.5},
+                    "affect": {
+                        "label": "疲労",
+                        "valence": "negative",
+                        "intensity": 0.5,
+                    },
                     "theme": "心と体",
                     "tags": [],
                     "grouping": {"existingProblemId": "p1", "confidence": 0.7},
