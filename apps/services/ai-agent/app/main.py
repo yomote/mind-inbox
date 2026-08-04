@@ -3,7 +3,8 @@ FastAPI entrypoint for the AI Agent.
 
 Endpoints:
   POST /chat     — 会話ターン
-  POST /organize — セッション履歴を OrganizedResult に変換
+  POST /extract  — セッション全文を Mention[] に抽出 + 既存 Problem へグルーピング (ADR 0007)
+  POST /organize — セッション履歴を OrganizedResult に変換 (deprecated: Phase C で /extract に置換)
   POST /plan     — OrganizedResult から ActionPlan を生成
   POST /approve  — 承認待ちツール呼び出しの実行 / キャンセル
   GET  /health   — ヘルスチェック
@@ -15,6 +16,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException
 
 from .config import get_settings
+from .extractor import extract
 from .kernel import get_kernel
 from .organizer import organize
 from .planner import generate_plan
@@ -29,6 +31,8 @@ from .schemas import (
     ApproveResponse,
     ChatRequest,
     ChatResponse,
+    ExtractionResult,
+    ExtractRequest,
     HealthResponse,
     OrganizeRequest,
     OrganizeResponse,
@@ -89,6 +93,22 @@ async def chat(
         )
     except Exception as exc:
         logger.error("POST /chat error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/extract", response_model=ExtractionResult)
+async def extract_endpoint(
+    req: ExtractRequest,
+    session_repo: SessionRepository = Depends(get_session_repo),
+) -> ExtractionResult:
+    try:
+        return await extract(
+            req.session_id, req.existing_problems, session_repo, get_kernel()
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error("POST /extract error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
 
 

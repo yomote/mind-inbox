@@ -134,6 +134,72 @@ class TestOrganize:
         assert "Session not found" in res.json()["detail"]
 
 
+# ---- /extract ---------------------------------------------------------------
+
+
+class TestExtract:
+    async def test_l2_extract_returns_200_and_camelcase_body(
+        self, client, monkeypatch, make_kernel, session_repo
+    ):
+        # 無いと: extract() の戻り値を FastAPI が domain.ts の型 (camelCase) で返さない退行が
+        #         静かに通り、BFF (Phase B) の deserialize が壊れる
+        history = ChatHistory()
+        history.add_user_message("転職しようか迷ってて")
+        await session_repo.save("s1", history)
+
+        kernel = make_kernel(
+            json.dumps(
+                {
+                    "mentions": [
+                        {
+                            "statement": "転職すべきか迷っている",
+                            "excerpt": "転職しようか迷ってて",
+                            "affect": {
+                                "label": "不安",
+                                "valence": "negative",
+                                "intensity": 0.6,
+                            },
+                            "theme": "仕事・キャリア",
+                            "tags": ["転職"],
+                            "grouping": {
+                                "existingProblemId": None,
+                                "newProblemTitle": "転職の迷い",
+                                "confidence": 0.8,
+                            },
+                        }
+                    ]
+                }
+            )
+        )
+        monkeypatch.setattr(app_main, "get_kernel", lambda: kernel)
+
+        res = await client.post(
+            "/extract", json={"sessionId": "s1", "existingProblems": []}
+        )
+        assert res.status_code == 200
+        body = res.json()
+        # by_alias 直列化 (domain.ts 一致) を pin
+        assert body["sessionId"] == "s1"
+        assert body["newProblemCount"] == 1
+        assert body["updatedProblemCount"] == 0
+        item = body["items"][0]
+        assert item["grouping"]["kind"] == "new"
+        assert item["grouping"]["problemTitle"] == "転職の迷い"
+        assert item["mention"]["proposedTheme"] == "仕事・キャリア"
+        assert item["mention"]["problemId"] == item["grouping"]["problemId"]
+
+    async def test_l2_extract_returns_404_when_session_not_found(
+        self, client, monkeypatch, make_kernel
+    ):
+        # 無いと: ValueError → HTTPException(404) マッピングが切れて 500 を返す退行が静かに通る
+        kernel = make_kernel(json.dumps({"mentions": []}))
+        monkeypatch.setattr(app_main, "get_kernel", lambda: kernel)
+
+        res = await client.post("/extract", json={"sessionId": "nonexistent"})
+        assert res.status_code == 404
+        assert "Session not found" in res.json()["detail"]
+
+
 # ---- /plan ------------------------------------------------------------------
 
 
