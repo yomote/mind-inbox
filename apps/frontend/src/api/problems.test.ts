@@ -35,10 +35,12 @@ describe("[L1] toBffTriageInput", () => {
     ).toEqual({ action: "relink", mentionId: "m1", fromProblemId: "p1", toProblemId: "p2" });
   });
 
-  it("merge: problemId を sourceProblemId に付け替える", () => {
+  it("merge: 生存/削除の向きを反転する（mock survivor=problemId → BFF targetProblemId）", () => {
+    // 無いと: mock(problemId=生存)と BFF(targetProblemId=生存)の向きの取り違えが静かに通り、
+    //         real 分岐で「残るはずの Problem」が削除される
     expect(
-      toBffTriageInput({ action: "merge", problemId: "p1", targetProblemId: "p2" }),
-    ).toEqual({ action: "merge", sourceProblemId: "p1", targetProblemId: "p2" });
+      toBffTriageInput({ action: "merge", problemId: "survivor", targetProblemId: "absorbed" }),
+    ).toEqual({ action: "merge", sourceProblemId: "absorbed", targetProblemId: "survivor" });
   });
 
   it("editTheme / 状態遷移は素通し", () => {

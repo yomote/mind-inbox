@@ -3,7 +3,7 @@ import { TRPCClientError } from "@trpc/client";
 import * as mock from "../mockApi";
 import type { ExtractionResult, Problem, ProblemFilter, TriageInput } from "../mockApi";
 import { trpc } from "../trpc/client";
-import type { AppRouter } from "../../../bff/src/trpc/router";
+import type { AppRouter } from "../trpc/client";
 
 /**
  * Problem / Mention の api 層（Phase C で mock→real を結線）。
@@ -31,10 +31,12 @@ function toBffTriageInput(input: TriageInput): BffTriageInput {
         toProblemId: input.targetProblemId ?? "",
       };
     case "merge":
+      // 向きが逆: mock は problemId=生存 / targetProblemId=吸収され削除。
+      // BFF は sourceProblemId=削除 / targetProblemId=生存。→ 入れ替える。
       return {
         action: "merge",
-        sourceProblemId: input.problemId,
-        targetProblemId: input.targetProblemId ?? "",
+        sourceProblemId: input.targetProblemId ?? "",
+        targetProblemId: input.problemId,
       };
     case "editTheme":
       return { action: "editTheme", problemId: input.problemId, theme: input.theme ?? "未分類" };
