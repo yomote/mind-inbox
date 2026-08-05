@@ -617,6 +617,22 @@ describe("[L2] problem.triage — relink", () => {
     expect(to.mentions.find((m) => m.id === "men-b")?.problemId).toBe("p2");
   });
 
+  it("rejects relinking within the same problem", async () => {
+    // 無いと: from===to で in-memory の同一参照が stale 上書きされ Mention が重複する退行が静かに通る
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(
+      makeProblem({ id: "p1", mentions: [makeMention({ id: "men-a", problemId: "p1" })] }),
+    );
+    await expect(
+      caller.problem.triage({
+        action: "relink",
+        mentionId: "men-a",
+        fromProblemId: "p1",
+        toProblemId: "p1",
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
   it("removes the source problem when its last mention is relinked away", async () => {
     // 無いと: 種の Mention が抜けて mentions=[] の Problem が残り ProblemSchema.min(1) を破る退行が静かに通る
     const { caller, problemRepo } = makeCallerWithRepos();

@@ -22,6 +22,7 @@ import {
   ThemeSchema,
   type ExtractionResult,
   type Problem,
+  type TriageAction,
 } from "./domain";
 
 const t = initTRPC.context<TrpcContext>().create();
@@ -149,6 +150,12 @@ const TriageInputSchema = z.discriminatedUnion("action", [
 ]);
 type TriageInput = z.infer<typeof TriageInputSchema>;
 
+// drift ガード: TriageInput の action 集合が domain.ts の TriageActionSchema と一致することを
+// コンパイル時に強制する（どちらか一方に action を足し忘れると型エラーになる）。
+type AssertEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const _triageActionsInSync: AssertEqual<TriageInput["action"], TriageAction> = true;
+void _triageActionsInSync;
+
 async function requireProblem(repo: ProblemRepository, id: string): Promise<Problem> {
   const problem = await repo.get(id);
   if (!problem) {
@@ -196,6 +203,12 @@ async function applyTriage(input: TriageInput, repo: ProblemRepository): Promise
       return [];
     }
     case "relink": {
+      if (input.fromProblemId === input.toProblemId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "fromProblemId と toProblemId が同一です",
+        });
+      }
       const from = await requireProblem(repo, input.fromProblemId);
       const to = await requireProblem(repo, input.toProblemId);
       const mention = from.mentions.find((m) => m.id === input.mentionId);
