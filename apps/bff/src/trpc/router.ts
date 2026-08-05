@@ -22,6 +22,7 @@ import {
   ThemeSchema,
   type ExtractionResult,
   type Problem,
+  type TriageAction,
 } from "./domain";
 
 const t = initTRPC.context<TrpcContext>().create();
@@ -114,6 +115,138 @@ async function materializeExtraction(
 
 function dedupe(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+// ---- triage ----------------------------------------------------------------
+// domain_model.md §4.2 / TriageActionSchema。分割は v1 では後回し。
+// action ごとに必要な引数が違うため discriminatedUnion で受ける。
+
+const TriageInputSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("resolve"), problemId: z.string().min(1) }),
+  z.object({ action: z.literal("shelve"), problemId: z.string().min(1) }),
+  z.object({ action: z.literal("reopen"), problemId: z.string().min(1) }),
+  z.object({ action: z.literal("dismiss"), problemId: z.string().min(1) }),
+  z.object({
+    action: z.literal("editTheme"),
+    problemId: z.string().min(1),
+    theme: ThemeSchema,
+  }),
+  z.object({
+    action: z.literal("editTitle"),
+    problemId: z.string().min(1),
+    title: z.string().min(1),
+  }),
+  z.object({
+    action: z.literal("relink"),
+    mentionId: z.string().min(1),
+    fromProblemId: z.string().min(1),
+    toProblemId: z.string().min(1),
+  }),
+  z.object({
+    action: z.literal("merge"),
+    sourceProblemId: z.string().min(1),
+    targetProblemId: z.string().min(1),
+  }),
+]);
+type TriageInput = z.infer<typeof TriageInputSchema>;
+
+// drift ガード: TriageInput の action 集合が domain.ts の TriageActionSchema と一致することを
+// コンパイル時に強制する（どちらか一方に action を足し忘れると型エラーになる）。
+type AssertEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const _triageActionsInSync: AssertEqual<TriageInput["action"], TriageAction> = true;
+void _triageActionsInSync;
+
+async function requireProblem(repo: ProblemRepository, id: string): Promise<Problem> {
+  const problem = await repo.get(id);
+  if (!problem) {
+    throw new TRPCError({ code: "NOT_FOUND", message: `Problem not found: ${id}` });
+  }
+  return problem;
+}
+
+/** mentions 変更後に派生フィールド（mentionCount / lastMentionedAt）を再計算する。 */
+function withDerived(problem: Problem): Problem {
+  const mentionCount = problem.mentions.length;
+  const lastMentionedAt = problem.mentions.reduce(
+    (max, m) => (m.createdAt > max ? m.createdAt : max),
+    problem.mentions[0]?.createdAt ?? problem.lastMentionedAt,
+  );
+  return { ...problem, mentionCount, lastMentionedAt };
+}
+
+/** トリアージ操作を適用し、影響を受けた Problem を返す（dismiss / merge で消えたものは含めない）。 */
+async function applyTriage(input: TriageInput, repo: ProblemRepository): Promise<Problem[]> {
+  switch (input.action) {
+    case "resolve": {
+      const p = await requireProblem(repo, input.problemId);
+      return [await repo.upsert({ ...p, status: "resolved", resolvedAt: nowIso() })];
+    }
+    case "shelve": {
+      const p = await requireProblem(repo, input.problemId);
+      return [await repo.upsert({ ...p, status: "shelved", shelvedAt: nowIso() })];
+    }
+    case "reopen": {
+      const p = await requireProblem(repo, input.problemId);
+      return [await repo.upsert({ ...p, status: "open", resolvedAt: null, shelvedAt: null })];
+    }
+    case "editTheme": {
+      const p = await requireProblem(repo, input.problemId);
+      return [await repo.upsert({ ...p, theme: input.theme })];
+    }
+    case "editTitle": {
+      const p = await requireProblem(repo, input.problemId);
+      return [await repo.upsert({ ...p, title: input.title })];
+    }
+    case "dismiss": {
+      await requireProblem(repo, input.problemId);
+      await repo.remove(input.problemId);
+      return [];
+    }
+    case "relink": {
+      if (input.fromProblemId === input.toProblemId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "fromProblemId と toProblemId が同一です",
+        });
+      }
+      const from = await requireProblem(repo, input.fromProblemId);
+      const to = await requireProblem(repo, input.toProblemId);
+      const mention = from.mentions.find((m) => m.id === input.mentionId);
+      if (!mention) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Mention not found in ${input.fromProblemId}: ${input.mentionId}`,
+        });
+      }
+      const affected: Problem[] = [];
+      const remaining = from.mentions.filter((m) => m.id !== input.mentionId);
+      if (remaining.length === 0) {
+        // 種の Mention が抜けて空になった Problem は削除する（mentions.min(1) を保つ）
+        await repo.remove(from.id);
+      } else {
+        affected.push(await repo.upsert(withDerived({ ...from, mentions: remaining })));
+      }
+      const moved = { ...mention, problemId: to.id };
+      affected.push(await repo.upsert(withDerived({ ...to, mentions: [...to.mentions, moved] })));
+      return affected;
+    }
+    case "merge": {
+      if (input.sourceProblemId === input.targetProblemId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "source と target が同一です" });
+      }
+      const source = await requireProblem(repo, input.sourceProblemId);
+      const target = await requireProblem(repo, input.targetProblemId);
+      const movedMentions = source.mentions.map((m) => ({ ...m, problemId: target.id }));
+      const merged = withDerived({
+        ...target,
+        mentions: [...target.mentions, ...movedMentions],
+        tags: dedupe([...target.tags, ...source.tags]),
+        plans: [...target.plans, ...source.plans],
+      });
+      await repo.remove(source.id);
+      return [await repo.upsert(merged)];
+    }
+  }
 }
 
 // ---- health ----------------------------------------------------------------
@@ -302,11 +435,16 @@ const problemRouter = router({
     .input(z.object({ id: z.string().min(1) }))
     .output(ProblemSchema)
     .query(async ({ input, ctx }) => {
-      const problem = await ctx.problemRepo.get(input.id);
-      if (!problem) {
-        throw new TRPCError({ code: "NOT_FOUND", message: `Problem not found: ${input.id}` });
-      }
-      return problem;
+      return await requireProblem(ctx.problemRepo, input.id);
+    }),
+
+  // 事後トリアージ（統合 / 再リンク / 却下 / テーマ・タイトル編集 / 状態遷移）。ADR 0007。
+  triage: publicProcedure
+    .input(TriageInputSchema)
+    .output(z.object({ problems: z.array(ProblemSchema) }))
+    .mutation(async ({ input, ctx }) => {
+      console.log(`[problem.triage] action=${input.action}`);
+      return { problems: await applyTriage(input, ctx.problemRepo) };
     }),
 
   // 既存 /plan を再利用して Problem にプランを付ける（派生物。status は変えない / ADR 0007）。
@@ -314,10 +452,7 @@ const problemRouter = router({
     .input(z.object({ problemId: z.string().min(1) }))
     .output(ProblemSchema)
     .mutation(async ({ input, ctx }) => {
-      const problem = await ctx.problemRepo.get(input.problemId);
-      if (!problem) {
-        throw new TRPCError({ code: "NOT_FOUND", message: `Problem not found: ${input.problemId}` });
-      }
+      const problem = await requireProblem(ctx.problemRepo, input.problemId);
       const plan = await createPlanAiAgent({
         summary: problem.summary,
         emotions: dedupe(problem.mentions.map((m) => m.affect.label)),

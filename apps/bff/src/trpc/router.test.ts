@@ -30,7 +30,7 @@ import {
   organize as organizeAiAgent,
   sendChatMessage,
 } from "../clients/aiAgentClient";
-import type { ExtractionResult, Mention } from "./domain";
+import type { ExtractionResult, Mention, Problem } from "./domain";
 import { InMemoryHistoryRepository } from "../repositories/historyRepository";
 import { InMemoryProblemRepository } from "../repositories/problemRepository";
 import type { TrpcContext } from "./context";
@@ -39,13 +39,38 @@ import { appRouter } from "./router";
 // ---- helpers ---------------------------------------------------------------
 
 function makeCaller() {
-  // 各 repo は test 毎に fresh InMemory を渡して isolation を担保する。
+  return makeCallerWithRepos().caller;
+}
+
+/** triage / seed 系で repo を直接いじりたい test 用。 */
+function makeCallerWithRepos() {
+  const problemRepo = new InMemoryProblemRepository();
   const ctx: TrpcContext = {
     req: {} as HttpRequest,
     historyRepo: new InMemoryHistoryRepository(),
-    problemRepo: new InMemoryProblemRepository(),
+    problemRepo,
   };
-  return appRouter.createCaller(ctx);
+  return { caller: appRouter.createCaller(ctx), problemRepo };
+}
+
+function makeProblem(overrides: Partial<Problem> = {}): Problem {
+  const mentions = overrides.mentions ?? [makeMention()];
+  return {
+    id: "prob-1",
+    title: "転職の迷い",
+    summary: "転職すべきか迷っている",
+    theme: "仕事・キャリア",
+    tags: ["転職"],
+    status: "open",
+    mentions,
+    mentionCount: mentions.length,
+    plans: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    lastMentionedAt: "2026-01-01T00:00:00.000Z",
+    resolvedAt: null,
+    shelvedAt: null,
+    ...overrides,
+  };
 }
 
 // ---- extract fixtures ------------------------------------------------------
@@ -496,5 +521,205 @@ describe("[L2] problem.createPlan", () => {
     await expect(makeCaller().problem.createPlan({ problemId: "nope" })).rejects.toMatchObject({
       code: "NOT_FOUND",
     });
+  });
+});
+
+// ---- problem.triage --------------------------------------------------------
+
+describe("[L2] problem.triage — 状態遷移", () => {
+  it.each([
+    { action: "resolve", status: "resolved" },
+    { action: "shelve", status: "shelved" },
+  ] as const)("$action moves status to $status", async ({ action, status }) => {
+    // 無いと: 状態遷移や resolvedAt/shelvedAt の記録漏れが静かに通る
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem({ id: "p1" }));
+
+    const { problems } = await caller.problem.triage({ action, problemId: "p1" });
+    expect(problems[0].status).toBe(status);
+    if (action === "resolve") expect(problems[0].resolvedAt).not.toBeNull();
+    if (action === "shelve") expect(problems[0].shelvedAt).not.toBeNull();
+  });
+
+  it("reopen clears resolvedAt/shelvedAt and sets open", async () => {
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(
+      makeProblem({ id: "p1", status: "resolved", resolvedAt: "2026-03-01T00:00:00.000Z" }),
+    );
+
+    const { problems } = await caller.problem.triage({ action: "reopen", problemId: "p1" });
+    expect(problems[0].status).toBe("open");
+    expect(problems[0].resolvedAt).toBeNull();
+    expect(problems[0].shelvedAt).toBeNull();
+  });
+});
+
+describe("[L2] problem.triage — 編集", () => {
+  it("editTheme / editTitle update the field", async () => {
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem({ id: "p1" }));
+
+    const t = await caller.problem.triage({ action: "editTheme", problemId: "p1", theme: "心と体" });
+    expect(t.problems[0].theme).toBe("心と体");
+
+    const t2 = await caller.problem.triage({
+      action: "editTitle",
+      problemId: "p1",
+      title: "新しいタイトル",
+    });
+    expect(t2.problems[0].title).toBe("新しいタイトル");
+  });
+});
+
+describe("[L2] problem.triage — dismiss", () => {
+  it("removes the problem", async () => {
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem({ id: "p1" }));
+
+    const { problems } = await caller.problem.triage({ action: "dismiss", problemId: "p1" });
+    expect(problems).toEqual([]);
+    await expect(caller.problem.get({ id: "p1" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+describe("[L2] problem.triage — relink", () => {
+  it("moves a mention to another problem and recomputes both counts", async () => {
+    // 無いと: Mention 移動で from/to の mentionCount / problemId が更新されず不整合になる退行が静かに通る
+    const { caller, problemRepo } = makeCallerWithRepos();
+    const mA = makeMention({ id: "men-a", problemId: "p1" });
+    const mB = makeMention({
+      id: "men-b",
+      problemId: "p1",
+      createdAt: "2026-02-01T00:00:00.000Z",
+    });
+    await problemRepo.upsert(makeProblem({ id: "p1", mentions: [mA, mB] }));
+    await problemRepo.upsert(
+      makeProblem({
+        id: "p2",
+        title: "別の悩み",
+        mentions: [makeMention({ id: "men-c", problemId: "p2" })],
+      }),
+    );
+
+    await caller.problem.triage({
+      action: "relink",
+      mentionId: "men-b",
+      fromProblemId: "p1",
+      toProblemId: "p2",
+    });
+
+    const from = await caller.problem.get({ id: "p1" });
+    const to = await caller.problem.get({ id: "p2" });
+    expect(from.mentions.map((m) => m.id)).toEqual(["men-a"]);
+    expect(from.mentionCount).toBe(1);
+    expect(to.mentions.map((m) => m.id)).toEqual(["men-c", "men-b"]);
+    expect(to.mentionCount).toBe(2);
+    expect(to.mentions.find((m) => m.id === "men-b")?.problemId).toBe("p2");
+  });
+
+  it("rejects relinking within the same problem", async () => {
+    // 無いと: from===to で in-memory の同一参照が stale 上書きされ Mention が重複する退行が静かに通る
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(
+      makeProblem({ id: "p1", mentions: [makeMention({ id: "men-a", problemId: "p1" })] }),
+    );
+    await expect(
+      caller.problem.triage({
+        action: "relink",
+        mentionId: "men-a",
+        fromProblemId: "p1",
+        toProblemId: "p1",
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("removes the source problem when its last mention is relinked away", async () => {
+    // 無いと: 種の Mention が抜けて mentions=[] の Problem が残り ProblemSchema.min(1) を破る退行が静かに通る
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(
+      makeProblem({ id: "p1", mentions: [makeMention({ id: "men-only", problemId: "p1" })] }),
+    );
+    await problemRepo.upsert(
+      makeProblem({ id: "p2", mentions: [makeMention({ id: "men-c", problemId: "p2" })] }),
+    );
+
+    await caller.problem.triage({
+      action: "relink",
+      mentionId: "men-only",
+      fromProblemId: "p1",
+      toProblemId: "p2",
+    });
+
+    await expect(caller.problem.get({ id: "p1" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect((await caller.problem.get({ id: "p2" })).mentionCount).toBe(2);
+  });
+});
+
+describe("[L2] problem.triage — merge", () => {
+  it("merges source mentions/tags/plans into target and removes source", async () => {
+    // 無いと: 統合で mentions/tags/plans の取りこぼしや source 残留、count 不整合が静かに通る
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(
+      makeProblem({
+        id: "p1",
+        tags: ["転職"],
+        mentions: [makeMention({ id: "men-a", problemId: "p1" })],
+      }),
+    );
+    await problemRepo.upsert(
+      makeProblem({
+        id: "p2",
+        title: "似た悩み",
+        tags: ["キャリア"],
+        plans: [{ title: "既存プラン", steps: ["x"] }],
+        mentions: [
+          makeMention({ id: "men-c", problemId: "p2", createdAt: "2026-02-01T00:00:00.000Z" }),
+        ],
+      }),
+    );
+
+    const { problems } = await caller.problem.triage({
+      action: "merge",
+      sourceProblemId: "p1",
+      targetProblemId: "p2",
+    });
+
+    expect(problems).toHaveLength(1);
+    const target = problems[0];
+    expect(target.id).toBe("p2");
+    expect(target.mentions.map((m) => m.id).sort()).toEqual(["men-a", "men-c"]);
+    expect(target.mentionCount).toBe(2);
+    expect(target.tags).toEqual(["キャリア", "転職"]); // dedupe 後（target→source 順）
+    await expect(caller.problem.get({ id: "p1" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("rejects merging a problem into itself", async () => {
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem({ id: "p1" }));
+    await expect(
+      caller.problem.triage({ action: "merge", sourceProblemId: "p1", targetProblemId: "p1" }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+});
+
+describe("[L2] problem.triage — エラー", () => {
+  it("throws NOT_FOUND for an unknown problem", async () => {
+    await expect(
+      makeCaller().problem.triage({ action: "resolve", problemId: "nope" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("throws NOT_FOUND for an unknown mention in relink", async () => {
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem({ id: "p1" }));
+    await problemRepo.upsert(makeProblem({ id: "p2" }));
+    await expect(
+      caller.problem.triage({
+        action: "relink",
+        mentionId: "ghost",
+        fromProblemId: "p1",
+        toProblemId: "p2",
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });
