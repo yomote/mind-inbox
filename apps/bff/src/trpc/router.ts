@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { initTRPC } from "@trpc/server";
+import { initTRPC, TRPCError } from "@trpc/server";
 import { z } from "zod";
 import type { TrpcContext } from "./context";
 import {
   approve as approveAiAgent,
   createPlan as createPlanAiAgent,
+  extract as extractAiAgent,
   organize as organizeAiAgent,
   sendChatMessage,
 } from "../clients/aiAgentClient";
@@ -13,6 +14,15 @@ import {
   HistoryItemSchema,
   OrganizedResultSchema,
 } from "../repositories/historyRepository";
+import type { ProblemRepository } from "../repositories/problemRepository";
+import {
+  ExtractionResultSchema,
+  ProblemSchema,
+  ProblemStatusSchema,
+  ThemeSchema,
+  type ExtractionResult,
+  type Problem,
+} from "./domain";
 
 const t = initTRPC.context<TrpcContext>().create();
 
@@ -55,6 +65,55 @@ function deriveTitle(concern: string): string {
   const trimmed = concern.trim();
   if (trimmed.length === 0) return "相談セッション";
   return trimmed.length > 26 ? `${trimmed.slice(0, 26)}…` : trimmed;
+}
+
+/**
+ * ai-agent の抽出結果を Problem リポジトリに反映する。
+ * new は新規 Problem を起こし、existing は既存に Mention を追記して mentionCount / lastMentionedAt を更新。
+ * 状態遷移（reignited の reopen 等）は自動では行わず、事後トリアージに委ねる（ADR 0007）。
+ */
+async function materializeExtraction(
+  result: ExtractionResult,
+  repo: ProblemRepository,
+): Promise<void> {
+  for (const { mention, grouping } of result.items) {
+    if (grouping.kind === "existing") {
+      const existing = await repo.get(grouping.problemId);
+      if (existing) {
+        await repo.upsert({
+          ...existing,
+          mentions: [...existing.mentions, mention],
+          mentionCount: grouping.mentionCount,
+          lastMentionedAt: mention.createdAt,
+        });
+        continue;
+      }
+      // 既存が見つからない（候補集合との齟齬）→ 取りこぼさず新規として作る
+    }
+    // 新規 Problem（new、または existing だが候補が見つからないフォールバック）。
+    // Mention は1件なので mentionCount は必ず 1（mentions.length と一致させる。
+    // grouping.mentionCount は既存追記前提の値なのでここでは使わない）。
+    const problem: Problem = {
+      id: grouping.problemId,
+      title: grouping.problemTitle,
+      summary: mention.statement,
+      theme: grouping.problemTheme,
+      tags: mention.proposedTags,
+      status: "open",
+      mentions: [mention],
+      mentionCount: 1,
+      plans: [],
+      createdAt: mention.createdAt,
+      lastMentionedAt: mention.createdAt,
+      resolvedAt: null,
+      shelvedAt: null,
+    };
+    await repo.upsert(problem);
+  }
+}
+
+function dedupe(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 // ---- health ----------------------------------------------------------------
@@ -136,6 +195,29 @@ const consultationRouter = router({
       return await organizeAiAgent({ sessionId: input.sessionId });
     }),
 
+  // 吐き出し全文 → Mention 抽出 + 自動グルーピング（ADR 0007）。organize を置換する新導線。
+  // BFF が既存 Problem 候補を渡し（ADR 0012）、結果を Problem リポジトリに反映する。
+  extract: publicProcedure
+    .input(z.object({ sessionId: z.string().min(1) }))
+    .output(ExtractionResultSchema)
+    .mutation(async ({ input, ctx }) => {
+      console.log(`[consultation.extract] sessionId=${input.sessionId}`);
+      const existing = await ctx.problemRepo.list();
+      const result = await extractAiAgent({
+        sessionId: input.sessionId,
+        existingProblems: existing.map((p) => ({
+          id: p.id,
+          title: p.title,
+          theme: p.theme,
+          summary: p.summary,
+          mentionCount: p.mentionCount,
+          status: p.status,
+        })),
+      });
+      await materializeExtraction(result, ctx.problemRepo);
+      return result;
+    }),
+
   createPlan: publicProcedure
     .input(z.object({ result: OrganizedResultSchema }))
     .output(ActionPlanSchema)
@@ -199,12 +281,60 @@ const historyRouter = router({
     }),
 });
 
+// ---- problem ---------------------------------------------------------------
+
+const problemRouter = router({
+  list: publicProcedure
+    .input(
+      z
+        .object({
+          theme: ThemeSchema.optional(),
+          status: ProblemStatusSchema.optional(),
+        })
+        .optional(),
+    )
+    .output(z.array(ProblemSchema))
+    .query(async ({ input, ctx }) => {
+      return await ctx.problemRepo.list(input ?? undefined);
+    }),
+
+  get: publicProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .output(ProblemSchema)
+    .query(async ({ input, ctx }) => {
+      const problem = await ctx.problemRepo.get(input.id);
+      if (!problem) {
+        throw new TRPCError({ code: "NOT_FOUND", message: `Problem not found: ${input.id}` });
+      }
+      return problem;
+    }),
+
+  // 既存 /plan を再利用して Problem にプランを付ける（派生物。status は変えない / ADR 0007）。
+  createPlan: publicProcedure
+    .input(z.object({ problemId: z.string().min(1) }))
+    .output(ProblemSchema)
+    .mutation(async ({ input, ctx }) => {
+      const problem = await ctx.problemRepo.get(input.problemId);
+      if (!problem) {
+        throw new TRPCError({ code: "NOT_FOUND", message: `Problem not found: ${input.problemId}` });
+      }
+      const plan = await createPlanAiAgent({
+        summary: problem.summary,
+        emotions: dedupe(problem.mentions.map((m) => m.affect.label)),
+        priorities: problem.tags,
+      });
+      const updated: Problem = { ...problem, plans: [...problem.plans, plan] };
+      return await ctx.problemRepo.upsert(updated);
+    }),
+});
+
 // ---- app router ------------------------------------------------------------
 
 export const appRouter = router({
   health: healthRouter,
   consultation: consultationRouter,
   history: historyRouter,
+  problem: problemRouter,
 });
 
 export type AppRouter = typeof appRouter;

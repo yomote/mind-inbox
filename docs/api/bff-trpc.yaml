@@ -93,6 +93,174 @@ paths:
               required:
                 - result
               additionalProperties: false
+  /api/trpc/consultation.extract:
+    post:
+      operationId: consultation.extract
+      tags:
+        - consultation
+      summary: consultation.extract
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionId:
+                    type: string
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        mention:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            sessionId:
+                              type: string
+                            dumpId:
+                              type: string
+                              nullable: true
+                            createdAt:
+                              type: string
+                            statement:
+                              type: string
+                            excerpt:
+                              type: string
+                            affect:
+                              type: object
+                              properties:
+                                label:
+                                  type: string
+                                valence:
+                                  type: string
+                                  enum:
+                                    - negative
+                                    - neutral
+                                    - positive
+                                intensity:
+                                  type: number
+                                  minimum: 0
+                                  maximum: 1
+                              required:
+                                - label
+                                - valence
+                                - intensity
+                              additionalProperties: false
+                            proposedTheme:
+                              type: string
+                              enum:
+                                - 仕事・キャリア
+                                - お金
+                                - 心と体
+                                - 家族・パートナー
+                                - 人間関係
+                                - 自己理解・生き方
+                                - 日常・生活
+                                - 未分類
+                            proposedTags:
+                              type: array
+                              items:
+                                type: string
+                            problemId:
+                              type: string
+                              nullable: true
+                            groupingConfidence:
+                              type: number
+                              minimum: 0
+                              maximum: 1
+                              nullable: true
+                          required:
+                            - id
+                            - sessionId
+                            - dumpId
+                            - createdAt
+                            - statement
+                            - excerpt
+                            - affect
+                            - proposedTheme
+                            - proposedTags
+                            - problemId
+                            - groupingConfidence
+                          additionalProperties: false
+                        grouping:
+                          type: object
+                          properties:
+                            kind:
+                              type: string
+                              enum:
+                                - new
+                                - existing
+                            problemId:
+                              type: string
+                            problemTitle:
+                              type: string
+                            problemTheme:
+                              type: string
+                              enum:
+                                - 仕事・キャリア
+                                - お金
+                                - 心と体
+                                - 家族・パートナー
+                                - 人間関係
+                                - 自己理解・生き方
+                                - 日常・生活
+                                - 未分類
+                            isRecurrence:
+                              type: boolean
+                            mentionCount:
+                              type: integer
+                              exclusiveMinimum: true
+                              minimum: 0
+                            reignited:
+                              type: boolean
+                            groupingConfidence:
+                              type: number
+                              minimum: 0
+                              maximum: 1
+                              nullable: true
+                          required:
+                            - kind
+                            - problemId
+                            - problemTitle
+                            - problemTheme
+                            - isRecurrence
+                            - mentionCount
+                            - reignited
+                            - groupingConfidence
+                          additionalProperties: false
+                      required:
+                        - mention
+                        - grouping
+                      additionalProperties: false
+                  newProblemCount:
+                    type: integer
+                    minimum: 0
+                  updatedProblemCount:
+                    type: integer
+                    minimum: 0
+                required:
+                  - sessionId
+                  - items
+                  - newProblemCount
+                  - updatedProblemCount
+                additionalProperties: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sessionId:
+                  type: string
+                  minLength: 1
+              required:
+                - sessionId
+              additionalProperties: false
   /api/trpc/consultation.organize:
     post:
       operationId: consultation.organize
@@ -436,3 +604,537 @@ paths:
                 - result
                 - plan
               additionalProperties: false
+  /api/trpc/problem.createPlan:
+    post:
+      operationId: problem.createPlan
+      tags:
+        - problem
+      summary: problem.createPlan
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  title:
+                    type: string
+                  summary:
+                    type: string
+                  theme:
+                    type: string
+                    enum:
+                      - 仕事・キャリア
+                      - お金
+                      - 心と体
+                      - 家族・パートナー
+                      - 人間関係
+                      - 自己理解・生き方
+                      - 日常・生活
+                      - 未分類
+                  tags:
+                    type: array
+                    items:
+                      type: string
+                  status:
+                    type: string
+                    enum:
+                      - open
+                      - resolved
+                      - shelved
+                  mentions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        sessionId:
+                          type: string
+                        dumpId:
+                          type: string
+                          nullable: true
+                        createdAt:
+                          type: string
+                        statement:
+                          type: string
+                        excerpt:
+                          type: string
+                        affect:
+                          type: object
+                          properties:
+                            label:
+                              type: string
+                            valence:
+                              type: string
+                              enum:
+                                - negative
+                                - neutral
+                                - positive
+                            intensity:
+                              type: number
+                              minimum: 0
+                              maximum: 1
+                          required:
+                            - label
+                            - valence
+                            - intensity
+                          additionalProperties: false
+                        proposedTheme:
+                          type: string
+                          enum:
+                            - 仕事・キャリア
+                            - お金
+                            - 心と体
+                            - 家族・パートナー
+                            - 人間関係
+                            - 自己理解・生き方
+                            - 日常・生活
+                            - 未分類
+                        proposedTags:
+                          type: array
+                          items:
+                            type: string
+                        problemId:
+                          type: string
+                          nullable: true
+                        groupingConfidence:
+                          type: number
+                          minimum: 0
+                          maximum: 1
+                          nullable: true
+                      required:
+                        - id
+                        - sessionId
+                        - dumpId
+                        - createdAt
+                        - statement
+                        - excerpt
+                        - affect
+                        - proposedTheme
+                        - proposedTags
+                        - problemId
+                        - groupingConfidence
+                      additionalProperties: false
+                    minItems: 1
+                  mentionCount:
+                    type: integer
+                    minimum: 0
+                  plans:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        title:
+                          type: string
+                        steps:
+                          type: array
+                          items:
+                            type: string
+                      required:
+                        - title
+                        - steps
+                      additionalProperties: false
+                  createdAt:
+                    type: string
+                  lastMentionedAt:
+                    type: string
+                  resolvedAt:
+                    type: string
+                    nullable: true
+                  shelvedAt:
+                    type: string
+                    nullable: true
+                required:
+                  - id
+                  - title
+                  - summary
+                  - theme
+                  - tags
+                  - status
+                  - mentions
+                  - mentionCount
+                  - plans
+                  - createdAt
+                  - lastMentionedAt
+                  - resolvedAt
+                  - shelvedAt
+                additionalProperties: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                problemId:
+                  type: string
+                  minLength: 1
+              required:
+                - problemId
+              additionalProperties: false
+  /api/trpc/problem.get:
+    get:
+      operationId: problem.get
+      tags:
+        - problem
+      summary: problem.get
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  title:
+                    type: string
+                  summary:
+                    type: string
+                  theme:
+                    type: string
+                    enum:
+                      - 仕事・キャリア
+                      - お金
+                      - 心と体
+                      - 家族・パートナー
+                      - 人間関係
+                      - 自己理解・生き方
+                      - 日常・生活
+                      - 未分類
+                  tags:
+                    type: array
+                    items:
+                      type: string
+                  status:
+                    type: string
+                    enum:
+                      - open
+                      - resolved
+                      - shelved
+                  mentions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        sessionId:
+                          type: string
+                        dumpId:
+                          type: string
+                          nullable: true
+                        createdAt:
+                          type: string
+                        statement:
+                          type: string
+                        excerpt:
+                          type: string
+                        affect:
+                          type: object
+                          properties:
+                            label:
+                              type: string
+                            valence:
+                              type: string
+                              enum:
+                                - negative
+                                - neutral
+                                - positive
+                            intensity:
+                              type: number
+                              minimum: 0
+                              maximum: 1
+                          required:
+                            - label
+                            - valence
+                            - intensity
+                          additionalProperties: false
+                        proposedTheme:
+                          type: string
+                          enum:
+                            - 仕事・キャリア
+                            - お金
+                            - 心と体
+                            - 家族・パートナー
+                            - 人間関係
+                            - 自己理解・生き方
+                            - 日常・生活
+                            - 未分類
+                        proposedTags:
+                          type: array
+                          items:
+                            type: string
+                        problemId:
+                          type: string
+                          nullable: true
+                        groupingConfidence:
+                          type: number
+                          minimum: 0
+                          maximum: 1
+                          nullable: true
+                      required:
+                        - id
+                        - sessionId
+                        - dumpId
+                        - createdAt
+                        - statement
+                        - excerpt
+                        - affect
+                        - proposedTheme
+                        - proposedTags
+                        - problemId
+                        - groupingConfidence
+                      additionalProperties: false
+                    minItems: 1
+                  mentionCount:
+                    type: integer
+                    minimum: 0
+                  plans:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        title:
+                          type: string
+                        steps:
+                          type: array
+                          items:
+                            type: string
+                      required:
+                        - title
+                        - steps
+                      additionalProperties: false
+                  createdAt:
+                    type: string
+                  lastMentionedAt:
+                    type: string
+                  resolvedAt:
+                    type: string
+                    nullable: true
+                  shelvedAt:
+                    type: string
+                    nullable: true
+                required:
+                  - id
+                  - title
+                  - summary
+                  - theme
+                  - tags
+                  - status
+                  - mentions
+                  - mentionCount
+                  - plans
+                  - createdAt
+                  - lastMentionedAt
+                  - resolvedAt
+                  - shelvedAt
+                additionalProperties: false
+      parameters:
+        - name: input
+          in: query
+          required: true
+          description: tRPC input (URL-encoded JSON)
+          schema:
+            type: object
+            properties:
+              id:
+                type: string
+                minLength: 1
+            required:
+              - id
+            additionalProperties: false
+  /api/trpc/problem.list:
+    get:
+      operationId: problem.list
+      tags:
+        - problem
+      summary: problem.list
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    title:
+                      type: string
+                    summary:
+                      type: string
+                    theme:
+                      type: string
+                      enum:
+                        - 仕事・キャリア
+                        - お金
+                        - 心と体
+                        - 家族・パートナー
+                        - 人間関係
+                        - 自己理解・生き方
+                        - 日常・生活
+                        - 未分類
+                    tags:
+                      type: array
+                      items:
+                        type: string
+                    status:
+                      type: string
+                      enum:
+                        - open
+                        - resolved
+                        - shelved
+                    mentions:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+                          sessionId:
+                            type: string
+                          dumpId:
+                            type: string
+                            nullable: true
+                          createdAt:
+                            type: string
+                          statement:
+                            type: string
+                          excerpt:
+                            type: string
+                          affect:
+                            type: object
+                            properties:
+                              label:
+                                type: string
+                              valence:
+                                type: string
+                                enum:
+                                  - negative
+                                  - neutral
+                                  - positive
+                              intensity:
+                                type: number
+                                minimum: 0
+                                maximum: 1
+                            required:
+                              - label
+                              - valence
+                              - intensity
+                            additionalProperties: false
+                          proposedTheme:
+                            type: string
+                            enum:
+                              - 仕事・キャリア
+                              - お金
+                              - 心と体
+                              - 家族・パートナー
+                              - 人間関係
+                              - 自己理解・生き方
+                              - 日常・生活
+                              - 未分類
+                          proposedTags:
+                            type: array
+                            items:
+                              type: string
+                          problemId:
+                            type: string
+                            nullable: true
+                          groupingConfidence:
+                            type: number
+                            minimum: 0
+                            maximum: 1
+                            nullable: true
+                        required:
+                          - id
+                          - sessionId
+                          - dumpId
+                          - createdAt
+                          - statement
+                          - excerpt
+                          - affect
+                          - proposedTheme
+                          - proposedTags
+                          - problemId
+                          - groupingConfidence
+                        additionalProperties: false
+                      minItems: 1
+                    mentionCount:
+                      type: integer
+                      minimum: 0
+                    plans:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          title:
+                            type: string
+                          steps:
+                            type: array
+                            items:
+                              type: string
+                        required:
+                          - title
+                          - steps
+                        additionalProperties: false
+                    createdAt:
+                      type: string
+                    lastMentionedAt:
+                      type: string
+                    resolvedAt:
+                      type: string
+                      nullable: true
+                    shelvedAt:
+                      type: string
+                      nullable: true
+                  required:
+                    - id
+                    - title
+                    - summary
+                    - theme
+                    - tags
+                    - status
+                    - mentions
+                    - mentionCount
+                    - plans
+                    - createdAt
+                    - lastMentionedAt
+                    - resolvedAt
+                    - shelvedAt
+                  additionalProperties: false
+      parameters:
+        - name: input
+          in: query
+          required: true
+          description: tRPC input (URL-encoded JSON)
+          schema:
+            anyOf:
+              - not: {}
+              - type: object
+                properties:
+                  theme:
+                    type: string
+                    enum:
+                      - 仕事・キャリア
+                      - お金
+                      - 心と体
+                      - 家族・パートナー
+                      - 人間関係
+                      - 自己理解・生き方
+                      - 日常・生活
+                      - 未分類
+                  status:
+                    type: string
+                    enum:
+                      - open
+                      - resolved
+                      - shelved
+                additionalProperties: false

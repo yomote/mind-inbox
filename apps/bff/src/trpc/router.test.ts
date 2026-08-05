@@ -18,6 +18,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../clients/aiAgentClient", () => ({
   sendChatMessage: vi.fn(),
   organize: vi.fn(),
+  extract: vi.fn(),
   createPlan: vi.fn(),
   approve: vi.fn(),
 }));
@@ -25,22 +26,68 @@ vi.mock("../clients/aiAgentClient", () => ({
 import {
   approve as approveAiAgent,
   createPlan as createPlanAiAgent,
+  extract as extractAiAgent,
   organize as organizeAiAgent,
   sendChatMessage,
 } from "../clients/aiAgentClient";
+import type { ExtractionResult, Mention } from "./domain";
 import { InMemoryHistoryRepository } from "../repositories/historyRepository";
+import { InMemoryProblemRepository } from "../repositories/problemRepository";
 import type { TrpcContext } from "./context";
 import { appRouter } from "./router";
 
 // ---- helpers ---------------------------------------------------------------
 
 function makeCaller() {
-  // historyRepo は test 毎に fresh InMemory を渡して isolation を担保する。
+  // 各 repo は test 毎に fresh InMemory を渡して isolation を担保する。
   const ctx: TrpcContext = {
     req: {} as HttpRequest,
     historyRepo: new InMemoryHistoryRepository(),
+    problemRepo: new InMemoryProblemRepository(),
   };
   return appRouter.createCaller(ctx);
+}
+
+// ---- extract fixtures ------------------------------------------------------
+
+function makeMention(overrides: Partial<Mention> = {}): Mention {
+  return {
+    id: "men-1",
+    sessionId: "s1",
+    dumpId: "s1",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    statement: "転職すべきか迷っている",
+    excerpt: "転職しようか迷ってて",
+    affect: { label: "不安", valence: "negative", intensity: 0.6 },
+    proposedTheme: "仕事・キャリア",
+    proposedTags: ["転職"],
+    problemId: "prob-1",
+    groupingConfidence: null,
+    ...overrides,
+  };
+}
+
+function newExtraction(problemId = "prob-1"): ExtractionResult {
+  return {
+    sessionId: "s1",
+    items: [
+      {
+        mention: makeMention({ problemId }),
+        grouping: {
+          kind: "new",
+          problemId,
+          problemTitle: "転職の迷い",
+          problemTheme: "仕事・キャリア",
+          isRecurrence: false,
+          mentionCount: 1,
+          reignited: false,
+          groupingConfidence: null,
+        },
+      },
+    ],
+    newProblemCount: 1,
+    updatedProblemCount: 0,
+  };
 }
 
 beforeEach(() => {
@@ -291,5 +338,163 @@ describe("[L2] flow: start → sendMessage → organize → createPlan → save"
     expect(list[0]).toEqual(saved);
     expect(list[0].title).toBe("仕事が辛い");
     expect(list[0].plan.steps).toEqual(["早く帰る", "信頼できる人に話す"]);
+  });
+});
+
+// ---- consultation.extract --------------------------------------------------
+
+describe("[L2] consultation.extract", () => {
+  it("persists a new problem and returns the extraction result", async () => {
+    // 無いと: 抽出結果を Problem リポジトリに反映し損ねる / 戻り値の構造変更が静かに通る
+    vi.mocked(extractAiAgent).mockResolvedValue(newExtraction("prob-1"));
+    const caller = makeCaller();
+
+    const result = await caller.consultation.extract({ sessionId: "s1" });
+    expect(result.newProblemCount).toBe(1);
+    expect(result.items[0].grouping.kind).toBe("new");
+    // 初回は既存候補が空で ai-agent を呼ぶ
+    expect(extractAiAgent).toHaveBeenCalledWith({ sessionId: "s1", existingProblems: [] });
+
+    // 永続化されて problem.get で引ける
+    const problem = await caller.problem.get({ id: "prob-1" });
+    expect(problem.title).toBe("転職の迷い");
+    expect(problem.mentions).toHaveLength(1);
+    expect(problem.mentionCount).toBe(1);
+    expect(problem.status).toBe("open");
+  });
+
+  it("appends to an existing problem and passes candidates to ai-agent", async () => {
+    // 無いと: 再出現が既存に束ねられず mentionCount / mentions / lastMentionedAt が更新されない退行が静かに通る
+    const caller = makeCaller();
+    vi.mocked(extractAiAgent).mockResolvedValueOnce(newExtraction("prob-1"));
+    await caller.consultation.extract({ sessionId: "s1" });
+
+    vi.mocked(extractAiAgent).mockResolvedValueOnce({
+      sessionId: "s2",
+      items: [
+        {
+          mention: makeMention({
+            id: "men-2",
+            sessionId: "s2",
+            dumpId: "s2",
+            problemId: "prob-1",
+            statement: "やっぱり転職したい",
+            createdAt: "2026-02-01T00:00:00.000Z",
+          }),
+          grouping: {
+            kind: "existing",
+            problemId: "prob-1",
+            problemTitle: "転職の迷い",
+            problemTheme: "仕事・キャリア",
+            isRecurrence: true,
+            mentionCount: 2,
+            reignited: false,
+            groupingConfidence: 0.9,
+          },
+        },
+      ],
+      newProblemCount: 0,
+      updatedProblemCount: 1,
+    });
+    await caller.consultation.extract({ sessionId: "s2" });
+
+    // 2回目は既存候補 prob-1 を ai-agent に渡している（ADR 0012）
+    expect(vi.mocked(extractAiAgent).mock.calls[1]?.[0].existingProblems).toEqual([
+      expect.objectContaining({ id: "prob-1", title: "転職の迷い", status: "open", mentionCount: 1 }),
+    ]);
+
+    const problem = await caller.problem.get({ id: "prob-1" });
+    expect(problem.mentions).toHaveLength(2);
+    expect(problem.mentionCount).toBe(2);
+    expect(problem.lastMentionedAt).toBe("2026-02-01T00:00:00.000Z");
+  });
+
+  it("creates a consistent new problem when an 'existing' grouping references an unknown id", async () => {
+    // 無いと: 候補集合との齟齬（existing だが repo に無い）で mentionCount=2 のまま
+    //         mentions.length=1 の不整合 Problem が作られる退行が静かに通る
+    const caller = makeCaller();
+    vi.mocked(extractAiAgent).mockResolvedValue({
+      sessionId: "s1",
+      items: [
+        {
+          mention: makeMention({ problemId: "prob-orphan" }),
+          grouping: {
+            kind: "existing",
+            problemId: "prob-orphan", // repo に存在しない
+            problemTitle: "転職の迷い",
+            problemTheme: "仕事・キャリア",
+            isRecurrence: true,
+            mentionCount: 2, // 既存追記前提の値。フォールバックでは採用しない
+            reignited: false,
+            groupingConfidence: 0.9,
+          },
+        },
+      ],
+      newProblemCount: 0,
+      updatedProblemCount: 1,
+    });
+
+    await caller.consultation.extract({ sessionId: "s1" });
+
+    const problem = await caller.problem.get({ id: "prob-orphan" });
+    expect(problem.mentions).toHaveLength(1);
+    expect(problem.mentionCount).toBe(1); // mentions.length と一致
+    expect(problem.status).toBe("open");
+  });
+
+  it("rejects empty sessionId with zod validation", async () => {
+    await expect(makeCaller().consultation.extract({ sessionId: "" })).rejects.toBeInstanceOf(
+      TRPCError,
+    );
+    expect(extractAiAgent).not.toHaveBeenCalled();
+  });
+});
+
+// ---- problem.list / get ----------------------------------------------------
+
+describe("[L2] problem.list / get", () => {
+  it("get throws NOT_FOUND for unknown id", async () => {
+    // 無いと: 存在しない Problem に対して undefined を返し、詳細画面が壊れる退行が静かに通る
+    await expect(makeCaller().problem.get({ id: "nope" })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+  });
+
+  it("list filters by status", async () => {
+    // 無いと: status フィルタが効かず解決済みが一覧に混ざる退行が静かに通る
+    const caller = makeCaller();
+    vi.mocked(extractAiAgent).mockResolvedValue(newExtraction("prob-1"));
+    await caller.consultation.extract({ sessionId: "s1" });
+
+    expect(await caller.problem.list({ status: "open" })).toHaveLength(1);
+    expect(await caller.problem.list({ status: "resolved" })).toHaveLength(0);
+  });
+});
+
+// ---- problem.createPlan ----------------------------------------------------
+
+describe("[L2] problem.createPlan", () => {
+  it("appends a plan derived from the problem without changing status", async () => {
+    // 無いと: プランが Problem に紐づかない / 派生物のはずが status を変えてしまう退行が静かに通る
+    const caller = makeCaller();
+    vi.mocked(extractAiAgent).mockResolvedValue(newExtraction("prob-1"));
+    await caller.consultation.extract({ sessionId: "s1" });
+
+    vi.mocked(createPlanAiAgent).mockResolvedValue({ title: "48時間プラン", steps: ["休む"] });
+    const updated = await caller.problem.createPlan({ problemId: "prob-1" });
+
+    expect(updated.plans).toEqual([{ title: "48時間プラン", steps: ["休む"] }]);
+    expect(updated.status).toBe("open");
+    expect(createPlanAiAgent).toHaveBeenCalledWith({
+      summary: "転職すべきか迷っている",
+      emotions: ["不安"],
+      priorities: ["転職"],
+    });
+  });
+
+  it("throws NOT_FOUND for unknown problemId", async () => {
+    await expect(makeCaller().problem.createPlan({ problemId: "nope" })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
   });
 });
