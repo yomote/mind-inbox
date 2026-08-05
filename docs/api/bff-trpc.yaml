@@ -1138,3 +1138,308 @@ paths:
                       - resolved
                       - shelved
                 additionalProperties: false
+  /api/trpc/problem.triage:
+    post:
+      operationId: problem.triage
+      tags:
+        - problem
+      summary: problem.triage
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  problems:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        title:
+                          type: string
+                        summary:
+                          type: string
+                        theme:
+                          type: string
+                          enum:
+                            - 仕事・キャリア
+                            - お金
+                            - 心と体
+                            - 家族・パートナー
+                            - 人間関係
+                            - 自己理解・生き方
+                            - 日常・生活
+                            - 未分類
+                        tags:
+                          type: array
+                          items:
+                            type: string
+                        status:
+                          type: string
+                          enum:
+                            - open
+                            - resolved
+                            - shelved
+                        mentions:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                              sessionId:
+                                type: string
+                              dumpId:
+                                type: string
+                                nullable: true
+                              createdAt:
+                                type: string
+                              statement:
+                                type: string
+                              excerpt:
+                                type: string
+                              affect:
+                                type: object
+                                properties:
+                                  label:
+                                    type: string
+                                  valence:
+                                    type: string
+                                    enum:
+                                      - negative
+                                      - neutral
+                                      - positive
+                                  intensity:
+                                    type: number
+                                    minimum: 0
+                                    maximum: 1
+                                required:
+                                  - label
+                                  - valence
+                                  - intensity
+                                additionalProperties: false
+                              proposedTheme:
+                                type: string
+                                enum:
+                                  - 仕事・キャリア
+                                  - お金
+                                  - 心と体
+                                  - 家族・パートナー
+                                  - 人間関係
+                                  - 自己理解・生き方
+                                  - 日常・生活
+                                  - 未分類
+                              proposedTags:
+                                type: array
+                                items:
+                                  type: string
+                              problemId:
+                                type: string
+                                nullable: true
+                              groupingConfidence:
+                                type: number
+                                minimum: 0
+                                maximum: 1
+                                nullable: true
+                            required:
+                              - id
+                              - sessionId
+                              - dumpId
+                              - createdAt
+                              - statement
+                              - excerpt
+                              - affect
+                              - proposedTheme
+                              - proposedTags
+                              - problemId
+                              - groupingConfidence
+                            additionalProperties: false
+                          minItems: 1
+                        mentionCount:
+                          type: integer
+                          minimum: 0
+                        plans:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              title:
+                                type: string
+                              steps:
+                                type: array
+                                items:
+                                  type: string
+                            required:
+                              - title
+                              - steps
+                            additionalProperties: false
+                        createdAt:
+                          type: string
+                        lastMentionedAt:
+                          type: string
+                        resolvedAt:
+                          type: string
+                          nullable: true
+                        shelvedAt:
+                          type: string
+                          nullable: true
+                      required:
+                        - id
+                        - title
+                        - summary
+                        - theme
+                        - tags
+                        - status
+                        - mentions
+                        - mentionCount
+                        - plans
+                        - createdAt
+                        - lastMentionedAt
+                        - resolvedAt
+                        - shelvedAt
+                      additionalProperties: false
+                required:
+                  - problems
+                additionalProperties: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              anyOf:
+                - type: object
+                  properties:
+                    action:
+                      type: string
+                      enum:
+                        - resolve
+                    problemId:
+                      type: string
+                      minLength: 1
+                  required:
+                    - action
+                    - problemId
+                  additionalProperties: false
+                - type: object
+                  properties:
+                    action:
+                      type: string
+                      enum:
+                        - shelve
+                    problemId:
+                      type: string
+                      minLength: 1
+                  required:
+                    - action
+                    - problemId
+                  additionalProperties: false
+                - type: object
+                  properties:
+                    action:
+                      type: string
+                      enum:
+                        - reopen
+                    problemId:
+                      type: string
+                      minLength: 1
+                  required:
+                    - action
+                    - problemId
+                  additionalProperties: false
+                - type: object
+                  properties:
+                    action:
+                      type: string
+                      enum:
+                        - dismiss
+                    problemId:
+                      type: string
+                      minLength: 1
+                  required:
+                    - action
+                    - problemId
+                  additionalProperties: false
+                - type: object
+                  properties:
+                    action:
+                      type: string
+                      enum:
+                        - editTheme
+                    problemId:
+                      type: string
+                      minLength: 1
+                    theme:
+                      type: string
+                      enum:
+                        - 仕事・キャリア
+                        - お金
+                        - 心と体
+                        - 家族・パートナー
+                        - 人間関係
+                        - 自己理解・生き方
+                        - 日常・生活
+                        - 未分類
+                  required:
+                    - action
+                    - problemId
+                    - theme
+                  additionalProperties: false
+                - type: object
+                  properties:
+                    action:
+                      type: string
+                      enum:
+                        - editTitle
+                    problemId:
+                      type: string
+                      minLength: 1
+                    title:
+                      type: string
+                      minLength: 1
+                  required:
+                    - action
+                    - problemId
+                    - title
+                  additionalProperties: false
+                - type: object
+                  properties:
+                    action:
+                      type: string
+                      enum:
+                        - relink
+                    mentionId:
+                      type: string
+                      minLength: 1
+                    fromProblemId:
+                      type: string
+                      minLength: 1
+                    toProblemId:
+                      type: string
+                      minLength: 1
+                  required:
+                    - action
+                    - mentionId
+                    - fromProblemId
+                    - toProblemId
+                  additionalProperties: false
+                - type: object
+                  properties:
+                    action:
+                      type: string
+                      enum:
+                        - merge
+                    sourceProblemId:
+                      type: string
+                      minLength: 1
+                    targetProblemId:
+                      type: string
+                      minLength: 1
+                  required:
+                    - action
+                    - sourceProblemId
+                    - targetProblemId
+                  additionalProperties: false
