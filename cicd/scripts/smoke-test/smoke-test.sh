@@ -52,7 +52,8 @@ warn() { echo "WARN- $1"; }
 section "Resolve outputs"
 [[ -n "$SWA_HOST" ]] && ok "staticSiteDefaultHostname: $SWA_HOST" || ng "Missing output: staticSiteDefaultHostname"
 [[ -n "$FUNC_HOST" ]] && ok "functionAppDefaultHostname: $FUNC_HOST" || ng "Missing output: functionAppDefaultHostname"
-[[ -n "$SQL_FQDN" ]] && ok "sqlServerFqdn: $SQL_FQDN" || ng "Missing output: sqlServerFqdn"
+# SQL は enableSql=false（既定, ADR 0013）だと未プロビジョニング → 出力空は正常（skip 扱い）。
+[[ -n "$SQL_FQDN" ]] && ok "sqlServerFqdn: $SQL_FQDN" || warn "sqlServerFqdn 空: SQL 無効 (enableSql=false) とみなし SQL 系チェックを skip"
 [[ -n "$LAW_CUSTOMER_ID" ]] && ok "logAnalyticsCustomerId: $LAW_CUSTOMER_ID" || warn "Missing output: logAnalyticsCustomerId"
 
 section "Public reachability"

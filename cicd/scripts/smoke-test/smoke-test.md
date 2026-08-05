@@ -19,7 +19,7 @@
 
 - `staticSiteDefaultHostname`
 - `functionAppDefaultHostname`
-- `sqlServerFqdn`
+- `sqlServerFqdn` — `enableSql=false`（既定, ADR 0013）だと空。SQL 系チェックは自動 skip される
 - `logAnalyticsCustomerId`
 
 ## 1. 速攻チェック（推奨）
