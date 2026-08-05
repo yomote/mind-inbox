@@ -19,20 +19,20 @@ import { SessionSpecPreview } from '../../../frontend/src/spec/previews/SessionS
 
 ## 1. 目的
 
-ユーザーの入力とAIの応答を時系列で表示し、整理結果画面へ進むための対話を行う。
+ユーザーの入力とAIの応答を時系列で表示し、対話の区切りで**困りごとを抽出**して抽出結果レビューへ進むための対話を行う（organize→extract 移行 / Phase C）。旧「整理結果へ」導線は段階廃止で残す。
 
 ## 2. ユーザーがこの画面で達成すること
 
 - 今抱えている悩みを言語化する
 - AIからの問いかけで視点を整理する
 - 必要に応じて危機時サポートや一時中断に遷移する
-- 対話の区切りで整理結果画面へ進む
+- 対話の区切りで困りごとを抽出し、抽出結果レビューへ進む（主導線）
 
 ## 3. 主要ユースケース
 
 1. 新規相談を開始する
 2. 会話を継続する
-3. 整理結果へ遷移する
+3. 困りごとを抽出して抽出結果レビューへ進む（主導線 / 旧「整理結果へ」は段階廃止で併存）
 4. セッションを一時中断する
 5. 危機時サポートへ遷移する
 
@@ -50,7 +50,8 @@ import { SessionSpecPreview } from '../../../frontend/src/spec/previews/SessionS
   - 送信ボタン
   - 危機時サポートボタン
   - 一時保存 / 中断ボタン
-  - 整理結果へボタン
+  - 困りごとを抽出ボタン（主導線 / primary）
+  - 整理結果へボタン（旧 PoC / secondary・段階廃止）
 
 ## 5. UI要素一覧
 
@@ -77,7 +78,8 @@ import { SessionSpecPreview } from '../../../frontend/src/spec/previews/SessionS
 - 空文字・送信中は送信を受け付けない
 - 「危機時サポート」で `crisisSupport` に遷移
 - 「一時保存 / 中断」で `paused` に遷移
-- 「整理結果へ」で結果生成後 `result` に遷移
+- 「困りごとを抽出」で抽出後 `extractReview` に遷移（主導線）
+- 「整理結果へ」で結果生成後 `result` に遷移（旧 PoC / 段階廃止で併存）
 
 ## 7. 状態
 
@@ -98,7 +100,8 @@ import { SessionSpecPreview } from '../../../frontend/src/spec/previews/SessionS
 ## 9. 遷移
 
 - 一時保存 / 中断 -> `paused`
-- 対話整理実行 -> `result`
+- 困りごと抽出実行 -> `extractReview`（主導線）
+- 対話整理実行 -> `result`（旧 PoC / 段階廃止で併存）
 - 危機時サポート押下 -> `crisisSupport`
 
 ## 10. データ入出力
@@ -133,4 +136,5 @@ import { SessionSpecPreview } from '../../../frontend/src/spec/previews/SessionS
 - 送信中は送信ボタンにローディング表示
 - 危機時サポートボタンから危機時サポートへ遷移できる
 - 一時保存 / 中断ボタンから中断画面へ遷移できる
-- 整理結果へボタンで整理結果画面へ遷移できる
+- 困りごとを抽出ボタン（primary）で抽出結果レビューへ遷移できる
+- 整理結果へボタン（secondary）で整理結果画面へ遷移できる（段階廃止で併存）

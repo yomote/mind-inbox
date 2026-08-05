@@ -42,6 +42,7 @@ export function SessionSpecPreview() {
       onCrisisSupport={() => {}}
       onPause={() => {}}
       onOrganize={() => {}}
+      onExtract={() => {}}
     />
   );
 }

@@ -24,14 +24,23 @@ export function SessionControls({
         一時保存 / 中断
       </Button>
       <Box sx={{ flex: 1 }} />
+      {/*
+        organize→extract 移行 (Phase C): 困りごと抽出を主導線に、
+        「整理結果へ」(旧 PoC) は段階廃止で secondary(text) に降格。
+        extract が無い場合のみ organize を primary にフォールバック。
+      */}
+      <Button
+        variant={onExtract ? "text" : "contained"}
+        onClick={onOrganize}
+        disabled={loading}
+      >
+        整理結果へ
+      </Button>
       {onExtract && (
-        <Button variant="outlined" onClick={onExtract} disabled={loading}>
+        <Button variant="contained" onClick={onExtract} disabled={loading}>
           困りごとを抽出
         </Button>
       )}
-      <Button variant="contained" onClick={onOrganize} disabled={loading}>
-        整理結果へ
-      </Button>
     </Stack>
   );
 }
