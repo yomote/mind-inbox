@@ -34,15 +34,25 @@
 | Container Apps ×3 | Consumption | アプリは scale-to-zero → ~¥0 | 3→1 環境に統合（プロビジョニング短縮） |
 | Azure Functions | Y1（従量） | 呼ばれた分のみ → ~¥0 | 変更なし |
 | Azure OpenAI | S0 | トークン従量 → ~¥0 | 変更なし |
-| Static Web Apps | Standard | 小額固定（~¥1,300/月） | linked backend に必要なため維持 |
-| ACR | Basic | 小額固定（~¥750/月） | 維持（事前ビルド image の置き場） |
+| Static Web Apps | Standard → **Free** | ~¥1,300/月 → **¥0** | linked backend（Standard 専用）をやめ、**フロントは Functions を直叩き**（CORS）。認可は下記 EasyAuth で担保 |
+| ACR | Basic → **ghcr** | ~¥750/月 → **¥0** | image を **GitHub Container Registry** に置く。GitHub Actions でビルド→push、Container Apps が pull（`az acr build` も不要に = image 事前ビルドと合流） |
 | Log Analytics | 従量 | 取込量依存・小額 | 保持期間を短めに |
 
-→ **未使用の SQL 一式を dev から外せば**、待機は「小額固定（SWA Standard + ACR Basic ≒ 月 ¥2,000 前後）」だけに収まり、かつ `up` から最遅リソース（Private Endpoint / DNS / VNet）が消えて短縮される。SQL はアプリが一度も参照しておらず（BFF / AI Agent に SQL 参照ゼロ、実装は in-memory dict で差し替え先は Redis）、撤去は挙動に影響しない。当初は「サーバーレス化でコスト最適化」を想定したが、精査の結果「そもそも未使用 → 撤去」がコスト・速度とも上回るため方針を変更した。
+→ **未使用 SQL 一式の撤去（¥2,000）+ SWA Free 化（¥1,300）+ ghcr 化（¥750）で、待機コストはほぼ ¥0**（残りは Log Analytics 取込と Functions ストレージの数百円程度）。SQL はアプリが一度も参照しておらず（BFF / AI Agent に SQL 参照ゼロ、実装は in-memory dict で差し替え先は Redis）、撤去は挙動に影響しない。当初は「サーバーレス化でコスト最適化」を想定したが、精査の結果「そもそも未使用 → 撤去」がコスト・速度とも上回るため方針を変更した。
+
+### アクセス制御（常設・公開 URL の必須ガード）
+
+常設で公開 URL になると、揮発データより **OpenAI トークンの悪用課金**がリスク。SWA Free は linked backend を持たず、フロントは Functions を直叩きするため、**守るべきは "お金を使う" Functions（BFF）側**。SWA の認証はフロント（静的）しか守らない点に注意。
+
+- **Functions の EasyAuth（App Service 認証）で Entra ID を有効化**（Consumption でも無料）。未認証は 401、**自分の Entra アカウント / テナントに限定**
+- フロント（SWA Free）は **MSAL でログイン**しトークンを取得、`Authorization: Bearer` を付けて Functions を呼ぶ。クロスオリジンなので **CORS + preflight** を通す
+- 認可を破られても気づけるよう、**OpenAI に予算アラート**を併設（二重防御）
+
+SWA Standard（¥1,300）なら linked backend + 組み込み Entra 認証で turnkey だが、¥0 を優先し **Functions 側の EasyAuth を自前配線**する道を選ぶ（トレードオフは Negative Consequences 参照）。
 
 ## Considered Options
 
-- Option A: **常設・待機最小コスト + main マージ自動デプロイ**（未使用 SQL 一式の撤去 + Container Apps 環境統合 + image 事前ビルド + scale-to-zero 維持）
+- Option A: **常設・待機ほぼ¥0 + main マージ自動デプロイ**（未使用 SQL 撤去 + SWA Free 化 + ghcr 化 + Functions EasyAuth 認可 + Container Apps 環境統合 + image 事前ビルド + scale-to-zero 維持）
 - Option B: **[ADR 0009](0009-on-demand-cd-via-github-actions-oidc.md) 維持**（オンデマンド up/down + 夜間 teardown）
 - Option C: **オンデマンド維持のまま `up` を高速化**（image 事前ビルド + 環境統合はするが、teardown は残す）
 
@@ -59,25 +69,27 @@ Chosen option: **Option A**。
 - 常に最新が 1 つの固定 URL で公開され、開けば数秒〜のコールドスタートで**すぐ触れる**（スマホ含む）
 - main マージ → 自動デプロイで、確認導線が「待つ」から「常にそこにある」へ
 - image 事前ビルド + 環境統合で、デプロイ所要が分オーダーに（毎回の `az acr build` ×2 とフル IaC を除去）
-- 未使用の SQL 一式（+ Private Endpoint / DNS / VNet）が消え、待機の高額費が ¥0 になるうえ `up` も最速化される
+- 未使用 SQL 撤去 + SWA Free + ghcr で**待機コストがほぼ ¥0**（数百円程度）になり、`up` の最遅リソース（Private Endpoint / DNS / VNet）も消える
+- Functions EasyAuth（Entra 自分限定）+ 予算アラートで、**常設・公開でも認可とコスト上限の二重防御**
 - 既存 OIDC / スクリプト / 2-phase Bicep を流用（二重管理しない）
 
 ### Negative Consequences
 
 - **将来 永続化を入れる段階で別途プロビジョニングが必要**：dev から SQL を外すため、セッション/承認を本当に永続化する時に、コードの意図どおり Redis（または SQL）を改めて立てる判断が要る（現状は in-memory で再起動時に消えても可）
-- **待機でも小額固定が残る**：SWA Standard + ACR Basic ≒ 月 ¥2,000 前後。「完全 ¥0」ではない（0009 の強みは失う）
-- **「消し忘れ」概念が消える代わりに放置監視が要る**：常設ゆえコスト暴走の芯（SQL・OpenAI）を予算アラートで見張る運用に切り替える
+- **認証を自前配線するコスト**：SWA Standard の turnkey な組み込み認証を捨てて ¥0 にするため、Entra アプリの SPA リダイレクト設定 / フロントの MSAL 組み込み / Functions EasyAuth 有効化 / CORS を自前で持つ（部品が増える。¥1,300 で楽をするか一度の配線で ¥0 にするかの交換）
+- **「消し忘れ」概念が消える代わりに放置監視が要る**：常設ゆえコスト暴走の芯（OpenAI）を予算アラートで見張る運用に切り替える
 - **Container Apps 環境の 3→1 統合で障害ドメインを共有**：1 環境の不調が ai-agent/voicevox 双方に及びうる（dev では許容）
-- **認証の判断が要る**：常設・公開 URL になるため、匿名公開か Entra で自分のアカウントに限定するかを決める（Issue で扱う）
+- **フロントが Functions を直叩き（同一オリジンでない）**：linked backend を捨てるため CORS 管理と、フロントのビルド時に BFF URL を渡す配線が要る
 
 ## Pros and Cons of the Options
 
-### Option A: 常設・待機最小コスト + 自動デプロイ（採用）
+### Option A: 常設・待機ほぼ¥0 + 自動デプロイ（採用）
 
 - Good, because 本物をぱっと・常に触れる（要件に直答）
-- Good, because 未使用 SQL 一式の撤去で待機の高額費が ¥0 になり、`up` の最遅リソース（Private Endpoint / DNS / VNet）も消える
+- Good, because 未使用 SQL 撤去 + SWA Free + ghcr で待機がほぼ ¥0 になり、`up` の最遅リソース（Private Endpoint / DNS / VNet）も消える
 - Good, because デプロイが分オーダーになり、確認の待ち時間が実質ゼロ
-- Bad, because 待機でも小額固定が残り、完全 ¥0 ではない
+- Good, because Functions EasyAuth（Entra 自分限定）+ 予算アラートで常設・公開でも安全
+- Bad, because 認証を自前配線する手間が増える（SWA Standard の turnkey を捨てる対価）
 - Bad, because 放置監視（予算アラート）とコールドスタートを受け入れる必要
 
 ### Option B: ADR 0009 維持（オンデマンド teardown）
