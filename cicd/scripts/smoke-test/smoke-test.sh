@@ -36,6 +36,7 @@ out() {
 SWA_HOST=$(out staticSiteDefaultHostname || true)
 FUNC_HOST=$(out functionAppDefaultHostname || true)
 SQL_FQDN=$(out sqlServerFqdn || true)
+SQL_ENABLED=$(out sqlEnabled || true)
 LAW_CUSTOMER_ID=$(out logAnalyticsCustomerId || true)
 
 fail=0
@@ -53,7 +54,14 @@ section "Resolve outputs"
 [[ -n "$SWA_HOST" ]] && ok "staticSiteDefaultHostname: $SWA_HOST" || ng "Missing output: staticSiteDefaultHostname"
 [[ -n "$FUNC_HOST" ]] && ok "functionAppDefaultHostname: $FUNC_HOST" || ng "Missing output: functionAppDefaultHostname"
 # SQL は enableSql=false（既定, ADR 0013）だと未プロビジョニング → 出力空は正常（skip 扱い）。
-[[ -n "$SQL_FQDN" ]] && ok "sqlServerFqdn: $SQL_FQDN" || warn "sqlServerFqdn 空: SQL 無効 (enableSql=false) とみなし SQL 系チェックを skip"
+# ただし enableSql=true なのに FQDN 空なら SQL provisioning 失敗の疑い → NG（退行を握りつぶさない）。
+if [[ -n "$SQL_FQDN" ]]; then
+  ok "sqlServerFqdn: $SQL_FQDN"
+elif [[ "$SQL_ENABLED" == "true" ]]; then
+  ng "enableSql=true なのに sqlServerFqdn が空 (SQL provisioning 失敗の疑い)"
+else
+  warn "sqlServerFqdn 空: SQL 無効 (enableSql=false) とみなし SQL 系チェックを skip"
+fi
 [[ -n "$LAW_CUSTOMER_ID" ]] && ok "logAnalyticsCustomerId: $LAW_CUSTOMER_ID" || warn "Missing output: logAnalyticsCustomerId"
 
 section "Public reachability"
