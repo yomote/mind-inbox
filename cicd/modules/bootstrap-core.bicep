@@ -161,22 +161,9 @@ param openAiModelVersion string = '2024-11-20'
 @description('Deployment capacity in units of 1,000 tokens-per-minute (TPM). Subject to regional quota.')
 param openAiCapacity int = 10
 
-// -------------------- Azure Container Registry params --------------------
-@description('Enable Azure Container Registry for building and storing AI Agent images.')
-param enableAcr bool = false
-
-@description('ACR name (alphanumeric, 5-50 chars, globally unique).')
-param acrName string = toLower('cr${take('${environmentName}${replace(replace(appName, '-', ''), '_', '')}', 46)}')
-
-@allowed([
-  'Basic'
-  'Standard'
-  'Premium'
-])
-@description('ACR SKU.')
-param acrSkuName string = 'Basic'
-
 // -------------------- AI Agent Container App params --------------------
+// NOTE: ACR は廃止（#67 / ADR 0013）。image は GitHub Actions で ghcr に事前ビルドし、
+// Container App は ghcr の public image を pull する（待機 ¥750/月 の ACR を除去）。
 @description('Enable AI Agent on Azure Container Apps.')
 param enableAiAgentAca bool = false
 
@@ -687,18 +674,6 @@ resource openAiDeployment 'Microsoft.CognitiveServices/accounts/deployments@2023
   }
 }
 
-// -------------------- Azure Container Registry --------------------
-resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = if (enableAcr) {
-  name: acrName
-  location: location
-  sku: {
-    name: acrSkuName
-  }
-  properties: {
-    adminUserEnabled: false
-  }
-}
-
 // -------------------- AI Agent Container Apps Environment --------------------
 // Container App itself is created/updated by deploy-ai-agent.sh (avoids ARM provisioning timeout)
 // Consumption-only environment (no workloadProfiles) — provisions in seconds
@@ -1001,9 +976,6 @@ output openAiEnabled bool = enableOpenAi
 output openAiEndpoint string = enableOpenAi ? (openAiAccount.?properties.?endpoint ?? '') : ''
 output openAiAccountName string = enableOpenAi ? openAiAccountName : ''
 output openAiDeploymentName string = enableOpenAi ? openAiDeploymentName : ''
-output acrEnabled bool = enableAcr
-output acrName string = enableAcr ? acrName : ''
-output acrLoginServer string = enableAcr ? acr!.properties.loginServer : ''
 output aiAgentEnabled bool = enableAiAgentAca
 output aiAgentContainerAppName string = enableAiAgentAca ? aiAgentContainerAppName : ''
 output aiAgentContainerAppsEnvironmentName string = enableAiAgentAca ? aiAgentContainerAppsEnvironmentName : ''

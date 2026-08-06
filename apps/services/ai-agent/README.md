@@ -62,16 +62,17 @@ curl -X POST http://localhost:8000/chat \
 ### 前提
 
 - `az login` 済み
-- bootstrap で `enableAcr=true` / `enableAiAgentAca=true` でデプロイ済み
+- bootstrap で `enableAiAgentAca=true` でデプロイ済み
+- image が ghcr に push 済み（`build-images.yml` が main マージ時に自動ビルド。手動は Actions の `build-images` を dispatch）。詳細: [ghcr images runbook](../../../docs/runbooks/ghcr-images.md)
 
 ```bash
-# CAE と ACR を作成（未実施の場合）
+# CAE を作成（未実施の場合）。ACR は廃止（#67 / ADR 0013）— image は ghcr の事前ビルド済み。
 az deployment group create \
   -g rg-dev-mind-inbox \
   -n main-bootstrap \
   -f cicd/modules/bootstrap-core.bicep \
   -p cicd/iac/main-bootstrap.parameters.json \
-  -p enableAcr=true enableAiAgentAca=true enableOpenAi=true
+  -p enableAiAgentAca=true enableOpenAi=true
 ```
 
 ### デプロイ
