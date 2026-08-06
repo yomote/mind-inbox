@@ -19,4 +19,13 @@
 
 ---
 
-(まだエントリなし — 初回の debrief では全期間を対象にする。ADR 0014 自体が最初の承認対象)
+## 2026-08-06 — design-gate
+
+- **対象**: issue #69「SWA Free 化 + Functions EasyAuth(Entra 自分限定) + CORS + 予算アラート」。根拠 ADR: [0013](../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md)
+- **決定**:
+  - **承認** — この設計で実装に進む。あわせて ADR 0013 を `Proposed` → `Accepted`、ADR 0009 を `Superseded by 0013` に更新
+  - 「自分限定」の強さ: **A. 単一テナント限定のみ**（テナントに実質本人しか居ないため、設定が最小で壊れにくい方を採る）
+  - 予算アラート: **月 ¥3,000**、通知先はアカウントのメール。actual 50% / forecast 80% / actual 100% の 3 段
+  - ローカル開発: **認証なし**（Functions Core Tools に EasyAuth が無く、ローカル BFF は自機内のみ）
+- **学びメモ**: 理解確認で「第三者が Functions を直接 curl したら?」に対し **「CORS がブロックするので届かない」** を選択 → **CORS はブラウザ側の規約であって認可ではない**（curl/Postman はヘッダを無視して到達する。CORS の役割は "他人のサイトの JS がログイン中のブラウザを踏み台にするのを防ぐ" こと）を解説し直した。実際に止めるのは EasyAuth の 401。次回この領域を扱うときは「守りの層がどこにあるか」を先に図で固定してから細部に入る
+- **持ち越し**: EasyAuth 有効時に **CORS preflight (OPTIONS) が 401 になる既知リスク**の実測。実デプロイ時に未認証 401 とあわせて確認し、preflight が弾かれる場合は `globalValidation.excludedPaths` などの回避を runbook に追記する

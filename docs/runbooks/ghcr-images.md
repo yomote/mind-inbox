@@ -20,14 +20,29 @@ main マージ (apps/services/** 変更)
 - **push 認証**: workflow の `GITHUB_TOKEN`（`packages: write`）。PAT 不要。
 - **pull 認証**: image を **public** にして Container Apps から認証なしで pull（registry secret 不要 = ADR 0006 の「静的シークレット0」を維持）。
 
-## 一度きりの初期設定 — package を public にする
+## package の可視性 — public であることを確認する
 
-`GITHUB_TOKEN` で最初に push された ghcr package は既定で **private**。Container Apps が registry secret 無しで pull できるよう **public に切り替える**（image にはシークレットを焼き込んでいないので公開して問題ない。実行時の認可は Container App の Managed Identity と env で担保）。
+Container Apps は registry secret 無しで pull する設計なので、package が **public** である必要がある（image にシークレットは焼き込んでいない。実行時の認可は Container App の Managed Identity と env で担保）。
 
-1. `build-images` workflow を一度成功させる（main マージ or Actions から手動 dispatch）。これで package が作られる。
-2. GitHub → プロフィール/Org の **Packages** → `ai-agent` と `voicevox-wrapper` をそれぞれ開く。
-3. **Package settings → Danger Zone → Change visibility → Public**。
-4. (任意) **Package settings → Manage Actions access** で当該 repo に `Write` を確認（同一 repo からの push は既定で許可）。
+**この repo は public のため、`build-images` が作った package も public になっている**（2026-08-06 実測）。確認はこれで足りる:
+
+```bash
+# 匿名でマニフェストが取れれば public（= Container Apps も認証なしで pull できる）
+for IMG in ai-agent voicevox-wrapper; do
+  TOKEN=$(curl -s "https://ghcr.io/token?scope=repository:yomote/mind-inbox/$IMG:pull&service=ghcr.io" | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+  echo -n "$IMG: "
+  curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
+    -H "Accept: application/vnd.oci.image.index.v1+json" \
+    "https://ghcr.io/v2/yomote/mind-inbox/$IMG/manifests/latest"
+done
+# 期待: 200  /  401 なら private → 下の手順で public に切り替える
+```
+
+private だった場合（repo を private 化した・新しい package が private で作られた等）:
+
+1. GitHub → プロフィール/Org の **Packages** → 対象の package を開く
+2. **Package settings → Danger Zone → Change visibility → Public**
+3. (任意) **Manage Actions access** で当該 repo に `Write` があることを確認
 
 > private のまま運用したい場合は、Container App に GitHub PAT（`read:packages`）を registry secret として設定し、`deploy-*.sh` の `az containerapp create/update` に `--registry-server ghcr.io --registry-username <user> --registry-password <pat>` を足す。ただし静的シークレットが増えるため既定は public を推奨。
 

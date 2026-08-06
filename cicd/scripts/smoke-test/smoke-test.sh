@@ -38,6 +38,8 @@ FUNC_HOST=$(out functionAppDefaultHostname || true)
 SQL_FQDN=$(out sqlServerFqdn || true)
 SQL_ENABLED=$(out sqlEnabled || true)
 LAW_CUSTOMER_ID=$(out logAnalyticsCustomerId || true)
+EASYAUTH_ENABLED=$(out functionEasyAuthEnabled || true)
+SWA_SKU_OUT=$(out staticSiteSkuName || true)
 
 fail=0
 
@@ -88,18 +90,54 @@ if [[ -n "$SWA_HOST" ]]; then
     if [[ "$SWA_SKU" == "Standard" ]]; then
       ng "SWA /api/trpc/health.ping not reachable (expected reachable for Standard SKU linked backend; HTTP ${swa_api_code:-?})"
     else
-      warn "SWA /api/trpc/health.ping not reachable (often expected on Free SKU unless repo/API is wired; HTTP ${swa_api_code:-?})"
-      warn "Tip: set staticSiteSkuName=Standard to enable linked backend in IaC, or link repo so SWA builds the API"
+      # Free SKU では linked backend を持たない設計 (#69)。SWA 配下に API が無いのは正常で、
+      # フロントは Functions を直叩きする。ここは skip 扱い。
+      warn "SWA /api/trpc/health.ping 応答なし: Free SKU は linked backend を持たない設計のため正常 (HTTP ${swa_api_code:-?})"
     fi
   fi
 fi
 
+# -------- Functions の認可 (#69) --------
+# 常設・公開 URL では、課金の芯 (OpenAI) を持つ Functions が唯一の門。
+# EasyAuth 有効なら「未認証で 200 が返る」= 門が開きっぱなし → NG にする。
+# ここを reachable 判定のままにすると、認可が外れていても緑で通ってしまう。
 if [[ -n "$FUNC_HOST" ]]; then
-  if curl -fsS "https://$FUNC_HOST/api/trpc/health.ping" >/dev/null; then
-    ok "Function App /api/trpc/health.ping reachable"
-    warn "If you intend to block direct access to Function App, add access restrictions (not present in IaC)"
+  set +e
+  func_code=$(curl -sS -o /dev/null -w "%{http_code}" "https://$FUNC_HOST/api/trpc/health.ping")
+  func_rc=$?
+  set -e
+
+  if [[ "$func_rc" -ne 0 ]]; then
+    warn "Function App に到達できませんでした (デプロイ未完了 / ネットワーク; HTTP ${func_code:-?})"
+  elif [[ "$EASYAUTH_ENABLED" == "true" ]]; then
+    case "$func_code" in
+      401|403) ok "Functions 未認証アクセスが $func_code で拒否された (EasyAuth の門が効いている)" ;;
+      200) ng "EasyAuth 有効なのに未認証で 200。門が開いている (誰でも OpenAI を消費できる)" ;;
+      *) warn "Functions 未認証アクセスが HTTP $func_code (401/403 を期待。デプロイ未完了の可能性)" ;;
+    esac
+
+    # CORS preflight が EasyAuth に巻き込まれて 401 になると、実ブラウザから一切呼べなくなる。
+    if [[ -n "$SWA_HOST" ]]; then
+      set +e
+      pre_code=$(curl -sS -o /dev/null -w "%{http_code}" -X OPTIONS \
+        -H "Origin: https://$SWA_HOST" \
+        -H "Access-Control-Request-Method: POST" \
+        -H "Access-Control-Request-Headers: authorization,content-type" \
+        "https://$FUNC_HOST/api/trpc/health.ping")
+      set -e
+      case "$pre_code" in
+        200|204) ok "CORS preflight (OPTIONS) が $pre_code で通った" ;;
+        401|403) ng "CORS preflight が $pre_code。EasyAuth が OPTIONS まで弾いており実ブラウザから呼べない (runbook: entra-spa-auth-and-budget.md)" ;;
+        *) warn "CORS preflight が HTTP $pre_code (200/204 を期待)" ;;
+      esac
+    fi
   else
-    warn "Function App /api/trpc/health.ping not reachable (deployment/package may not be published yet)"
+    if [[ "$func_code" == "200" ]]; then
+      ok "Function App /api/trpc/health.ping reachable (EasyAuth 無効)"
+      warn "EasyAuth が無効です。公開 URL のまま運用するなら applyFunctionAuthLockdown=true と functionAuthEntraClientId を設定してください (#69)"
+    else
+      warn "Function App /api/trpc/health.ping not reachable (HTTP $func_code; デプロイ未完了の可能性)"
+    fi
   fi
 fi
 

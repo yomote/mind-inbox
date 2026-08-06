@@ -21,6 +21,8 @@
 - `functionAppDefaultHostname`
 - `sqlServerFqdn` — `enableSql=false`（既定, ADR 0013）だと空。SQL 系チェックは自動 skip される
 - `sqlEnabled` — `enableSql` の真偽。`true` かつ `sqlServerFqdn` が空なら SQL provisioning 失敗とみなし **NG**（意図的 skip と本当の失敗を区別する）
+- `functionEasyAuthEnabled` — Functions の認可 (#69)。`true` なら **未認証で 200 が返ったら NG**（門が開きっぱなし = 誰でも OpenAI を消費できる）。あわせて CORS preflight が 401 に巻き込まれていないかも確認する
+- `staticSiteSkuName` — Free では linked backend を持たない設計のため、SWA 配下に API が無いのは正常（skip 扱い）
 - `logAnalyticsCustomerId`
 
 ## 1. 速攻チェック（推奨）
