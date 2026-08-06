@@ -1,15 +1,21 @@
 name: deploy
 
-# オンデマンド CD（ADR 0009）。
-# - 手動 up: 環境を立ち上げる（IaC + コンテナ + BFF/frontend）
-# - 手動 down: cleanup-env.sh で撤収（¥0 に戻す）
-# - 夜間 schedule: 消し忘れ防止の自動 teardown ガード
+# 常設 dev への CD（ADR 0013。ADR 0009 のオンデマンド teardown を supersede）。
+# - main マージ: 常設 dev へ自動デプロイ（固定 URL に最新が載る）
+# - 手動 up: 環境を立ち上げる / 作り直す（IaC + コンテナ + BFF/frontend）
+# - 手動 down: cleanup-env.sh で撤収（一時的に畳みたいとき用。常設運用では通常使わない）
+#
+# 夜間 schedule の自動 teardown は **廃止**（ADR 0013）。待機コストの主因（SQL / ACR /
+# SWA Standard）を撤去して待機ほぼ ¥0 になったため、「消し忘れ」を毎晩潰す必要がなくなった。
+# 代わりの安全網は **予算アラート**（#69 で IaC 化。閾値超過でメール通知）。
 #
 # 認証は Azure OIDC（federated credential）= 保存シークレット0。
 # 事前設定（一度きり）: docs/runbooks/azure-oidc-cd-setup.md を参照し、
 # リポジトリ Variables に AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID を設定する。
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       action:
@@ -29,21 +35,16 @@ on:
         options: [cpu, gpu]
         default: cpu
         required: true
-  schedule:
-    # 夜間 teardown ガード: 毎日 JST 04:07 (= UTC 19:07) に down。消し忘れでも ¥0 に戻る。
-    # 立ち上げは常に手動 up なので、この自動 down で困らない（必要なら再度 up）。
-    - cron: "7 19 * * *"
 
 permissions:
   id-token: write # OIDC トークン取得に必須
   contents: read
 
 concurrency:
-  # up / down / schedule を RG 単位で「同一グループ」に入れて直列化する。
-  # これは意図的: 別グループにすると手動 up と夜間 down が並列実行され、deployment 中に
-  # group delete が走って RG が壊れる（= per-action グループ案より危険）。直列化が安全側。
-  # 「立てた直後に夜間 teardown で消える」問題は、teardown ステップ側の最小生存時間ガード
-  # （RG タグ deployedAtEpoch を見て若い環境は schedule では skip）で防ぐ。
+  # 自動デプロイ / 手動 up / 手動 down を RG 単位で「同一グループ」に入れて直列化する。
+  # これは意図的: 別グループにすると deployment 中に group delete が走って RG が壊れる。
+  # cancel-in-progress: false — 走行中のデプロイを途中で切ると中途半端な状態が残るため、
+  # 連続 push でもキューイングして順に流す。
   group: deploy-${{ github.event.inputs.environment || 'dev' }}
   cancel-in-progress: false
 
@@ -60,7 +61,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # OIDC 未設定（repo Variables 未登録）の間は、誤実行や夜間 schedule を赤くせず skip。
+      # OIDC 未設定（repo Variables 未登録）の間は、誤実行を赤くせず skip。
       - name: Guard — OIDC 設定済みか
         id: guard
         env:
@@ -76,6 +77,25 @@ jobs:
             echo "::warning::OIDC 未設定（AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID のいずれか空）。docs/runbooks/azure-oidc-cd-setup.md で3変数すべてを Variables に登録してください。今回はスキップします。"
           fi
 
+      # main マージの自動デプロイは **明示的に有効化するまで動かない**。
+      # 理由: 認可 (#69 の Entra アプリ登録 + applyFunctionAuthLockdown) が未設定のまま
+      # 自動デプロイを回すと、認可の無いアプリが公開 URL に自動で出続ける。
+      # docs/runbooks/entra-spa-auth-and-budget.md を終えてから
+      # リポジトリ Variables に AUTO_DEPLOY_ENABLED=true を設定して解禁する。
+      # 手動 up / down はこのゲートの対象外（意図が明示されているため）。
+      - name: Guard — 自動デプロイが解禁されているか
+        id: autodeploy
+        if: github.event_name == 'push'
+        env:
+          AUTO_DEPLOY_ENABLED: ${{ vars.AUTO_DEPLOY_ENABLED }}
+        run: |
+          if [ "$AUTO_DEPLOY_ENABLED" = "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::自動デプロイは未解禁のため skip しました。認可の設定 (docs/runbooks/entra-spa-auth-and-budget.md) を終えたあと、リポジトリ Variables に AUTO_DEPLOY_ENABLED=true を設定すると main マージで常設 dev へ自動反映されます。"
+          fi
+
       - name: Azure login (OIDC, no stored secret)
         if: steps.guard.outputs.run == 'true'
         uses: azure/login@v2
@@ -84,65 +104,55 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # ---- DOWN: 手動 down または 夜間 schedule ----
+      # ---- DOWN: 手動 down のみ ----
+      # 夜間 schedule の自動 teardown は ADR 0013 で廃止（常設・待機ほぼ ¥0 になったため）。
+      # 一時的に畳みたいときの手段としてスクリプトと手動 down は残す。
       # cleanup-env.sh は冪等（内部 rg_exists ガードで RG 不在なら group delete を skip）。
-      # よって既に撤収済みの夜でもジョブは緑のまま。`|| true` は付けない（purge 失敗等の
-      # 本当のエラーは赤くして気づきたいため）。
-      # 夜間 schedule のみ「最小生存時間」ガード: 立てたばかり(< MIN_LIFETIME_SECONDS)の環境は
-      # 即撤収しない（手動 down は明示意図なので常に実行）。
+      # `|| true` は付けない（purge 失敗等の本当のエラーは赤くして気づきたいため）。
       - name: Tear down (cleanup-env)
-        if: steps.guard.outputs.run == 'true' && (github.event_name == 'schedule' || github.event.inputs.action == 'down')
-        env:
-          MIN_LIFETIME_SECONDS: "10800" # 3h
+        if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'down'
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            DEPLOYED_AT="$(az group show -n "$RG" --query "tags.deployedAtEpoch" -o tsv 2>/dev/null || true)"
-            if [ -n "$DEPLOYED_AT" ]; then
-              AGE=$(( $(date +%s) - DEPLOYED_AT ))
-              if [ "$AGE" -lt "$MIN_LIFETIME_SECONDS" ]; then
-                echo "環境が新しい（${AGE}s < ${MIN_LIFETIME_SECONDS}s）ため夜間 teardown を skip。"
-                exit 0
-              fi
-            fi
-          fi
           echo "Tearing down $RG ..."
           RG="$RG" ./cicd/scripts/env/cleanup-env.sh
 
-      # ---- UP: 手動 up のみ ----
+      # ---- UP: 手動 up、または main マージの自動デプロイ（解禁済みのとき） ----
+      # provision.sh は冪等なので、初回構築と以後の反映を同じ 1 本で回す
+      # （ADR 0013「既存 IaC / スクリプトを唯一の真実として再利用」）。
       - name: Setup Node 22
-        if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up'
+        if: steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
       - name: Setup pnpm
-        if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up'
+        if: steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
         uses: pnpm/action-setup@v4
         with:
           version: 9
 
       - name: Install deploy tooling (swa CLI, zip)
-        if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up'
+        if: steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
         run: |
           npm install -g @azure/static-web-apps-cli
           # zip は ubuntu-latest に入っている想定。無い時だけ apt（毎回の update ~30-60s を回避）。
           command -v zip >/dev/null || { sudo apt-get update && sudo apt-get install -y zip; }
 
       - name: Provision + deploy (up)
-        if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up'
+        if: steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
         env:
-          VOICEVOX_TIER: ${{ github.event.inputs.voicevox }}
+          # push（自動デプロイ）には inputs が無いので既定 cpu。tier を変えたいときは手動 up。
+          VOICEVOX_TIER: ${{ github.event.inputs.voicevox || 'cpu' }}
         run: |
           RG="$RG" ENVIRONMENT="$ENVIRONMENT" DEPLOYMENT="$DEPLOYMENT" VOICEVOX_TIER="$VOICEVOX_TIER" \
             ./cicd/scripts/deploy/provision.sh
 
       - name: SWA URL を Actions サマリに出す
-        if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up'
+        if: steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
         run: |
           HOST="$(az staticwebapp list -g "$RG" --query "[?starts_with(name, 'swa-')].defaultHostname | [0]" -o tsv 2>/dev/null || true)"
           if [ -n "$HOST" ]; then
             {
-              echo "### 🌐 公開 URL（スマホからアクセス）"
+              echo "### 🌐 公開 URL（常設 dev / スマホからアクセス）"
               echo ""
               echo "https://$HOST"
             } >> "$GITHUB_STEP_SUMMARY"

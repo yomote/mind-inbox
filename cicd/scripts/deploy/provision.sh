@@ -49,12 +49,11 @@ az account show >/dev/null
 
 echo "==> [1/5] Resource group: $RG ($LOCATION)"
 az group create -n "$RG" -l "$LOCATION" >/dev/null
-# 立ち上げ時刻を RG タグに記録 → 夜間 schedule teardown が「最小生存時間」ガードで参照する。
-# 失敗してもデプロイ自体は続行するが、サイレントにはしない（ガードが効かず夜間に即撤収されうるため警告）。
-if ! az group update -n "$RG" --set "tags.deployedAtEpoch=$(date +%s)" -o none >/dev/null 2>&1; then
-  echo "WARN: deployedAtEpoch タグの記録に失敗。夜間 teardown の最小生存時間ガードが効かず、" >&2
-  echo "      立てた直後でも夜間 schedule で撤収される可能性があります。" >&2
-fi
+# 最終デプロイ時刻を RG タグに記録する（「この環境はいつのものか」を後から追える）。
+# 夜間 teardown の最小生存時間ガードで使っていたが、ADR 0013 で自動 teardown 自体を廃止したため
+# 現在は記録用途のみ。失敗してもデプロイは続行する。
+az group update -n "$RG" --set "tags.deployedAtEpoch=$(date +%s)" -o none >/dev/null 2>&1 \
+  || echo "WARN: deployedAtEpoch タグの記録に失敗（デプロイは続行。記録用途のみ）" >&2
 
 echo "==> [2/5] Bootstrap infra (main-bootstrap.bicep) — voicevoxTier=$VOICEVOX_TIER"
 az deployment group create \
