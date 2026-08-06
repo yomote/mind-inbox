@@ -31,8 +31,8 @@ param staticSiteName string = toLower('swa-${environmentName}-${replace(replace(
   'Free'
   'Standard'
 ])
-@description('Static Web Apps SKU')
-param staticSiteSkuName string = 'Standard'
+@description('Static Web Apps SKU. 既定 Free (ADR 0013 / #69): linked backend は Standard 専用なので、フロントは Functions を直叩きし、認可は Functions 側の EasyAuth が担う。')
+param staticSiteSkuName string = 'Free'
 
 @description('Repository URL for Static Web Apps (optional; set to empty to create without repo linkage)')
 param staticSiteRepositoryUrl string = ''
@@ -76,6 +76,37 @@ param staticSiteEntraClientSecret string = ''
 
 @description('Apply Function App EasyAuth lockdown in bootstrap (recommended: false; manage in main-config).')
 param applyFunctionAuthLockdown bool = false
+
+// -------------------- Function App 認可 (EasyAuth / Entra) — #69 --------------------
+// SWA Free には linked backend が無く、フロントは Functions を別オリジンから直叩きする。
+// SWA の認証は SWA が配る静的ファイルにしか効かないため、課金の芯 (OpenAI) を持つ
+// Functions 側に認可の門を置く。未認証は関数コード起動前に 401 (ADR 0013)。
+@description('Entra (Azure AD) app client ID used by the SPA and accepted by Function App EasyAuth. 空なら EasyAuth は構成しない。')
+param functionAuthEntraClientId string = ''
+
+@description('Entra tenant ID. 単一テナント限定 (この tenant の identity のみ許可)。')
+param functionAuthEntraTenantId string = tenant().tenantId
+
+@description('Extra CORS origins allowed to call the Function App (SWA の既定ホスト名は自動で許可される)。')
+param functionExtraCorsOrigins array = []
+
+// -------------------- 予算アラート (二重防御) — #69 --------------------
+// 認可を破られても・設定を緩めても、請求で気づけるようにする (ADR 0013)。
+@description('Create a monthly budget alert on this resource group.')
+param enableBudgetAlert bool = true
+
+@description('Monthly budget amount in the billing currency (JPY サブスクなら円)。')
+param budgetAmount int = 3000
+
+@description('Email addresses notified when budget thresholds are crossed.')
+param budgetContactEmails array = []
+
+// Azure の Consumption Budget は作成後に startDate を変更できない。
+// utcNow() を既定にすると毎デプロイで再計算され、月をまたいだ再デプロイ (ADR 0013 の
+// main マージ自動デプロイ) で既存 budget の更新が startDate 不一致で失敗しうる。
+// そのため **固定値** を既定にし、parameters ファイルで明示管理する。
+@description('Budget start date (first day of a month, yyyy-MM-dd)。作成後は変更不可なので固定値で持つ。')
+param budgetStartDate string = '2026-08-01'
 
 @description('Azure Functions app name (must be globally unique)')
 param functionAppName string = toLower('func-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}')
@@ -517,6 +548,15 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
           linuxFxVersion: 'Node|22'
           minTlsVersion: '1.2'
           ftpsState: 'Disabled'
+          // SWA Free 化でフロントは別オリジンになるため CORS が要る (#69)。
+          // 注意: CORS はブラウザ側の規約であって認可ではない。守りは EasyAuth の 401。
+          cors: {
+            allowedOrigins: union(
+              ['https://${staticSite.properties.defaultHostname}'],
+              functionExtraCorsOrigins
+            )
+            supportCredentials: false
+          }
           appSettings: [
             {
               name: 'AzureWebJobsStorage'
@@ -857,9 +897,13 @@ resource staticSiteBackend 'Microsoft.Web/staticSites/linkedBackends@2025-03-01'
 }
 
 // -------------------- Function App Authentication (EasyAuth) --------------------
-// Lock down the Function App so it is intended to be called via SWA proxy only.
-// This uses the built-in Azure Static Web Apps identity provider.
-resource functionAuthSettingsV2 'Microsoft.Web/sites/config@2023-12-01' = if (applyFunctionAuthLockdown) {
+// 認可の門はここ (#69 / ADR 0013)。SWA Free には linked backend が無く、フロントは
+// 別オリジンから直叩きするため、SWA 側の認証では API を守れない。課金の芯 (OpenAI) は
+// この Functions の先にあるので、未認証は関数コードが起動する前に 401 で弾く。
+// 単一テナント限定: issuer をこの tenant に固定し、audience を SPA の client ID に限定する。
+var functionEasyAuthEnabled = applyFunctionAuthLockdown && !empty(functionAuthEntraClientId)
+
+resource functionAuthSettingsV2 'Microsoft.Web/sites/config@2023-12-01' = if (functionEasyAuthEnabled) {
   parent: functionApp
   name: 'authsettingsV2'
   properties: {
@@ -881,15 +925,23 @@ resource functionAuthSettingsV2 'Microsoft.Web/sites/config@2023-12-01' = if (ap
       }
     }
     identityProviders: {
-      azureStaticWebApps: {
+      azureActiveDirectory: {
         enabled: true
         registration: {
-          // Observed in the portal as the SWA hostname; keep it deterministic in IaC.
-          clientId: staticSite.properties.defaultHostname
+          // 単一テナント issuer。他テナントの identity は検証で落ちる。
+          openIdIssuer: 'https://login.microsoftonline.com/${functionAuthEntraTenantId}/v2.0'
+          clientId: functionAuthEntraClientId
+        }
+        validation: {
+          // SPA が自分自身の client ID 宛に取ったトークンを受ける (api://<id> と <id> の両表記)。
+          allowedAudiences: [
+            functionAuthEntraClientId
+            'api://${functionAuthEntraClientId}'
+          ]
         }
       }
       // Explicitly disable all other providers to avoid partially-enabled configs.
-      azureActiveDirectory: {
+      azureStaticWebApps: {
         enabled: false
       }
       facebook: {
@@ -920,6 +972,44 @@ resource functionAuthSettingsV2 'Microsoft.Web/sites/config@2023-12-01' = if (ap
   }
 }
 
+// -------------------- 予算アラート (二重防御) — #69 --------------------
+// 認可が破られても・設定を緩めても請求で気づけるようにする最後の砦 (ADR 0013)。
+// 50% で予兆、80% で警戒、100% で超過。通知先が空なら作らない (通知の無い予算は無意味)。
+resource budget 'Microsoft.Consumption/budgets@2023-05-01' = if (enableBudgetAlert && !empty(budgetContactEmails)) {
+  name: 'budget-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}'
+  properties: {
+    category: 'Cost'
+    amount: budgetAmount
+    timeGrain: 'Monthly'
+    timePeriod: {
+      startDate: budgetStartDate
+    }
+    notifications: {
+      forecasted80: {
+        enabled: true
+        operator: 'GreaterThan'
+        threshold: 80
+        thresholdType: 'Forecasted'
+        contactEmails: budgetContactEmails
+      }
+      actual50: {
+        enabled: true
+        operator: 'GreaterThan'
+        threshold: 50
+        thresholdType: 'Actual'
+        contactEmails: budgetContactEmails
+      }
+      actual100: {
+        enabled: true
+        operator: 'GreaterThan'
+        threshold: 100
+        thresholdType: 'Actual'
+        contactEmails: budgetContactEmails
+      }
+    }
+  }
+}
+
 output logAnalyticsWorkspaceId string = law.id
 output logAnalyticsCustomerId string = law.properties.customerId
 output sqlEnabled bool = enableSql
@@ -932,6 +1022,13 @@ output sqlAdminKeyVaultName string = enableSql ? sqlAdminKeyVaultName : ''
 
 output staticSiteDefaultHostname string = staticSite.properties.defaultHostname
 output functionAppDefaultHostname string = functionApp.properties.defaultHostName
+
+// #69: フロントのビルド時 env とスモークテストがこの3つを参照する。
+output staticSiteSkuName string = staticSiteSkuName
+output functionEasyAuthEnabled bool = functionEasyAuthEnabled
+output functionAuthEntraClientId string = functionAuthEntraClientId
+output functionAuthEntraTenantId string = functionEasyAuthEnabled ? functionAuthEntraTenantId : ''
+output budgetAlertEnabled bool = enableBudgetAlert && !empty(budgetContactEmails)
 
 output staticSiteName string = staticSite.name
 output staticSiteEntraAuthEnabled bool = staticSiteEntraAuthEnabled

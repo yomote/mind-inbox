@@ -1,6 +1,6 @@
 # 0009. デプロイは GitHub Actions のオンデマンド CD（手動 up/down + 夜間 teardown）で行う
 
-- Status: Accepted
+- Status: Superseded by [0013](0013-standing-low-cost-dev-env-with-auto-deploy.md) (2026-08-06)
 - Date: 2026-06-28
 - Deciders: omoteforlab
 - Consulted: —

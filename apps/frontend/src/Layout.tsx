@@ -17,6 +17,7 @@ import AccountCircleRoundedIcon from "@mui/icons-material/AccountCircleRounded";
 import LogoutRoundedIcon from "@mui/icons-material/LogoutRounded";
 import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import { useLocation, useNavigate } from "react-router-dom";
+import { authEnabled, getAccount, initAuth, login, logout } from "./auth/msal";
 import {
   createActionPlan,
   createProblemPlan,
@@ -56,10 +57,6 @@ type LayoutProps = {
   onToggleTheme: () => void;
 };
 
-type StaticWebAppsClientPrincipal = {
-  userDetails?: string;
-};
-
 const HEADER_BY_ROUTE: Record<AppRoute, string> = {
   onboarding: "起動画面 / オンボーディング",
   home: "ホーム",
@@ -77,35 +74,6 @@ const HEADER_BY_ROUTE: Record<AppRoute, string> = {
   problemDetail: "困りごと詳細",
 };
 
-function getClientPrincipal(payload: unknown): StaticWebAppsClientPrincipal | null {
-  if (Array.isArray(payload)) {
-    const [entry] = payload;
-    if (
-      entry &&
-      typeof entry === "object" &&
-      "clientPrincipal" in entry &&
-      entry.clientPrincipal &&
-      typeof entry.clientPrincipal === "object"
-    ) {
-      return entry.clientPrincipal as StaticWebAppsClientPrincipal;
-    }
-
-    return null;
-  }
-
-  if (
-    payload &&
-    typeof payload === "object" &&
-    "clientPrincipal" in payload &&
-    payload.clientPrincipal &&
-    typeof payload.clientPrincipal === "object"
-  ) {
-    return payload.clientPrincipal as StaticWebAppsClientPrincipal;
-  }
-
-  return null;
-}
-
 /**
  * 最初の発話からセッションのタイトルを自動生成する（mock の簡易 AI タイトル）。
  * タイトルは最初に聞かず、内容から後付けする方針。実 AI 生成は Phase A で差し替え。
@@ -118,15 +86,13 @@ function deriveSessionTitle(text: string): string {
 
 export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const isDev = import.meta.env.DEV;
-  // mock モード（VITE_USE_MOCK=true）は BFF も SWA 認証も無い自己完結デモ。
-  // 認証ゲート（/.auth/me）と login/logout リダイレクトをスキップして触れるようにする。
+  // mock モード（VITE_USE_MOCK=true）は BFF も認証も無い自己完結デモ。
+  // 認証ゲートと login/logout をスキップして触れるようにする。
   const useMock = import.meta.env.VITE_USE_MOCK === "true";
   const standalone = isDev || useMock;
   const location = useLocation();
   const navigate = useNavigate();
   const voicevoxSpeaker = Number(import.meta.env.VITE_VOICEVOX_SPEAKER || "3");
-  const loginUrl = "/login";
-  const logoutUrl = "/logout";
 
   const [authStatus, setAuthStatus] = React.useState<AuthStatus>("loading");
   const [loading, setLoading] = React.useState(false);
@@ -186,24 +152,23 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
       };
     }
 
+    // 認証が構成されていないビルド（VITE_ENTRA_* 未設定）では門が無いので通す。
+    // API 側も同時に EasyAuth 未構成のため、UI だけ閉じても意味がない
+    // （公開 URL に出す場合は deploy-frontend.sh が警告する）。
+    if (!authEnabled) {
+      setAuthStatus("authenticated");
+      return () => {
+        active = false;
+      };
+    }
+
+    // 認可の門は Functions(EasyAuth) 側にある (#69)。UI はここで
+    // 「Entra のサインイン済みアカウントがあるか」だけを見る。
     void (async () => {
       try {
-        const response = await fetch("/.auth/me", {
-          credentials: "same-origin",
-          cache: "no-store",
-        });
-
-        if (!response.ok) {
-          throw new Error("Failed to load auth state");
-        }
-
-        const auth = (await response.json()) as unknown;
-        const clientPrincipal = getClientPrincipal(auth);
-        const authenticated = Boolean(clientPrincipal?.userDetails);
-
+        await initAuth();
         if (!active) return;
-
-        setAuthStatus(authenticated ? "authenticated" : "anonymous");
+        setAuthStatus(getAccount() ? "authenticated" : "anonymous");
       } catch {
         if (!active) return;
         setAuthStatus("anonymous");
@@ -237,10 +202,9 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
       return;
     }
 
-    const postLoginRedirectUri = encodeURIComponent(`${window.location.origin}${ROUTE_PATHS.home}`);
-
-    window.location.assign(`${loginUrl}?post_login_redirect_uri=${postLoginRedirectUri}`);
-  }, [authStatus, isDev, loginUrl, transition]);
+    // Entra へリダイレクトしてサインインする (#69)。戻りは main.tsx の initAuth() が回収する。
+    void login();
+  }, [authStatus, isDev, transition]);
 
   const stopSpeaking = React.useCallback(() => {
     if (activeAudioRef.current) {
@@ -751,11 +715,11 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     lastSpokenAssistantMessageIdRef.current = null;
     voiceCacheRef.current.clear();
     navigate(ROUTE_PATHS.onboarding, { replace: true });
-    // standalone（dev / mock デモ）は SWA の /logout が無いのでリダイレクトしない。
-    if (!standalone) {
-      window.location.assign(logoutUrl);
+    // standalone（dev / mock デモ）と認証無効ビルドはサインアウト先が無いのでリダイレクトしない。
+    if (!standalone && authEnabled) {
+      void logout();
     }
-  }, [logoutUrl, navigate, standalone, stopListening, stopSpeaking]);
+  }, [navigate, standalone, stopListening, stopSpeaking]);
 
   const isAuthenticated = authStatus === "authenticated";
   const currentRoute = React.useMemo<AppRoute>(() => {

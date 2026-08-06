@@ -49,6 +49,38 @@ param containerAppsLocation string = voicevoxLocation
 @description('Functions plan SKU')
 param functionPlanSkuName string = 'Y1'
 
+// -------------------- SWA SKU / Functions 認可 / 予算 (#69, ADR 0013) --------------------
+@allowed([
+  'Free'
+  'Standard'
+])
+@description('Static Web Apps SKU. 既定 Free: linked backend を捨てて待機 ¥0 にし、認可は Functions の EasyAuth が担う。')
+param staticSiteSkuName string = 'Free'
+
+@description('Apply Function App EasyAuth lockdown (未認証は 401)。functionAuthEntraClientId と併用する。')
+param applyFunctionAuthLockdown bool = false
+
+@description('Entra app client ID (SPA)。EasyAuth の audience かつ MSAL のクライアント。空なら EasyAuth 未構成。')
+param functionAuthEntraClientId string = ''
+
+@description('Entra tenant ID。既定はデプロイ先テナント (単一テナント限定)。')
+param functionAuthEntraTenantId string = tenant().tenantId
+
+@description('Function App の CORS 追加許可オリジン (SWA 既定ホスト名は自動許可)。')
+param functionExtraCorsOrigins array = []
+
+@description('月次予算アラートを作る。')
+param enableBudgetAlert bool = true
+
+@description('月次予算額 (請求通貨)。')
+param budgetAmount int = 3000
+
+@description('予算アラートの通知先メール。空なら予算を作らない。')
+param budgetContactEmails array = []
+
+@description('予算の開始日 (月初, yyyy-MM-dd)。作成後は変更不可のため固定値で管理する。')
+param budgetStartDate string = '2026-08-01'
+
 // -------------------- Azure OpenAI --------------------
 @description('Enable Azure OpenAI account and model deployment.')
 param enableOpenAi bool = false
@@ -85,6 +117,15 @@ module infra '../modules/bootstrap-core.bicep' = {
     staticSiteLocation: staticSiteLocation
     functionLocation: functionLocation
     functionPlanSkuName: functionPlanSkuName
+    staticSiteSkuName: staticSiteSkuName
+    applyFunctionAuthLockdown: applyFunctionAuthLockdown
+    functionAuthEntraClientId: functionAuthEntraClientId
+    functionAuthEntraTenantId: functionAuthEntraTenantId
+    functionExtraCorsOrigins: functionExtraCorsOrigins
+    enableBudgetAlert: enableBudgetAlert
+    budgetAmount: budgetAmount
+    budgetContactEmails: budgetContactEmails
+    budgetStartDate: budgetStartDate
     enableVoicevoxAca: enableVoicevoxAca
     voicevoxTier: voicevoxTier
     containerAppsLocation: containerAppsLocation
@@ -103,7 +144,13 @@ module infra '../modules/bootstrap-core.bicep' = {
 }
 
 output staticSiteName string = infra.outputs.staticSiteName
+output staticSiteDefaultHostname string = infra.outputs.staticSiteDefaultHostname
 output functionAppDefaultHostname string = infra.outputs.functionAppDefaultHostname
+output staticSiteSkuName string = infra.outputs.staticSiteSkuName
+output functionEasyAuthEnabled bool = infra.outputs.functionEasyAuthEnabled
+output functionAuthEntraClientId string = infra.outputs.functionAuthEntraClientId
+output functionAuthEntraTenantId string = infra.outputs.functionAuthEntraTenantId
+output budgetAlertEnabled bool = infra.outputs.budgetAlertEnabled
 output sqlEnabled bool = infra.outputs.sqlEnabled
 output sqlServerFqdn string = infra.outputs.sqlServerFqdn
 output sqlDatabase string = infra.outputs.sqlDatabase
