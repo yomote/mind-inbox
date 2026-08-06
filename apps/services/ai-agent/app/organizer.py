@@ -9,10 +9,10 @@ from __future__ import annotations
 import json
 import logging
 
-from semantic_kernel import Kernel
+from agent_framework import BaseChatClient
 from semantic_kernel.contents import ChatHistory
 
-from .kernel import get_execution_settings
+from .agents import complete
 from .repositories import SessionRepository
 from .schemas import OrganizeResponse
 
@@ -50,7 +50,7 @@ def _format_history(history: ChatHistory) -> str:
 async def organize(
     session_id: str,
     session_repo: SessionRepository,
-    kernel: Kernel,
+    client: BaseChatClient,
 ) -> OrganizeResponse:
     history = await session_repo.get(session_id)
     if history is None:
@@ -59,15 +59,7 @@ async def organize(
     conversation = _format_history(history)
     prompt = _ORGANIZE_PROMPT.format(conversation=conversation)
 
-    call_history = ChatHistory()
-    call_history.add_user_message(prompt)
-
-    svc = kernel.get_service("chat")
-    result = await svc.get_chat_message_content(
-        chat_history=call_history, settings=get_execution_settings()
-    )
-
-    raw = str(result).strip()
+    raw = (await complete(client, prompt)).strip()
     parts = raw.split("```")
     if len(parts) >= 3:
         raw = parts[1].removeprefix("json").strip()

@@ -18,21 +18,19 @@ def approval_repo() -> InMemoryApprovalRepository:
 
 
 @pytest.fixture
-def make_kernel():
-    """Kernel mock の factory。chat service が任意の文字列を返すように構成する。
+def make_client():
+    """MAF chat client mock の factory。get_response が任意のテキストを返すように構成する。
 
     使い方:
-        def test_x(make_kernel):
-            kernel = make_kernel('{"summary": "..."}')
+        def test_x(make_client):
+            client = make_client('{"summary": "..."}')
     """
 
     def _factory(response_text: str) -> MagicMock:
-        mock_result = MagicMock()
-        mock_result.__str__ = lambda self: response_text
-        mock_svc = MagicMock()
-        mock_svc.get_chat_message_content = AsyncMock(return_value=mock_result)
-        kernel = MagicMock()
-        kernel.get_service = MagicMock(return_value=mock_svc)
-        return kernel
+        mock_response = MagicMock()
+        mock_response.text = response_text
+        client = MagicMock()
+        client.get_response = AsyncMock(return_value=mock_response)
+        return client
 
     return _factory

@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException
 
+from .agents import get_chat_client
 from .config import get_settings
 from .extractor import extract
 from .kernel import get_kernel
@@ -64,7 +65,12 @@ def get_approval_repo() -> ApprovalRepository:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting %s", settings.app_name)
-    get_kernel()  # 起動時にカーネルをロードして初回リクエストのレイテンシを下げる
+    get_kernel()  # 起動時にカーネルをロードして初回リクエストのレイテンシを下げる (M1-3 まで /chat 系が使用)
+    try:
+        get_chat_client()  # MAF chat client も起動時にロード
+    except Exception as exc:
+        # 資格情報なしでも起動は継続する (kernel と同じ縮退方針)。LLM 呼び出し時に失敗する
+        logger.error("Chat client setup failed — LLM calls will fail: %s", exc)
     yield
     logger.info("Shutting down %s", settings.app_name)
 
@@ -103,7 +109,7 @@ async def extract_endpoint(
 ) -> ExtractionResult:
     try:
         return await extract(
-            req.session_id, req.existing_problems, session_repo, get_kernel()
+            req.session_id, req.existing_problems, session_repo, get_chat_client()
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -118,7 +124,7 @@ async def organize_endpoint(
     session_repo: SessionRepository = Depends(get_session_repo),
 ) -> OrganizeResponse:
     try:
-        return await organize(req.session_id, session_repo, get_kernel())
+        return await organize(req.session_id, session_repo, get_chat_client())
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
@@ -129,7 +135,7 @@ async def organize_endpoint(
 @app.post("/plan", response_model=PlanResponse)
 async def plan_endpoint(req: PlanRequest) -> PlanResponse:
     try:
-        return await generate_plan(req, get_kernel())
+        return await generate_plan(req, get_chat_client())
     except Exception as exc:
         logger.error("POST /plan error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))

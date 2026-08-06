@@ -41,15 +41,15 @@ async def _seed(session_repo, session_id="s1"):
 
 class TestExtractNew:
     async def test_l1_maps_new_problem_to_extraction_result(
-        self, session_repo, make_kernel
+        self, session_repo, make_client
     ):
         # 新規 Problem を起こす分岐の各フィールド mapping を pin する。
         # 無いと: schema フィールドのリネーム/型変更や problem_id の紐付け欠落が静かに通り、
         #         BFF 側で deserialize / グルーピング表示が壊れる
         await _seed(session_repo)
-        kernel = make_kernel(json.dumps(_NEW_PAYLOAD))
+        client_mock = make_client(json.dumps(_NEW_PAYLOAD))
 
-        result = await extract("s1", [], session_repo, kernel)
+        result = await extract("s1", [], session_repo, client_mock)
 
         assert len(result.items) == 1
         item = result.items[0]
@@ -72,23 +72,23 @@ class TestExtractNew:
         assert result.updated_problem_count == 0
 
     async def test_l1_new_problem_title_falls_back_to_statement(
-        self, session_repo, make_kernel
+        self, session_repo, make_client
     ):
         # newProblemTitle が空なら statement をタイトルに使う契約を pin する。
         # 無いと: 新規 Problem のタイトルが空文字のまま一覧に並ぶ退行が静かに通る
         await _seed(session_repo)
         payload = json.loads(json.dumps(_NEW_PAYLOAD))
         payload["mentions"][0]["grouping"]["newProblemTitle"] = ""
-        kernel = make_kernel(json.dumps(payload))
+        client_mock = make_client(json.dumps(payload))
 
-        result = await extract("s1", [], session_repo, kernel)
+        result = await extract("s1", [], session_repo, client_mock)
 
         assert result.items[0].grouping.problem_title == "転職すべきか迷っている"
 
 
 class TestExtractExisting:
     async def test_l1_groups_into_existing_and_flags_recurrence(
-        self, session_repo, make_kernel
+        self, session_repo, make_client
     ):
         # 既存 Problem への再出現分岐: is_recurrence / mention_count 加算 / updated 集計を pin する。
         # 無いと: 再出現が常に新規として起き、「ためる」体験 (重複束ね) が壊れる
@@ -122,9 +122,9 @@ class TestExtractExisting:
                 }
             ]
         }
-        kernel = make_kernel(json.dumps(payload))
+        client_mock = make_client(json.dumps(payload))
 
-        result = await extract("s1", existing, session_repo, kernel)
+        result = await extract("s1", existing, session_repo, client_mock)
 
         item = result.items[0]
         assert item.grouping.kind == "existing"
@@ -140,7 +140,7 @@ class TestExtractExisting:
         assert result.updated_problem_count == 1
 
     async def test_l1_accumulates_mention_count_within_same_dump(
-        self, session_repo, make_kernel
+        self, session_repo, make_client
     ):
         # 同一 Dump 内で複数 Mention が同じ既存 Problem に寄る時、mention_count を累積する契約を pin する。
         # 無いと: 2件目以降も ref.mention_count + 1 のまま (過小カウント) になり「今月N回目」表示が狂う
@@ -182,9 +182,9 @@ class TestExtractExisting:
                 },
             ]
         }
-        kernel = make_kernel(json.dumps(payload))
+        client_mock = make_client(json.dumps(payload))
 
-        result = await extract("s1", existing, session_repo, kernel)
+        result = await extract("s1", existing, session_repo, client_mock)
 
         counts = [item.grouping.mention_count for item in result.items]
         assert counts == [3, 4]  # 既存 2 → 3 → 4 と累積
@@ -192,7 +192,7 @@ class TestExtractExisting:
         assert result.new_problem_count == 0
 
     async def test_l1_reignited_when_existing_problem_not_open(
-        self, session_repo, make_kernel
+        self, session_repo, make_client
     ):
         # 棚卸し済み / 解決済みの Problem に再出現したら reignited=True を pin する。
         # 無いと: 再燃 (解決したはずの悩みがぶり返した) の気づきが UI に出せない退行が静かに通る
@@ -222,14 +222,14 @@ class TestExtractExisting:
                 }
             ]
         }
-        kernel = make_kernel(json.dumps(payload))
+        client_mock = make_client(json.dumps(payload))
 
-        result = await extract("s1", existing, session_repo, kernel)
+        result = await extract("s1", existing, session_repo, client_mock)
 
         assert result.items[0].grouping.reignited is True
 
     async def test_l1_unknown_existing_id_is_treated_as_new(
-        self, session_repo, make_kernel
+        self, session_repo, make_client
     ):
         # LLM が候補に無い id を返したら dangling 参照を作らず新規に丸める契約を pin する。
         # 無いと: 存在しない problemId を指す Mention が生まれ、詳細表示が壊れる
@@ -239,9 +239,9 @@ class TestExtractExisting:
         ]
         payload = json.loads(json.dumps(_NEW_PAYLOAD))
         payload["mentions"][0]["grouping"]["existingProblemId"] = "p-does-not-exist"
-        kernel = make_kernel(json.dumps(payload))
+        client_mock = make_client(json.dumps(payload))
 
-        result = await extract("s1", existing, session_repo, kernel)
+        result = await extract("s1", existing, session_repo, client_mock)
 
         assert result.items[0].grouping.kind == "new"
         assert result.new_problem_count == 1
@@ -249,64 +249,64 @@ class TestExtractExisting:
 
 
 class TestExtractRobustness:
-    async def test_l1_json_inside_markdown_fence(self, session_repo, make_kernel):
+    async def test_l1_json_inside_markdown_fence(self, session_repo, make_client):
         # organizer と同じく ```json フェンス剥がしが効くことを pin する。
         await _seed(session_repo)
         fenced = f"```json\n{json.dumps(_NEW_PAYLOAD)}\n```"
-        kernel = make_kernel(fenced)
+        client_mock = make_client(fenced)
 
-        result = await extract("s1", [], session_repo, kernel)
+        result = await extract("s1", [], session_repo, client_mock)
 
         assert len(result.items) == 1
         assert result.items[0].grouping.kind == "new"
 
     async def test_l1_malformed_json_returns_empty_result(
-        self, session_repo, make_kernel
+        self, session_repo, make_client
     ):
         # LLM が JSON でない文字列を返した時、例外を投げず空 ExtractionResult を返す契約を pin する。
         # 無いと: parse failure 時に 500 で落ち、吐き出し直後の抽出画面が汎用エラーになる
         await _seed(session_repo)
-        kernel = make_kernel("not valid json at all")
+        client_mock = make_client("not valid json at all")
 
-        result = await extract("s1", [], session_repo, kernel)
+        result = await extract("s1", [], session_repo, client_mock)
 
         assert result.items == []
         assert result.new_problem_count == 0
         assert result.updated_problem_count == 0
 
     async def test_l1_unknown_theme_falls_back_to_michubunrui(
-        self, session_repo, make_kernel
+        self, session_repo, make_client
     ):
         # 固定分類外のテーマは「未分類」に丸める契約を pin する。
         # 無いと: 想定外テーマがそのまま流れ、Theme enum (domain.ts) と乖離して BFF で弾かれる
         await _seed(session_repo)
         payload = json.loads(json.dumps(_NEW_PAYLOAD))
         payload["mentions"][0]["theme"] = "宇宙開発"
-        kernel = make_kernel(json.dumps(payload))
+        client_mock = make_client(json.dumps(payload))
 
-        result = await extract("s1", [], session_repo, kernel)
+        result = await extract("s1", [], session_repo, client_mock)
 
         assert result.items[0].mention.proposed_theme == "未分類"
         assert result.items[0].grouping.problem_theme == "未分類"
 
     async def test_l1_missing_session_raises_value_error(
-        self, session_repo, make_kernel
+        self, session_repo, make_client
     ):
         # 存在しない session は ValueError (endpoint 側で 404 に mapping)。
-        kernel = make_kernel(json.dumps(_NEW_PAYLOAD))
+        client_mock = make_client(json.dumps(_NEW_PAYLOAD))
 
         with pytest.raises(ValueError, match="Session not found"):
-            await extract("nonexistent", [], session_repo, kernel)
+            await extract("nonexistent", [], session_repo, client_mock)
 
     async def test_l1_empty_mentions_returns_empty_result(
-        self, session_repo, make_kernel
+        self, session_repo, make_client
     ):
         # 困りごとが無い吐き出し (mentions 空配列) を正常に空結果として返す。
         # 無いと: 0 件抽出が異常系に落ちる退行が静かに通る
         await _seed(session_repo)
-        kernel = make_kernel(json.dumps({"mentions": []}))
+        client_mock = make_client(json.dumps({"mentions": []}))
 
-        result = await extract("s1", [], session_repo, kernel)
+        result = await extract("s1", [], session_repo, client_mock)
 
         assert result.items == []
         assert result.new_problem_count == 0
