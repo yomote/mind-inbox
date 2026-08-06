@@ -70,6 +70,9 @@ param enableVoicevoxWrapperAca bool = false
 @description('Azure region for VOICEVOX Wrapper Container Apps resources.')
 param voicevoxWrapperLocation string = functionLocation
 
+@description('Provision the Azure SQL stack. Default false: v1 は in-memory のみで SQL 未使用 (ADR 0013)。永続化 (Phase 2: Redis + Cosmos) が要るとき true。')
+param enableSql bool = false
+
 @description('Set to true if a soft-deleted Key Vault with the same name already exists.')
 param recoverSqlAdminKeyVault bool = false
 
@@ -99,6 +102,7 @@ module infra '../modules/bootstrap-core.bicep' = {
     aiAgentLocation: aiAgentLocation
     enableVoicevoxWrapperAca: enableVoicevoxWrapperAca
     voicevoxWrapperLocation: voicevoxWrapperLocation
+    enableSql: enableSql
     recoverSqlAdminKeyVault: recoverSqlAdminKeyVault
     sqlAdminKeyVaultName: sqlAdminKeyVaultName
     restoreOpenAiAccount: restoreOpenAiAccount
@@ -107,6 +111,7 @@ module infra '../modules/bootstrap-core.bicep' = {
 
 output staticSiteName string = infra.outputs.staticSiteName
 output functionAppDefaultHostname string = infra.outputs.functionAppDefaultHostname
+output sqlEnabled bool = infra.outputs.sqlEnabled
 output sqlServerFqdn string = infra.outputs.sqlServerFqdn
 output sqlDatabase string = infra.outputs.sqlDatabase
 output staticSiteEntraClientId string = infra.outputs.staticSiteEntraClientId

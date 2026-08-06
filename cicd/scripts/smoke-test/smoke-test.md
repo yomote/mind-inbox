@@ -19,7 +19,8 @@
 
 - `staticSiteDefaultHostname`
 - `functionAppDefaultHostname`
-- `sqlServerFqdn`
+- `sqlServerFqdn` — `enableSql=false`（既定, ADR 0013）だと空。SQL 系チェックは自動 skip される
+- `sqlEnabled` — `enableSql` の真偽。`true` かつ `sqlServerFqdn` が空なら SQL provisioning 失敗とみなし **NG**（意図的 skip と本当の失敗を区別する）
 - `logAnalyticsCustomerId`
 
 ## 1. 速攻チェック（推奨）

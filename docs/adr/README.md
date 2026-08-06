@@ -78,3 +78,4 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0010](0010-voicevox-cpu-gpu-deploy-tier.md) — VOICEVOX を `voicevoxTier`(cpu/gpu) 単一スイッチで切替（既定 cpu）で up を高速・安価に _(Proposed)_
 - [0011](0011-github-projects-as-execution-dashboard.md) — GitHub Projects は実行状態のダッシュボードに徹し、設計の真実は docs に置く _(Proposed)_
 - [0012](0012-grouping-in-ai-agent-with-bff-supplied-candidates.md) — Mention のグルーピングは AI Agent が担い、BFF が既存 Problem 候補を渡す
+- [0013](0013-standing-low-cost-dev-env-with-auto-deploy.md) — dev 環境は「常設・待機最小コスト + main マージ自動デプロイ」にする（0009 のオンデマンド teardown を置き換える） _(Proposed)_

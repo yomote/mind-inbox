@@ -231,6 +231,9 @@ param appSubnetPrefix string = '10.10.20.0/24'
 @description('Log Analytics workspace name')
 param lawName string = 'law-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-ops'
 
+@description('Provision the Azure SQL stack (SQL Server/DB + admin Key Vault + Private Endpoint/DNS/VNet link + diagnostics). Default false: v1 はアプリが SQL を一切参照せず in-memory のみで動く (ADR 0013)。永続化が要る Phase 2 (Redis + Cosmos) で必要になれば true にする。')
+param enableSql bool = false
+
 @description('SQL server name (must be globally unique)')
 param sqlServerName string = toLower('sql-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}')
 
@@ -332,12 +335,12 @@ var sqlServerHostnameSuffix = startsWith(environment().suffixes.sqlServerHostnam
 
 var sqlPrivateDnsZoneName = 'privatelink.${sqlServerHostnameSuffix}'
 
-resource sqlPrivateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
+resource sqlPrivateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = if (enableSql) {
   name: sqlPrivateDnsZoneName
   location: 'global'
 }
 
-resource sqlPrivateDnsVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
+resource sqlPrivateDnsVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (enableSql) {
   parent: sqlPrivateDnsZone
   name: '${vnet.name}-link'
   location: 'global'
@@ -353,7 +356,7 @@ resource sqlPrivateDnsVnetLink 'Microsoft.Network/privateDnsZones/virtualNetwork
 @description('Set to true if a soft-deleted Key Vault with the same name already exists and needs to be recovered.')
 param recoverSqlAdminKeyVault bool = false
 
-resource sqlAdminKeyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+resource sqlAdminKeyVault 'Microsoft.KeyVault/vaults@2023-07-01' = if (enableSql) {
   name: sqlAdminKeyVaultName
   location: location
   properties: union(
@@ -372,7 +375,7 @@ resource sqlAdminKeyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   )
 }
 
-resource sqlAdminPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+resource sqlAdminPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (enableSql) {
   parent: sqlAdminKeyVault
   name: sqlAdminPasswordSecretName
   properties: {
@@ -381,7 +384,7 @@ resource sqlAdminPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' =
 }
 
 // -------------------- Azure SQL Server & DB --------------------
-resource sqlServer 'Microsoft.Sql/servers@2024-05-01-preview' = {
+resource sqlServer 'Microsoft.Sql/servers@2024-05-01-preview' = if (enableSql) {
   name: sqlServerName
   location: location
   properties: {
@@ -393,7 +396,7 @@ resource sqlServer 'Microsoft.Sql/servers@2024-05-01-preview' = {
   }
 }
 
-resource sqlDb 'Microsoft.Sql/servers/databases@2024-05-01-preview' = {
+resource sqlDb 'Microsoft.Sql/servers/databases@2024-05-01-preview' = if (enableSql) {
   parent: sqlServer
   name: sqlDatabaseName
   location: location
@@ -408,8 +411,8 @@ resource sqlDb 'Microsoft.Sql/servers/databases@2024-05-01-preview' = {
 
 // -------------------- Private Endpoint for SQL Server --------------------
 // groupId for SQL Server private link is typically "sqlServer"
-resource sqlPe 'Microsoft.Network/privateEndpoints@2024-01-01' = {
-  name: 'pe-${sqlServer.name}'
+resource sqlPe 'Microsoft.Network/privateEndpoints@2024-01-01' = if (enableSql) {
+  name: 'pe-${sqlServerName}'
   location: location
   properties: {
     subnet: {
@@ -430,7 +433,7 @@ resource sqlPe 'Microsoft.Network/privateEndpoints@2024-01-01' = {
 }
 
 // DNS Zone Group to auto-create A records in privatelink zone
-resource sqlPeDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-01-01' = {
+resource sqlPeDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-01-01' = if (enableSql) {
   parent: sqlPe
   name: 'pdzg-sql'
   properties: {
@@ -452,8 +455,8 @@ resource sqlPeDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGro
 //
 // Below is a SAFE skeleton: enable a few typical categories once you confirm names.
 
-resource diagSqlServer 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
-  name: 'diag-${sqlServer.name}'
+resource diagSqlServer 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (enableSql) {
+  name: 'diag-${sqlServerName}'
   scope: sqlServer
   properties: {
     workspaceId: law.id
@@ -973,12 +976,13 @@ resource functionAuthSettingsV2 'Microsoft.Web/sites/config@2023-12-01' = if (ap
 
 output logAnalyticsWorkspaceId string = law.id
 output logAnalyticsCustomerId string = law.properties.customerId
-output sqlServerFqdn string = '${sqlServer.name}.${sqlServerHostnameSuffix}'
-output sqlDatabase string = sqlDb.name
+output sqlEnabled bool = enableSql
+output sqlServerFqdn string = enableSql ? '${sqlServerName}.${sqlServerHostnameSuffix}' : ''
+output sqlDatabase string = enableSql ? sqlDatabaseName : ''
 output vnetId string = vnet.id
 output peSubnetId string = peSubnet.id
 output appSubnetId string = appSubnet.id
-output sqlAdminKeyVaultName string = sqlAdminKeyVault.name
+output sqlAdminKeyVaultName string = enableSql ? sqlAdminKeyVaultName : ''
 
 output staticSiteDefaultHostname string = staticSite.properties.defaultHostname
 output functionAppDefaultHostname string = functionApp.properties.defaultHostName
