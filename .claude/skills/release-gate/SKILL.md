@@ -1,6 +1,6 @@
 ---
 name: release-gate
-description: deploy の前に独立 judge 3 役 (security-reviewer / qa-reviewer / release-judge) を新品コンテキストで走らせ、Go/No-Go を集約する「リリースゲート」。user が「/release-gate」「リリースしていい?」「デプロイ前チェック」「出荷判定して」等と言ったとき、または deploy-*.sh を実行する直前に起動。判定はレポートまで — deploy の実行は人間。設計背景は ADR 0015。
+description: deploy の前に独立 judge 3 役 (security-reviewer / qa-reviewer / release-judge) を新品コンテキストで走らせるリリースゲート。開発リリースレポートを作り、security はスキャンツール併用の審査、QA は受け入れテスト (L3) の作成・実行までやり、release-judge が 3 レポートを突き合わせて Go/No-Go を出す。user が「/release-gate」「リリースしていい?」「デプロイ前チェック」「出荷判定して」等と言ったとき、または deploy-*.sh を実行する直前に起動。判定はレポートまで — deploy の実行は人間。設計背景は ADR 0015。
 ---
 
 # release-gate
@@ -27,20 +27,34 @@ git log --oneline -15 origin/main   # リリース対象 ref の確認
 - 比較基点: 前回リリース (直近の deploy タグ / 前回 gate 通過 commit)。特定できなければ user に確認するか、「基点不明」として judge にそのまま渡す (誤魔化して狭めない)
 - 対象環境: dev / stg / prod
 
-### Step 2 — 独立 judge の並列起動
+### Step 2 — 開発リリースレポートの作成
+
+release-judge への入力 1 本目。commit range の実データ (git log / マージ PR / 紐づく Issue) から**事実だけ**をまとめる:
+
+```markdown
+## 開発リリースレポート ({基点}..{ref})
+- 入る機能 / 変更: {Issue# / PR# と 1 行説明の一覧}
+- やらなかったこと・落としたスコープ: {明示。無ければ「なし」}
+- 実装者テストの状況: {追加/変更されたテストと CI の最新結果}
+- 既知の懸念: {あれば}
+```
+
+**このレポートに「リリースして良いと思う」等の自己判定は書かない** (それは judge の仕事)。スコープ縮小を隠さず書く — release-judge は無言のスコープ縮小を FAIL にする。
+
+### Step 3 — security / QA の並列起動
 
 **このセッションでは審査しない。** Agent tool で 2 役を**並列**に、新品コンテキストで起動する:
 
-1. `security-reviewer` — プロンプトに「対象 ref と比較基点 (commit range)」「対象環境」を渡す
-2. `qa-reviewer` — 同上
+1. `security-reviewer` — 「対象 ref と比較基点 (commit range)」「対象環境」を渡す。スキャンツールを回した上での判定が返る
+2. `qa-reviewer` — 同上に加えて開発リリースレポートを渡す (受け入れマトリクスの突合対象)。**受け入れテスト (L3) の作成・実行まで**やって QA レポートが返る
 
-それぞれ rubric (`.github/claude/security-rubric.md` / `qa-rubric.md`) に従ったレポートを返してくる。
+qa-reviewer がテストを新規作成した場合、そのテストコードの扱い (commit して PR に含めるか) は user に確認する。
 
-### Step 3 — release-judge に集約させる
+### Step 4 — release-judge に集約させる
 
-2 役のレポート全文 + 対象 ref / 環境を `release-judge` subagent に渡し、`.github/claude/release-rubric.md` のチェックリスト (CI 状態・不可逆変更・rollback 経路・運用整合) を証拠つきで埋めさせ、`🟢 GO / 🟡 CONDITIONAL GO / 🔴 NO-GO` を出させる。
+**3 本のレポート** (開発 / QA / セキュリティ) 全文 + 対象 ref / 環境を `release-judge` subagent に渡し、`.github/claude/release-rubric.md` のチェックリスト (機能が揃っているか・品質シグナル・不可逆変更・rollback 経路・運用整合) を証拠つきで埋めさせ、`🟢 GO / 🟡 CONDITIONAL GO / 🔴 NO-GO` を出させる。
 
-### Step 4 — user への提示
+### Step 5 — user への提示
 
 release-judge のレポートをそのまま提示し、先頭に 1 行で要約を付ける:
 
@@ -51,8 +65,9 @@ release-judge のレポートをそのまま提示し、先頭に 1 行で要約
 
 {release-judge レポート本体: チェックリスト表 / 残リスク / 次のアクション}
 
-<details><summary>security-reviewer レポート</summary>...</details>
-<details><summary>qa-reviewer レポート</summary>...</details>
+<details><summary>開発リリースレポート</summary>...</details>
+<details><summary>QA レポート (受け入れマトリクス / テスト実行結果)</summary>...</details>
+<details><summary>セキュリティレポート (スキャン実行状況 / findings)</summary>...</details>
 ```
 
 - `🟢 GO`: deploy コマンドを提示する (実行は user の指示があってから)

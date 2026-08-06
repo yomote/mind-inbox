@@ -102,12 +102,13 @@ PR テンプレ・Test Issue テンプレに「このテストが無いと何が
 
 | 項目               | 内容                                                                                                |
 | ------------------ | --------------------------------------------------------------------------------------------------- |
-| **目的**           | UI 描画レベルでの破壊検知。最終防衛線                                                               |
-| **対象**           | `onboarding → newConsultation → session → organize → result → save → history` の **1 シナリオのみ** |
+| **目的**           | UI 描画レベルでの破壊検知 + 受け入れ検証。最終防衛線                                                |
+| **対象**           | `onboarding → newConsultation → session → organize → result → save → history` の主要シナリオ + QA が受け入れ基準から導出したシナリオ |
 | **フレームワーク** | Playwright                                                                                          |
 | **書き方の指針**   | BFF は env 未設定 = stub モードで起動。スクリーン単位の個別 E2E は書かない                          |
 | **非ゴール**       | スクリーンの見た目スナップショット、エラーパスの網羅                                                |
 | **実行コマンド**   | `npm run test:e2e`                                                                                  |
+| **所有者**         | **qa-reviewer (QA 役, [ADR 0015](../adr/0015-independent-judge-agents-security-qa-release.md))**。実装者は L3 を増やさない — 受け入れシナリオの追加は QA 役が受け入れ基準 (`.github/claude/qa-rubric.md`) から導出して行う |
 
 ### L4 smoke (実環境疎通)
 

@@ -31,16 +31,16 @@ Technical Story: `claude/security-review-agent-9avoqw` ブランチ。「実装�
 
 ## Decision Outcome
 
-Chosen option: **"Option B"**。役割ごとに (1) 審査基準 rubric (`.github/claude/{security,qa,release}-rubric.md`)、(2) Claude Code の **subagent 定義** (`.claude/agents/*.md`) を置く。subagent は**常に新しいコンテキストで起動し、呼び出し元の会話を引き継がない**ため、「別のコンテキストで完全に別の役割」という要件を仕組みとして満たす。リリース判定は `/release-gate` skill が 3 judge を並列起動して Go/No-Go を集約し、最終判断 (deploy 実行) は人間が行う。
+Chosen option: **"Option B"**。役割ごとに (1) 審査基準 rubric (`.github/claude/{security,qa,release}-rubric.md`)、(2) Claude Code の **subagent 定義** (`.claude/agents/*.md`) を置く。subagent は**常に新しいコンテキストで起動し、呼び出し元の会話を引き継がない**ため、「別のコンテキストで完全に別の役割」という要件を仕組みとして満たす。リリース判定は `/release-gate` skill が (1) 開発リリースレポート (事実の列挙のみ) を作り、(2) security / QA を並列起動し、(3) release-judge に 3 レポートを突合させて Go/No-Go を出す。最終判断 (deploy 実行) は人間が行う。
 
 各役割の分担:
 
-| 役割 | いつ走るか | 見るもの | 見ないもの |
+| 役割 | いつ走るか | やること | やらないこと |
 | --- | --- | --- | --- |
 | PR レビュー judge (既存, ADR 0008) | PR opened / synchronize | 戦略 doc 整合・一般バグ・PR テンプレ整合 | セキュリティ深掘り (security judge に委譲) |
-| security-reviewer | PR 時 (レビュー Routine から subagent 起動) + release-gate 時 | 攻撃面・秘密情報・PII・インジェクション・インフラ露出 | コードスタイル・テスト設計 |
-| qa-reviewer | release-gate 時 (大きめ PR では任意) | 要件/UI 仕様との突合・シナリオ/探索観点・異常系の穴 | 実装者が書いた unit の再レビュー・CI 重複 |
-| release-judge | release-gate 時 (deploy 前) | CI 状態・未解決 blocker・不可逆変更・rollback 経路 | コード詳細 (他 judge の結論を集約) |
+| security-reviewer | PR 時 (レビュー Routine から subagent 起動) + release-gate 時 | **脆弱性スキャンツール (npm audit / pip-audit / gitleaks 等) を回し**、結果を rubric に照らして triage + 攻撃面の目視追跡 (秘密情報・PII・インジェクション・インフラ露出) | コードスタイル・テスト設計・コード修正 |
+| qa-reviewer | release-gate 時 (大きめ PR では任意) | 受け入れマトリクス (欲しかった機能が揃っているか) の作成 + **受け入れテスト (L3 E2E) の作成・実行** + シナリオ/探索観点。**L3 レイヤの所有者** | 実装者 unit の再レビュー・CI 重複・**プロダクトコードの変更** (触るのはテストコードのみ) |
+| release-judge | release-gate 時 (deploy 前) | **3 レポート (開発リリースレポート / QA / セキュリティ) の突合**: 機能が揃っているか・テスト/QA が実際に行われたか・CI・不可逆変更・rollback 経路 | コード詳細の再監査 (レポートが無ければ UNKNOWN、デフォルト NO-GO) |
 
 ### Positive Consequences
 
@@ -51,8 +51,10 @@ Chosen option: **"Option B"**。役割ごとに (1) 審査基準 rubric (`.githu
 
 ### Negative Consequences
 
-- judge が増える分、サブスクのレート枠・実行時間を消費する (release-gate は deploy 前のみ起動して抑制)
-- subagent の独立性は「コンテキスト非共有」であって、モデル自体は同一 — 同型の見落としは共有し得る (将来 CI ツール (CodeQL 等) で補完余地)
+- judge が増える分、サブスクのレート枠・実行時間を消費する (release-gate は deploy 前のみ起動して抑制。特に QA はテスト作成・実行まで行うため最も重い)
+- qa-reviewer は「judge は書かない」原則の例外 (テストコード限定で Write/Edit を持つ)。プロダクトコード不変更は rubric + agent 定義の二重指示で担保するが、決定論的な強制ではない
+- security のスキャンはセッション環境にツールが無いと grep 代替 + UNKNOWN になる (UNKNOWN は release-judge 側で GO を阻む設計なので、静かには劣化しない)
+- subagent の独立性は「コンテキスト非共有」であって、モデル自体は同一 — 同型の見落としは共有し得る (CodeQL 等の CI 恒久組み込みで補完余地)
 - release-judge の NO-GO は助言であり、deploy スクリプトを機械的にブロックはしない (強制力は人間の運用。必要になったら CI ゲート化を別 ADR で)
 
 ## Pros and Cons of the Options

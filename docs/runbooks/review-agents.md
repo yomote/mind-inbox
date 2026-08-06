@@ -20,15 +20,22 @@ PR レビュー Routine (ADR 0008: doc 整合・バグ・テンプレ)
 人間 merge
       │ deploy したくなったら
       ▼
-/release-gate skill ──→ security-reviewer + qa-reviewer (並列・新品コンテキスト)
-      │                        │
-      │                        ▼
-      │                  release-judge (集約: 🟢 GO / 🟡 / 🔴 NO-GO)
+/release-gate skill
+      ├─ 開発リリースレポート作成 (事実の列挙のみ・自己判定なし)
+      ├─→ security-reviewer (スキャンツール併用の審査)   ┐ 並列・
+      ├─→ qa-reviewer (受け入れマトリクス + L3 作成・実行) ┘ 新品コンテキスト
+      ▼
+release-judge ← 3 レポート (開発 / QA / セキュリティ) を突合
+      │            (機能揃ってる? テスト/QA やった? → 🟢 GO / 🟡 / 🔴 NO-GO)
       ▼
 人間が deploy ボタン (deploy-*.sh)
 ```
 
-分離の原則: **judge は必ず subagent (新品コンテキスト) として起動する**。実装セッション自身に審査させない。
+分離の原則: **judge は必ず subagent (新品コンテキスト) として起動する**。実装セッション自身に審査させない。役割ごとの持ち物:
+
+- **security-reviewer**: 脆弱性スキャンツール (npm audit / pip-audit / gitleaks / semgrep 等、使える物) を先に回し、結果を rubric に照らして判定する。ツールが無ければ grep 代替 + UNKNOWN 明記
+- **qa-reviewer**: 「欲しかった機能が揃っているか / 変な動きをしないか」を受け入れマトリクスで検証し、**受け入れテスト (L3 E2E) を作成・実行**する。L3 レイヤの所有者。プロダクトコードは触らない (テストコードのみ)
+- **release-judge**: 3 レポートを突き合わせ、「この品質で出してよいか」を判定する。レポートが欠けた領域は UNKNOWN = GO は出ない (デフォルト NO-GO)
 
 ## 構成ファイル (rubric-as-truth)
 
@@ -68,7 +75,10 @@ subagent はレビューセッション内でも新品コンテキストで起�
 
 ## Verification
 
-- [ ] `/release-gate` で security / qa / release-judge の 3 レポートが返り、verdict (🟢/🟡/🔴) が出る
+- [ ] `/release-gate` で開発レポート + security / QA レポート + release-judge の verdict (🟢/🟡/🔴) が出る
+- [ ] セキュリティレポートに「スキャン実行状況」表があり、回せなかったツールが UNKNOWN と明記されている
+- [ ] QA レポートに受け入れマトリクスとテスト実行結果 (pass/fail、未実行は明記) がある
+- [ ] qa-reviewer の作ったテストにプロダクトコードの差分が混ざっていない
 - [ ] release-judge のチェックリストに UNKNOWN が出たとき、GO になっていない (デフォルト NO-GO が効いている)
 - [ ] 実装セッションが自分で審査を代行していない (レポートが subagent 発か、セッションログで確認できる)
 
@@ -88,6 +98,18 @@ subagent はレビューセッション内でも新品コンテキストで起�
 
 - 原因: CI 結果や前回リリース基点にアクセスできない環境で走っている。
 - 対処: 範囲 (commit range) と CI 結果を呼び出しプロンプトで明示的に渡す。UNKNOWN のまま GO にしないのは仕様。
+
+### スキャンツールが環境に無く UNKNOWN だらけになる
+
+- 原因: クラウドセッション / Routine 環境に gitleaks / semgrep 等が未インストール。
+- 対処: `npm audit` (lockfile 同梱) と git grep 代替は常に動くので最低線は出る。恒久対応するなら
+  スキャナを CI (test.yml とは別 job) に足す — その追加は security-reviewer の「提案」を起点に PR で行う。
+
+### qa-reviewer が作ったテストをどう取り込むか
+
+- テストは QA レポートと一緒に提示される。取り込む場合はテストファイルのみの commit / PR にする
+  (プロダクトコードの差分が混ざっていたら rubric 違反 — 取り込まず finding として扱う)。
+- 取り込んだ L3 は以後 CI (`npm run test:e2e`) の資産になる。
 
 ### 実装セッションが「自分でチェックしたから GO」と言う
 
