@@ -75,6 +75,9 @@ param budgetAmount int = 3000
 @description('予算アラートの通知先メール。空なら予算を作らない。')
 param budgetContactEmails array = []
 
+@description('予算の開始日 (月初, yyyy-MM-dd)。作成後は変更不可のため固定値で管理する。')
+param budgetStartDate string = '2026-08-01'
+
 // -------------------- Azure OpenAI --------------------
 @description('Enable Azure OpenAI account and model deployment.')
 param enableOpenAi bool = false
@@ -125,6 +128,7 @@ module infra '../modules/bootstrap-core.bicep' = {
     enableBudgetAlert: enableBudgetAlert
     budgetAmount: budgetAmount
     budgetContactEmails: budgetContactEmails
+    budgetStartDate: budgetStartDate
     enableVoicevoxAca: enableVoicevoxAca
     voicevoxTier: voicevoxTier
     voicevoxLocation: voicevoxLocation

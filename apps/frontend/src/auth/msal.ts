@@ -81,9 +81,17 @@ export function getAccount(): AccountInfo | null {
   return getMsal()?.getActiveAccount() ?? null;
 }
 
+/**
+ * サインインリダイレクトは 1 回だけ発火させる。
+ * getAccessToken() は tRPC の headers() から毎リクエスト呼ばれるため、
+ * 未サインイン時に並行リクエストが走ると loginRedirect が多重発火しうる。
+ */
+let redirectInFlight = false;
+
 export async function login(): Promise<void> {
   const msal = getMsal();
-  if (!msal) return;
+  if (!msal || redirectInFlight) return;
+  redirectInFlight = true;
   await msal.loginRedirect({ scopes: [apiScope] });
 }
 
@@ -115,6 +123,8 @@ export async function getAccessToken(): Promise<string | null> {
     return result.accessToken;
   } catch (err) {
     if (err instanceof InteractionRequiredAuthError) {
+      if (redirectInFlight) return null;
+      redirectInFlight = true;
       await msal.acquireTokenRedirect({ scopes: [apiScope], account });
       return null;
     }

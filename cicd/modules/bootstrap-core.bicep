@@ -101,8 +101,12 @@ param budgetAmount int = 3000
 @description('Email addresses notified when budget thresholds are crossed.')
 param budgetContactEmails array = []
 
-@description('Budget start date (first day of a month, yyyy-MM-dd). 既定はデプロイ時点の月初。')
-param budgetStartDate string = utcNow('yyyy-MM-01')
+// Azure の Consumption Budget は作成後に startDate を変更できない。
+// utcNow() を既定にすると毎デプロイで再計算され、月をまたいだ再デプロイ (ADR 0013 の
+// main マージ自動デプロイ) で既存 budget の更新が startDate 不一致で失敗しうる。
+// そのため **固定値** を既定にし、parameters ファイルで明示管理する。
+@description('Budget start date (first day of a month, yyyy-MM-dd)。作成後は変更不可なので固定値で持つ。')
+param budgetStartDate string = '2026-08-01'
 
 @description('Azure Functions app name (must be globally unique)')
 param functionAppName string = toLower('func-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}')
