@@ -50,15 +50,19 @@ az ad app update --id "$CLIENT_ID" --identifier-uris "api://$CLIENT_ID"
 
 ## 2. IaC に client ID を渡して再デプロイ
 
+`applyFunctionAuthLockdown` と `functionAuthEntraClientId` は **`main-bootstrap.parameters.json` に commit 済み**（client ID は秘密情報ではなく、SPA バンドルにも載る公開識別子）。これは意図的で、**パラメータを渡し忘れた再デプロイが「認証無効ビルド」を出荷するのを防ぐ**ため。
+
+**予算の通知先メールだけは PII なので commit しない**。初回のみ引数で渡す（budget リソースは作成後 ARM の incremental デプロイで残るため、以降の再デプロイで省略しても消えない）。
+
 ```bash
 az deployment group create \
   -g rg-dev-mind-inbox -n main-bootstrap \
   -f cicd/iac/main-bootstrap.bicep \
   -p @cicd/iac/main-bootstrap.parameters.json \
-  -p applyFunctionAuthLockdown=true \
-     functionAuthEntraClientId="$CLIENT_ID" \
-     budgetContactEmails='["<your-email@example.com>"]'
+  -p budgetContactEmails='["<your-email@example.com>"]'
 ```
+
+> 別のアプリ登録に差し替えるときは `parameters.json` の `functionAuthEntraClientId` を更新する（`-p` での上書きも可）。
 
 これで:
 
