@@ -37,6 +37,9 @@ param voicevoxTier string = 'cpu'
 @description('Azure region for VOICEVOX Container Apps resources.')
 param voicevoxLocation string = functionLocation
 
+@description('共有 Container Apps Environment のリージョン (#68)。CAE は 1 つに統合済み。既定は voicevoxLocation (GPU のリージョン制約が最も厳しいため)。')
+param containerAppsLocation string = voicevoxLocation
+
 @allowed([
   'B1'
   'S1'
@@ -58,15 +61,9 @@ param openAiLocation string = functionLocation
 @description('Enable AI Agent on Azure Container Apps.')
 param enableAiAgentAca bool = false
 
-@description('Azure region for AI Agent Container Apps resources.')
-param aiAgentLocation string = functionLocation
-
 // -------------------- VOICEVOX Wrapper Container App --------------------
 @description('Enable VOICEVOX Wrapper on Azure Container Apps.')
 param enableVoicevoxWrapperAca bool = false
-
-@description('Azure region for VOICEVOX Wrapper Container Apps resources.')
-param voicevoxWrapperLocation string = functionLocation
 
 @description('Provision the Azure SQL stack. Default false: v1 は in-memory のみで SQL 未使用 (ADR 0013)。永続化 (Phase 2: Redis + Cosmos) が要るとき true。')
 param enableSql bool = false
@@ -90,15 +87,14 @@ module infra '../modules/bootstrap-core.bicep' = {
     functionPlanSkuName: functionPlanSkuName
     enableVoicevoxAca: enableVoicevoxAca
     voicevoxTier: voicevoxTier
+    containerAppsLocation: containerAppsLocation
     voicevoxLocation: voicevoxLocation
     enableStaticSiteEntraAuth: false
     autoCreateStaticSiteEntraAppRegistration: false
     enableOpenAi: enableOpenAi
     openAiLocation: openAiLocation
     enableAiAgentAca: enableAiAgentAca
-    aiAgentLocation: aiAgentLocation
     enableVoicevoxWrapperAca: enableVoicevoxWrapperAca
-    voicevoxWrapperLocation: voicevoxWrapperLocation
     enableSql: enableSql
     recoverSqlAdminKeyVault: recoverSqlAdminKeyVault
     sqlAdminKeyVaultName: sqlAdminKeyVaultName
@@ -121,6 +117,7 @@ output openAiAccountName string = infra.outputs.openAiAccountName
 output openAiDeploymentName string = infra.outputs.openAiDeploymentName
 output aiAgentEnabled bool = infra.outputs.aiAgentEnabled
 output aiAgentContainerAppName string = infra.outputs.aiAgentContainerAppName
+output containerAppsEnvironmentName string = infra.outputs.containerAppsEnvironmentName
 output aiAgentContainerAppsEnvironmentName string = infra.outputs.aiAgentContainerAppsEnvironmentName
 output voicevoxWrapperEnabled bool = infra.outputs.voicevoxWrapperEnabled
 output voicevoxWrapperContainerAppName string = infra.outputs.voicevoxWrapperContainerAppName

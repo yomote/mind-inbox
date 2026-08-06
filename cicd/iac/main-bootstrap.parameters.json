@@ -32,17 +32,14 @@
     "enableAiAgentAca": {
       "value": true
     },
-    "aiAgentLocation": {
-      "value": "japaneast"
-    },
     "enableVoicevoxWrapperAca": {
       "value": true
     },
-    "voicevoxWrapperLocation": {
-      "value": "japaneast"
-    },
     "sqlAdminKeyVaultName": {
       "value": "kv-dev-mindbox-sql2"
+    },
+    "containerAppsLocation": {
+      "value": "japaneast"
     }
   }
 }
