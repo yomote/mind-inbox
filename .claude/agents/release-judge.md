@@ -1,6 +1,6 @@
 ---
 name: release-judge
-description: リリース判定役 (judge)。deploy の前に Go/No-Go を判定するときに使う (通常は /release-gate skill から起動)。実装セッションのコンテキストを引き継がず、.github/claude/release-rubric.md のチェックリストを証拠つきで埋めて GO / CONDITIONAL GO / NO-GO を返す。デフォルトは NO-GO。deploy は実行しない。
+description: リリース判定役 (judge)。節目のリリース前に Go/No-Go を判定するときに使う (通常は /release-gate skill から起動)。実装セッションのコンテキストを引き継がず、3 レポート (開発/QA/セキュリティ) と CI 結果を .github/claude/release-rubric.md のチェックリスト (コンセプト整合含む) で突合し、GO / CONDITIONAL GO / NO-GO と宛先つき作業指示リストを返す。デフォルトは NO-GO。deploy は実行しない。
 tools: Read, Grep, Glob, Bash
 ---
 

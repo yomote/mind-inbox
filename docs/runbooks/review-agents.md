@@ -18,24 +18,26 @@ PR レビュー Routine (ADR 0008: doc 整合・バグ・テンプレ)
       ├─→ security-reviewer subagent (PR にセキュリティ関連差分がある時)
       ▼
 人間 merge
-      │ deploy したくなったら
+      │ 節目のリリース (フェーズ完了版 / stg・prod 昇格 / 不可逆変更) の前
+      │ ※ dev への日常 auto-deploy には差し込まない
       ▼
 /release-gate skill
       ├─ 開発リリースレポート作成 (事実の列挙のみ・自己判定なし)
-      ├─→ security-reviewer (スキャンツール併用の審査)   ┐ 並列・
-      ├─→ qa-reviewer (受け入れマトリクス + L3 作成・実行) ┘ 新品コンテキスト
+      ├─→ security-reviewer (スキャナ総動員 + 動的チェック)          ┐ 並列・
+      ├─→ qa-reviewer (受け入れマトリクス + ゴールデンパス/UI 挙動 L3) ┘ 新品コンテキスト
       ▼
-release-judge ← 3 レポート (開発 / QA / セキュリティ) を突合
-      │            (機能揃ってる? テスト/QA やった? → 🟢 GO / 🟡 / 🔴 NO-GO)
+release-judge ← 3 レポート + CI レイヤ別結果を突合
+      │   (機能揃ってる? コンセプトとズレてない? テスト/QA やった?
+      │    → 🟢 GO / 🟡 / 🔴 NO-GO + 宛先つき作業指示リスト)
       ▼
 人間が deploy ボタン (deploy-*.sh)
 ```
 
 分離の原則: **judge は必ず subagent (新品コンテキスト) として起動する**。実装セッション自身に審査させない。役割ごとの持ち物:
 
-- **security-reviewer**: 脆弱性スキャンツール (npm audit / pip-audit / gitleaks / semgrep 等、使える物) を先に回し、結果を rubric に照らして判定する。ツールが無ければ grep 代替 + UNKNOWN 明記
-- **qa-reviewer**: 「欲しかった機能が揃っているか / 変な動きをしないか」を受け入れマトリクスで検証し、**受け入れテスト (L3 E2E) を作成・実行**する。L3 レイヤの所有者。プロダクトコードは触らない (テストコードのみ)
-- **release-judge**: 3 レポートを突き合わせ、「この品質で出してよいか」を判定する。レポートが欠けた領域は UNKNOWN = GO は出ない (デフォルト NO-GO)
+- **security-reviewer**: 環境で使える脆弱性スキャナを総動員 (npm audit / pip-audit / osv-scanner / gitleaks / semgrep / bandit / trivy 等) し、結果を rubric に照らして判定する。アプリを起動できる場合は動的チェック (外部通信の観察・未認証アクセス実測・応答ヘッダ) も実施。使えなかった分は UNKNOWN 明記
+- **qa-reviewer**: 「欲しかった機能が揃っているか / 変な動きをしないか」を受け入れマトリクスで検証し、**ゴールデンパス・UI 挙動・ユーザビリティ観点のシナリオテスト (L3 E2E) を作成・実行**する。L3 レイヤの所有者。ビジュアルの美的評価はしない (MDX 仕様との乖離のみ)。プロダクトコードは触らない (テストコードのみ)
+- **release-judge**: 3 レポート + CI を突き合わせ、「この品質で出してよいか」「コンセプト ([`docs/concept_deck.md`](../concept_deck.md)) とズレていないか」を判定する。FAIL/UNKNOWN は**宛先つき作業指示リスト** (実装 / qa-reviewer / security-reviewer / 人間) に変換して返す。レポートが欠けた領域は UNKNOWN = GO は出ない (デフォルト NO-GO)
 
 ## 構成ファイル (rubric-as-truth)
 
@@ -55,7 +57,9 @@ subagent 定義は薄いラッパで、観点はすべて rubric 側に置く。
 /release-gate
 ```
 
-だけで良い (skill が範囲確定 → 3 judge 起動 → 集約まで面倒を見る)。deploy の実行は 🟢 でも人間。
+だけで良い (skill が範囲確定 → 開発レポート → judge 起動 → 集約まで面倒を見る)。deploy の実行は 🟢 でも人間。
+
+**回すのは節目だけ**: フェーズ/マイルストーンの完了版・stg/prod への昇格・不可逆変更を含む deploy。dev への日常 auto-deploy や docs のみの変更には差し込まない (CI + PR レビュー judge の守備範囲)。🔴 が出たら作業指示リストを user 合意の上でディスパッチし、対応後に release-judge を**再起動**して再判定する。
 
 ### PR 時にセキュリティレビューも走らせる (任意強化)
 

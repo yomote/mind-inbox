@@ -10,7 +10,7 @@ tools: Read, Grep, Glob, Bash
 
 1. まず `.github/claude/security-rubric.md` を読む。役割・観点 (S1〜S7)・Severity・出力ルールのすべてはそこに従う (rubric-as-truth)。
 2. 審査対象の diff を確定する。呼び出しプロンプトで範囲 (branch / PR / commit range) が指定されていればそれを、無ければ `git diff main...HEAD` を使う。
-3. **rubric の「スキャンツールの併用」に従い、利用可能なスキャナ (npm audit / pip-audit / gitleaks / semgrep 等) を先に回す**。使えなかったツールは UNKNOWN として記録し、代替 (grep パターン等) で埋める。
+3. **rubric の「スキャンツールの併用」に従い、環境で使えるスキャナを全部回す** (npm audit / pip-audit / osv-scanner / gitleaks / semgrep / bandit / trivy 等)。アプリを stub モードで起動できる場合は**動的チェック** (外部通信の観察・未認証アクセスの実測・応答ヘッダ) も行う。使えなかったツール・できなかったチェックは UNKNOWN として記録し、代替 (grep パターン等) で埋める。
 4. ツールの検出結果を rubric に照らして triage する (到達可能性・実害の判定)。あわせて diff の変更行から到達できる攻撃面を、ファイル境界を越えて目視で追跡する。必要なら設定ファイル・Bicep・workflow も読む。
 5. rubric の出力ルールに従い、verdict + スキャン実行状況 + findings テーブルのレポートを最終出力として返す。
 

@@ -16,14 +16,28 @@
 
 ## スキャンツールの併用 (目視より先に回す)
 
-LLM の目視だけに頼らない。**利用可能なスキャナを先に回し、その結果を rubric に照らして判定する** — ツールが機械的に拾い、あなたは「このプロダクトで実害があるか」を判断する分担。
+LLM の目視だけに頼らない。**環境で使えるスキャナは全部使う** — ツールが機械的に拾い、あなたは「このプロダクトで実害があるか」を判断する分担。以下は代表例で、これに限らず利用可能なものがあれば動員する:
+
+### 静的スキャン (SAST / SCA / secrets)
 
 | 対象 | ツール (利用可能なものを使う) | 見るもの |
 | --- | --- | --- |
-| npm 依存 (bff / frontend) | `npm audit --json` (lockfile があるディレクトリで) | 既知 CVE。**到達可能性を判定**してから severity を付ける |
-| Python 依存 (ai-agent / voicevox) | `pip-audit` / 無ければ `pip list` + アドバイザリ照合 | 同上 |
-| 秘密情報 | `gitleaks detect` / 無ければ git grep パターン (`AKIA`, `-----BEGIN`, `client_secret` 等) | コミット済み秘密 (S1) |
-| コードパターン | `semgrep --config auto` (入っていれば) | injection / SSRF 系の機械検出 (S2) |
+| npm 依存 (bff / frontend) | `npm audit --json` / `osv-scanner` (lockfile があるディレクトリで) | 既知 CVE。**到達可能性を判定**してから severity を付ける |
+| Python 依存 (ai-agent / voicevox) | `pip-audit` / `osv-scanner` / 無ければ `pip list` + アドバイザリ照合 | 同上 |
+| 秘密情報 | `gitleaks detect` / `trufflehog` / 無ければ git grep パターン (`AKIA`, `-----BEGIN`, `client_secret` 等) | コミット済み秘密 (S1) |
+| コードパターン (SAST) | `semgrep --config auto` / Python は `bandit` | injection / SSRF / 危険 API 系の機械検出 (S2) |
+| コンテナ / IaC | `trivy fs` / `trivy config` / `checkov` (Dockerfile・Bicep・workflow に差分がある時) | ベースイメージ CVE・設定ミス (S6) |
+
+### 動的チェック (アプリが起動できる場合)
+
+release-gate 時など、stub モードでローカル起動できるなら静的だけで済ませない:
+
+- **外部通信の観察**: フロント + BFF を起動して主要フローを 1 周し、**想定外の外部送信が無いか**を確認する (期待される宛先は自ホスト / AI Agent / VOICEVOX のみ。相談テキストが解析サービス・CDN・テレメトリ等へ飛んでいたら blocker 候補 — S3 の実測版)
+- **認可の実測**: 認証が要るはずのエンドポイントに未認証 curl を打ち、401/403 が返るか (「CORS があるから大丈夫」を実測で潰す — S4)
+- **応答ヘッダ**: セキュリティヘッダ (CSP / X-Content-Type-Options 等) と、エラー応答に内部情報 (スタックトレース・接続文字列) が漏れていないか
+- DAST ツール (`zap-baseline` 等) が使えるなら回してよいが、無ければ上記の手動チェックで代替し、その旨を記録する
+
+起動できない環境では動的チェック全体を UNKNOWN として明記する (やったふりをしない)。
 
 運用ルール:
 

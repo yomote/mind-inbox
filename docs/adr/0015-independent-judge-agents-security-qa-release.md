@@ -31,16 +31,16 @@ Technical Story: `claude/security-review-agent-9avoqw` ブランチ。「実装�
 
 ## Decision Outcome
 
-Chosen option: **"Option B"**。役割ごとに (1) 審査基準 rubric (`.github/claude/{security,qa,release}-rubric.md`)、(2) Claude Code の **subagent 定義** (`.claude/agents/*.md`) を置く。subagent は**常に新しいコンテキストで起動し、呼び出し元の会話を引き継がない**ため、「別のコンテキストで完全に別の役割」という要件を仕組みとして満たす。リリース判定は `/release-gate` skill が (1) 開発リリースレポート (事実の列挙のみ) を作り、(2) security / QA を並列起動し、(3) release-judge に 3 レポートを突合させて Go/No-Go を出す。最終判断 (deploy 実行) は人間が行う。
+Chosen option: **"Option B"**。役割ごとに (1) 審査基準 rubric (`.github/claude/{security,qa,release}-rubric.md`)、(2) Claude Code の **subagent 定義** (`.claude/agents/*.md`) を置く。subagent は**常に新しいコンテキストで起動し、呼び出し元の会話を引き継がない**ため、「別のコンテキストで完全に別の役割」という要件を仕組みとして満たす。リリース判定は `/release-gate` skill が (1) 開発リリースレポート (事実の列挙のみ) を作り、(2) security / QA を並列起動し、(3) release-judge に 3 レポートを突合させて Go/No-Go を出す。最終判断 (deploy 実行) は人間が行う。**フルゲートは毎デプロイではなく節目で回す**: フェーズ/マイルストーン完了版・stg/prod 昇格・不可逆変更を含む deploy が対象で、dev への日常 auto-deploy (ADR 0013) には差し込まない (そこは CI + PR レビュー judge の守備範囲)。
 
 各役割の分担:
 
 | 役割 | いつ走るか | やること | やらないこと |
 | --- | --- | --- | --- |
 | PR レビュー judge (既存, ADR 0008) | PR opened / synchronize | 戦略 doc 整合・一般バグ・PR テンプレ整合 | セキュリティ深掘り (security judge に委譲) |
-| security-reviewer | PR 時 (レビュー Routine から subagent 起動) + release-gate 時 | **脆弱性スキャンツール (npm audit / pip-audit / gitleaks 等) を回し**、結果を rubric に照らして triage + 攻撃面の目視追跡 (秘密情報・PII・インジェクション・インフラ露出) | コードスタイル・テスト設計・コード修正 |
-| qa-reviewer | release-gate 時 (大きめ PR では任意) | 受け入れマトリクス (欲しかった機能が揃っているか) の作成 + **受け入れテスト (L3 E2E) の作成・実行** + シナリオ/探索観点。**L3 レイヤの所有者** | 実装者 unit の再レビュー・CI 重複・**プロダクトコードの変更** (触るのはテストコードのみ) |
-| release-judge | release-gate 時 (deploy 前) | **3 レポート (開発リリースレポート / QA / セキュリティ) の突合**: 機能が揃っているか・テスト/QA が実際に行われたか・CI・不可逆変更・rollback 経路 | コード詳細の再監査 (レポートが無ければ UNKNOWN、デフォルト NO-GO) |
+| security-reviewer | PR 時 (レビュー Routine から subagent 起動) + release-gate 時 | **環境で使える脆弱性スキャナを総動員** (npm audit / pip-audit / osv-scanner / gitleaks / semgrep / bandit / trivy 等の SAST/SCA/secrets) し、起動できるなら**動的チェック** (外部通信の観察・未認証アクセス実測) も実施。結果を rubric に照らして triage + 攻撃面の目視追跡 | コードスタイル・テスト設計・コード修正 |
+| qa-reviewer | release-gate 時 (大きめ PR では任意) | 受け入れマトリクス (欲しかった機能が揃っているか) の作成 + **ゴールデンパス・UI 挙動・ユーザビリティ観点のシナリオテスト (L3 E2E) の作成・実行**。**L3 レイヤの所有者** | 実装者 unit の再レビュー・CI 重複・ビジュアルの美的評価 (デザイナー領域)・**プロダクトコードの変更** (触るのはテストコードのみ) |
+| release-judge | release-gate 時 (節目のリリース前) | **3 レポート (開発リリースレポート / QA / セキュリティ) + CI のレイヤ別結果の突合**: 機能が揃っているか・**コンセプトデックとの整合 (企画観点)**・テスト/QA が実際に行われたか・不可逆変更・rollback 経路。FAIL/UNKNOWN は**宛先つき作業指示リスト**に変換して返す | コード詳細の再監査 (レポートが無ければ UNKNOWN、デフォルト NO-GO)・指示の実行 |
 
 ### Positive Consequences
 

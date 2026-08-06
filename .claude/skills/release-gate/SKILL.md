@@ -7,10 +7,20 @@ description: deploy の前に独立 judge 3 役 (security-reviewer / qa-reviewer
 
 deploy 前に「実装した側」とは別コンテキストの審査役でリリース可否を判定する。実装セッションが自分の変更を GO と言っても意味がない ([ADR 0015](../../../docs/adr/0015-independent-judge-agents-security-qa-release.md)) — 判定は必ず subagent (新品コンテキスト) に出させ、このセッションは**範囲確定と集約だけ**をやる。
 
-## いつ起動するか
+## いつ起動するか (毎デプロイではない)
 
-- user が `/release-gate`、「リリースしていい?」「デプロイ前チェック」等を言ったとき
-- `cicd/scripts/deploy/deploy-*.sh` を実行する直前 (user の依頼が deploy でも、ゲートを先に通すことを提案する)
+フルゲートは重い (QA のテスト作成・実行 + セキュリティの動的チェックを含む)。**「きっちりした版」を出す節目**で回す:
+
+- user が `/release-gate`、「リリースしていい?」「デプロイ前チェック」「出荷判定して」等を明示したとき
+- **フェーズ / マイルストーンの完了版**を出すとき (Phase 完了、まとまった機能群のリリース)
+- **stg / prod への昇格**、または不可逆な変更 (スキーマ / 公開 API / 課金) を含む deploy の前
+
+対象外 (ゲートを差し込まない):
+
+- dev 環境への日常の自動デプロイ (ADR 0013 の main マージ → auto-deploy)。ここは CI + PR レビュー judge が守る
+- docs のみ / 設定微修正のみの deploy
+
+迷ったら「これは節目の版か?」を user に 1 回だけ聞く。user が「毎回やって」と言った場合はそれに従う。
 
 ## 手順
 
@@ -72,7 +82,10 @@ release-judge のレポートをそのまま提示し、先頭に 1 行で要約
 
 - `🟢 GO`: deploy コマンドを提示する (実行は user の指示があってから)
 - `🟡 CONDITIONAL GO`: 残リスクを列挙し、**受け入れるかどうかを user に聞く**
-- `🔴 NO-GO`: 解除条件を列挙する。解除作業をこのセッションでやった場合、**再判定は必ず judge を再起動して行う** (自分で「直したから GO」にしない)
+- `🔴 NO-GO`: release-judge の**作業指示リスト** (宛先: 実装 / qa-reviewer / security-reviewer / 人間) を提示し、user の合意を得てディスパッチする:
+  - 実装宛て → このセッション (または実装 Issue 化) で対応
+  - qa-reviewer / security-reviewer 宛て → 該当 subagent を指示つきで再起動
+  - 対応後の**再判定は必ず release-judge を再起動して行う** (自分で「直したから GO」にしない)
 
 ## やらないこと
 
