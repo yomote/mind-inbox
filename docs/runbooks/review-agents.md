@@ -59,11 +59,33 @@ subagent 定義は薄いラッパで、観点はすべて rubric 側に置く。
 
 リリースイベント = **リリース PR (`main → release`)**。一度だけ準備する:
 
-1. `release` ブランチを main から作って push: `git checkout -b release main && git push -u origin release`
-2. GitHub `Settings → Branches` で `release` に保護を設定:
+1. ~~`release` ブランチを main から作る~~ — **実施済み** (2026-08-06、`main` の `0bba631` から作成)
+2. **[要 user・ワンクリック]** ブランチ保護: <https://github.com/yomote/mind-inbox/settings/branches> → **Add branch ruleset** (または Add rule):
+   - Target branch: `release`
    - **"Require conversation resolution before merging"** を有効化 — judge の blocker スレッドが未解決のままだとマージ (= リリース) できない。これがゲートの強制力
    - (任意) Require status checks で test.yml を必須に
-3. (任意・自動化) <https://claude.ai/code/routines> に Routine を追加: トリガー `pull_request` (`opened` / `synchronize`)、プロンプトは「**PR の base ブランチが `release` の場合のみ** /release-gate を実行。それ以外の PR なら何もせず終了」。main への機能 PR 用レビュー Routine (ADR 0008) とは別物として共存する
+   - ※ API からは設定できない (管理権限の認証が要る) ため、ここだけ手動
+3. **[要 user・任意]** ゲート自動起動の Routine: <https://claude.ai/code/routines> → New routine。main への機能 PR 用レビュー Routine (ADR 0008) とは**別物として共存**する
+   - **名前**: `Release gate (mind-inbox)` / **リポジトリ**: `yomote/mind-inbox`
+   - **トリガー**: GitHub event / `pull_request` → `opened` と `synchronize` / `Is draft` = `false`
+   - **Permissions**: `Allow unrestricted branch pushes` は OFF (qa-reviewer のテスト commit は `claude/` ブランチで可)
+   - **プロンプト** (貼り付け用):
+
+     ```text
+     まず対象 PR の base ブランチを確認してください。
+     base が release でない場合: この PR はリリース PR ではないので、何もせず終了する。
+     base が release の場合: これはリリース PR。リポジトリの release-gate skill
+     (.claude/skills/release-gate/SKILL.md) の手順に従ってフルゲートを実行する。
+     - 開発リリースレポートを作成し、security-reviewer / qa-reviewer /
+       biz-owner-reviewer subagent を並列起動し、release-judge に 4 レポートを集約させる
+     - release-judge の FAIL / blocker 項目は、このリリース PR の該当箇所への
+       レビュースレッド (指摘 + 解除条件) として投稿する
+     - サマリ (verdict + チェックリスト + 作業指示リスト) を PR にコメントする
+     - 再実行時 (push 後) は解消済みスレッドを resolve する
+     merge / deploy はしない。判定とスレッド管理までが責務で、マージは人間が行う。
+     ```
+
+Routine を作らない場合も、リリース PR を開いた後に手元セッションで `/release-gate` と言えば同じゲートが走る (自動化しないだけで運用は成立する)。
 
 ### リリースを出す (節目が来たら)
 
