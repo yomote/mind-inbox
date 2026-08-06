@@ -18,26 +18,29 @@ PR レビュー Routine (ADR 0008: doc 整合・バグ・テンプレ)
       ├─→ security-reviewer subagent (PR にセキュリティ関連差分がある時)
       ▼
 人間 merge
-      │ 節目のリリース (フェーズ完了版 / stg・prod 昇格 / 不可逆変更) の前
-      │ ※ dev への日常 auto-deploy には差し込まない
+      │ 節目が来たら: リリース PR (main → release) を開く
+      │ ※ main への機能 PR / dev への日常 auto-deploy には差し込まない
       ▼
-/release-gate skill
+/release-gate skill (リリース PR で起動 — Routine or 手動)
       ├─ 開発リリースレポート作成 (事実の列挙のみ・自己判定なし)
-      ├─→ security-reviewer (スキャナ総動員 + 動的チェック)          ┐ 並列・
-      ├─→ qa-reviewer (受け入れマトリクス + ゴールデンパス/UI 挙動 L3) ┘ 新品コンテキスト
+      ├─→ security-reviewer (スキャナ総動員 + 動的チェック)          ┐
+      ├─→ qa-reviewer (受け入れマトリクス + ゴールデンパス/UI 挙動 L3) ┤ 並列・新品コンテキスト
+      ├─→ biz-owner-reviewer (実操作ウォークスルー + 違和感)          ┘
       ▼
-release-judge ← 3 レポート + CI レイヤ別結果を突合
+release-judge ← 4 レポート + CI レイヤ別結果を突合
       │   (機能揃ってる? コンセプトとズレてない? テスト/QA やった?
       │    → 🟢 GO / 🟡 / 🔴 NO-GO + 宛先つき作業指示リスト)
+      │   blocker はリリース PR のスレッドに → 未解決ならマージ不可 (ブランチ保護)
       ▼
-人間が deploy ボタン (deploy-*.sh)
+人間がリリース PR をマージ → stg/prod へ deploy (deploy-*.sh)
 ```
 
 分離の原則: **judge は必ず subagent (新品コンテキスト) として起動する**。実装セッション自身に審査させない。役割ごとの持ち物:
 
 - **security-reviewer**: 環境で使える脆弱性スキャナを総動員 (npm audit / pip-audit / osv-scanner / gitleaks / semgrep / bandit / trivy 等) し、結果を rubric に照らして判定する。アプリを起動できる場合は動的チェック (外部通信の観察・未認証アクセス実測・応答ヘッダ) も実施。使えなかった分は UNKNOWN 明記
 - **qa-reviewer**: 「欲しかった機能が揃っているか / 変な動きをしないか」を受け入れマトリクスで検証し、**ゴールデンパス・UI 挙動・ユーザビリティ観点のシナリオテスト (L3 E2E) を作成・実行**する。L3 レイヤの所有者。ビジュアルの美的評価はしない (MDX 仕様との乖離のみ)。プロダクトコードは触らない (テストコードのみ)
-- **release-judge**: 3 レポート + CI を突き合わせ、「この品質で出してよいか」「コンセプト ([`docs/concept_deck.md`](../concept_deck.md)) とズレていないか」を判定する。FAIL/UNKNOWN は**宛先つき作業指示リスト** (実装 / qa-reviewer / security-reviewer / 人間) に変換して返す。レポートが欠けた領域は UNKNOWN = GO は出ない (デフォルト NO-GO)
+- **biz-owner-reviewer**: ビジネスオーナーとして**アプリを実際に起動・操作**し (stub モード + Playwright、スクショつき)、文言・導線・期待とのズレ・コンセプト体現・「普通に考えておかしいよね」の違和感を報告する。アサーション的な仕様突合はしない (QA の担当)
+- **release-judge**: 4 レポート + CI を突き合わせ、「この品質で出してよいか」「コンセプト ([`docs/concept_deck.md`](../concept_deck.md)) とズレていないか」を判定する。FAIL/UNKNOWN は**宛先つき作業指示リスト** (実装 / qa-reviewer / security-reviewer / biz-owner-reviewer / 人間) に変換して返す。レポートが欠けた領域は UNKNOWN = GO は出ない (デフォルト NO-GO)
 
 ## 構成ファイル (rubric-as-truth)
 
@@ -45,21 +48,31 @@ release-judge ← 3 レポート + CI レイヤ別結果を突合
 | --- | --- | --- |
 | security-reviewer | [`.github/claude/security-rubric.md`](../../.github/claude/security-rubric.md) | `.claude/agents/security-reviewer.md` |
 | qa-reviewer | [`.github/claude/qa-rubric.md`](../../.github/claude/qa-rubric.md) | `.claude/agents/qa-reviewer.md` |
+| biz-owner-reviewer | [`.github/claude/biz-owner-rubric.md`](../../.github/claude/biz-owner-rubric.md) | `.claude/agents/biz-owner-reviewer.md` |
 | release-judge | [`.github/claude/release-rubric.md`](../../.github/claude/release-rubric.md) | `.claude/agents/release-judge.md` |
 
 subagent 定義は薄いラッパで、観点はすべて rubric 側に置く。**観点変更 = rubric の PR** (Routine や agent 定義をいじらない)。
 
 ## Steps
 
-### リリース判定を回す
+### 初回セットアップ: `release` ブランチとブランチ保護
 
-```
-/release-gate
-```
+リリースイベント = **リリース PR (`main → release`)**。一度だけ準備する:
 
-だけで良い (skill が範囲確定 → 開発レポート → judge 起動 → 集約まで面倒を見る)。deploy の実行は 🟢 でも人間。
+1. `release` ブランチを main から作って push: `git checkout -b release main && git push -u origin release`
+2. GitHub `Settings → Branches` で `release` に保護を設定:
+   - **"Require conversation resolution before merging"** を有効化 — judge の blocker スレッドが未解決のままだとマージ (= リリース) できない。これがゲートの強制力
+   - (任意) Require status checks で test.yml を必須に
+3. (任意・自動化) <https://claude.ai/code/routines> に Routine を追加: トリガー `pull_request` (`opened` / `synchronize`)、プロンプトは「**PR の base ブランチが `release` の場合のみ** /release-gate を実行。それ以外の PR なら何もせず終了」。main への機能 PR 用レビュー Routine (ADR 0008) とは別物として共存する
 
-**回すのは節目だけ**: フェーズ/マイルストーンの完了版・stg/prod への昇格・不可逆変更を含む deploy。dev への日常 auto-deploy や docs のみの変更には差し込まない (CI + PR レビュー judge の守備範囲)。🔴 が出たら作業指示リストを user 合意の上でディスパッチし、対応後に release-judge を**再起動**して再判定する。
+### リリースを出す (節目が来たら)
+
+1. 「きっちりした版」を出すと決めたら、リリース PR を開く: `main → release` (タイトル例: `Release: Phase N 完了版`)
+2. フルゲートが走る (Routine 自動 or セッションで `/release-gate`)。blocker はリリース PR のスレッドになる
+3. 🔴 なら作業指示リストを user 合意の上でディスパッチ → 対応 push → release-judge を**再起動**して再判定 (スレッド resolve)
+4. 全スレッド解決 + 🟢/受け入れ済み 🟡 → **人間がマージ** → tag を打って stg/prod へ deploy (`deploy-*.sh`)
+
+**回すのは節目だけ**: main への機能 PR・dev への日常 auto-deploy・docs のみの変更には差し込まない (CI + PR レビュー judge の守備範囲)。
 
 ### PR 時にセキュリティレビューも走らせる (任意強化)
 
@@ -79,7 +92,9 @@ subagent はレビューセッション内でも新品コンテキストで起�
 
 ## Verification
 
-- [ ] `/release-gate` で開発レポート + security / QA レポート + release-judge の verdict (🟢/🟡/🔴) が出る
+- [ ] `/release-gate` で開発レポート + security / QA / ビジネスオーナーレポート + release-judge の verdict (🟢/🟡/🔴) が出る
+- [ ] ビジネスオーナーレポートにスクショつきウォークスルーログがある (起動できなかった場合は「未実施」が明記され、release-judge 側で UNKNOWN になる)
+- [ ] リリース PR で blocker がスレッド化され、未解決のままマージできない (ブランチ保護が効いている)
 - [ ] セキュリティレポートに「スキャン実行状況」表があり、回せなかったツールが UNKNOWN と明記されている
 - [ ] QA レポートに受け入れマトリクスとテスト実行結果 (pass/fail、未実行は明記) がある
 - [ ] qa-reviewer の作ったテストにプロダクトコードの差分が混ざっていない

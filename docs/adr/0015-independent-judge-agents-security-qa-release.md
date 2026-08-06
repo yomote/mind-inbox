@@ -31,7 +31,7 @@ Technical Story: `claude/security-review-agent-9avoqw` ブランチ。「実装�
 
 ## Decision Outcome
 
-Chosen option: **"Option B"**。役割ごとに (1) 審査基準 rubric (`.github/claude/{security,qa,release}-rubric.md`)、(2) Claude Code の **subagent 定義** (`.claude/agents/*.md`) を置く。subagent は**常に新しいコンテキストで起動し、呼び出し元の会話を引き継がない**ため、「別のコンテキストで完全に別の役割」という要件を仕組みとして満たす。リリース判定は `/release-gate` skill が (1) 開発リリースレポート (事実の列挙のみ) を作り、(2) security / QA を並列起動し、(3) release-judge に 3 レポートを突合させて Go/No-Go を出す。最終判断 (deploy 実行) は人間が行う。**フルゲートは毎デプロイではなく節目で回す**: フェーズ/マイルストーン完了版・stg/prod 昇格・不可逆変更を含む deploy が対象で、dev への日常 auto-deploy (ADR 0013) には差し込まない (そこは CI + PR レビュー judge の守備範囲)。
+Chosen option: **"Option B"**。役割ごとに (1) 審査基準 rubric (`.github/claude/{security,qa,release}-rubric.md`)、(2) Claude Code の **subagent 定義** (`.claude/agents/*.md`) を置く。subagent は**常に新しいコンテキストで起動し、呼び出し元の会話を引き継がない**ため、「別のコンテキストで完全に別の役割」という要件を仕組みとして満たす。リリース判定は `/release-gate` skill が (1) 開発リリースレポート (事実の列挙のみ) を作り、(2) security / QA を並列起動し、(3) release-judge に 3 レポートを突合させて Go/No-Go を出す。最終判断 (deploy 実行) は人間が行う。**フルゲートは毎デプロイではなく節目で回す**: リリースイベントは**リリース PR (`main → release`)** として表現し (後述)、main への機能 PR や dev への日常 auto-deploy (ADR 0013) には差し込まない (そこは CI + PR レビュー judge の守備範囲)。
 
 各役割の分担:
 
@@ -40,7 +40,17 @@ Chosen option: **"Option B"**。役割ごとに (1) 審査基準 rubric (`.githu
 | PR レビュー judge (既存, ADR 0008) | PR opened / synchronize | 戦略 doc 整合・一般バグ・PR テンプレ整合 | セキュリティ深掘り (security judge に委譲) |
 | security-reviewer | PR 時 (レビュー Routine から subagent 起動) + release-gate 時 | **環境で使える脆弱性スキャナを総動員** (npm audit / pip-audit / osv-scanner / gitleaks / semgrep / bandit / trivy 等の SAST/SCA/secrets) し、起動できるなら**動的チェック** (外部通信の観察・未認証アクセス実測) も実施。結果を rubric に照らして triage + 攻撃面の目視追跡 | コードスタイル・テスト設計・コード修正 |
 | qa-reviewer | release-gate 時 (大きめ PR では任意) | 受け入れマトリクス (欲しかった機能が揃っているか) の作成 + **ゴールデンパス・UI 挙動・ユーザビリティ観点のシナリオテスト (L3 E2E) の作成・実行**。**L3 レイヤの所有者** | 実装者 unit の再レビュー・CI 重複・ビジュアルの美的評価 (デザイナー領域)・**プロダクトコードの変更** (触るのはテストコードのみ) |
-| release-judge | release-gate 時 (節目のリリース前) | **3 レポート (開発リリースレポート / QA / セキュリティ) + CI のレイヤ別結果の突合**: 機能が揃っているか・**コンセプトデックとの整合 (企画観点)**・テスト/QA が実際に行われたか・不可逆変更・rollback 経路。FAIL/UNKNOWN は**宛先つき作業指示リスト**に変換して返す | コード詳細の再監査 (レポートが無ければ UNKNOWN、デフォルト NO-GO)・指示の実行 |
+| biz-owner-reviewer | release-gate 時 | **ビジネスオーナーとして UI を実操作** (stub 起動 + Playwright ウォークスルー、スクショつき): 文言・導線・期待とのズレ・コンセプト体現・「普通に考えておかしいよね」の違和感を報告 | コードレビュー・アサーション的な仕様突合 (QA の担当)・コード変更 |
+| release-judge | release-gate 時 (リリース PR) | **4 レポート (開発リリースレポート / QA / セキュリティ / ビジネスオーナー) + CI のレイヤ別結果の突合**: 機能が揃っているか・**コンセプトデックとの整合 (企画観点)**・テスト/QA が実際に行われたか・不可逆変更・rollback 経路。FAIL/UNKNOWN は**宛先つき作業指示リスト**に変換して返す | コード詳細の再監査 (レポートが無ければ UNKNOWN、デフォルト NO-GO)・指示の実行 |
+
+### リリースイベントの受け口: リリース PR (`main → release`)
+
+「main へのマージ毎」ではなく「main から release ラインへ昇格する節目」をゲート対象にする。その節目を GitHub 上のイベントとして表現するため、**常設の `release` ブランチを置き、リリース = `main → release` の PR (リリース PR) を開くこと**と定義する:
+
+- **既存機構の再利用**: PR イベントなので、フルゲートを Routine (ADR 0008 と同じ仕組み) で自動起動できる。tag / GitHub Release / workflow_dispatch 起点だと Routine のトリガーに乗らず、別の実行基盤が要る
+- **強制力**: judge の blocker をリリース PR のレビュースレッドとして残せば、`release` ブランチ保護「会話の解決を必須」で**未解決のままマージ (= リリース) できない**。ADR 0008 と同型のゲートが release 粒度でも効く
+- **履歴**: 「何をいつリリース判定したか」がリリース PR として GitHub に残る (journal と別に機械可読)
+- 日常の dev auto-deploy (ADR 0013, main マージ) はこれまで通りゲートなし。`release` へのマージを stg/prod 昇格などの「きっちりした版」の起点として使う
 
 ### Positive Consequences
 
@@ -89,7 +99,7 @@ Chosen option: **"Option B"**。役割ごとに (1) 審査基準 rubric (`.githu
 
 ## Links
 
-- 審査基準: [`security-rubric.md`](../../.github/claude/security-rubric.md) / [`qa-rubric.md`](../../.github/claude/qa-rubric.md) / [`release-rubric.md`](../../.github/claude/release-rubric.md)
+- 審査基準: [`security-rubric.md`](../../.github/claude/security-rubric.md) / [`qa-rubric.md`](../../.github/claude/qa-rubric.md) / [`biz-owner-rubric.md`](../../.github/claude/biz-owner-rubric.md) / [`release-rubric.md`](../../.github/claude/release-rubric.md)
 - Runbook: [`docs/runbooks/review-agents.md`](../runbooks/review-agents.md)
 - 関連 ADR: [0008 PR レビュー Routine](0008-pr-review-via-cloud-routine.md) / [0014 理解ゲート+デブリーフ](0014-design-comprehension-gate-and-debrief.md)
 - Subagents: <https://code.claude.com/docs/en/sub-agents>

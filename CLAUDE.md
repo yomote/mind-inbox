@@ -43,7 +43,7 @@ user の意思決定と技術学習をループに組み込む仕組み ([ADR 00
 - **マージ / Proposed ADR が溜まったら `debrief` skill** — ゼミ形式で「何を作ったか / なぜ / 代替案」を解説し、Proposed ADR を user が Accept/Reject する。溜まっていたらエージェントから提案してよい
 - **「あれなんだっけ?」には `explain` skill** — 真実ソースを引いて図解で即答する
 - **無人セッション (Routine 等) ではゲートを通せない** — 不可逆な判断 (DB スキーマ破壊的変更 / 外部サービス・課金追加 / 公開 API の形 / データ削除) は実装せず Issue に質問を積む。可逆な判断は Proposed ADR を書いて進め、次の debrief で追認を受ける
-- **節目のリリース前は `release-gate` skill を通す** (フェーズ完了版 / stg・prod 昇格 / 不可逆変更。dev への日常 auto-deploy は対象外) — 実装セッション自身に Go/No-Go を判定させず、独立 judge 3 役 (いずれも新品コンテキストの subagent) に判定させる ([ADR 0015](docs/adr/0015-independent-judge-agents-security-qa-release.md) / [Runbook](docs/runbooks/review-agents.md))。security-reviewer は脆弱性スキャナ総動員 + 動的チェック、qa-reviewer はゴールデンパス/UI 挙動の受け入れテスト (L3 E2E) を作成・実行 (L3 の所有者)、release-judge が 3 レポート (開発/QA/セキュリティ) をコンセプト整合含めて突合し、FAIL は宛先つき作業指示に変換。審査基準は `.github/claude/{security,qa,release}-rubric.md` (rubric-as-truth)。🟢 でも deploy ボタンは人間
+- **リリースは「リリース PR (`main → release`)」で表現し、そこで `release-gate` skill を通す** (main への機能 PR / dev への日常 auto-deploy は対象外) — 実装セッション自身に Go/No-Go を判定させず、独立 judge (いずれも新品コンテキストの subagent) に判定させる ([ADR 0015](docs/adr/0015-independent-judge-agents-security-qa-release.md) / [Runbook](docs/runbooks/review-agents.md))。security-reviewer は脆弱性スキャナ総動員 + 動的チェック、qa-reviewer はゴールデンパス/UI 挙動の受け入れテスト (L3 E2E) を作成・実行 (L3 の所有者)、biz-owner-reviewer は UI を実操作して違和感を報告、release-judge が 4 レポートをコンセプト整合含めて突合し、FAIL は宛先つき作業指示に変換。blocker はリリース PR のスレッド + ブランチ保護でマージ不可。審査基準は `.github/claude/{security,qa,biz-owner,release}-rubric.md` (rubric-as-truth)。🟢 でも merge / deploy は人間
 - セッション記録は [`docs/debrief/journal.md`](docs/debrief/journal.md)
 
 ### PR を出したあとの追従
