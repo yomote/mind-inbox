@@ -27,7 +27,7 @@ description: 前回以降にマージされた PR と Proposed のままの ADR 
 ### Step 1 — 前回以降の差分を集める
 
 1. `docs/debrief/journal.md` の最新エントリ日付 = 前回マーカーを読む (エントリが無ければ全期間)
-2. GitHub MCP (`mcp__github__list_pull_requests`、ToolSearch で読み込み) で前回以降の**マージ済み PR** を取得 (repo: `yomote/mind-inbox`)
+2. GitHub MCP (`mcp__github__search_pull_requests`、ToolSearch で読み込み) で前回以降の**マージ済み PR** を取得 — query: `repo:yomote/mind-inbox is:pr is:merged merged:>{前回マーカー日付}`。マーカーが無い (初回) 場合のみ `list_pull_requests` (state closed, sort updated desc) で直近から引く
 3. `grep -l "Status: Proposed" docs/adr/*.md` で **Proposed のままの ADR** を列挙
 4. 前回以降に追加・大幅更新された `docs/design/`・`docs/adr/` も対象に含める
 
