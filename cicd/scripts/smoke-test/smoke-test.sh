@@ -39,7 +39,6 @@ SQL_FQDN=$(out sqlServerFqdn || true)
 SQL_ENABLED=$(out sqlEnabled || true)
 LAW_CUSTOMER_ID=$(out logAnalyticsCustomerId || true)
 EASYAUTH_ENABLED=$(out functionEasyAuthEnabled || true)
-SWA_SKU_OUT=$(out staticSiteSkuName || true)
 
 fail=0
 

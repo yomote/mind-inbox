@@ -57,7 +57,7 @@ az deployment group create \
   -p @cicd/iac/main-bootstrap.parameters.json \
   -p applyFunctionAuthLockdown=true \
      functionAuthEntraClientId="$CLIENT_ID" \
-     budgetContactEmails='["omoteforlab@gmail.com"]'
+     budgetContactEmails='["<your-email@example.com>"]'
 ```
 
 これで:
