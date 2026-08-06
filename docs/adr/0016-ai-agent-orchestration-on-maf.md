@@ -1,6 +1,6 @@
 # 0016. AI Agent のオーケストレーション基盤を Semantic Kernel から Microsoft Agent Framework へ移行する
 
-- Status: Proposed
+- Status: Accepted (design-gate #1, 2026-08-06)
 - Date: 2026-08-06
 - Deciders: omoteforlab
 - Consulted: —

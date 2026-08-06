@@ -1,6 +1,6 @@
 # 0015. システムの能動化 — ガードレール付きプロアクティブ・エージェントワークフローを解禁する (思想転換)
 
-- Status: Proposed
+- Status: Accepted (design-gate #1, 2026-08-06)
 - Date: 2026-08-06
 - Deciders: omoteforlab
 - Consulted: —
