@@ -1,6 +1,6 @@
 # 0011. GitHub Projects は実行状態のダッシュボードに徹し、設計の真実は docs に置く
 
-- Status: Proposed
+- Status: Accepted (debrief #1, 2026-08-06)
 - Date: 2026-07-19
 - Deciders: omoteforlab
 - Consulted: —
