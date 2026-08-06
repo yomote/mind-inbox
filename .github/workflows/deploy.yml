@@ -50,7 +50,8 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # 初回 up は ~20〜40 分（IaC + az acr build）。acr build 再試行やネット遅延の余裕を見て 90。
+    # 初回 up は ~15〜30 分（IaC + Container Apps 反映）。image は ghcr 事前ビルド済み(#67)を
+    # 差し替えるだけでデプロイ経路のビルドは無い。ネット遅延・再試行の余裕を見て 90。
     timeout-minutes: 90
     env:
       ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}

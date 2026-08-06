@@ -35,7 +35,7 @@ need() {
 }
 # 下流スクリプト（deploy-backend: npm/zip, deploy-frontend: pnpm/swa/curl）が要るツールを
 # 先にまとめて検査し、途中の別スクリプトで初めて落ちて原因特定が遅れるのを防ぐ。
-# コンテナ系は `az acr build`（クラウドビルド）なので docker は不要。
+# コンテナ image は ghcr の事前ビルド済み（build-images.yml, #67）を差し替えるだけなので docker は不要。
 # frontend は pnpm-lock.yaml 前提（package-lock.json を置かない方針）なので pnpm は必須。
 # deploy-frontend.sh の `npm ci` フォールバックはこのリポでは lockfile 不在で失敗するため当てにしない。
 need az

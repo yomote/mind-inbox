@@ -53,10 +53,8 @@ param enableOpenAi bool = false
 @description('Azure region for Azure OpenAI (e.g. japaneast, eastus, swedencentral).')
 param openAiLocation string = functionLocation
 
-// -------------------- ACR + AI Agent Container App --------------------
-@description('Enable Azure Container Registry.')
-param enableAcr bool = false
-
+// -------------------- AI Agent Container App --------------------
+// NOTE: ACR は廃止（#67 / ADR 0013）。image は ghcr に事前ビルド（build-images.yml）。
 @description('Enable AI Agent on Azure Container Apps.')
 param enableAiAgentAca bool = false
 
@@ -97,7 +95,6 @@ module infra '../modules/bootstrap-core.bicep' = {
     autoCreateStaticSiteEntraAppRegistration: false
     enableOpenAi: enableOpenAi
     openAiLocation: openAiLocation
-    enableAcr: enableAcr
     enableAiAgentAca: enableAiAgentAca
     aiAgentLocation: aiAgentLocation
     enableVoicevoxWrapperAca: enableVoicevoxWrapperAca
@@ -122,8 +119,6 @@ output openAiEnabled bool = infra.outputs.openAiEnabled
 output openAiEndpoint string = infra.outputs.openAiEndpoint
 output openAiAccountName string = infra.outputs.openAiAccountName
 output openAiDeploymentName string = infra.outputs.openAiDeploymentName
-output acrLoginServer string = infra.outputs.acrLoginServer
-output acrName string = infra.outputs.acrName
 output aiAgentEnabled bool = infra.outputs.aiAgentEnabled
 output aiAgentContainerAppName string = infra.outputs.aiAgentContainerAppName
 output aiAgentContainerAppsEnvironmentName string = infra.outputs.aiAgentContainerAppsEnvironmentName

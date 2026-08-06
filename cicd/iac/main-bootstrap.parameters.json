@@ -29,9 +29,6 @@
     "openAiLocation": {
       "value": "japaneast"
     },
-    "enableAcr": {
-      "value": true
-    },
     "enableAiAgentAca": {
       "value": true
     },

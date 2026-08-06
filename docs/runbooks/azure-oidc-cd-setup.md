@@ -42,7 +42,7 @@ REPO=yomote/mind-inbox ./cicd/scripts/cloud-env/setup-oidc.sh
 GitHub → **Actions → "deploy" → Run workflow** → `action: up` / `environment: dev`。
 （または `gh workflow run deploy.yml -f action=up -f environment=dev`、あるいはセッションの私に「up して」と依頼）
 
-- 所要時間: **初回 ~20〜40 分**（IaC + `az acr build` でイメージビルド + Container Apps 反映 + BFF/SWA デプロイ）。
+- 所要時間: **初回 ~15〜30 分**（IaC + Container Apps 反映 + BFF/SWA デプロイ）。image は ghcr の事前ビルド済み（#67）を差し替えるだけなので、デプロイ経路でのイメージビルドは無い。
 - 完了後、ジョブログの `deploy-frontend` 出力に SWA の URL が出る。スマホからはそれを開く。
 
 ### 4. 撤収（down / ¥0 化）
@@ -87,10 +87,10 @@ GitHub → **Actions → "deploy" → Run workflow** → `action: up` / `environ
 - 原因: 並列実行ではない（同一 concurrency group + `cancel-in-progress: false` で直列化されるため並列にはならない）。実際の挙動は GitHub Actions の仕様で、**同一グループの pending は最新 1 件のみ保持**され、`up` が pending 中に schedule `down` が来ると **pending の up が置き換えられてキャンセル**されうる、という点。
 - 緩和: 「立てた直後に夜間 teardown で消える」は teardown 側の最小生存時間ガード（RG タグ `deployedAtEpoch` が 3h 未満なら schedule では skip）で防止済み。pending 置き換えの取りこぼしを避けたい場合は **teardown 時間帯（深夜）に `up` しない**、もしくはその日は `deploy.yml` の `schedule` を一時コメントアウトする。
 
-### up が遅い / 毎回イメージビルドで時間がかかる
+### up が遅い
 
-- 原因: 撤収で ACR ごと消えるため、再 up でイメージを `az acr build` し直す。
-- 対処（任意の最適化）: ACR とイメージだけ別の永続 RG に分離して残す（少額の常時コストと引き換えに再 up を短縮）。将来検討。
+- image は ghcr に事前ビルド済み（#67）なので、デプロイ経路でのイメージビルドは無い。撤収しても ghcr の image は残るため、再 up でビルドし直す必要はない（`deploy-*.sh` は ghcr のタグ差し替えのみ）。
+- 詳細: [ghcr images runbook](./ghcr-images.md)
 
 ## Related
 

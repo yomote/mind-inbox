@@ -1,0 +1,16 @@
+# ビルドコンテキストから除外（image 肥大化・キャッシュ無効化・秘密混入を防ぐ）
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+tests/
+*.md
+.env
+.env.*
+.git
+.gitignore
+.dockerignore
+Dockerfile
