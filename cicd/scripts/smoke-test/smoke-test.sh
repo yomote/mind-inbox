@@ -157,20 +157,25 @@ for CA in $(az containerapp list -g "$RG" --query "[].name" -o tsv 2>/dev/null);
     continue
   fi
 
+  # 判定はパスに依存させない。ingress の IP 制限はアプリに届く前に 403 を返すため、
+  # **アプリ由来の応答が返ってきた時点で「到達できている」= 露出している**。
+  # 404 でも NG にするのが要点: voicevox エンジンは /health を持たず (起動確認は /version)、
+  # パス固定で 200 だけを見ると「制限が外れているのに 404 で見逃す」ことになる。
   set +e
-  ca_code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 20 "https://$CA_FQDN/health")
+  ca_code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 30 "https://$CA_FQDN/")
   ca_rc=$?
   set -e
 
   if [[ "$ca_rc" -ne 0 ]]; then
-    # 接続自体が確立できない = 到達できない。拒否されている側なので想定どおり。
-    ok "$CA: 匿名アクセスが接続段階で拒否された"
-  elif [[ "$ca_code" == "403" || "$ca_code" == "401" ]]; then
-    ok "$CA: 匿名アクセスが $ca_code で拒否された"
-  elif [[ "$ca_code" == "200" ]]; then
-    ng "$CA: 匿名アクセスが 200。無認可で公開されている (ingress の制限を確認: issue #86)"
+    # タイムアウト / DNS 等。「拒否された」とは断定できない (scale-to-zero の
+    # コールドスタートで待たされた可能性もある)。未検証として扱う。
+    warn "$CA: 匿名アクセスの結果を判定できませんでした (curl rc=$ca_rc)。拒否された証拠にはならないので手動で確認すること"
+  elif [[ "$ca_code" == "403" ]]; then
+    ok "$CA: 匿名アクセスが 403 で拒否された (ingress の IP 制限が効いている)"
+  elif [[ "$ca_code" == "401" ]]; then
+    ok "$CA: 匿名アクセスが 401 で拒否された (認証が要求されている)"
   else
-    warn "$CA: 匿名アクセスが HTTP $ca_code (401/403 もしくは接続拒否を期待)"
+    ng "$CA: 匿名アクセスに HTTP $ca_code が返った。アプリまで到達しており無認可で公開されている (issue #86)"
   fi
 done
 
