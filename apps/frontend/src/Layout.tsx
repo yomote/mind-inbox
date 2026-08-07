@@ -482,6 +482,9 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   }, [stopListening, stopSpeaking]);
 
   const handleStartConsultation = async () => {
+    // ホームのボタンに直結しているため、連打・ダブルタップでの並行実行をここで防ぐ
+    // (handleSendMessage と同じガードパターン)
+    if (loading) return;
     unlockAudioPlayback(); // タップ起点で音声を解錠（iOS の自動再生ブロック対策）
     setLoading(true);
     try {

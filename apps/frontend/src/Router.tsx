@@ -178,7 +178,7 @@ export function AppRouter({
             <HomeScreen
               // UI 仕様 (home.mdx): テーマ入力画面は挟まず直接対話を開始する
               // (タイトルは最初の発話から自動生成 — 2026-08-07 user 決定で newConsultation 画面を廃止)
-              onNewConsultation={() => void handleStartConsultation()}
+              onStartConsultation={() => void handleStartConsultation()}
               onProblemList={() => void handleOpenProblemList()}
               onHistory={() => transition("history")}
               onSpecPreview={isDev ? () => transition("specPreview") : undefined}
