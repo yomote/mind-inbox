@@ -83,3 +83,4 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0015](0015-proactive-agentic-workflow.md) — システムの能動化 — ガードレール付きプロアクティブ・エージェントワークフローを解禁する (思想転換)
 - [0016](0016-ai-agent-orchestration-on-maf.md) — AI Agent のオーケストレーション基盤を Semantic Kernel から Microsoft Agent Framework へ移行する
 - [0017](0017-container-apps-access-via-auth-gate.md) — Container Apps の「第二の扉」は認証の門で閉じる (組み込み認証 + Managed Identity / voicevox は internal ingress)
+- [0018](0018-runtime-verification-in-the-loop.md) — 動作検証をループに組み込む（実態の読み取り・PR への証跡・ローカルブラウザ検証）
