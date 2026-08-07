@@ -140,6 +140,83 @@ if [[ -n "$FUNC_HOST" ]]; then
   fi
 fi
 
+# -------- Container Apps の露出 (#86) --------
+# 認可の門は Functions だけでは足りない。OpenAI の鍵を握る ai-agent をはじめ、
+# Container Apps は「もう一つの扉」であり、ここが無認可で開いていると
+# Functions の 401 を実測して安心していても財布が焼かれる。
+#
+# 無いと何が静かに通るか: ingress の IP 制限が剥がれても (bicep 管理のリソースは
+# 再デプロイで ingress ごと上書きされ、実際に voicevox で発生した) デプロイは緑のまま。
+# 気づく手段が「たまたま点検したとき」しかなくなる。
+section "Container Apps should reject anonymous access"
+
+# 一覧取得に失敗したり空だったりすると for が 0 回まわり、検査区画ごと無言でスキップされる。
+# それでは「検査して問題なかった」のか「検査できていない」のかが出力から区別できず、
+# この検査自身が「静かに通る」経路になる。取得の成否と期待するアプリの存在を明示的に確かめる。
+# stderr は stdout に混ぜない。az containerapp は preview 警告バナーを stderr に出すことがあり、
+# 2>&1 で取り込むと警告文が一覧に紛れ込み、単語分割されて偽のアプリ名としてループに入る
+# (しかも rc=0 のままなので ng/warn にもならず気づけない)。
+# --only-show-errors で警告を抑え、エラー出力は別ファイルに退避して失敗時だけ読む。
+CA_ERR="$(mktemp)"
+set +e
+CA_NAMES="$(az containerapp list -g "$RG" --query "[].name" -o tsv --only-show-errors 2>"$CA_ERR")"
+ca_list_rc=$?
+set -e
+
+if [[ "$ca_list_rc" -ne 0 ]]; then
+  ng "Container Apps の一覧取得に失敗したため露出検査を実行できませんでした: $(head -c 160 "$CA_ERR")"
+  CA_NAMES=""
+elif [[ -z "$CA_NAMES" ]]; then
+  warn "Container App が 1 件も見つかりませんでした (未デプロイなら正常。デプロイ済みならこの検査が効いていない)"
+fi
+
+# deployment outputs で「居るはず」とされているアプリが一覧に無ければ、検査対象の取りこぼし。
+# voicevox エンジン自身も必ず含める: ingress 制限が最も剥がれやすく (bicep 管理のため
+# 再デプロイで上書きされる)、かつ #86 で恒久対策が未了なので、一覧から漏れたら気づきたい。
+for expected in \
+  "$(out aiAgentContainerAppName || true)" \
+  "$(out voicevoxWrapperContainerAppName || true)" \
+  "$(out voicevoxContainerAppName || true)"; do
+  [[ -z "$expected" ]] && continue
+  grep -qx "$expected" <<<"$CA_NAMES" \
+    || ng "$expected が Container Apps 一覧に見つかりません (露出検査の対象から漏れています)"
+done
+
+# 行単位で読む (単語分割に頼らない)。空行はスキップ。
+while IFS= read -r CA; do
+  [[ -z "$CA" ]] && continue
+  CA_FQDN=$(az containerapp show -g "$RG" -n "$CA" \
+    --query "properties.configuration.ingress.fqdn" -o tsv --only-show-errors 2>/dev/null || true)
+  if [[ -z "$CA_FQDN" ]]; then
+    ok "$CA: 外部 ingress なし (公開されていない)"
+    continue
+  fi
+
+  # 判定はパスに依存させない。ingress の IP 制限はアプリに届く前に 403 を返すため、
+  # **アプリ由来の応答が返ってきた時点で「到達できている」= 露出している**。
+  # 404 でも NG にするのが要点: voicevox エンジンは /health を持たず (起動確認は /version)、
+  # パス固定で 200 だけを見ると「制限が外れているのに 404 で見逃す」ことになる。
+  set +e
+  ca_code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 30 "https://$CA_FQDN/")
+  ca_rc=$?
+  set -e
+
+  if [[ "$ca_rc" -ne 0 ]]; then
+    # ipSecurityRestrictions は TLS 確立後に HTTP 403 を返す (フロントプロキシで判定) ため、
+    # **接続段階の失敗は「拒否された」ではなく別の異常**: DNS 障害 / コールドスタートの
+    # タイムアウト / コンテナのクラッシュなど可用性側の問題である可能性が高い。
+    # 露出の有無も未検証のままなので、ok にはせず warn で拾う。
+    warn "$CA: 匿名アクセスの結果を判定できませんでした (curl rc=$ca_rc)。IP 制限が効いていれば 403 が返るはずで、接続失敗は可用性の異常 (DNS/コールドスタート/クラッシュ) の疑い。露出の有無も未検証なので手動で確認すること"
+  elif [[ "$ca_code" == "403" ]]; then
+    ok "$CA: 匿名アクセスが 403 で拒否された (ingress の IP 制限が効いている)"
+  elif [[ "$ca_code" == "401" ]]; then
+    ok "$CA: 匿名アクセスが 401 で拒否された (認証が要求されている)"
+  else
+    ng "$CA: 匿名アクセスに HTTP $ca_code が返った。アプリまで到達しており無認可で公開されている (issue #86)"
+  fi
+done <<< "$CA_NAMES"
+rm -f "$CA_ERR"
+
 section "SQL public access should be blocked"
 if [[ -n "$SQL_FQDN" ]]; then
   SQL_SERVER_NAME=${SQL_FQDN%%.*}
