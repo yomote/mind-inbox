@@ -644,23 +644,18 @@ resource voicevoxContainerApp 'Microsoft.App/containerApps@2024-03-01' = if (ena
       managedEnvironmentId: sharedManagedEnvironment.id
       configuration: {
         activeRevisionsMode: 'Single'
+        // NOTE: ingress の IP 制限は **意図的にここに置いていない** (#86)。
+        // 一度 `sharedManagedEnvironment.properties.staticIp` を許可する形で実装したが、
+        // 実測の結果それは **inbound 用の IP** (4.190.8.64) で、Container App 間の
+        // 呼び出し元である **egress IP** (outboundIpAddresses = 130.33.178.89) とは
+        // 別物だった。あのまま入れると vv-wrapper からの正規アクセスまで弾いて TTS が壊れる。
+        // 正しい egress IP は各 Container App の outboundIpAddresses にしか無く、
+        // 自リソース定義内から自分の property を参照するのは循環参照になるため bicep では書けない。
+        // → 3 つの Container App をまとめてどう守るかは #86 の design-gate で決める。
         ingress: {
           external: true
           targetPort: 50021
           transport: 'http'
-          // VOICEVOX エンジンを呼ぶのは同一 CAE 内の vv-wrapper だけ。外から直接叩けると
-          // 無料の TTS / 計算資源として踏み台にされる (#86)。CAE の送信元 IP のみ許可し、
-          // それ以外は暗黙 Deny。
-          // ここを bicep に持たせるのが要点: 手動で設定しても bootstrap の再適用で
-          // ingress ごと上書きされて消える (2026-08-07 に実際に発生)。
-          ipSecurityRestrictions: [
-            {
-              name: 'cae-only'
-              ipAddressRange: '${sharedManagedEnvironment.properties.staticIp}/32'
-              action: 'Allow'
-              description: 'same Container Apps environment (vv-wrapper) only'
-            }
-          ]
         }
       }
       template: {

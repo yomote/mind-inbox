@@ -114,21 +114,45 @@ az functionapp deployment source config-zip -g "$RG" -n "$FUNC_APP_NAME" --src "
 deploy_rc=$?
 set -e
 
+# この zip に含まれるはずの関数。「何か 1 つでも登録されていれば OK」にすると、
+# 一部が欠けた壊れたデプロイや、前回のパッケージが残っているだけの状態を通してしまう。
+EXPECTED_FUNCTIONS=(trpc tts)
+
 if [[ "$deploy_rc" -ne 0 ]]; then
   echo "WARN: config-zip が非ゼロ終了 (rc=$deploy_rc)。実際の配置結果を検証します..." >&2
 
-  # 検証1: 直前に URL 版を削除しているので、URL が入っていれば「今回の実行が書いた」証拠。
-  new_pkg="$(az functionapp config appsettings list -g "$RG" -n "$FUNC_APP_NAME" \
-    --query "[?name=='WEBSITE_RUN_FROM_PACKAGE'].value | [0]" -o tsv 2>/dev/null || true)"
-  # 検証2: プラットフォームがパッケージを読み込み、関数を認識しているか。
-  fn_list="$(az functionapp function list -g "$RG" -n "$FUNC_APP_NAME" --query "[].name" -o tsv 2>/dev/null || true)"
+  # Azure 側の反映には数秒〜のラグがあるため、即断せず数回リトライする
+  # (待たずに読むと、成功したデプロイを false negative で落として CD がフレーキーになる)。
+  verified=0
+  for attempt in 1 2 3 4 5; do
+    # 検証1: 直前に URL 版を削除しているので、URL が入っていれば「今回の実行が書いた」証拠。
+    new_pkg="$(az functionapp config appsettings list -g "$RG" -n "$FUNC_APP_NAME" \
+      --query "[?name=='WEBSITE_RUN_FROM_PACKAGE'].value | [0]" -o tsv 2>/dev/null || true)"
+    # 検証2: プラットフォームがパッケージを読み込み、**期待する関数が揃って**認識されているか。
+    fn_list="$(az functionapp function list -g "$RG" -n "$FUNC_APP_NAME" --query "[].name" -o tsv 2>/dev/null || true)"
 
-  if [[ "$new_pkg" == http* && -n "$fn_list" ]]; then
-    echo "  検証OK: パッケージが更新され、関数も認識されています:" >&2
+    missing=()
+    for fn in "${EXPECTED_FUNCTIONS[@]}"; do
+      grep -qE "(^|/)${fn}$" <<<"$fn_list" || missing+=("$fn")
+    done
+
+    if [[ "$new_pkg" == http* && ${#missing[@]} -eq 0 ]]; then
+      verified=1
+      break
+    fi
+    echo "  (attempt $attempt/5) 反映待ち: package=${new_pkg:0:40}… missing=${missing[*]:-none}" >&2
+    sleep 10
+  done
+
+  if [[ "$verified" -eq 1 ]]; then
+    echo "  検証OK: パッケージが更新され、期待する関数が揃っています:" >&2
     echo "$fn_list" | sed 's/^/    - /' >&2
     echo "  → CLI の状態確認のみの失敗とみなして続行します" >&2
   else
-    echo "ERROR: 配置自体が失敗しています (package='${new_pkg:0:60}...' functions='${fn_list:-<none>}')" >&2
+    echo "ERROR: 配置自体が失敗しています" >&2
+    echo "  package  = ${new_pkg:-<unset>}" >&2
+    echo "  functions= ${fn_list:-<none>}" >&2
+    echo "  missing  = ${missing[*]:-<none>}" >&2
     exit 1
   fi
 fi
