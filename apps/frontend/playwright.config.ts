@@ -60,7 +60,10 @@ export default defineConfig({
 
   webServer: {
     // tsc は lint-and-build ジョブが見ているので、ここは vite build だけ回す (起動を速く保つ)。
-    command: `pnpm exec vite build --mode production && pnpm exec vite preview --port ${PORT} --strictPort`,
+    // --host 127.0.0.1 は必須。既定 (localhost) だと OS / Node の DNS 解決順で
+    // `::1` だけにバインドされることがあり、Playwright が待つ 127.0.0.1 に繋がらない
+    // (実際 GitHub runner でだけ webServer 起動待ちが 120s タイムアウトした)。
+    command: `pnpm exec vite build --mode production && pnpm exec vite preview --host 127.0.0.1 --port ${PORT} --strictPort`,
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

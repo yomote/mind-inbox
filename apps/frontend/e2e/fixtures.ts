@@ -26,12 +26,6 @@ export const test = base.extend<{ pageErrors: string[] }>({
 export { expect };
 
 /**
- * mock ビルドのホーム画面まで進める。
- *
- * `VITE_USE_MOCK=true` の production ビルドでは認証ゲートが無いため、
- * "/" は onboarding ではなく /home へリダイレクトされる (Layout.tsx / Router.tsx)。
- */
-/**
  * 画面上部の見出し (Layout.tsx が出す h5)。
  *
  * 画面内にも同じ語の見出しが出ることがある (例: 設定画面の h6「設定」) ので、
@@ -41,6 +35,12 @@ export function pageHeading(page: Page, name: string) {
   return page.getByRole("heading", { level: 5, name, exact: true });
 }
 
+/**
+ * mock ビルドのホーム画面まで進める。
+ *
+ * `VITE_USE_MOCK=true` の production ビルドでは認証ゲートが無いため、
+ * "/" は onboarding ではなく /home へリダイレクトされる (Layout.tsx / Router.tsx)。
+ */
 export async function gotoHome(page: Page) {
   await page.goto("/");
   await expect(page.getByRole("button", { name: "新しい相談を始める" })).toBeVisible();
