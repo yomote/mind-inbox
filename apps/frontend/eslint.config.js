@@ -6,7 +6,7 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores(['dist', 'playwright-report', 'test-results']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
@@ -24,6 +24,18 @@ export default defineConfig([
         "error",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
+    },
+  },
+  {
+    // Playwright の fixture は `use` という引数名を使う (`async ({ page }, use) => ...`)。
+    // React Hook の命名規則に引っかかるだけで React とは無関係なので、e2e では外す。
+    files: ['e2e/**/*.ts'],
+    languageOptions: {
+      globals: globals.node,
+    },
+    rules: {
+      'react-hooks/rules-of-hooks': 'off',
+      'react-refresh/only-export-components': 'off',
     },
   },
 ])

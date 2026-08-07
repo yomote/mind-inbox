@@ -100,14 +100,19 @@ PR テンプレ・Test Issue テンプレに「このテストが無いと何が
 
 ### L3 E2E (UI Flow)
 
-| 項目               | 内容                                                                                                |
-| ------------------ | --------------------------------------------------------------------------------------------------- |
-| **目的**           | UI 描画レベルでの破壊検知。最終防衛線                                                               |
-| **対象**           | `onboarding → newConsultation → session → organize → result → save → history` の **1 シナリオのみ** |
-| **フレームワーク** | Playwright                                                                                          |
-| **書き方の指針**   | BFF は env 未設定 = stub モードで起動。スクリーン単位の個別 E2E は書かない                          |
-| **非ゴール**       | スクリーンの見た目スナップショット、エラーパスの網羅                                                |
-| **実行コマンド**   | `npm run test:e2e`                                                                                  |
+| 項目               | 内容                                                                                                                                                         |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **目的**           | UI 描画レベルでの破壊検知。**ブラウザでしか出ない壊れ方**を落とす最終防衛線                                                                                  |
+| **対象**           | `home → session → extract → problems` の主要フロー + 画面遷移ガード + 主要画面のスクリーンショット                                                           |
+| **フレームワーク** | Playwright (chromium)。`apps/frontend/e2e/`                                                                                                                  |
+| **起動の仕方**     | `VITE_USE_MOCK=true` の **production ビルドを `vite preview` で配信**。BFF も認証も無い自己完結モード ([ADR 0004](../adr/0004-mockapi-as-frontend-truth.md)) |
+| **書き方の指針**   | 認証環境変数を渡さない (`VITE_ENTRA_*` 未設定 = MSAL 未初期化)。全テストで `pageerror` / `console.error` を回収して落とす                                    |
+| **非ゴール**       | 見た目のスナップショット比較 (画像は人が見る副産物)、MSAL の実ログイン往復、実 AI 応答、エラーパスの網羅                                                     |
+| **実行コマンド**   | `npm run test:e2e` (root) / `pnpm --dir apps/frontend test:e2e:ui` (デバッグ)                                                                                |
+
+**dev サーバではなく production ビルドを使う理由**: dev では `import.meta.env.DEV` が真になり、`VITE_USE_MOCK` の値に関わらず認証ゲートがスキップされる (`Layout.tsx` の `standalone`)。dev サーバで回すと「mock フラグが効いているか」を検証できない。production バンドルを起動するので、**バンドル固有の初期化事故** (import 時に `window` を触る等 — #69 で実際に踏んだ) もここで落ちる。
+
+**ローカル検証は実環境検証の代わりにならない** ([ADR 0018](../adr/0018-runtime-verification-in-the-loop.md))。認証・CORS・クラウド固有の挙動は L4 smoke と PR の「動作検証」欄で担保する。別レイヤとして扱うこと。
 
 ### L4 smoke (実環境疎通)
 
@@ -208,7 +213,7 @@ cd apps/bff && npm run test -- --watch
 
 main ブランチ保護で 2〜4 を必須チェックに設定する。
 
-> **現状 (2026-05 時点)**: L0/L3/BFF/Frontend/VOICEVOX は placeholder script (`echo + exit 0`) で実装済み。各 issue (#1, #2, #4) が着地した時点で placeholder を実コマンドに差し替えるだけで CI が活きる。
+> **現状 (2026-08 時点)**: L3 (#4) は Playwright で実装済み。VOICEVOX の L1 (#2) だけ placeholder script (`echo + exit 0`) のまま。placeholder が残っている限り CI の pass 表示は「通った」ではなく「まだ何も見ていない」を意味するので、サマリの注記と対で読む。
 
 ---
 
@@ -264,14 +269,14 @@ PR テンプレートには加えて **「テスト設計セクション」** (�
 - マイルストーン: [v0.1 test-harness](https://github.com/yomote/mind-inbox/milestone/1)
 - 親 epic: [#7 テストハーネス整備](https://github.com/yomote/mind-inbox/issues/7)
 
-| Layer        | Issue                                               |
-| ------------ | --------------------------------------------------- |
-| L0 contract  | [#1](https://github.com/yomote/mind-inbox/issues/1) |
-| L1 unit      | [#2](https://github.com/yomote/mind-inbox/issues/2) |
-| L2 service   | [#3](https://github.com/yomote/mind-inbox/issues/3) |
-| L3 e2e       | [#4](https://github.com/yomote/mind-inbox/issues/4) |
-| infra script | [#5](https://github.com/yomote/mind-inbox/issues/5) |
-| ci gate      | [#6](https://github.com/yomote/mind-inbox/issues/6) |
+| Layer        | Issue                                                  |
+| ------------ | ------------------------------------------------------ |
+| L0 contract  | [#1](https://github.com/yomote/mind-inbox/issues/1)    |
+| L1 unit      | [#2](https://github.com/yomote/mind-inbox/issues/2)    |
+| L2 service   | [#3](https://github.com/yomote/mind-inbox/issues/3)    |
+| L3 e2e       | [#4](https://github.com/yomote/mind-inbox/issues/4) ✅ |
+| infra script | [#5](https://github.com/yomote/mind-inbox/issues/5)    |
+| ci gate      | [#6](https://github.com/yomote/mind-inbox/issues/6)    |
 
 導入順序:
 
