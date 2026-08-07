@@ -19,6 +19,24 @@ logger = logging.getLogger(__name__)
 
 _client: BaseChatClient | None = None
 
+# temperature / max_tokens を受け付けない推論モデルの接頭辞 (#55)。
+# Azure ではデプロイ名がモデル名と一致する運用 (gpt-4o / gpt-5-mini 等) を前提とする。
+_REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+
+def _options_for_model(model: str | None) -> OpenAIChatOptions:
+    """モデル名に応じた既定オプション。推論モデルは temperature / max_tokens 非対応のため付けない。"""
+    if model and model.lower().startswith(_REASONING_MODEL_PREFIXES):
+        return OpenAIChatOptions()
+    return OpenAIChatOptions(temperature=0.7, max_tokens=1024)
+
+
+def _current_model() -> str | None:
+    settings = get_settings()
+    if settings.azure_openai_endpoint:
+        return settings.azure_openai_deployment
+    return settings.openai_model
+
 
 def get_chat_client() -> BaseChatClient:
     global _client
@@ -66,6 +84,6 @@ async def complete(client: BaseChatClient, prompt: str) -> str:
     """
     response = await client.get_response(
         [Message(role="user", contents=[prompt])],
-        options=OpenAIChatOptions(temperature=0.7, max_tokens=1024),
+        options=_options_for_model(_current_model()),
     )
     return response.text

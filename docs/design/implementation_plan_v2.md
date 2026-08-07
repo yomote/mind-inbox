@@ -68,7 +68,7 @@ PR 分割の目安: M1-1+M1-2 / M1-3 / M1-4+M1-5 の 3 PR。各 PR で契約不�
 ### M1-1. 依存差し替えと初期化
 
 - **変更対象**: `apps/services/ai-agent/pyproject.toml`（`agent-framework` 追加）/ `app/kernel.py` → `app/agents.py`（Azure OpenAI クライアント + ChatAgent 初期化）。環境変数は既存の Azure OpenAI 設定を流用（新規シークレットなし）
-- **要点**: SK と MAF の併存を許す過渡期を作らず、モジュール単位で置き換える。**推論モデル gpt-5-mini の制約 (temperature / max_tokens 非対応) の考慮を初期化層で維持する** (#55 の実装メモ)
+- **要点**: SK と MAF の併存を許す過渡期を作らず、モジュール単位で置き換える。**推論モデル (gpt-5 系等) の制約 (temperature / max_tokens 非対応) への対応は移行元に存在しなかったため、本移行でモデル名分岐として新規実装する** (#55 の実装メモ由来。PR #85 レビュー指摘で実態に合わせて訂正)
 - **完了条件**: `/health` 起動 + 既存テストが緑のまま
 
 ### M1-2. 単発呼び出し系の移行
