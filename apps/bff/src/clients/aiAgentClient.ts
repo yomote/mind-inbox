@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { config } from "../config";
+import { serviceHeaders } from "./serviceToken";
 import type { ExtractionResult, ProblemStatus, Theme } from "../trpc/domain";
 
 export type ChatRequest = {
@@ -74,7 +75,9 @@ export async function sendChatMessage(req: ChatRequest): Promise<ChatResponse> {
 
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await serviceHeaders(config.aiAgentAudience, {
+      "Content-Type": "application/json",
+    }),
     body: JSON.stringify({ session_id: req.sessionId, message: req.message }),
   });
 
@@ -108,7 +111,9 @@ export async function organize(req: OrganizeRequest): Promise<OrganizeResponse> 
 
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await serviceHeaders(config.aiAgentAudience, {
+      "Content-Type": "application/json",
+    }),
     body: JSON.stringify({ session_id: req.sessionId }),
   });
 
@@ -139,7 +144,9 @@ export async function extract(req: ExtractRequest): Promise<ExtractionResult> {
 
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await serviceHeaders(config.aiAgentAudience, {
+      "Content-Type": "application/json",
+    }),
     body: JSON.stringify({
       session_id: req.sessionId,
       existing_problems: req.existingProblems.map((p) => ({
@@ -171,7 +178,9 @@ export async function createPlan(req: PlanRequest): Promise<PlanResponse> {
 
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await serviceHeaders(config.aiAgentAudience, {
+      "Content-Type": "application/json",
+    }),
     body: JSON.stringify({
       summary: req.summary,
       emotions: req.emotions,
@@ -201,7 +210,9 @@ export async function approve(req: ApproveRequest): Promise<ApproveResponse> {
 
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await serviceHeaders(config.aiAgentAudience, {
+      "Content-Type": "application/json",
+    }),
     body: JSON.stringify({
       approval_request_id: req.approvalRequestId,
       approved: req.approved,

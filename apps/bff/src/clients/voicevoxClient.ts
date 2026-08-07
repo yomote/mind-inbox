@@ -1,4 +1,5 @@
 import { config } from "../config";
+import { serviceHeaders } from "./serviceToken";
 
 export type SynthesizeRequest = {
   text: string;
@@ -22,7 +23,9 @@ export async function synthesize(req: SynthesizeRequest): Promise<ArrayBuffer | 
 
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await serviceHeaders(config.voicevoxAudience, {
+      "Content-Type": "application/json",
+    }),
     body: JSON.stringify({
       text: req.text,
       speaker: req.speakerId ?? 3,

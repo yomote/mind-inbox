@@ -5,6 +5,10 @@
 export const config = {
   aiAgentBaseUrl: process.env["AI_AGENT_BASE_URL"] || undefined,
   voicevoxBaseUrl: process.env["VOICEVOX_BASE_URL"] || undefined,
+  // 下流 Container Apps の組み込み認証 (#86 / ADR 0017) 向け audience。
+  // 未設定なら Authorization を付けない = 門を立てていない環境・ローカルではそのまま通る。
+  aiAgentAudience: process.env["AI_AGENT_AUDIENCE"] || undefined,
+  voicevoxAudience: process.env["VOICEVOX_AUDIENCE"] || undefined,
 } as const;
 
 export type Config = typeof config;
