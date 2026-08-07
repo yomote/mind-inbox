@@ -34,6 +34,15 @@ GitHub MCP ツール（`mcp__github__*`。ToolSearch で `select:` して読み�
 
 > Issue 番号は変わりうるので**タイトル接頭辞で発見**する（番号をこの skill に固定しない）: `[epic]` = エピック、`[v1][Phase A/B/C]` = v1 フェーズ、ラベル `infra`/`security` = インフラ、`[tech-debt]` = 技術負債。
 
+### Step 1.5 — 「🙋 あなたの番」を集める (ADR 0016)
+
+PO の応答待ちを先頭に出すための材料を引く:
+
+1. **`needs-human` ラベルの Open Issue** — `list_issues` (labels: ["needs-human"])
+2. **Proposed のまま滞留している ADR** — `grep -l "Status: Proposed" docs/adr/*.md` (経過日数も出す)
+
+この 2 つはレポート冒頭に**必ず**表示する (0 件なら「🙋 あなたの番: なし」と 1 行)。
+
 ### Step 2 — 構造にマッピング
 
 引いた Issue を次の束に振り分ける（ラベルとタイトル接頭辞で判定）:
@@ -64,6 +73,10 @@ v1 ロードマップ（`docs/design/implementation_plan_v1.md`）の順序（D�
 
 ```markdown
 ## 📊 Mind Inbox 開発ステータス（{YYYY-MM-DD}）
+
+**🙋 あなたの番** ({k} 件) ← 0 件でも行は出す
+- {needs-human Issue #n: タイトル / 何をすればよいか 1 行}
+- {Proposed ADR NNNN ({n} 日経過) → 次の debrief で Accept/Reject}
 
 **直近の動き**: {直近マージ PR を 1 行}
 

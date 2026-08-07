@@ -45,6 +45,7 @@ user の意思決定と技術学習をループに組み込む仕組み ([ADR 00
 - **無人セッション (Routine 等) ではゲートを通せない** — 不可逆な判断 (DB スキーマ破壊的変更 / 外部サービス・課金追加 / 公開 API の形 / データ削除) は実装せず Issue に質問を積む。可逆な判断は Proposed ADR を書いて進め、次の debrief で追認を受ける
 - **リリースは「リリース PR (`main → release`)」で表現し、そこで `release-gate` skill を通す** (main への機能 PR / dev への日常 auto-deploy は対象外) — 実装セッション自身に Go/No-Go を判定させず、独立 judge (いずれも新品コンテキストの subagent) に判定させる ([ADR 0015](docs/adr/0015-independent-judge-agents-security-qa-release.md) / [Runbook](docs/runbooks/review-agents.md))。security-reviewer は脆弱性スキャナ総動員 + 動的チェック、qa-reviewer はゴールデンパス/UI 挙動の受け入れテスト (L3 E2E) を作成・実行 (L3 の所有者)、biz-owner-reviewer は UI を実操作して違和感を報告、release-judge が 4 レポートをコンセプト整合含めて突合し、FAIL は宛先つき作業指示に変換。blocker はリリース PR のスレッド + ブランチ保護でマージ不可。審査基準は `.github/claude/{security,qa,biz-owner,release}-rubric.md` (rubric-as-truth)。🟢 でも merge / deploy は人間
 - **user (PO) の指示の出し方へのフィードバックは `po-feedback` skill** — 実セッションの証拠ベースで辛口レビュー。debrief の締めに 1 コーナーとして回すのが既定
+- **人間の確認は選択肢形式・宿題は needs-human キュー** ([ADR 0016](docs/adr/0016-hitl-choice-format-and-needs-human-queue.md)) — 解釈確認・設計選択・承認は散文に埋めず AskUserQuestion (クリック選択式) で出す。人間にしかできない宿題 (web UI 設定・ADR Accept 等) は発生時点で `needs-human` ラベルの Issue に積む。`/status` は冒頭に「🙋 あなたの番」(needs-human 残 + Proposed ADR 残) を必ず出す。未確認のまま進む場合はその旨を明示して記録を残す
 - セッション記録は [`docs/debrief/journal.md`](docs/debrief/journal.md)
 
 ### PR を出したあとの追従
