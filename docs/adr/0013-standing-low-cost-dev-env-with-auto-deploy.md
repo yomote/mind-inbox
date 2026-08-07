@@ -1,6 +1,6 @@
 # 0013. dev 環境は「常設・待機最小コスト + main マージ自動デプロイ」にする（0009 のオンデマンド teardown を置き換える）
 
-- Status: Accepted (2026-08-06, design-gate #69 にて承認)
+- Status: Accepted (2026-08-06, design-gate #69 にて承認。debrief #1 でも追認)
 - Date: 2026-08-05
 - Deciders: omoteforlab
 - Consulted: —

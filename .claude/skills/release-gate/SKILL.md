@@ -1,11 +1,11 @@
 ---
 name: release-gate
-description: リリース PR (main → release) などの節目で、独立 judge (security-reviewer / qa-reviewer / biz-owner-reviewer / release-judge) を新品コンテキストで走らせるリリースゲート。開発リリースレポートを作り、security はスキャナ総動員 + 動的チェック、QA は受け入れテスト (L3) の作成・実行、ビジネスオーナーは実操作ウォークスルーをやり、release-judge が 4 レポートを突き合わせて Go/No-Go と宛先つき作業指示を出す。リリース PR が開かれたとき、user が「/release-gate」「リリースしていい?」「出荷判定して」等と言ったとき、または不可逆変更を含む deploy の直前に起動。main への機能 PR や日常の dev auto-deploy には差し込まない。判定はレポートまで — merge / deploy は人間。設計背景は ADR 0015。
+description: リリース PR (main → release) などの節目で、独立 judge (security-reviewer / qa-reviewer / biz-owner-reviewer / release-judge) を新品コンテキストで走らせるリリースゲート。開発リリースレポートを作り、security はスキャナ総動員 + 動的チェック、QA は受け入れテスト (L3) の作成・実行、ビジネスオーナーは実操作ウォークスルーをやり、release-judge が 4 レポートを突き合わせて Go/No-Go と宛先つき作業指示を出す。リリース PR が開かれたとき、user が「/release-gate」「リリースしていい?」「出荷判定して」等と言ったとき、または不可逆変更を含む deploy の直前に起動。main への機能 PR や日常の dev auto-deploy には差し込まない。判定はレポートまで — merge / deploy は人間。設計背景は ADR 0019。
 ---
 
 # release-gate
 
-deploy 前に「実装した側」とは別コンテキストの審査役でリリース可否を判定する。実装セッションが自分の変更を GO と言っても意味がない ([ADR 0015](../../../docs/adr/0015-independent-judge-agents-security-qa-release.md)) — 判定は必ず subagent (新品コンテキスト) に出させ、このセッションは**範囲確定と集約だけ**をやる。
+deploy 前に「実装した側」とは別コンテキストの審査役でリリース可否を判定する。実装セッションが自分の変更を GO と言っても意味がない ([ADR 0019](../../../docs/adr/0019-independent-judge-agents-security-qa-release.md)) — 判定は必ず subagent (新品コンテキスト) に出させ、このセッションは**範囲確定と集約だけ**をやる。
 
 ## いつ起動するか — リリースイベント = リリース PR (`main → release`)
 

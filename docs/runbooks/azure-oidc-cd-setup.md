@@ -1,9 +1,12 @@
-# オンデマンド CD（GitHub Actions + Azure OIDC）の設定と運用
+# 常設 dev の CD（GitHub Actions + Azure OIDC）の設定と運用
 
 ## Trigger
 
-`deploy.yml`（オンデマンド CD / [ADR 0009](../adr/0009-on-demand-cd-via-github-actions-oidc.md)）を初めて使うとき、
-または「使う時だけ環境を立てて（up）、終わったら ¥0 に戻す（down）」を運用するとき。
+`deploy.yml` を初めて使うとき、または常設 dev の運用（main マージの自動デプロイ / 手動 up / 一時的な down）を行うとき。
+
+> 方針は [ADR 0013](../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md)（常設・待機ほぼ ¥0 + main マージ自動デプロイ）。
+> [ADR 0009](../adr/0009-on-demand-cd-via-github-actions-oidc.md) のオンデマンド teardown は supersede 済みで、
+> **夜間の自動 teardown は廃止**。OIDC 認証・`provision.sh` / `cleanup-env.sh` の機構は引き続き使う。
 
 ## Prerequisites
 
@@ -45,12 +48,21 @@ GitHub → **Actions → "deploy" → Run workflow** → `action: up` / `environ
 - 所要時間: **初回 ~15〜30 分**（IaC + Container Apps 反映 + BFF/SWA デプロイ）。image は ghcr の事前ビルド済み（#67）を差し替えるだけなので、デプロイ経路でのイメージビルドは無い。
 - 完了後、ジョブログの `deploy-frontend` 出力に SWA の URL が出る。スマホからはそれを開く。
 
-### 4. 撤収（down / ¥0 化）
+### 4. 自動デプロイを解禁する（常設運用の本番運転）
+
+main マージで常設 dev に自動反映させるには、リポジトリ **Settings → Variables** に `AUTO_DEPLOY_ENABLED=true` を設定する。
+
+> **先に認可を設定すること。** 未設定のまま解禁すると、認可の無いアプリが公開 URL に自動で出続ける。
+> 手順: [entra-spa-auth-and-budget.md](./entra-spa-auth-and-budget.md)（Entra SPA 登録 → `applyFunctionAuthLockdown=true` → 未認証 401 の実測）。
+> 変数が未設定の間、main への push は `notice` を出して**何もせず skip** する（安全側の既定）。
+
+### 5. 撤収（down / ¥0 化）— 一時的に畳みたいとき
 
 **Actions → "deploy" → Run workflow** → `action: down`（または私に「down して」）。
 `cleanup-env.sh` が RG 削除 + soft-delete 残骸（Key Vault / OpenAI / Log Analytics）まで purge。
 
-> 夜間 schedule（JST 04:07）が自動で `down` を流すため、消し忘れても翌朝 ¥0 に戻る。
+> 常設運用では通常使わない（待機コストは SQL / ACR / SWA Standard を外してほぼ ¥0）。
+> 消し忘れ対策の夜間 teardown は廃止し、代わりに**予算アラート**（#69）で支出を見張る。
 
 ## Verification
 
@@ -77,15 +89,16 @@ GitHub → **Actions → "deploy" → Run workflow** → `action: up` / `environ
 - 原因: SP のロール不足。RG 作成/削除や Key Vault purge にはサブスクリプションスコープの権限が要る。
 - 対処: `setup-oidc.sh` の `ROLE=Contributor`（既定）でサブスクリプションに付与されているか `az role assignment list --assignee <AZURE_CLIENT_ID>` で確認。
 
-### 夜間に消えて困る（長時間使いたい）
+### main にマージしたのにデプロイされない
 
-- 原因: schedule teardown は毎日 `down` する設計。
-- 対処: その日は使い終わりに手動運用で再 `up`、または一時的に `deploy.yml` の `schedule` をコメントアウト（使い終わったら戻す）。
+- 原因: `AUTO_DEPLOY_ENABLED` が未設定（安全側の既定）。または OIDC の 3 変数が未登録。
+- 確認: Actions の該当 run に `自動デプロイは未解禁のため skip しました` の notice が出ているか。
+- 対処: 認可の設定（[entra-spa-auth-and-budget.md](./entra-spa-auth-and-budget.md)）を終えてから `AUTO_DEPLOY_ENABLED=true` を登録する。
 
-### up と 夜間 teardown が重なりうる
+### 連続でマージしたときのデプロイ順
 
-- 原因: 並列実行ではない（同一 concurrency group + `cancel-in-progress: false` で直列化されるため並列にはならない）。実際の挙動は GitHub Actions の仕様で、**同一グループの pending は最新 1 件のみ保持**され、`up` が pending 中に schedule `down` が来ると **pending の up が置き換えられてキャンセル**されうる、という点。
-- 緩和: 「立てた直後に夜間 teardown で消える」は teardown 側の最小生存時間ガード（RG タグ `deployedAtEpoch` が 3h 未満なら schedule では skip）で防止済み。pending 置き換えの取りこぼしを避けたい場合は **teardown 時間帯（深夜）に `up` しない**、もしくはその日は `deploy.yml` の `schedule` を一時コメントアウトする。
+- 同一 concurrency group + `cancel-in-progress: false` で直列化される。走行中のデプロイは中断されず、後続はキューイングされて順に流れる（中途半端な状態を残さないため意図的にこの設定）。
+- GitHub Actions の仕様上、**pending は最新 1 件のみ保持**されるため、短時間に何度もマージすると中間のコミットはデプロイをスキップして最新だけが反映される。常設 dev の用途では問題にならない。
 
 ### up が遅い
 

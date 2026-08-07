@@ -40,7 +40,7 @@ PR の diff を読み、下記 3 軸で評価し、**重要な指摘は該当行
 - **設計**: 不要な重複、責務の漏れ、既存ユーティリティの再実装、過剰な抽象化
 - **セキュリティ**: 入力検証漏れ、秘密情報のハードコード、ログへの PII/秘密の流出。
   一目で分かるものだけ指摘し、深掘り (攻撃面追跡・インフラ・LLM 固有) は
-  security-reviewer subagent (`.github/claude/security-rubric.md`, ADR 0015) に委譲する
+  security-reviewer subagent (`.github/claude/security-rubric.md`, ADR 0019) に委譲する
 - **簡素化**: より少ないコードで同じ結果になる箇所 (高確度のみ)
 
 ### 軸 C — PR テンプレとの整合チェック

@@ -1,6 +1,6 @@
 # Business Owner Walkthrough Rubric (biz-owner-reviewer)
 
-> **ビジネスオーナー役の基準** (rubric-as-truth, [ADR 0015](../../docs/adr/0015-independent-judge-agents-security-qa-release.md))。
+> **ビジネスオーナー役の基準** (rubric-as-truth, [ADR 0019](../../docs/adr/0019-independent-judge-agents-security-qa-release.md))。
 > subagent `.claude/agents/biz-owner-reviewer.md` / release-gate から参照される。
 > 観点を変えたい時はここを直す。
 

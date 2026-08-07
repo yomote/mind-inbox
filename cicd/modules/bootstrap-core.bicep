@@ -133,8 +133,15 @@ param voicevoxTier string = 'cpu'
 @description('Azure region for VOICEVOX Container Apps environment/app.')
 param voicevoxLocation string = location
 
-@description('Container Apps Environment name for VOICEVOX.')
-param voicevoxContainerAppsEnvironmentName string = toLower('cae-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-voicevox')
+// -------------------- 共有 Container Apps Environment (#68 / ADR 0013) --------------------
+// 以前は ai-agent / voicevox / vv-wrapper で CAE を 3 つ作っていた。CAE の作成は 1 つ数分かかり、
+// フル構築の所要を押し上げていたため dev では 1 環境に相乗りする。
+// トレードオフ: 障害ドメインを共有する (1 環境の不調が全サービスに及ぶ)。dev では許容。
+@description('Shared Container Apps Environment name (ai-agent / voicevox / vv-wrapper が相乗りする)。')
+param containerAppsEnvironmentName string = toLower('cae-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}')
+
+@description('Region for the shared Container Apps Environment. VOICEVOX GPU のリージョン制約が最も厳しいため既定は voicevoxLocation に合わせる。')
+param containerAppsLocation string = voicevoxLocation
 
 @description('Container App name for VOICEVOX engine.')
 param voicevoxContainerAppName string = toLower('ca-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-voicevox')
@@ -198,24 +205,12 @@ param openAiCapacity int = 10
 @description('Enable AI Agent on Azure Container Apps.')
 param enableAiAgentAca bool = false
 
-@description('Azure region for AI Agent Container Apps resources.')
-param aiAgentLocation string = location
-
-@description('Container Apps Environment name for AI Agent.')
-param aiAgentContainerAppsEnvironmentName string = toLower('cae-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-ai')
-
 @description('Container App name for AI Agent.')
 param aiAgentContainerAppName string = toLower('ca-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-ai-agent')
 
 // -------------------- VOICEVOX Wrapper Container App params --------------------
 @description('Enable VOICEVOX Wrapper on Azure Container Apps.')
 param enableVoicevoxWrapperAca bool = false
-
-@description('Azure region for VOICEVOX Wrapper Container Apps resources.')
-param voicevoxWrapperLocation string = location
-
-@description('Container Apps Environment name for VOICEVOX Wrapper.')
-param voicevoxWrapperContainerAppsEnvironmentName string = toLower('cae-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-vv-wrap')
 
 @description('Container App name for VOICEVOX Wrapper.')
 param voicevoxWrapperContainerAppName string = toLower('ca-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-vv-wrap')
@@ -618,9 +613,14 @@ var voicevoxGpuWorkloadProfiles = [
   }
 ]
 
-resource voicevoxManagedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = if (enableVoicevoxAca) {
-  name: voicevoxContainerAppsEnvironmentName
-  location: voicevoxLocation
+// 共有 CAE (#68): ai-agent / voicevox / vv-wrapper が 1 つの環境に相乗りする。
+// どれか 1 つでも有効なら作る。VOICEVOX が gpu tier のときだけ GPU ワークロードプロファイルを足す
+// （CPU 側のアプリは workloadProfileName を指定せず組み込みの Consumption を使うので影響なし）。
+var containerAppsEnabled = enableVoicevoxAca || enableAiAgentAca || enableVoicevoxWrapperAca
+
+resource sharedManagedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = if (containerAppsEnabled) {
+  name: containerAppsEnvironmentName
+  location: containerAppsLocation
   properties: union(
     {
       appLogsConfiguration: {
@@ -631,20 +631,36 @@ resource voicevoxManagedEnvironment 'Microsoft.App/managedEnvironments@2024-03-0
         }
       }
     },
-    voicevoxIsGpu ? { workloadProfiles: voicevoxGpuWorkloadProfiles } : {}
+    (enableVoicevoxAca && voicevoxIsGpu) ? { workloadProfiles: voicevoxGpuWorkloadProfiles } : {}
   )
 }
 
 resource voicevoxContainerApp 'Microsoft.App/containerApps@2024-03-01' = if (enableVoicevoxAca) {
   name: voicevoxContainerAppName
-  location: voicevoxLocation
+  // Container App は環境と同じリージョンに置く必要があるため、共有 CAE の location に揃える (#68)。
+  location: containerAppsLocation
   properties: union(
     {
-      managedEnvironmentId: voicevoxManagedEnvironment.id
+      managedEnvironmentId: sharedManagedEnvironment.id
       configuration: {
         activeRevisionsMode: 'Single'
+        // internal ingress (#86 / ADR 0017)。VOICEVOX エンジンの呼び出し元は
+        // **同じ CAE に居る vv-wrapper だけ**なので、外部 ingress を持つ理由が無い。
+        // external: false にすると FQDN が `*.internal.<region>.azurecontainerapps.io` になり、
+        // 環境の外からは名前解決すらできない = 到達経路そのものが消える。
+        //
+        // IP 許可リストは採らない。一度 `sharedManagedEnvironment.properties.staticIp` を
+        // 許可する形で実装したが、実測の結果それは **inbound 用の IP** (4.190.8.64) で、
+        // 呼び出し元の **egress IP** (outboundIpAddresses = 130.33.178.89) とは別物だった。
+        // 正しい egress IP は各 Container App の outboundIpAddresses にしか無く、
+        // 自リソース定義内から自分の property を参照するのは循環参照になるため書けない。
+        // ADR 0017 が Option D (IP 許可リスト) を却下した理由でもある。
+        //
+        // vv-wrapper 側の接続先は deployment output `voicevoxBaseUrl` から毎回配線される
+        // (provision.sh が bootstrap → deploy-voicevox-wrapper.sh の順で走る) ため、
+        // internal 化で FQDN が変わっても次のデプロイで追随する。
         ingress: {
-          external: true
+          external: false
           targetPort: 50021
           transport: 'http'
         }
@@ -714,38 +730,8 @@ resource openAiDeployment 'Microsoft.CognitiveServices/accounts/deployments@2023
   }
 }
 
-// -------------------- AI Agent Container Apps Environment --------------------
-// Container App itself is created/updated by deploy-ai-agent.sh (avoids ARM provisioning timeout)
-// Consumption-only environment (no workloadProfiles) — provisions in seconds
-resource aiAgentManagedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = if (enableAiAgentAca) {
-  name: aiAgentContainerAppsEnvironmentName
-  location: aiAgentLocation
-  properties: {
-    appLogsConfiguration: {
-      destination: 'log-analytics'
-      logAnalyticsConfiguration: {
-        customerId: law.properties.customerId
-        sharedKey: law.listKeys().primarySharedKey
-      }
-    }
-  }
-}
-
-// -------------------- VOICEVOX Wrapper Container Apps Environment --------------------
-// Container App itself is created/updated by deploy-voicevox-wrapper.sh
-resource voicevoxWrapperManagedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = if (enableVoicevoxWrapperAca) {
-  name: voicevoxWrapperContainerAppsEnvironmentName
-  location: voicevoxWrapperLocation
-  properties: {
-    appLogsConfiguration: {
-      destination: 'log-analytics'
-      logAnalyticsConfiguration: {
-        customerId: law.properties.customerId
-        sharedKey: law.listKeys().primarySharedKey
-      }
-    }
-  }
-}
+// AI Agent / VOICEVOX Wrapper の Container App 本体は deploy-*.sh が作成/更新する
+// (ARM のプロビジョニングタイムアウトを避けるため)。載せる環境は上の共有 CAE (#68)。
 
 // -------------------- Static Web Apps (frontend) --------------------
 var staticSiteRepoProps = (staticSiteRepositoryUrl != '')
@@ -943,6 +929,15 @@ resource functionAuthSettingsV2 'Microsoft.Web/sites/config@2023-12-01' = if (fu
     globalValidation: {
       requireAuthentication: true
       unauthenticatedClientAction: 'Return401'
+      // Functions の管理 API (/admin/*) を認証の対象外にする。
+      // 除外しないと EasyAuth が Azure 自身の管理呼び出しまで 401 で弾き、
+      //   - `az functionapp deployment source config-zip` の検証段階が Bad Request で落ちる
+      //   - `az functionapp function list` が Bad Request になり関数を列挙できない
+      // （2026-08-06 に実環境で発生。デプロイ自体は成功しているのに CD が赤くなる）。
+      // /admin/* は元々 **master key 必須** で、EasyAuth を外しても無認可では叩けない。
+      excludedPaths: [
+        '/admin/*'
+      ]
     }
     httpSettings: {
       requireHttps: true
@@ -1075,7 +1070,10 @@ output openAiAccountName string = enableOpenAi ? openAiAccountName : ''
 output openAiDeploymentName string = enableOpenAi ? openAiDeploymentName : ''
 output aiAgentEnabled bool = enableAiAgentAca
 output aiAgentContainerAppName string = enableAiAgentAca ? aiAgentContainerAppName : ''
-output aiAgentContainerAppsEnvironmentName string = enableAiAgentAca ? aiAgentContainerAppsEnvironmentName : ''
+// #68: CAE を 1 つに統合したので、両サービスとも同じ環境名を返す。
+// output 名は据え置き — deploy-*.sh はこの名前を読むだけで変更不要。
+output containerAppsEnvironmentName string = containerAppsEnabled ? containerAppsEnvironmentName : ''
+output aiAgentContainerAppsEnvironmentName string = enableAiAgentAca ? containerAppsEnvironmentName : ''
 output voicevoxWrapperEnabled bool = enableVoicevoxWrapperAca
 output voicevoxWrapperContainerAppName string = enableVoicevoxWrapperAca ? voicevoxWrapperContainerAppName : ''
-output voicevoxWrapperContainerAppsEnvironmentName string = enableVoicevoxWrapperAca ? voicevoxWrapperContainerAppsEnvironmentName : ''
+output voicevoxWrapperContainerAppsEnvironmentName string = enableVoicevoxWrapperAca ? containerAppsEnvironmentName : ''

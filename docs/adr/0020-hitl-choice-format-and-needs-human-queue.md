@@ -1,4 +1,4 @@
-# 0016. 人間の確認は選択肢形式で出し、人間宿題は needs-human キューに一元化する
+# 0020. 人間の確認は選択肢形式で出し、人間宿題は needs-human キューに一元化する
 
 - Status: Proposed
 - Date: 2026-08-07
@@ -69,4 +69,4 @@ Chosen option: **"Option A"**。3 つの規約で構成する:
 ## Links
 
 - 発端: [journal 2026-08-07 po-feedback](../debrief/journal.md)
-- 関連 ADR: [0011 Projects=実行ダッシュボード](0011-github-projects-as-execution-dashboard.md) / [0014 理解ゲート+デブリーフ](0014-design-comprehension-gate-and-debrief.md) / [0015 独立 judge](0015-independent-judge-agents-security-qa-release.md)
+- 関連 ADR: [0011 Projects=実行ダッシュボード](0011-github-projects-as-execution-dashboard.md) / [0014 理解ゲート+デブリーフ](0014-design-comprehension-gate-and-debrief.md) / [0019 独立 judge](0019-independent-judge-agents-security-qa-release.md)

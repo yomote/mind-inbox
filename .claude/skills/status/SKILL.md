@@ -34,7 +34,7 @@ GitHub MCP ツール（`mcp__github__*`。ToolSearch で `select:` して読み�
 
 > Issue 番号は変わりうるので**タイトル接頭辞で発見**する（番号をこの skill に固定しない）: `[epic]` = エピック、`[v1][Phase A/B/C]` = v1 フェーズ、ラベル `infra`/`security` = インフラ、`[tech-debt]` = 技術負債。
 
-### Step 1.5 — 「🙋 あなたの番」を集める (ADR 0016)
+### Step 1.5 — 「🙋 あなたの番」を集める (ADR 0020)
 
 PO の応答待ちを先頭に出すための材料を引く:
 

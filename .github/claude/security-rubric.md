@@ -1,6 +1,6 @@
 # Security Review Rubric (security-reviewer judge)
 
-> **セキュリティ審査役の審査基準** (rubric-as-truth, [ADR 0015](../../docs/adr/0015-independent-judge-agents-security-qa-release.md))。
+> **セキュリティ審査役の審査基準** (rubric-as-truth, [ADR 0019](../../docs/adr/0019-independent-judge-agents-security-qa-release.md))。
 > subagent `.claude/agents/security-reviewer.md` / PR レビュー Routine / release-gate から参照される。
 > 観点を変えたい時はここを直す。
 

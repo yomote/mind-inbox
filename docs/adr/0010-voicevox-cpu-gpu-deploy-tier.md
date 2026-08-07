@@ -1,6 +1,6 @@
 # 0010. VOICEVOX を `voicevoxTier`(cpu/gpu) 単一スイッチで切替（既定 cpu）
 
-- Status: Proposed
+- Status: Accepted (debrief #1, 2026-08-06)
 - Date: 2026-06-28
 - Deciders: omoteforlab
 - Consulted: —

@@ -1,7 +1,7 @@
 # 独立 judge エージェント (security / QA / release) の運用
 
 実装セッションとは**別コンテキスト・別役割**の審査役 3 体を、ループのどこで・どう走らせるかの手順。
-判断記録: [ADR 0015](../adr/0015-independent-judge-agents-security-qa-release.md)。
+判断記録: [ADR 0019](../adr/0019-independent-judge-agents-security-qa-release.md)。
 既存の PR レビュー judge ([ADR 0008](../adr/0008-pr-review-via-cloud-routine.md) / [Runbook](claude-pr-review.md)) と役割分担して動く。
 
 ## Trigger
@@ -125,9 +125,9 @@ subagent はレビューセッション内でも新品コンテキストで起�
 
 ## Rollback / コスト制御
 
-- judge を減らす: release-gate 時に qa-reviewer をスキップしたい等は skill を直すのではなく、その回のプロンプトで明示指定 (恒久変更なら ADR 0015 の見直し)
+- judge を減らす: release-gate 時に qa-reviewer をスキップしたい等は skill を直すのではなく、その回のプロンプトで明示指定 (恒久変更なら ADR 0019 の見直し)
 - 観点を軽くする: 各 rubric の観点を削る PR を出す
-- 廃止: `.claude/agents/` と `.claude/skills/release-gate/` を消し、ADR 0015 を Deprecated にする
+- 廃止: `.claude/agents/` と `.claude/skills/release-gate/` を消し、ADR 0019 を Deprecated にする
 
 ## Common Issues
 
@@ -154,11 +154,11 @@ subagent はレビューセッション内でも新品コンテキストで起�
 
 ### 実装セッションが「自分でチェックしたから GO」と言う
 
-- それが [ADR 0015](../adr/0015-independent-judge-agents-security-qa-release.md) で禁止した状況そのもの。`/release-gate` を通し直す。
+- それが [ADR 0019](../adr/0019-independent-judge-agents-security-qa-release.md) で禁止した状況そのもの。`/release-gate` を通し直す。
 
 ## Related
 
-- 判断記録: [ADR 0015](../adr/0015-independent-judge-agents-security-qa-release.md)
+- 判断記録: [ADR 0019](../adr/0019-independent-judge-agents-security-qa-release.md)
 - PR レビュー judge: [ADR 0008](../adr/0008-pr-review-via-cloud-routine.md) / [Runbook](claude-pr-review.md) / [`review-rubric.md`](../../.github/claude/review-rubric.md)
 - テスト戦略 (L0〜L4 と QA の分担): [`docs/testing/strategy.md`](../testing/strategy.md)
 - Subagents: <https://code.claude.com/docs/en/sub-agents>

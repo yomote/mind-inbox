@@ -63,10 +63,23 @@ jobs:
         continue-on-error: true
         run: npm run test:fast
 
+      # L3 は chromium が要る。ランナーには入っていないので毎回入れる
+      # (--with-deps で OS 側の共有ライブラリも揃える)。
+      - name: Install Playwright chromium
+        run: pnpm --dir apps/frontend exec playwright install --with-deps chromium
+
       - name: L3 e2e
         id: e2e
         continue-on-error: true
         run: npm run test:e2e
+
+      - name: Upload Playwright report (失敗時のみ)
+        if: steps.e2e.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/frontend/playwright-report/
+          retention-days: 7
 
       - name: Build summary
         run: |
@@ -87,7 +100,7 @@ jobs:
             echo "| L1+L2 fast  | $(fmt ${{ steps.fast.outcome }}) | \`npm run test:fast\` |"
             echo "| L3 e2e      | $(fmt ${{ steps.e2e.outcome }}) | \`npm run test:e2e\` |"
             echo ""
-            echo "詳細は各 Step のログを参照。未実装レイヤは placeholder (exit 0) のため pass 表示になります。"
+            echo "詳細は各 Step のログを参照。VOICEVOX の L1 (#2) だけ placeholder (exit 0) のため pass 表示になります。"
             echo ""
             echo "戦略: [docs/testing/strategy.md](https://github.com/yomote/mind-inbox/blob/main/docs/testing/strategy.md)"
           } | tee pr-comment.md >> "$GITHUB_STEP_SUMMARY"
