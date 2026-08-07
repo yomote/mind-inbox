@@ -128,8 +128,10 @@ h() {
 
 # --- 0. 環境 ------------------------------------------------------------------
 
-SUB_NAME="$(az account show --query name -o tsv)"
-SUB_ID="$(az account show --query id -o tsv)"
+run az account show --query name -o tsv || true
+SUB_NAME="${RUN_OUT:-(取得失敗)}"
+run az account show --query id -o tsv || true
+SUB_ID="${RUN_OUT:-(取得失敗)}"
 run az deployment group show -g "$RG" -n "$DEPLOYMENT" --query properties.timestamp -o tsv --only-show-errors || true
 DEPLOY_TS="${RUN_OUT:-(取得失敗)}"
 
@@ -172,7 +174,8 @@ else
   SITE_ID=""
   run az functionapp show -g "$RG" -n "$FUNC_APP" --query id -o tsv --only-show-errors && SITE_ID="$RUN_OUT"
   if [[ -z "$SITE_ID" ]]; then
-    echo "| 実設定 | (取得失敗: リソース ID を引けない — $RUN_ERR) |"
+    # コマンド自体は成功したが id が空、というケースでも理由欄を空にしない。
+    echo "| 実設定 | (取得失敗: リソース ID を引けない — ${RUN_ERR:-コマンドは成功したが id が空だった}) |"
   elif run az rest --method GET \
     --url "https://management.azure.com${SITE_ID}/config/authsettingsV2?api-version=2023-01-01" -o json; then
     AUTH_JSON="$RUN_OUT"
@@ -282,7 +285,9 @@ fi
 
 h "コスト"
 
-if run az consumption budget list --query "[].{n:name,a:amount,s:currentSpend.amount,u:currentSpend.unit}" -o json --only-show-errors; then
+# 予算は bootstrap-core.bicep がこの RG に宣言している。-g を付けないと
+# サブスクリプション全体が既定スコープになり、他 RG の予算が混ざる。
+if run az consumption budget list -g "$RG" --query "[].{n:name,a:amount,s:currentSpend.amount,u:currentSpend.unit}" -o json --only-show-errors; then
   BUDGETS="$RUN_OUT"
   COUNT="$(echo "$BUDGETS" | jq1 'import json,sys;print(len(json.load(sys.stdin)))')"
   if [[ "$COUNT" == "0" ]]; then
