@@ -68,6 +68,10 @@ function deriveTitle(concern: string): string {
   return trimmed.length > 26 ? `${trimmed.slice(0, 26)}…` : trimmed;
 }
 
+// 空入力で開始した場合の AI からの初手 (new-consultation.mdx「空入力でも開始可能」/
+// dialogue session.mdx「開始直後の挙動」)。受け止めトーンを崩さないこと。
+const EMPTY_START_OPENER = "今日はどんなことが気になっていますか?思いつくままで大丈夫です。";
+
 /**
  * ai-agent の抽出結果を Problem リポジトリに反映する。
  * new は新規 Problem を起こし、existing は既存に Mention を追記して mentionCount / lastMentionedAt を更新。
@@ -268,7 +272,8 @@ const consultationRouter = router({
       console.log(`[consultation.start] sessionId=${sessionId}`);
 
       // 空入力でも開始可能 (UI 仕様 new-consultation.mdx / mockApi と同挙動)。
-      // テーマ未入力の開始は AI を呼ばず、最初の問いかけだけ返す
+      // テーマ未入力の開始は AI を呼ばず、AI からの問いかけ (受け止めトーン,
+      // dialogue session.mdx §3.1) だけ返す
       // (空メッセージを ai-agent に流すと 422 になるため入口で分岐する)。
       const concern = input.concern.trim();
       if (concern.length === 0) {
@@ -280,7 +285,7 @@ const consultationRouter = router({
               {
                 id: randomUUID(),
                 role: "assistant" as const,
-                text: "ありがとうございます。\nまずは「今いちばん気になっていること」を1つ教えてください。",
+                text: EMPTY_START_OPENER,
                 createdAt: nowIso(),
               },
             ],

@@ -86,7 +86,8 @@ export async function startNewConsultation(concern: string): Promise<Consultatio
       {
         id: uid(),
         role: "assistant",
-        text: `ありがとうございます。\nまずは「今いちばん気になっていること」を1つ教えてください。`,
+        // 受け止めトーンの初手 (dialogue session.mdx「開始直後の挙動」)。BFF の EMPTY_START_OPENER と揃える。
+        text: "今日はどんなことが気になっていますか?思いつくままで大丈夫です。",
         createdAt: nowText(),
       },
     ],

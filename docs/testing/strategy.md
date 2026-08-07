@@ -102,13 +102,14 @@ PR テンプレ・Test Issue テンプレに「このテストが無いと何が
 
 | 項目               | 内容                                                                                                                                                         |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **目的**           | UI 描画レベルでの破壊検知。**ブラウザでしか出ない壊れ方**を落とす最終防衛線                                                                                  |
-| **対象**           | `home → session → extract → problems` の主要フロー + 画面遷移ガード + 主要画面のスクリーンショット                                                           |
+| **目的**           | UI 描画レベルでの破壊検知 + 受け入れ検証。**ブラウザでしか出ない壊れ方**を落とす最終防衛線                                                                   |
+| **対象**           | `home → session → extract → problems` の主要フロー + 画面遷移ガード + 主要画面のスクリーンショット + QA 役が受け入れ基準から導出したシナリオ                 |
 | **フレームワーク** | Playwright (chromium)。`apps/frontend/e2e/`                                                                                                                  |
 | **起動の仕方**     | `VITE_USE_MOCK=true` の **production ビルドを `vite preview` で配信**。BFF も認証も無い自己完結モード ([ADR 0004](../adr/0004-mockapi-as-frontend-truth.md)) |
 | **書き方の指針**   | 認証環境変数を渡さない (`VITE_ENTRA_*` 未設定 = MSAL 未初期化)。全テストで `pageerror` / `console.error` を回収して落とす                                    |
 | **非ゴール**       | 見た目のスナップショット比較 (画像は人が見る副産物)、MSAL の実ログイン往復、実 AI 応答、エラーパスの網羅                                                     |
 | **実行コマンド**   | `npm run test:e2e` (root) / `pnpm --dir apps/frontend test:e2e:ui` (デバッグ)                                                                                |
+| **所有者**         | **qa-reviewer (QA 役, [ADR 0019](../adr/0019-independent-judge-agents-security-qa-release.md))**。実装者は L3 を増やさない — 受け入れシナリオの追加は QA 役が受け入れ基準 (`.github/claude/qa-rubric.md`) から導出して行う |
 
 **dev サーバではなく production ビルドを使う理由**: dev では `import.meta.env.DEV` が真になり、`VITE_USE_MOCK` の値に関わらず認証ゲートがスキップされる (`Layout.tsx` の `standalone`)。dev サーバで回すと「mock フラグが効いているか」を検証できない。production バンドルを起動するので、**バンドル固有の初期化事故** (import 時に `window` を触る等 — #69 で実際に踏んだ) もここで落ちる。
 

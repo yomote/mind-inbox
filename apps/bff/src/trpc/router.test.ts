@@ -151,17 +151,20 @@ describe("[L2] consultation.start", () => {
     });
   });
 
-  it("starts with an assistant greeting (no AI call) when concern is empty", async () => {
-    // 無いと: UI 仕様 (new-consultation.mdx「空入力でも開始可能」) に反して空 concern が
-    // BAD_REQUEST になり、実環境でホームから相談を開始できない退行が静かに通る (2026-08-07 に実環境で発生)。
-    // また空メッセージが AI Agent に流れて 422 を引き起こす退行もここで止める
-    const result = await makeCaller().consultation.start({ concern: "" });
-
-    expect(result.session.title).toBe("相談セッション");
-    expect(result.session.messages).toHaveLength(1);
-    expect(result.session.messages[0]).toMatchObject({ role: "assistant" });
-    expect(sendChatMessage).not.toHaveBeenCalled();
-  });
+  it.each(["", "   "])(
+    "starts with assistant opener (no AI call) when concern is empty or whitespace (%j)",
+    async (concern) => {
+      // 無いと: UI 仕様 (new-consultation.mdx「空入力でも開始可能」) に反して空 concern が
+      // BAD_REQUEST になり、実環境でホームから相談を開始できない退行が静かに通る (2026-08-07 に実環境で発生)。
+      // また空メッセージが AI Agent に流れて 422 を引き起こす退行もここで止める
+      const { session } = await makeCaller().consultation.start({ concern });
+      expect(session.title).toBe("相談セッション");
+      expect(session.messages).toHaveLength(1);
+      expect(session.messages[0]).toMatchObject({ role: "assistant" });
+      expect(session.messages[0]?.text.length).toBeGreaterThan(0);
+      expect(sendChatMessage).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // ---- consultation.sendMessage ---------------------------------------------
