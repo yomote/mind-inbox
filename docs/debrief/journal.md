@@ -19,6 +19,13 @@
 
 ---
 
+## 2026-08-07 — design-gate (#86 Container Apps の第二の扉)
+
+- **対象**: Issue #86 の恒久対策方式。ADR 0017 を起案・承認
+- **決定**: **Option A (認証の門)** — ai-agent/vv-wrap に CA 組み込み認証 + BFF が Managed Identity トークン、voicevox は internal ingress 化。VNet 案は不採用 (「将来やる」予約もしない — 必要時に新 ADR)
+- **学びメモ**: user は当初 VNet 案 (ネットワークで閉じるのが原則として正しい) に傾いた → 現構成の Functions が Y1 で VNet 統合非対応であり、EP1 だと予算 (月¥3,000) 即死 / Flex Consumption 移行だと工事最大、という「正しさの通行料」を可視化したら判断が変わった。原則と通行料を並べて見せる説明は今後も有効。教訓「守るべき資源から到達経路を全部数える」をゲート観点に追加
+- **持ち越し**: #86 の実装 (IaC 反映 + smoke-test に無認可 401 実測)。実装は承認済み設計の範囲内なのでゲート不要
+
 ## 2026-08-06 — design-gate (#69 EasyAuth / SWA Free 化)
 
 - **対象**: issue #69「SWA Free 化 + Functions EasyAuth(Entra 自分限定) + CORS + 予算アラート」。根拠 ADR: [0013](../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md)

@@ -1,4 +1,4 @@
-# 0017. 動作検証をループに組み込む — 実態の読み取り・PR への証跡・ローカルブラウザ検証
+# 0018. 動作検証をループに組み込む — 実態の読み取り・PR への証跡・ローカルブラウザ検証
 
 - Status: Proposed
 - Date: 2026-08-07
@@ -8,7 +8,7 @@
 
 Technical Story: [debrief #2](../debrief/journal.md)（epic #70 の振り返り）/ 関連 issue: [#4](../../../issues/4)（L3 Playwright）/ [#86](../../../issues/86)（コンテナ露出）
 
-関連: [ADR 0014](0014-design-comprehension-gate-and-debrief.md)（理解ゲート + デブリーフ。本 ADR はその続きで「実装 → 検証」の境界を扱う）/ [ADR 0013](0013-standing-low-cost-dev-env-with-auto-deploy.md)（常設 dev 環境）/ [testing/strategy.md](../testing/strategy.md)
+関連: [ADR 0014](0014-design-comprehension-gate-and-debrief.md)（理解ゲート + デブリーフ。本 ADR はその続きで「実装 → 検証」の境界を扱う）/ [ADR 0017](0017-container-apps-access-via-auth-gate.md)（#86 の恒久対策。本 ADR の「到達経路を全部数える」が生まれた元の事象）/ [ADR 0013](0013-standing-low-cost-dev-env-with-auto-deploy.md)（常設 dev 環境）/ [testing/strategy.md](../testing/strategy.md)
 
 ## Context and Problem Statement
 
@@ -117,6 +117,7 @@ Chosen option: **Option A**。
 ## Links
 
 - [ADR 0014](0014-design-comprehension-gate-and-debrief.md) — 理解ゲート + デブリーフ（本 ADR はその「実装 → 検証」側）
+- [ADR 0017](0017-container-apps-access-via-auth-gate.md) — #86 の恒久対策（「2 本目の扉」の実例）
 - [ADR 0004](0004-mockapi-as-frontend-truth.md) — mockApi がフロントの真実（ローカル Playwright の土台）
 - [ADR 0006](0006-azure-access-via-device-code.md) — 静的シークレット0（Option C を却下した根拠）
 - [docs/testing/strategy.md](../testing/strategy.md) — L0〜L4 のテスト階層
