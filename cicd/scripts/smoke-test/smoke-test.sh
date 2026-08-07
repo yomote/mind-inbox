@@ -190,8 +190,20 @@ while IFS= read -r CA; do
   # (`*.internal.<region>.azurecontainerapps.io` が入る) ので、fqdn の有無だけで
   # 判定すると internal の CA を「外部公開されている」扱いで curl しに行き、
   # 名前解決に失敗して warn 止まり = 実際は閉じているのに未検証と報告してしまう。
+  # 取得の成否 (rc) と「ingress が実際に無い」を分ける。`|| true` で潰すと、
+  # 権限エラーや一時的な API 障害でも空文字になり「ingress なし = ok」に化ける。
+  # それはこの検査自身が静かに通る経路で、まさにこの PR が塞ごうとしている失敗モード。
+  # 一覧取得 (az containerapp list) を ng にしているのと同じ扱いに揃える。
+  set +e
   CA_INGRESS=$(az containerapp show -g "$RG" -n "$CA" \
-    --query "properties.configuration.ingress" -o json --only-show-errors 2>/dev/null || true)
+    --query "properties.configuration.ingress" -o json --only-show-errors 2>"$CA_ERR")
+  ca_show_rc=$?
+  set -e
+  if [[ "$ca_show_rc" -ne 0 ]]; then
+    ng "$CA: ingress の取得に失敗したため露出を判定できませんでした: $(head -c 160 "$CA_ERR")"
+    continue
+  fi
+
   CA_EXTERNAL=$(printf '%s' "$CA_INGRESS" | python3 -c \
     'import json,sys
 raw = sys.stdin.read().strip()
@@ -207,7 +219,9 @@ print("" if not d else (d.get("fqdn") or ""))' 2>/dev/null || true)
     ok "$CA: ingress なし (外部からも環境内からも HTTP で到達しない)"
     continue
   fi
-  if [[ "$CA_EXTERNAL" == "False" || "$CA_EXTERNAL" == "false" ]]; then
+  # Python の bool は "False"/"True" を出すが、大小文字を正規化して比較する
+  # (JSON 側の型が変わっても判定が静かに外れないように)。
+  if [[ "$(printf '%s' "$CA_EXTERNAL" | tr '[:upper:]' '[:lower:]')" == "false" ]]; then
     # internal は CAE の外から名前解決できない = 到達経路が存在しない (#86 / ADR 0017)。
     ok "$CA: internal ingress (CAE 内からのみ到達。外部に公開されていない)"
     continue
