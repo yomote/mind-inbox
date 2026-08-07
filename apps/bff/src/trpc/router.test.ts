@@ -151,11 +151,15 @@ describe("[L2] consultation.start", () => {
     });
   });
 
-  it("rejects empty concern with zod validation", async () => {
-    // 無いと: empty concern が AI Agent に流れて 500 を引き起こす退行が静かに通る
-    await expect(makeCaller().consultation.start({ concern: "" })).rejects.toBeInstanceOf(
-      TRPCError,
-    );
+  it("starts with an assistant greeting (no AI call) when concern is empty", async () => {
+    // 無いと: UI 仕様 (new-consultation.mdx「空入力でも開始可能」) に反して空 concern が
+    // BAD_REQUEST になり、実環境でホームから相談を開始できない退行が静かに通る (2026-08-07 に実環境で発生)。
+    // また空メッセージが AI Agent に流れて 422 を引き起こす退行もここで止める
+    const result = await makeCaller().consultation.start({ concern: "" });
+
+    expect(result.session.title).toBe("相談セッション");
+    expect(result.session.messages).toHaveLength(1);
+    expect(result.session.messages[0]).toMatchObject({ role: "assistant" });
     expect(sendChatMessage).not.toHaveBeenCalled();
   });
 });
@@ -425,7 +429,12 @@ describe("[L2] consultation.extract", () => {
 
     // 2回目は既存候補 prob-1 を ai-agent に渡している（ADR 0012）
     expect(vi.mocked(extractAiAgent).mock.calls[1]?.[0].existingProblems).toEqual([
-      expect.objectContaining({ id: "prob-1", title: "転職の迷い", status: "open", mentionCount: 1 }),
+      expect.objectContaining({
+        id: "prob-1",
+        title: "転職の迷い",
+        status: "open",
+        mentionCount: 1,
+      }),
     ]);
 
     const problem = await caller.problem.get({ id: "prob-1" });
@@ -559,7 +568,11 @@ describe("[L2] problem.triage — 編集", () => {
     const { caller, problemRepo } = makeCallerWithRepos();
     await problemRepo.upsert(makeProblem({ id: "p1" }));
 
-    const t = await caller.problem.triage({ action: "editTheme", problemId: "p1", theme: "心と体" });
+    const t = await caller.problem.triage({
+      action: "editTheme",
+      problemId: "p1",
+      theme: "心と体",
+    });
     expect(t.problems[0].theme).toBe("心と体");
 
     const t2 = await caller.problem.triage({

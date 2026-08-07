@@ -182,7 +182,9 @@ export function AppRouter({
         element={
           <ProtectedRoute authStatus={authStatus}>
             <HomeScreen
-              onNewConsultation={() => void handleStartConsultation()}
+              // UI 仕様 (home.mdx): 新しい相談を始める → newConsultation 画面へ遷移。
+              // 直接 start を呼ぶとテーマ入力画面を飛ばしてしまう
+              onNewConsultation={() => transition("newConsultation")}
               onProblemList={() => void handleOpenProblemList()}
               onHistory={() => transition("history")}
               onSpecPreview={isDev ? () => transition("specPreview") : undefined}
