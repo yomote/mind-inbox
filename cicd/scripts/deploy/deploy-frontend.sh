@@ -132,8 +132,39 @@ if [[ -z "$TOKEN" ]]; then
   exit 1
 fi
 
+# SWA Free には linked backend が無く、フロントは BFF(Functions) を別オリジンから直叩きする (#69)。
+# BFF の URL と Entra の client/tenant は **ビルド時に焼き込む** 必要があるため、
+# deployment outputs から解決して VITE_* として渡す。
+# 解決できない場合は空のまま進む: BFF URL 空 = 同一オリジン前提の旧挙動、
+# Entra 空 = 認証無効ビルド。意図せず認証が外れたビルドを黙って出さないよう警告する。
+resolve_frontend_build_env() {
+  local outputs
+  outputs="$(az deployment group show -g "$RG" -n "$DEPLOYMENT" --query 'properties.outputs' -o json 2>/dev/null || echo '{}')"
+  _out() { printf '%s' "$outputs" | python3 -c \
+    "import sys,json; print(json.load(sys.stdin).get('$1',{}).get('value',''))" 2>/dev/null; }
+
+  local func_host
+  func_host="$(_out functionAppDefaultHostname)"
+  VITE_BFF_BASE_URL="${VITE_BFF_BASE_URL:-${func_host:+https://$func_host}}"
+  VITE_ENTRA_CLIENT_ID="${VITE_ENTRA_CLIENT_ID:-$(_out functionAuthEntraClientId)}"
+  VITE_ENTRA_TENANT_ID="${VITE_ENTRA_TENANT_ID:-$(_out functionAuthEntraTenantId)}"
+  export VITE_BFF_BASE_URL VITE_ENTRA_CLIENT_ID VITE_ENTRA_TENANT_ID
+
+  echo "VITE_BFF_BASE_URL=${VITE_BFF_BASE_URL:-(empty)}"
+  if [[ -z "$VITE_BFF_BASE_URL" ]]; then
+    echo "WARN: BFF の URL を解決できませんでした。フロントは同一オリジンに API がある前提でビルドされます" >&2
+  fi
+  if [[ -n "$VITE_ENTRA_CLIENT_ID" && -n "$VITE_ENTRA_TENANT_ID" ]]; then
+    echo "VITE_ENTRA_CLIENT_ID=$VITE_ENTRA_CLIENT_ID (認証あり)"
+  else
+    echo "WARN: Entra の client/tenant が空のため **認証無効** のフロントをビルドします。" >&2
+    echo "      公開 URL に出す場合は applyFunctionAuthLockdown=true と functionAuthEntraClientId を設定してください" >&2
+  fi
+}
+
 echo "--- build frontend ---"
 cd "$FRONTEND_DIR"
+resolve_frontend_build_env
 if command -v pnpm >/dev/null 2>&1; then
   pnpm install --frozen-lockfile
   pnpm build

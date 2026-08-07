@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # Deploy AI Agent to Azure Container Apps.
 #
-# 1. az acr build         — ACR Tasks でクラウドビルド（ローカル Docker 不要）
-# 2. az containerapp      — Container App を作成 or 更新
-# 3. az role assignment   — Managed Identity に OpenAI User / AcrPull を付与
+# 1. az containerapp      — Container App を作成 or 更新（ghcr の事前ビルド image を差し替え）
+# 2. az role assignment   — Managed Identity に OpenAI User を付与
 #
-# 前提: main-bootstrap が enableAcr=true / enableAiAgentAca=true でデプロイ済み
+# image は build-images.yml が main マージ時に ghcr へ push 済み（#67 / ADR 0013）。
+# このスクリプトはビルドしない（`az acr build` 廃止）: 既存タグを Container App に差し替えるだけ。
+# 既定は :latest。特定コミットに固定したい時は IMAGE_TAG=sha-<full-sha> を渡す。
+# ghcr の image は public 前提でプル（registry secret 不要）。公開手順: docs/runbooks/ghcr-images.md
+#
+# 前提: main-bootstrap が enableAiAgentAca=true でデプロイ済み / ghcr に ai-agent image が push 済み
 set -euo pipefail
 
 RG="${RG:-rg-dev-mind-inbox}"
@@ -13,17 +17,17 @@ DEPLOYMENT="${DEPLOYMENT:-main-bootstrap}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 TARGET_PORT="${TARGET_PORT:-8000}"
 
+# ghcr の image 座標（ghcr.io/<owner>/<repo>/ai-agent）。owner/repo は環境変数で上書き可能。
+IMAGE_REGISTRY="${IMAGE_REGISTRY:-ghcr.io}"
+IMAGE_REPO="${IMAGE_REPO:-yomote/mind-inbox}"
+
 # Role definition IDs (built-in)
-ROLE_ACR_PULL="7f951dda-4ed3-4680-a7ca-43fe172d538d"
 ROLE_OPENAI_USER="5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"
 
 need() {
   command -v "$1" >/dev/null 2>&1 || { echo "ERROR: missing command: $1" >&2; exit 1; }
 }
 need az
-
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-SOURCE_DIR="$ROOT_DIR/apps/services/ai-agent"
 
 # ── Resolve deployment outputs (single API call) ──────────────────────────────
 echo "=== Resolving deployment outputs ==="
@@ -32,16 +36,12 @@ _OUTPUTS="$(az deployment group show -g "$RG" -n "$DEPLOYMENT" \
 _val() { printf '%s' "$_OUTPUTS" | python3 -c \
   "import sys,json; print(json.load(sys.stdin).get('$1',{}).get('value',''))" 2>/dev/null; }
 
-ACR_NAME="${ACR_NAME:-$(_val acrName)}"
 CA_NAME="${CA_NAME:-$(_val aiAgentContainerAppName)}"
 CAE_NAME="${CAE_NAME:-$(_val aiAgentContainerAppsEnvironmentName)}"
 OPENAI_ENDPOINT="${OPENAI_ENDPOINT:-$(_val openAiEndpoint)}"
 OPENAI_DEPLOYMENT="${OPENAI_DEPLOYMENT:-$(_val openAiDeploymentName)}"
 OPENAI_ACCOUNT_NAME="${OPENAI_ACCOUNT_NAME:-$(_val openAiAccountName)}"
 
-if [[ -z "$ACR_NAME" ]]; then
-  echo "ERROR: ACR name not found. Re-run bootstrap with enableAcr=true, or set ACR_NAME=<name>." >&2; exit 1
-fi
 if [[ -z "$CA_NAME" ]]; then
   echo "ERROR: Container App name not found. Re-run bootstrap with enableAiAgentAca=true, or set CA_NAME=<name>." >&2; exit 1
 fi
@@ -52,22 +52,14 @@ if [[ -z "$OPENAI_ENDPOINT" ]]; then
   echo "ERROR: OPENAI_ENDPOINT not found. Re-run bootstrap with enableOpenAi=true, or set OPENAI_ENDPOINT=<url>." >&2; exit 1
 fi
 
-IMAGE="${ACR_NAME}.azurecr.io/ai-agent:${IMAGE_TAG}"
-echo "ACR:      $ACR_NAME"
+IMAGE="${IMAGE:-${IMAGE_REGISTRY}/${IMAGE_REPO}/ai-agent:${IMAGE_TAG}}"
 echo "CA:       $CA_NAME"
 echo "CAE:      $CAE_NAME"
 echo "Image:    $IMAGE"
 echo "Endpoint: $OPENAI_ENDPOINT"
 
-# ── Build ─────────────────────────────────────────────────────────────────────
-echo ""
-echo "=== Building image with ACR Tasks ==="
-az acr build \
-  --registry "$ACR_NAME" \
-  --image "ai-agent:${IMAGE_TAG}" \
-  "$SOURCE_DIR"
-
 # ── Deploy Container App (create or update; FQDN captured from output) ────────
+# ghcr の public image を pull（--registry-server 不要）。ビルドは build-images.yml 側で完了済み。
 echo ""
 echo "=== Deploying Container App ==="
 
@@ -95,24 +87,15 @@ if [[ -z "$CA_EXISTS" ]]; then
     --cpu 0.5 \
     --memory 1Gi \
     --system-assigned \
-    --registry-server "${ACR_NAME}.azurecr.io" \
-    --registry-identity system \
     --env-vars "${ENV_VARS[@]}" \
     --query 'properties.configuration.ingress.fqdn' -o tsv)"
 else
   echo "Updating Container App '$CA_NAME'..."
-  # MI を system-assigned に（既に有効なら no-op）
+  # MI を system-assigned に（既に有効なら no-op）。OpenAI への RBAC アクセスに必要。
   az containerapp identity assign \
     --resource-group "$RG" \
     --name "$CA_NAME" \
     --system-assigned \
-    --output none
-  # ACR registry を identity 経由で設定（既に設定済みなら no-op）
-  az containerapp registry set \
-    --resource-group "$RG" \
-    --name "$CA_NAME" \
-    --server "${ACR_NAME}.azurecr.io" \
-    --identity system \
     --output none
   FQDN="$(az containerapp update \
     --resource-group "$RG" \
@@ -145,9 +128,6 @@ _assign_role() {
     --output none 2>&1 | grep -v "already exists" || true
   echo "  $label: done."
 }
-
-ACR_ID="$(az acr show -g "$RG" -n "$ACR_NAME" --query id -o tsv)"
-_assign_role "$ROLE_ACR_PULL" "$ACR_ID" "AcrPull"
 
 if [[ -n "$OPENAI_ACCOUNT_NAME" ]]; then
   OPENAI_ID="$(az cognitiveservices account show -g "$RG" -n "$OPENAI_ACCOUNT_NAME" --query id -o tsv 2>/dev/null || true)"

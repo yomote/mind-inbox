@@ -152,7 +152,7 @@ See `apps/bff/local.settings.json.example` for local dev template.
 
 ### Two-Phase IaC (Bicep)
 
-1. **bootstrap** (`cicd/iac/main-bootstrap.bicep`) — Creates all resources: SWA, Function App, SQL, Key Vault, Log Analytics, Container App environments, ACR
+1. **bootstrap** (`cicd/iac/main-bootstrap.bicep`) — Creates all resources: SWA, Function App, Key Vault, Log Analytics, Container App environments (SQL 一式は `enableSql=true` の時だけ。ACR は廃止 — ADR 0013)
 2. **config** (`cicd/iac/main-config.bicep`) — Entra ID auth + secrets (run after bootstrap)
 
 ### Resource Naming Convention
@@ -166,8 +166,8 @@ Environments: `dev` / `stg` / `prod`, default app name: `mind-box`
 cicd/scripts/deploy/deploy-all.sh              # Frontend + BFF
 cicd/scripts/deploy/deploy-frontend.sh         # SWA + Entra auth sync
 cicd/scripts/deploy/deploy-backend.sh          # BFF zip deploy to Functions
-cicd/scripts/deploy/deploy-ai-agent.sh         # Docker build → ACR → Container App
-cicd/scripts/deploy/deploy-voicevox-wrapper.sh # Docker build → ACR → Container App
+cicd/scripts/deploy/deploy-ai-agent.sh         # ghcr の事前ビルド image を Container App に差し替え
+cicd/scripts/deploy/deploy-voicevox-wrapper.sh # ghcr の事前ビルド image を Container App に差し替え
 cicd/scripts/smoke-test/smoke-test.sh          # Post-deploy verification
 ```
 
@@ -177,4 +177,5 @@ cicd/scripts/smoke-test/smoke-test.sh          # Post-deploy verification
 - **tRPC** provides end-to-end type safety between frontend and BFF without code generation
 - **SWA linked backend** uses Standard SKU to proxy API calls to Azure Functions with built-in auth
 - **Container Apps** (not AKS) for services — serverless containers with scale-to-zero for cost control
-- **Private endpoints** for SQL — network-isolated, accessed only from within VNet
+- **コンテナ image は ghcr に事前ビルド** — GitHub Actions (`build-images.yml`) が main マージ時に build/push し、デプロイはタグ差し替えのみ。ACR は廃止 ([ADR 0013](docs/adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) / [Runbook](docs/runbooks/ghcr-images.md))
+- **Private endpoints** for SQL — network-isolated, accessed only from within VNet (SQL は `enableSql=true` の時のみ。既定は未プロビジョニング)

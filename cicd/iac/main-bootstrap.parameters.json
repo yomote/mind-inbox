@@ -29,23 +29,26 @@
     "openAiLocation": {
       "value": "japaneast"
     },
-    "enableAcr": {
-      "value": true
-    },
     "enableAiAgentAca": {
       "value": true
-    },
-    "aiAgentLocation": {
-      "value": "japaneast"
     },
     "enableVoicevoxWrapperAca": {
       "value": true
     },
-    "voicevoxWrapperLocation": {
-      "value": "japaneast"
-    },
     "sqlAdminKeyVaultName": {
       "value": "kv-dev-mindbox-sql2"
+    },
+    "containerAppsLocation": {
+      "value": "japaneast"
+    },
+    "budgetStartDate": {
+      "value": "2026-08-01"
+    },
+    "applyFunctionAuthLockdown": {
+      "value": true
+    },
+    "functionAuthEntraClientId": {
+      "value": "a0f2c66e-e7ef-40c2-abda-32571470f23e"
     }
   }
 }

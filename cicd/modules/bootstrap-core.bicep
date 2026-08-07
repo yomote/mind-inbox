@@ -31,8 +31,8 @@ param staticSiteName string = toLower('swa-${environmentName}-${replace(replace(
   'Free'
   'Standard'
 ])
-@description('Static Web Apps SKU')
-param staticSiteSkuName string = 'Standard'
+@description('Static Web Apps SKU. 既定 Free (ADR 0013 / #69): linked backend は Standard 専用なので、フロントは Functions を直叩きし、認可は Functions 側の EasyAuth が担う。')
+param staticSiteSkuName string = 'Free'
 
 @description('Repository URL for Static Web Apps (optional; set to empty to create without repo linkage)')
 param staticSiteRepositoryUrl string = ''
@@ -77,6 +77,37 @@ param staticSiteEntraClientSecret string = ''
 @description('Apply Function App EasyAuth lockdown in bootstrap (recommended: false; manage in main-config).')
 param applyFunctionAuthLockdown bool = false
 
+// -------------------- Function App 認可 (EasyAuth / Entra) — #69 --------------------
+// SWA Free には linked backend が無く、フロントは Functions を別オリジンから直叩きする。
+// SWA の認証は SWA が配る静的ファイルにしか効かないため、課金の芯 (OpenAI) を持つ
+// Functions 側に認可の門を置く。未認証は関数コード起動前に 401 (ADR 0013)。
+@description('Entra (Azure AD) app client ID used by the SPA and accepted by Function App EasyAuth. 空なら EasyAuth は構成しない。')
+param functionAuthEntraClientId string = ''
+
+@description('Entra tenant ID. 単一テナント限定 (この tenant の identity のみ許可)。')
+param functionAuthEntraTenantId string = tenant().tenantId
+
+@description('Extra CORS origins allowed to call the Function App (SWA の既定ホスト名は自動で許可される)。')
+param functionExtraCorsOrigins array = []
+
+// -------------------- 予算アラート (二重防御) — #69 --------------------
+// 認可を破られても・設定を緩めても、請求で気づけるようにする (ADR 0013)。
+@description('Create a monthly budget alert on this resource group.')
+param enableBudgetAlert bool = true
+
+@description('Monthly budget amount in the billing currency (JPY サブスクなら円)。')
+param budgetAmount int = 3000
+
+@description('Email addresses notified when budget thresholds are crossed.')
+param budgetContactEmails array = []
+
+// Azure の Consumption Budget は作成後に startDate を変更できない。
+// utcNow() を既定にすると毎デプロイで再計算され、月をまたいだ再デプロイ (ADR 0013 の
+// main マージ自動デプロイ) で既存 budget の更新が startDate 不一致で失敗しうる。
+// そのため **固定値** を既定にし、parameters ファイルで明示管理する。
+@description('Budget start date (first day of a month, yyyy-MM-dd)。作成後は変更不可なので固定値で持つ。')
+param budgetStartDate string = '2026-08-01'
+
 @description('Azure Functions app name (must be globally unique)')
 param functionAppName string = toLower('func-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}')
 
@@ -102,8 +133,15 @@ param voicevoxTier string = 'cpu'
 @description('Azure region for VOICEVOX Container Apps environment/app.')
 param voicevoxLocation string = location
 
-@description('Container Apps Environment name for VOICEVOX.')
-param voicevoxContainerAppsEnvironmentName string = toLower('cae-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-voicevox')
+// -------------------- 共有 Container Apps Environment (#68 / ADR 0013) --------------------
+// 以前は ai-agent / voicevox / vv-wrapper で CAE を 3 つ作っていた。CAE の作成は 1 つ数分かかり、
+// フル構築の所要を押し上げていたため dev では 1 環境に相乗りする。
+// トレードオフ: 障害ドメインを共有する (1 環境の不調が全サービスに及ぶ)。dev では許容。
+@description('Shared Container Apps Environment name (ai-agent / voicevox / vv-wrapper が相乗りする)。')
+param containerAppsEnvironmentName string = toLower('cae-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}')
+
+@description('Region for the shared Container Apps Environment. VOICEVOX GPU のリージョン制約が最も厳しいため既定は voicevoxLocation に合わせる。')
+param containerAppsLocation string = voicevoxLocation
 
 @description('Container App name for VOICEVOX engine.')
 param voicevoxContainerAppName string = toLower('ca-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-voicevox')
@@ -161,30 +199,11 @@ param openAiModelVersion string = '2024-11-20'
 @description('Deployment capacity in units of 1,000 tokens-per-minute (TPM). Subject to regional quota.')
 param openAiCapacity int = 10
 
-// -------------------- Azure Container Registry params --------------------
-@description('Enable Azure Container Registry for building and storing AI Agent images.')
-param enableAcr bool = false
-
-@description('ACR name (alphanumeric, 5-50 chars, globally unique).')
-param acrName string = toLower('cr${take('${environmentName}${replace(replace(appName, '-', ''), '_', '')}', 46)}')
-
-@allowed([
-  'Basic'
-  'Standard'
-  'Premium'
-])
-@description('ACR SKU.')
-param acrSkuName string = 'Basic'
-
 // -------------------- AI Agent Container App params --------------------
+// NOTE: ACR は廃止（#67 / ADR 0013）。image は GitHub Actions で ghcr に事前ビルドし、
+// Container App は ghcr の public image を pull する（待機 ¥750/月 の ACR を除去）。
 @description('Enable AI Agent on Azure Container Apps.')
 param enableAiAgentAca bool = false
-
-@description('Azure region for AI Agent Container Apps resources.')
-param aiAgentLocation string = location
-
-@description('Container Apps Environment name for AI Agent.')
-param aiAgentContainerAppsEnvironmentName string = toLower('cae-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-ai')
 
 @description('Container App name for AI Agent.')
 param aiAgentContainerAppName string = toLower('ca-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-ai-agent')
@@ -192,12 +211,6 @@ param aiAgentContainerAppName string = toLower('ca-${environmentName}-${replace(
 // -------------------- VOICEVOX Wrapper Container App params --------------------
 @description('Enable VOICEVOX Wrapper on Azure Container Apps.')
 param enableVoicevoxWrapperAca bool = false
-
-@description('Azure region for VOICEVOX Wrapper Container Apps resources.')
-param voicevoxWrapperLocation string = location
-
-@description('Container Apps Environment name for VOICEVOX Wrapper.')
-param voicevoxWrapperContainerAppsEnvironmentName string = toLower('cae-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-vv-wrap')
 
 @description('Container App name for VOICEVOX Wrapper.')
 param voicevoxWrapperContainerAppName string = toLower('ca-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-vv-wrap')
@@ -535,6 +548,15 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
           linuxFxVersion: 'Node|22'
           minTlsVersion: '1.2'
           ftpsState: 'Disabled'
+          // SWA Free 化でフロントは別オリジンになるため CORS が要る (#69)。
+          // 注意: CORS はブラウザ側の規約であって認可ではない。守りは EasyAuth の 401。
+          cors: {
+            allowedOrigins: union(
+              ['https://${staticSite.properties.defaultHostname}'],
+              functionExtraCorsOrigins
+            )
+            supportCredentials: false
+          }
           appSettings: [
             {
               name: 'AzureWebJobsStorage'
@@ -591,9 +613,14 @@ var voicevoxGpuWorkloadProfiles = [
   }
 ]
 
-resource voicevoxManagedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = if (enableVoicevoxAca) {
-  name: voicevoxContainerAppsEnvironmentName
-  location: voicevoxLocation
+// 共有 CAE (#68): ai-agent / voicevox / vv-wrapper が 1 つの環境に相乗りする。
+// どれか 1 つでも有効なら作る。VOICEVOX が gpu tier のときだけ GPU ワークロードプロファイルを足す
+// （CPU 側のアプリは workloadProfileName を指定せず組み込みの Consumption を使うので影響なし）。
+var containerAppsEnabled = enableVoicevoxAca || enableAiAgentAca || enableVoicevoxWrapperAca
+
+resource sharedManagedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = if (containerAppsEnabled) {
+  name: containerAppsEnvironmentName
+  location: containerAppsLocation
   properties: union(
     {
       appLogsConfiguration: {
@@ -604,16 +631,17 @@ resource voicevoxManagedEnvironment 'Microsoft.App/managedEnvironments@2024-03-0
         }
       }
     },
-    voicevoxIsGpu ? { workloadProfiles: voicevoxGpuWorkloadProfiles } : {}
+    (enableVoicevoxAca && voicevoxIsGpu) ? { workloadProfiles: voicevoxGpuWorkloadProfiles } : {}
   )
 }
 
 resource voicevoxContainerApp 'Microsoft.App/containerApps@2024-03-01' = if (enableVoicevoxAca) {
   name: voicevoxContainerAppName
-  location: voicevoxLocation
+  // Container App は環境と同じリージョンに置く必要があるため、共有 CAE の location に揃える (#68)。
+  location: containerAppsLocation
   properties: union(
     {
-      managedEnvironmentId: voicevoxManagedEnvironment.id
+      managedEnvironmentId: sharedManagedEnvironment.id
       configuration: {
         activeRevisionsMode: 'Single'
         ingress: {
@@ -687,50 +715,8 @@ resource openAiDeployment 'Microsoft.CognitiveServices/accounts/deployments@2023
   }
 }
 
-// -------------------- Azure Container Registry --------------------
-resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = if (enableAcr) {
-  name: acrName
-  location: location
-  sku: {
-    name: acrSkuName
-  }
-  properties: {
-    adminUserEnabled: false
-  }
-}
-
-// -------------------- AI Agent Container Apps Environment --------------------
-// Container App itself is created/updated by deploy-ai-agent.sh (avoids ARM provisioning timeout)
-// Consumption-only environment (no workloadProfiles) — provisions in seconds
-resource aiAgentManagedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = if (enableAiAgentAca) {
-  name: aiAgentContainerAppsEnvironmentName
-  location: aiAgentLocation
-  properties: {
-    appLogsConfiguration: {
-      destination: 'log-analytics'
-      logAnalyticsConfiguration: {
-        customerId: law.properties.customerId
-        sharedKey: law.listKeys().primarySharedKey
-      }
-    }
-  }
-}
-
-// -------------------- VOICEVOX Wrapper Container Apps Environment --------------------
-// Container App itself is created/updated by deploy-voicevox-wrapper.sh
-resource voicevoxWrapperManagedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = if (enableVoicevoxWrapperAca) {
-  name: voicevoxWrapperContainerAppsEnvironmentName
-  location: voicevoxWrapperLocation
-  properties: {
-    appLogsConfiguration: {
-      destination: 'log-analytics'
-      logAnalyticsConfiguration: {
-        customerId: law.properties.customerId
-        sharedKey: law.listKeys().primarySharedKey
-      }
-    }
-  }
-}
+// AI Agent / VOICEVOX Wrapper の Container App 本体は deploy-*.sh が作成/更新する
+// (ARM のプロビジョニングタイムアウトを避けるため)。載せる環境は上の共有 CAE (#68)。
 
 // -------------------- Static Web Apps (frontend) --------------------
 var staticSiteRepoProps = (staticSiteRepositoryUrl != '')
@@ -911,9 +897,13 @@ resource staticSiteBackend 'Microsoft.Web/staticSites/linkedBackends@2025-03-01'
 }
 
 // -------------------- Function App Authentication (EasyAuth) --------------------
-// Lock down the Function App so it is intended to be called via SWA proxy only.
-// This uses the built-in Azure Static Web Apps identity provider.
-resource functionAuthSettingsV2 'Microsoft.Web/sites/config@2023-12-01' = if (applyFunctionAuthLockdown) {
+// 認可の門はここ (#69 / ADR 0013)。SWA Free には linked backend が無く、フロントは
+// 別オリジンから直叩きするため、SWA 側の認証では API を守れない。課金の芯 (OpenAI) は
+// この Functions の先にあるので、未認証は関数コードが起動する前に 401 で弾く。
+// 単一テナント限定: issuer をこの tenant に固定し、audience を SPA の client ID に限定する。
+var functionEasyAuthEnabled = applyFunctionAuthLockdown && !empty(functionAuthEntraClientId)
+
+resource functionAuthSettingsV2 'Microsoft.Web/sites/config@2023-12-01' = if (functionEasyAuthEnabled) {
   parent: functionApp
   name: 'authsettingsV2'
   properties: {
@@ -935,15 +925,23 @@ resource functionAuthSettingsV2 'Microsoft.Web/sites/config@2023-12-01' = if (ap
       }
     }
     identityProviders: {
-      azureStaticWebApps: {
+      azureActiveDirectory: {
         enabled: true
         registration: {
-          // Observed in the portal as the SWA hostname; keep it deterministic in IaC.
-          clientId: staticSite.properties.defaultHostname
+          // 単一テナント issuer。他テナントの identity は検証で落ちる。
+          openIdIssuer: 'https://login.microsoftonline.com/${functionAuthEntraTenantId}/v2.0'
+          clientId: functionAuthEntraClientId
+        }
+        validation: {
+          // SPA が自分自身の client ID 宛に取ったトークンを受ける (api://<id> と <id> の両表記)。
+          allowedAudiences: [
+            functionAuthEntraClientId
+            'api://${functionAuthEntraClientId}'
+          ]
         }
       }
       // Explicitly disable all other providers to avoid partially-enabled configs.
-      azureActiveDirectory: {
+      azureStaticWebApps: {
         enabled: false
       }
       facebook: {
@@ -974,6 +972,44 @@ resource functionAuthSettingsV2 'Microsoft.Web/sites/config@2023-12-01' = if (ap
   }
 }
 
+// -------------------- 予算アラート (二重防御) — #69 --------------------
+// 認可が破られても・設定を緩めても請求で気づけるようにする最後の砦 (ADR 0013)。
+// 50% で予兆、80% で警戒、100% で超過。通知先が空なら作らない (通知の無い予算は無意味)。
+resource budget 'Microsoft.Consumption/budgets@2023-05-01' = if (enableBudgetAlert && !empty(budgetContactEmails)) {
+  name: 'budget-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}'
+  properties: {
+    category: 'Cost'
+    amount: budgetAmount
+    timeGrain: 'Monthly'
+    timePeriod: {
+      startDate: budgetStartDate
+    }
+    notifications: {
+      forecasted80: {
+        enabled: true
+        operator: 'GreaterThan'
+        threshold: 80
+        thresholdType: 'Forecasted'
+        contactEmails: budgetContactEmails
+      }
+      actual50: {
+        enabled: true
+        operator: 'GreaterThan'
+        threshold: 50
+        thresholdType: 'Actual'
+        contactEmails: budgetContactEmails
+      }
+      actual100: {
+        enabled: true
+        operator: 'GreaterThan'
+        threshold: 100
+        thresholdType: 'Actual'
+        contactEmails: budgetContactEmails
+      }
+    }
+  }
+}
+
 output logAnalyticsWorkspaceId string = law.id
 output logAnalyticsCustomerId string = law.properties.customerId
 output sqlEnabled bool = enableSql
@@ -986,6 +1022,13 @@ output sqlAdminKeyVaultName string = enableSql ? sqlAdminKeyVaultName : ''
 
 output staticSiteDefaultHostname string = staticSite.properties.defaultHostname
 output functionAppDefaultHostname string = functionApp.properties.defaultHostName
+
+// #69: フロントのビルド時 env とスモークテストがこの3つを参照する。
+output staticSiteSkuName string = staticSiteSkuName
+output functionEasyAuthEnabled bool = functionEasyAuthEnabled
+output functionAuthEntraClientId string = functionAuthEntraClientId
+output functionAuthEntraTenantId string = functionEasyAuthEnabled ? functionAuthEntraTenantId : ''
+output budgetAlertEnabled bool = enableBudgetAlert && !empty(budgetContactEmails)
 
 output staticSiteName string = staticSite.name
 output staticSiteEntraAuthEnabled bool = staticSiteEntraAuthEnabled
@@ -1001,12 +1044,12 @@ output openAiEnabled bool = enableOpenAi
 output openAiEndpoint string = enableOpenAi ? (openAiAccount.?properties.?endpoint ?? '') : ''
 output openAiAccountName string = enableOpenAi ? openAiAccountName : ''
 output openAiDeploymentName string = enableOpenAi ? openAiDeploymentName : ''
-output acrEnabled bool = enableAcr
-output acrName string = enableAcr ? acrName : ''
-output acrLoginServer string = enableAcr ? acr!.properties.loginServer : ''
 output aiAgentEnabled bool = enableAiAgentAca
 output aiAgentContainerAppName string = enableAiAgentAca ? aiAgentContainerAppName : ''
-output aiAgentContainerAppsEnvironmentName string = enableAiAgentAca ? aiAgentContainerAppsEnvironmentName : ''
+// #68: CAE を 1 つに統合したので、両サービスとも同じ環境名を返す。
+// output 名は据え置き — deploy-*.sh はこの名前を読むだけで変更不要。
+output containerAppsEnvironmentName string = containerAppsEnabled ? containerAppsEnvironmentName : ''
+output aiAgentContainerAppsEnvironmentName string = enableAiAgentAca ? containerAppsEnvironmentName : ''
 output voicevoxWrapperEnabled bool = enableVoicevoxWrapperAca
 output voicevoxWrapperContainerAppName string = enableVoicevoxWrapperAca ? voicevoxWrapperContainerAppName : ''
-output voicevoxWrapperContainerAppsEnvironmentName string = enableVoicevoxWrapperAca ? voicevoxWrapperContainerAppsEnvironmentName : ''
+output voicevoxWrapperContainerAppsEnvironmentName string = enableVoicevoxWrapperAca ? containerAppsEnvironmentName : ''

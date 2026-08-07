@@ -1,0 +1,72 @@
+name: build-images
+
+# コンテナ image を GitHub Actions で事前ビルド → ghcr に push（#67 / ADR 0013）。
+# 従来は deploy 時に `az acr build` で毎回クラウドビルドしていた（ai-agent + voicevox の2回）。
+# これを main マージ時のビルドに前倒しし、デプロイは ghcr の既存タグ差し替えのみにする。
+# - タグ: SHA(long) + main では latest。deploy 側は既定 latest、固定したい時は IMAGE_TAG=sha-<sha>。
+# - registry: ghcr.io/<owner>/<repo>/<image>（= ghcr.io/yomote/mind-inbox/ai-agent 等）。
+# - 認証: push は GITHUB_TOKEN(packages:write)。pull は package を public にして認証不要にする
+#   （一度きりの公開手順は docs/runbooks/ghcr-images.md）。ACR(¥750/月)は廃止。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/services/ai-agent/**"
+      - "apps/services/voicevox/**"
+      - ".github/workflows/build-images.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  # 同一 ref の連続 push は最新だけビルドすれば十分（古い build をキャンセル）。
+  group: build-images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ai-agent
+            context: apps/services/ai-agent
+          - image: voicevox-wrapper
+            context: apps/services/voicevox
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image metadata (tags/labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # ghcr.io/<owner>/<repo>/<image>。owner/repo は小文字である必要があるため lowercase 化。
+          images: ghcr.io/${{ github.repository }}/${{ matrix.image }}
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
