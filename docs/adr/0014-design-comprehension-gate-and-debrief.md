@@ -1,6 +1,6 @@
 # 0014. 設計理解ゲートとゼミ型デブリーフで、user の意思決定・学習をループに組み込む
 
-- Status: Proposed
+- Status: Accepted (debrief #1, 2026-08-06)
 - Date: 2026-08-06
 - Deciders: omoteforlab
 - Consulted: —

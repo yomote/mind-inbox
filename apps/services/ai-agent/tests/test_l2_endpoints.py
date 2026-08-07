@@ -5,7 +5,7 @@ HTTP レイヤをバイパスし FastAPI を in-process に叩く。
 
 モック方針:
 - /chat /approve : workflow 全体を monkeypatch (workflow 内部分岐は L1 の領域)
-- /organize /plan: get_kernel() を mock して organize()/generate_plan() 本体を動かす
+- /organize /extract /plan: get_chat_client() を mock して各関数本体を動かす
 - /health        : 何もモックしない (FastAPI 自体の wiring 確認)
 
 ここで test しないこと:
@@ -96,14 +96,14 @@ class TestChat:
 
 class TestOrganize:
     async def test_l2_organize_returns_200_with_existing_session(
-        self, client, monkeypatch, make_kernel, session_repo
+        self, client, monkeypatch, make_client, session_repo
     ):
         # 無いと: organize() の戻り値を FastAPI が JSON で正しく返さない退行が静かに通る
         history = ChatHistory()
         history.add_user_message("仕事が辛い")
         await session_repo.save("s1", history)
 
-        kernel = make_kernel(
+        client_mock = make_client(
             json.dumps(
                 {
                     "summary": "仕事のストレス",
@@ -112,7 +112,7 @@ class TestOrganize:
                 }
             )
         )
-        monkeypatch.setattr(app_main, "get_kernel", lambda: kernel)
+        monkeypatch.setattr(app_main, "get_chat_client", lambda: client_mock)
 
         res = await client.post("/organize", json={"session_id": "s1"})
         assert res.status_code == 200
@@ -123,11 +123,11 @@ class TestOrganize:
         }
 
     async def test_l2_organize_returns_404_when_session_not_found(
-        self, client, monkeypatch, make_kernel
+        self, client, monkeypatch, make_client
     ):
         # 無いと: ValueError → HTTPException(404) マッピングが切れて 500 を返す退行が静かに通る
-        kernel = make_kernel("{}")
-        monkeypatch.setattr(app_main, "get_kernel", lambda: kernel)
+        client_mock = make_client("{}")
+        monkeypatch.setattr(app_main, "get_chat_client", lambda: client_mock)
 
         res = await client.post("/organize", json={"session_id": "nonexistent"})
         assert res.status_code == 404
@@ -139,7 +139,7 @@ class TestOrganize:
 
 class TestExtract:
     async def test_l2_extract_returns_200_and_camelcase_body(
-        self, client, monkeypatch, make_kernel, session_repo
+        self, client, monkeypatch, make_client, session_repo
     ):
         # 無いと: extract() の戻り値を FastAPI が domain.ts の型 (camelCase) で返さない退行が
         #         静かに通り、BFF (Phase B) の deserialize が壊れる
@@ -147,7 +147,7 @@ class TestExtract:
         history.add_user_message("転職しようか迷ってて")
         await session_repo.save("s1", history)
 
-        kernel = make_kernel(
+        client_mock = make_client(
             json.dumps(
                 {
                     "mentions": [
@@ -171,7 +171,7 @@ class TestExtract:
                 }
             )
         )
-        monkeypatch.setattr(app_main, "get_kernel", lambda: kernel)
+        monkeypatch.setattr(app_main, "get_chat_client", lambda: client_mock)
 
         res = await client.post(
             "/extract", json={"sessionId": "s1", "existingProblems": []}
@@ -189,11 +189,11 @@ class TestExtract:
         assert item["mention"]["problemId"] == item["grouping"]["problemId"]
 
     async def test_l2_extract_returns_404_when_session_not_found(
-        self, client, monkeypatch, make_kernel
+        self, client, monkeypatch, make_client
     ):
         # 無いと: ValueError → HTTPException(404) マッピングが切れて 500 を返す退行が静かに通る
-        kernel = make_kernel(json.dumps({"mentions": []}))
-        monkeypatch.setattr(app_main, "get_kernel", lambda: kernel)
+        client_mock = make_client(json.dumps({"mentions": []}))
+        monkeypatch.setattr(app_main, "get_chat_client", lambda: client_mock)
 
         res = await client.post("/extract", json={"sessionId": "nonexistent"})
         assert res.status_code == 404
@@ -205,13 +205,13 @@ class TestExtract:
 
 class TestPlan:
     async def test_l2_plan_returns_200_with_valid_input(
-        self, client, monkeypatch, make_kernel
+        self, client, monkeypatch, make_client
     ):
         # 無いと: generate_plan() の戻り値を FastAPI が JSON で正しく返さない退行が静かに通る
-        kernel = make_kernel(
+        client_mock = make_client(
             json.dumps({"title": "プラン", "steps": ["step1", "step2"]})
         )
-        monkeypatch.setattr(app_main, "get_kernel", lambda: kernel)
+        monkeypatch.setattr(app_main, "get_chat_client", lambda: client_mock)
 
         res = await client.post(
             "/plan",

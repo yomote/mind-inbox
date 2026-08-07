@@ -9,10 +9,9 @@ from __future__ import annotations
 import json
 import logging
 
-from semantic_kernel import Kernel
-from semantic_kernel.contents import ChatHistory
+from agent_framework import BaseChatClient
 
-from .kernel import get_execution_settings
+from .agents import complete
 from .schemas import PlanRequest, PlanResponse
 
 logger = logging.getLogger(__name__)
@@ -37,7 +36,7 @@ _PLAN_PROMPT = """\
 
 async def generate_plan(
     req: PlanRequest,
-    kernel: Kernel,
+    client: BaseChatClient,
 ) -> PlanResponse:
     prompt = _PLAN_PROMPT.format(
         summary=req.summary,
@@ -45,15 +44,7 @@ async def generate_plan(
         priorities="、".join(req.priorities),
     )
 
-    call_history = ChatHistory()
-    call_history.add_user_message(prompt)
-
-    svc = kernel.get_service("chat")
-    result = await svc.get_chat_message_content(
-        chat_history=call_history, settings=get_execution_settings()
-    )
-
-    raw = str(result).strip()
+    raw = (await complete(client, prompt)).strip()
     parts = raw.split("```")
     if len(parts) >= 3:
         raw = parts[1].removeprefix("json").strip()
