@@ -35,6 +35,39 @@ chmod +x ./scripts/smoke-test/smoke-test.sh
 RG=<your-rg> DEPLOYMENT=<your-deployment-name> ./scripts/smoke-test/smoke-test.sh
 ```
 
+## 1.5 実態ダンプ（判定しない・PR に貼る用）
+
+`smoke-test.sh` が「合否」を出すのに対し、`inspect-env.sh` は **「今どうなっているか」を read-only で吐くだけ**のスクリプト（[ADR 0018](../../../docs/adr/0018-runtime-verification-in-the-loop.md)）。PR の「動作検証」欄にそのまま貼れる markdown を出す。
+
+```bash
+RG=<your-rg> DEPLOYMENT=<your-deployment-name> cicd/scripts/smoke-test/inspect-env.sh
+# ファイルに落とす場合
+RG=... DEPLOYMENT=... cicd/scripts/smoke-test/inspect-env.sh > /tmp/inspect.md
+```
+
+出す内容:
+
+| 節     | 中身                                                                                                                                                                     |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 認可   | EasyAuth の実設定（`requireAuthentication` / `unauthenticatedClientAction` / `excludedPaths` / audience / issuer）と、**未認証 GET / CORS preflight を実際に叩いた結果** |
+| 露出   | 各 Container App の `external` / IP 制限ルール数 / **FQDN への匿名アクセスの応答コード**                                                                                 |
+| 配置   | 認識されている関数、`WEBSITE_RUN_FROM_PACKAGE`（SAS は伏せる）、アプリ最終更新                                                                                           |
+| コスト | 予算アラートの上限と当月実績                                                                                                                                             |
+
+### 読むときの注意
+
+- **判定しない**。exit code は「ダンプできたか」だけで、中身の良し悪しは表さない。合否が要るなら `smoke-test.sh`
+- **取得できなかった項目は `(未検証: 理由)` と出る**。ネットワーク制限のある環境（エージェントのコンテナ等）からだと到達確認だけ落ちるので、そこを「異常なし」と読み替えないこと
+- **EasyAuth は `az webapp auth show` で見ない**。あれは V1 (classic) 射影を返し、実際が `Return401` でも `RedirectToLoginPage` と答える（実測）。スクリプトは `authsettingsV2` を ARM から直接読んでいる
+
+環境変数:
+
+| 変数                | 既定               | 用途                             |
+| ------------------- | ------------------ | -------------------------------- |
+| `RG` / `DEPLOYMENT` | （必須）           | 対象リソースグループとデプロイ名 |
+| `CURL_TIMEOUT`      | `20`               | 到達確認のタイムアウト秒         |
+| `CORS_ORIGIN`       | SWA の既定ホスト名 | preflight で送る `Origin`        |
+
 ## 2. 手動チェック（要点）
 
 ### 2.1 SWA (frontend) が公開されている
