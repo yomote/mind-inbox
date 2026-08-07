@@ -84,3 +84,5 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0016](0016-ai-agent-orchestration-on-maf.md) — AI Agent のオーケストレーション基盤を Semantic Kernel から Microsoft Agent Framework へ移行する
 - [0017](0017-container-apps-access-via-auth-gate.md) — Container Apps の「第二の扉」は認証の門で閉じる (組み込み認証 + Managed Identity / voicevox は internal ingress)
 - [0018](0018-runtime-verification-in-the-loop.md) — 動作検証をループに組み込む（実態の読み取り・PR への証跡・ローカルブラウザ検証）
+- [0019](0019-independent-judge-agents-security-qa-release.md) — セキュリティ / QA / リリース判定を実装コンテキストから分離した独立 judge エージェントにする
+- [0020](0020-hitl-choice-format-and-needs-human-queue.md) — 人間の確認は選択肢形式で出し、人間宿題は needs-human キューに一元化する

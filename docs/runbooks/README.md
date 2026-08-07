@@ -57,6 +57,7 @@ Runbook PR は実際にその手順を**踏んだ人**が書くか、レビュ�
 - `github-projects-setup.md` — GitHub Projects (実行ダッシュボード) のフィールド / Workflow セットアップ (ADR 0011)
 - `ghcr-images.md` — コンテナ image を ghcr で事前ビルド → タグ差し替えデプロイ (ACR 廃止, #67 / ADR 0013)
 - `entra-spa-auth-and-budget.md` — 常設 dev の認可 (Entra SPA + Functions EasyAuth) と予算アラート (#69 / ADR 0013)
+- `review-agents.md` — 独立 judge エージェント (security / QA / biz-owner / release) の運用とリリース PR ゲート (ADR 0019)
 
 (初期 4 本は #12 で起こす)
 

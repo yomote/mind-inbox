@@ -8,7 +8,7 @@ const previewSession = {
     {
       id: "a-1",
       role: "assistant" as const,
-      text: "ありがとうございます。今いちばん気になっていることを教えてください。",
+      text: "今日はどんなことが気になっていますか?思いつくままで大丈夫です。",
       createdAt: new Date().toISOString(),
     },
     {

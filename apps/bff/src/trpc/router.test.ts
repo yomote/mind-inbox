@@ -151,15 +151,18 @@ describe("[L2] consultation.start", () => {
     });
   });
 
-  it("starts with assistant opener when concern is empty (new-consultation.mdx: 空入力でも開始可能)", async () => {
-    // 無いと: 空入力開始が入口で拒否される / 空文字が AI Agent に流れる退行が静かに通る
-    const { session } = await makeCaller().consultation.start({ concern: "   " });
-    expect(session.title).toBe("相談セッション");
-    expect(session.messages).toHaveLength(1);
-    expect(session.messages[0]?.role).toBe("assistant");
-    expect(session.messages[0]?.text.length).toBeGreaterThan(0);
-    expect(sendChatMessage).not.toHaveBeenCalled();
-  });
+  it.each(["", "   "])(
+    "starts with assistant opener when concern is empty or whitespace (%j) (new-consultation.mdx: 空入力でも開始可能)",
+    async (concern) => {
+      // 無いと: 空入力開始が入口で拒否される / 空文字が AI Agent に流れる退行が静かに通る
+      const { session } = await makeCaller().consultation.start({ concern });
+      expect(session.title).toBe("相談セッション");
+      expect(session.messages).toHaveLength(1);
+      expect(session.messages[0]?.role).toBe("assistant");
+      expect(session.messages[0]?.text.length).toBeGreaterThan(0);
+      expect(sendChatMessage).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // ---- consultation.sendMessage ---------------------------------------------
@@ -427,7 +430,12 @@ describe("[L2] consultation.extract", () => {
 
     // 2回目は既存候補 prob-1 を ai-agent に渡している（ADR 0012）
     expect(vi.mocked(extractAiAgent).mock.calls[1]?.[0].existingProblems).toEqual([
-      expect.objectContaining({ id: "prob-1", title: "転職の迷い", status: "open", mentionCount: 1 }),
+      expect.objectContaining({
+        id: "prob-1",
+        title: "転職の迷い",
+        status: "open",
+        mentionCount: 1,
+      }),
     ]);
 
     const problem = await caller.problem.get({ id: "prob-1" });
@@ -561,7 +569,11 @@ describe("[L2] problem.triage — 編集", () => {
     const { caller, problemRepo } = makeCallerWithRepos();
     await problemRepo.upsert(makeProblem({ id: "p1" }));
 
-    const t = await caller.problem.triage({ action: "editTheme", problemId: "p1", theme: "心と体" });
+    const t = await caller.problem.triage({
+      action: "editTheme",
+      problemId: "p1",
+      theme: "心と体",
+    });
     expect(t.problems[0].theme).toBe("心と体");
 
     const t2 = await caller.problem.triage({
