@@ -82,4 +82,5 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0014](0014-design-comprehension-gate-and-debrief.md) — 設計理解ゲートとゼミ型デブリーフで、user の意思決定・学習をループに組み込む
 - [0015](0015-proactive-agentic-workflow.md) — システムの能動化 — ガードレール付きプロアクティブ・エージェントワークフローを解禁する (思想転換)
 - [0016](0016-ai-agent-orchestration-on-maf.md) — AI Agent のオーケストレーション基盤を Semantic Kernel から Microsoft Agent Framework へ移行する
-- [0017](0017-needs-human-queue-and-po-inbox.md) — user 宛て依頼は needs-human Issue に一元化し、PO 受信箱 (/po-inbox) で集計する
+- [0017](0017-container-apps-access-via-auth-gate.md) — Container Apps の「第二の扉」は認証の門で閉じる (組み込み認証 + Managed Identity / voicevox は internal ingress)
+- [0018](0018-needs-human-queue-and-po-inbox.md) — user 宛て依頼は needs-human Issue に一元化し、PO 受信箱 (/po-inbox) で集計する

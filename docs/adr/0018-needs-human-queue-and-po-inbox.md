@@ -1,4 +1,4 @@
-# 0017. user 宛て依頼は needs-human Issue に一元化し、PO 受信箱 (/po-inbox) で集計する
+# 0018. user 宛て依頼は needs-human Issue に一元化し、PO 受信箱 (/po-inbox) で集計する
 
 - Status: Proposed
 - Date: 2026-08-07
