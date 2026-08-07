@@ -42,6 +42,38 @@ echo "CLIENT_ID=$CLIENT_ID"
 
 # API スコープを露出させる（EasyAuth の allowedAudiences と対にする）
 az ad app update --id "$CLIENT_ID" --identifier-uris "api://$CLIENT_ID"
+
+# ★ サービスプリンシパル (Enterprise Application) を作る。
+#   `az ad app create` はアプリ「登録」を作るだけで SP は作らない。SP が無いと
+#   トークン要求が AADSTS500011 (resource principal not found) で落ち、
+#   「サインインは通るのにトークンが取れず未認証扱い → ログインが無限ループ」になる
+#   (2026-08-07 に実環境で発生。下の事象記録参照)
+az ad sp create --id "$CLIENT_ID"
+
+# ★ アクセストークンを v2 にする。既定 (null=v1) のままだと発行トークンの issuer が
+#   sts.windows.net 形式になり、EasyAuth 側の openIdIssuer (login.microsoftonline.com/<tenant>/v2.0)
+#   と一致せず「ログインできたのに API が 401」になる
+OBJ_ID="$(az ad app show --id "$CLIENT_ID" --query id -o tsv)"
+SCOPE_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+az rest --method PATCH --url "https://graph.microsoft.com/v1.0/applications/$OBJ_ID" --body "{
+  \"api\": {
+    \"requestedAccessTokenVersion\": 2,
+    \"oauth2PermissionScopes\": [{
+      \"id\": \"$SCOPE_ID\", \"value\": \"access_as_user\", \"type\": \"User\", \"isEnabled\": true,
+      \"adminConsentDisplayName\": \"Access Mind Inbox BFF as user\",
+      \"adminConsentDescription\": \"Allows the SPA to call the Mind Inbox BFF (Functions EasyAuth) as the signed-in user.\",
+      \"userConsentDisplayName\": \"Access Mind Inbox BFF\",
+      \"userConsentDescription\": \"Allows this app to call the Mind Inbox backend on your behalf.\"
+    }]
+  }
+}"
+
+# ★ 自分自身の API への delegated permission を構成し、consent を事前付与する。
+#   これが無いと `.default` スコープが解決先を持たず、フロント (api://<clientId>/.default) が
+#   トークンを取れない
+az ad app permission add --id "$CLIENT_ID" --api "$CLIENT_ID" --api-permissions "$SCOPE_ID=Scope"
+az ad app permission grant --id "$CLIENT_ID" --api "$CLIENT_ID" \
+  --scope "access_as_user" --consent-type AllPrincipals
 ```
 
 `--sign-in-audience AzureADMyOrg` が **単一テナント限定**（design-gate で選択した「A. 単一テナント限定のみ」）。他テナントのアカウントは issuer 検証で落ちる。
@@ -114,7 +146,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X OPTIONS \
 - `az functionapp deployment source config-zip` が `ERROR: Operation returned an invalid status 'Bad Request'` で失敗（= CD が赤くなる）
 - `az functionapp function list` も同じく `Bad Request` で関数を列挙できない
 
-**紛らわしい点**: **デプロイ自体は成功していた**。`WEBSITE_RUN_FROM_PACKAGE` は実行時刻のパッケージ URL に更新済みで、関数も配置されていた。失敗していたのは *配置後の検証呼び出し* だけ。ログの `Bad Request` からは認証が原因だと分からない。
+**紛らわしい点**: **デプロイ自体は成功していた**。`WEBSITE_RUN_FROM_PACKAGE` は実行時刻のパッケージ URL に更新済みで、関数も配置されていた。失敗していたのは _配置後の検証呼び出し_ だけ。ログの `Bad Request` からは認証が原因だと分からない。
 
 **原因**: `globalValidation.requireAuthentication: true` が Functions の管理 API (`/admin/*`) にも適用され、Azure 側の管理呼び出しが 401 で弾かれていた。
 
@@ -128,19 +160,41 @@ az functionapp function list -g rg-dev-mind-inbox -n func-dev-mindbox --query "[
 # Bad Request が返る → excludedPaths が効いていない
 ```
 
-> **教訓**: EasyAuth を有効にすると「アプリを叩く経路」以外（管理 API・preflight）まで巻き込まれる。CD が落ちたら *デプロイが失敗した* と決めつけず、**まず配置結果そのもの**（`function list` / `WEBSITE_RUN_FROM_PACKAGE`）を確認すること。
+> **教訓**: EasyAuth を有効にすると「アプリを叩く経路」以外（管理 API・preflight）まで巻き込まれる。CD が落ちたら _デプロイが失敗した_ と決めつけず、**まず配置結果そのもの**（`function list` / `WEBSITE_RUN_FROM_PACKAGE`）を確認すること。
+
+#### 2026-08-07: サインインは通るのにログインが無限ループ（解決済み・§1 に反映済み）
+
+**症状**: SWA を開いて「始める」→ Entra 認証画面 → 認証成功 → アプリに戻るが最初の画面のまま → また「始める」で認証画面…の無限ループ。Entra 上でエラー画面は出ない（出ても一瞬で戻る）ため、ユーザーからは「認証してるのに入れない」に見える。
+
+**原因**: アプリ登録はあるが**サービスプリンシパル (Enterprise Application) が未作成**だった。runbook §1 の旧版が `az ad app create`（= Application オブジェクトのみ作成）で止まっており、`az ad sp create` が抜けていた。SP が居ないテナントに対して MSAL が `api://<clientId>/.default` のトークンを要求すると AADSTS500011 (resource principal not found) で失敗し、`handleRedirectPromise` が例外 → フロントは未認証扱い → ループ。
+
+**切り分けの決め手**:
+
+```bash
+az ad app show --id <clientId>   # → 出る (登録はある)
+az ad sp show --id <clientId>    # → Resource does not exist ← これが黒
+```
+
+**対処**（§1 に反映済み。既存アプリ登録への後追い適用も同じコマンド）:
+
+1. `az ad sp create --id <clientId>`
+2. `requestedAccessTokenVersion: 2` を設定（v1 のままだと次は issuer 不一致で API 401 になる）
+3. `access_as_user` スコープを公開 + 自己参照 delegated permission + `az ad app permission grant`
+
+> **教訓**: 認証設定の検証は「未認証で 401」だけでは足りない。**認証済みでトークンが取れて API に通る**までがワンセット。ブラウザ相当の実測ができない環境では、少なくとも `az ad sp show` で SP の存在まで確認すること。
 
 ---
 
 ## トラブルシュート
 
-| 症状 | 原因 / 対処 |
-| --- | --- |
-| ログイン後も API が 401 | トークンの `aud` が EasyAuth の `allowedAudiences` と不一致。`api://<clientId>` を identifier-uri に設定したか確認。フロントの `VITE_ENTRA_API_SCOPE` も合わせる |
-| ブラウザで CORS エラー | Function App の CORS 許可オリジンに SWA のホスト名が入っているか。`functionExtraCorsOrigins` で追加も可 |
-| ログイン画面に飛ばない | フロントのビルドに `VITE_ENTRA_*` が入っていない（＝認証無効ビルド）。`deploy-frontend.sh` のログの警告を確認 |
-| リダイレクトエラー (AADSTS50011) | アプリ登録の **SPA** リダイレクト URI に SWA の URL が無い。Web ではなく SPA 種別で登録すること |
-| 予算アラートが来ない | `budgetContactEmails` が空だと予算リソース自体を作らない（通知の無い予算は無意味なため）。値を入れて再デプロイ |
+| 症状                                         | 原因 / 対処                                                                                                                                                                                                                                          |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 認証後に最初の画面へ戻りログインが無限ループ | SP 未作成 (AADSTS500011)。`az ad sp show --id <clientId>` で確認し、無ければ §1 の SP 作成〜consent 付与を適用（上の 2026-08-07 事象記録参照）                                                                                                       |
+| ログイン後も API が 401                      | トークンの `aud` が EasyAuth の `allowedAudiences` と不一致。`api://<clientId>` を identifier-uri に設定したか確認。フロントの `VITE_ENTRA_API_SCOPE` も合わせる。`requestedAccessTokenVersion` が v1 (null) のままだと issuer 不一致でも 401 になる |
+| ブラウザで CORS エラー                       | Function App の CORS 許可オリジンに SWA のホスト名が入っているか。`functionExtraCorsOrigins` で追加も可                                                                                                                                              |
+| ログイン画面に飛ばない                       | フロントのビルドに `VITE_ENTRA_*` が入っていない（＝認証無効ビルド）。`deploy-frontend.sh` のログの警告を確認                                                                                                                                        |
+| リダイレクトエラー (AADSTS50011)             | アプリ登録の **SPA** リダイレクト URI に SWA の URL が無い。Web ではなく SPA 種別で登録すること                                                                                                                                                      |
+| 予算アラートが来ない                         | `budgetContactEmails` が空だと予算リソース自体を作らない（通知の無い予算は無意味なため）。値を入れて再デプロイ                                                                                                                                       |
 
 ## 一時的に認可を外したいとき
 
