@@ -82,3 +82,4 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0014](0014-design-comprehension-gate-and-debrief.md) — 設計理解ゲートとゼミ型デブリーフで、user の意思決定・学習をループに組み込む
 - [0015](0015-proactive-agentic-workflow.md) — システムの能動化 — ガードレール付きプロアクティブ・エージェントワークフローを解禁する (思想転換)
 - [0016](0016-ai-agent-orchestration-on-maf.md) — AI Agent のオーケストレーション基盤を Semantic Kernel から Microsoft Agent Framework へ移行する
+- [0017](0017-runtime-verification-in-the-loop.md) — 動作検証をループに組み込む（実態の読み取り・PR への証跡・ローカルブラウザ検証）
