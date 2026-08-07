@@ -171,8 +171,9 @@ elif [[ -z "$CA_NAMES" ]]; then
 fi
 
 # deployment outputs で「居るはず」とされているアプリが一覧に無ければ、検査対象の取りこぼし。
-# voicevox エンジン自身も必ず含める: ingress 制限が最も剥がれやすく (bicep 管理のため
-# 再デプロイで上書きされる)、かつ #86 で恒久対策が未了なので、一覧から漏れたら気づきたい。
+# voicevox エンジン自身も必ず含める: 過去に ingress 制限が 3 回剥がれた実績があり
+# (bicep 管理なので手動設定が再適用で上書きされる)、恒久対策として internal ingress に
+# したのが #86 / ADR 0017。一覧から漏れると「internal に戻っているか」を誰も見なくなる。
 for expected in \
   "$(out aiAgentContainerAppName || true)" \
   "$(out voicevoxWrapperContainerAppName || true)" \
@@ -185,10 +186,48 @@ done
 # 行単位で読む (単語分割に頼らない)。空行はスキップ。
 while IFS= read -r CA; do
   [[ -z "$CA" ]] && continue
-  CA_FQDN=$(az containerapp show -g "$RG" -n "$CA" \
-    --query "properties.configuration.ingress.fqdn" -o tsv --only-show-errors 2>/dev/null || true)
+  # external を先に見る。**internal ingress でも fqdn は空にならない**
+  # (`*.internal.<region>.azurecontainerapps.io` が入る) ので、fqdn の有無だけで
+  # 判定すると internal の CA を「外部公開されている」扱いで curl しに行き、
+  # 名前解決に失敗して warn 止まり = 実際は閉じているのに未検証と報告してしまう。
+  # 取得の成否 (rc) と「ingress が実際に無い」を分ける。`|| true` で潰すと、
+  # 権限エラーや一時的な API 障害でも空文字になり「ingress なし = ok」に化ける。
+  # それはこの検査自身が静かに通る経路で、まさにこの PR が塞ごうとしている失敗モード。
+  # 一覧取得 (az containerapp list) を ng にしているのと同じ扱いに揃える。
+  set +e
+  CA_INGRESS=$(az containerapp show -g "$RG" -n "$CA" \
+    --query "properties.configuration.ingress" -o json --only-show-errors 2>"$CA_ERR")
+  ca_show_rc=$?
+  set -e
+  if [[ "$ca_show_rc" -ne 0 ]]; then
+    ng "$CA: ingress の取得に失敗したため露出を判定できませんでした: $(head -c 160 "$CA_ERR")"
+    continue
+  fi
+
+  CA_EXTERNAL=$(printf '%s' "$CA_INGRESS" | python3 -c \
+    'import json,sys
+raw = sys.stdin.read().strip()
+d = json.loads(raw) if raw and raw != "null" else None
+print("" if not d else d.get("external"))' 2>/dev/null || true)
+  CA_FQDN=$(printf '%s' "$CA_INGRESS" | python3 -c \
+    'import json,sys
+raw = sys.stdin.read().strip()
+d = json.loads(raw) if raw and raw != "null" else None
+print("" if not d else (d.get("fqdn") or ""))' 2>/dev/null || true)
+
+  if [[ -z "$CA_INGRESS" || "$CA_INGRESS" == "null" ]]; then
+    ok "$CA: ingress なし (外部からも環境内からも HTTP で到達しない)"
+    continue
+  fi
+  # Python の bool は "False"/"True" を出すが、大小文字を正規化して比較する
+  # (JSON 側の型が変わっても判定が静かに外れないように)。
+  if [[ "$(printf '%s' "$CA_EXTERNAL" | tr '[:upper:]' '[:lower:]')" == "false" ]]; then
+    # internal は CAE の外から名前解決できない = 到達経路が存在しない (#86 / ADR 0017)。
+    ok "$CA: internal ingress (CAE 内からのみ到達。外部に公開されていない)"
+    continue
+  fi
   if [[ -z "$CA_FQDN" ]]; then
-    ok "$CA: 外部 ingress なし (公開されていない)"
+    warn "$CA: external ingress だが fqdn を取得できず、露出の有無を判定できませんでした"
     continue
   fi
 
