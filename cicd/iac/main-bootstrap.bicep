@@ -157,6 +157,7 @@ output sqlDatabase string = infra.outputs.sqlDatabase
 output staticSiteEntraClientId string = infra.outputs.staticSiteEntraClientId
 output staticSiteEntraAppAutoCreated bool = infra.outputs.staticSiteEntraAppAutoCreated
 output staticSiteEntraAppObjectId string = infra.outputs.staticSiteEntraAppObjectId
+output voicevoxContainerAppName string = infra.outputs.voicevoxContainerAppName
 output voicevoxBaseUrl string = infra.outputs.voicevoxBaseUrl
 output openAiEnabled bool = infra.outputs.openAiEnabled
 output openAiEndpoint string = infra.outputs.openAiEndpoint

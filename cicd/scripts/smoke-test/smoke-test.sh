@@ -166,7 +166,12 @@ elif [[ -z "$CA_NAMES" ]]; then
 fi
 
 # deployment outputs で「居るはず」とされているアプリが一覧に無ければ、検査対象の取りこぼし。
-for expected in "$(out aiAgentContainerAppName || true)" "$(out voicevoxWrapperContainerAppName || true)"; do
+# voicevox エンジン自身も必ず含める: ingress 制限が最も剥がれやすく (bicep 管理のため
+# 再デプロイで上書きされる)、かつ #86 で恒久対策が未了なので、一覧から漏れたら気づきたい。
+for expected in \
+  "$(out aiAgentContainerAppName || true)" \
+  "$(out voicevoxWrapperContainerAppName || true)" \
+  "$(out voicevoxContainerAppName || true)"; do
   [[ -z "$expected" ]] && continue
   grep -qx "$expected" <<<"$CA_NAMES" \
     || ng "$expected が Container Apps 一覧に見つかりません (露出検査の対象から漏れています)"
