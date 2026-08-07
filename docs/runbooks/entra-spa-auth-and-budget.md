@@ -105,6 +105,31 @@ curl -s -o /dev/null -w '%{http_code}\n' -X OPTIONS \
 
 最後にブラウザで SWA の URL を開き、Entra ログイン → 実際の AI 応答まで到達することを確認する。
 
+### 実環境で踏んだ事象の記録
+
+#### 2026-08-06: EasyAuth が Azure 自身の管理 API まで 401 で弾いた（解決済み・IaC 反映済み）
+
+**症状**: `applyFunctionAuthLockdown=true` で EasyAuth を有効化した直後から、
+
+- `az functionapp deployment source config-zip` が `ERROR: Operation returned an invalid status 'Bad Request'` で失敗（= CD が赤くなる）
+- `az functionapp function list` も同じく `Bad Request` で関数を列挙できない
+
+**紛らわしい点**: **デプロイ自体は成功していた**。`WEBSITE_RUN_FROM_PACKAGE` は実行時刻のパッケージ URL に更新済みで、関数も配置されていた。失敗していたのは *配置後の検証呼び出し* だけ。ログの `Bad Request` からは認証が原因だと分からない。
+
+**原因**: `globalValidation.requireAuthentication: true` が Functions の管理 API (`/admin/*`) にも適用され、Azure 側の管理呼び出しが 401 で弾かれていた。
+
+**対処**: `globalValidation.excludedPaths` に `/admin/*` を追加（`bootstrap-core.bicep` に反映済み。手動対処は不要）。`/admin/*` は元々 master key 必須なので、除外しても無認可アクセスは開かない。
+
+**確認方法**: 下記が成功すれば解決している。
+
+```bash
+az functionapp function list -g rg-dev-mind-inbox -n func-dev-mindbox --query "[].name" -o tsv
+# 期待: func-dev-mindbox/trpc と func-dev-mindbox/tts が並ぶ
+# Bad Request が返る → excludedPaths が効いていない
+```
+
+> **教訓**: EasyAuth を有効にすると「アプリを叩く経路」以外（管理 API・preflight）まで巻き込まれる。CD が落ちたら *デプロイが失敗した* と決めつけず、**まず配置結果そのもの**（`function list` / `WEBSITE_RUN_FROM_PACKAGE`）を確認すること。
+
 ---
 
 ## トラブルシュート
