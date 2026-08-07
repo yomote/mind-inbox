@@ -149,7 +149,30 @@ fi
 # 再デプロイで ingress ごと上書きされ、実際に voicevox で発生した) デプロイは緑のまま。
 # 気づく手段が「たまたま点検したとき」しかなくなる。
 section "Container Apps should reject anonymous access"
-for CA in $(az containerapp list -g "$RG" --query "[].name" -o tsv 2>/dev/null); do
+
+# 一覧取得に失敗したり空だったりすると for が 0 回まわり、検査区画ごと無言でスキップされる。
+# それでは「検査して問題なかった」のか「検査できていない」のかが出力から区別できず、
+# この検査自身が「静かに通る」経路になる。取得の成否と期待するアプリの存在を明示的に確かめる。
+set +e
+CA_NAMES="$(az containerapp list -g "$RG" --query "[].name" -o tsv 2>&1)"
+ca_list_rc=$?
+set -e
+
+if [[ "$ca_list_rc" -ne 0 ]]; then
+  ng "Container Apps の一覧取得に失敗したため露出検査を実行できませんでした: ${CA_NAMES:0:160}"
+  CA_NAMES=""
+elif [[ -z "$CA_NAMES" ]]; then
+  warn "Container App が 1 件も見つかりませんでした (未デプロイなら正常。デプロイ済みならこの検査が効いていない)"
+fi
+
+# deployment outputs で「居るはず」とされているアプリが一覧に無ければ、検査対象の取りこぼし。
+for expected in "$(out aiAgentContainerAppName || true)" "$(out voicevoxWrapperContainerAppName || true)"; do
+  [[ -z "$expected" ]] && continue
+  grep -qx "$expected" <<<"$CA_NAMES" \
+    || ng "$expected が Container Apps 一覧に見つかりません (露出検査の対象から漏れています)"
+done
+
+for CA in $CA_NAMES; do
   CA_FQDN=$(az containerapp show -g "$RG" -n "$CA" \
     --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
   if [[ -z "$CA_FQDN" ]]; then
