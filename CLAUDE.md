@@ -141,7 +141,7 @@ Browser → SWA (Static Web App)
 
 - `apps/frontend/src/mockApi.ts` provides full mock data for all screens
 - UI specs live in `docs/frontend/ui_specs/` as MDX interactive previews
-- Screens: onboarding, home, newConsultation, session, result, actionPlan, history, settings, paused, crisisSupport
+- Screens: onboarding, home, session, result, actionPlan, history, settings, paused, crisisSupport
 
 ### Environment Variables (BFF)
 

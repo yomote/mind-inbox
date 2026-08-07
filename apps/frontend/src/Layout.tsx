@@ -63,7 +63,6 @@ const HEADER_BY_ROUTE: Record<AppRoute, string> = {
   onboarding: "起動画面 / オンボーディング",
   home: "ホーム",
   specPreview: "UI仕様プレビュー",
-  newConsultation: "新しい相談を始める",
   session: "対話セッション",
   result: "整理結果",
   actionPlan: "行動プラン / 保存",
@@ -105,7 +104,6 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const [speaking, setSpeaking] = React.useState(false);
   const [ttsEnabled, setTtsEnabled] = React.useState(true);
 
-  const [concern, setConcern] = React.useState("");
   const [draftMessage, setDraftMessage] = React.useState("");
 
   const [session, setSession] = React.useState<ConsultationSession | null>(null);
@@ -487,7 +485,8 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     unlockAudioPlayback(); // タップ起点で音声を解錠（iOS の自動再生ブロック対策）
     setLoading(true);
     try {
-      const newSession = await startNewConsultation(concern.trim());
+      // テーマ入力画面は廃止 (home.mdx)。常に空で開始し、AI の問いかけから対話が始まる。
+      const newSession = await startNewConsultation("");
       setSession(newSession);
       setResult(null);
       setPlan(null);
@@ -710,7 +709,6 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     setInterimTranscript("");
     setVoiceError(null);
     setTtsEnabled(true);
-    setConcern("");
     setDraftMessage("");
     setSession(null);
     setResult(null);
@@ -735,8 +733,6 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
         return "home";
       case ROUTE_PATHS.specPreview:
         return "specPreview";
-      case ROUTE_PATHS.newConsultation:
-        return "newConsultation";
       case ROUTE_PATHS.session:
         return "session";
       case ROUTE_PATHS.result:
@@ -847,7 +843,6 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
                 isAuthenticated={isAuthenticated}
                 isDev={isDev}
                 DevSpecMdxPreview={DevSpecMdxPreview}
-                concern={concern}
                 loading={loading}
                 session={session}
                 draftMessage={draftMessage}
@@ -867,7 +862,6 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
                 themeMode={themeMode}
                 onToggleTheme={onToggleTheme}
                 transition={transition}
-                setConcern={setConcern}
                 setDraftMessage={setDraftMessage}
                 handleLogin={handleLogin}
                 handleStartConsultation={handleStartConsultation}
