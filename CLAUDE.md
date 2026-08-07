@@ -164,7 +164,7 @@ Environments: `dev` / `stg` / `prod`, default app name: `mind-box`
 
 ```bash
 cicd/scripts/deploy/deploy-all.sh              # Frontend + BFF
-cicd/scripts/deploy/deploy-frontend.sh         # SWA + Entra auth sync
+cicd/scripts/deploy/deploy-frontend.sh         # SWA へ静的配信 (VITE_* をビルド時に焼き込み)
 cicd/scripts/deploy/deploy-backend.sh          # BFF zip deploy to Functions
 cicd/scripts/deploy/deploy-ai-agent.sh         # ghcr の事前ビルド image を Container App に差し替え
 cicd/scripts/deploy/deploy-voicevox-wrapper.sh # ghcr の事前ビルド image を Container App に差し替え
