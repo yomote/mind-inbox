@@ -19,6 +19,20 @@
 
 ---
 
+## 2026-08-07 — debrief (#2, epic #70 常設 dev 環境)
+
+- **対象**: epic #70 のマージ済み PR 6 本 — #75 (SWA Free + 認可を Functions へ移設 + 予算) / #76 (CAE 3→1) / #77 (自動デプロイ結線 + 夜間 teardown 廃止) / #78 (認可パラメータ固定) / #87 (EasyAuth から /admin/* 除外) / #88 (偽の失敗で止めない + smoke-test を CD に組込)。可視化資料: debrief #2 artifact
+- **決定**: **ADR の裁定なし** (Proposed キューは 0 件。0013 は design-gate #69 と debrief #1 で承認済み、0009 は Superseded by 0013 に更新済み)
+- **学びメモ**: 理解確認 2 問とも設計と違う理解 → 再解説した:
+  - **(1) 「voicevox の IP 制限だけ 3 回消えたのはなぜか」→ 「設定した IP が間違っていたから」と回答。** 実際は *正しい egress IP に直した 2 回目も消えている* ので IP の正誤は原因ではない。真因は **「誰がそのリソースを宣言しているか」**: voicevox は bicep が ingress ブロックごと宣言しているため再適用で宣言外の設定が消える / ai-agent・vv-wrapper は bicep に存在せず `az containerapp update` が対象を絞って更新するため手動設定が生き残る。**宣言的管理の外で加えた変更は一時的**、という IaC の一般則として解説し直した。user は「値の正しさ」に原因を求める傾向があるので、今後は **「管理の担当（誰が宣言しているか）」を先に図で示す**
+  - **(2) 「CD が赤いとき最初にやることは」→ 「エラーメッセージを検索して原因を特定する」と回答。** 一般には正しいが、今回はそれで **agent 自身が一度誤診している** (Bad Request を EasyAuth のせいと診断し PR #87 を費やしたが CD は赤のまま。真因は config-zip の *事後チェック* だけの失敗)。解決したのは実態確認 (`WEBSITE_RUN_FROM_PACKAGE` の更新時刻 / `function list`)。**エラーメッセージは「何が起きたか」ではなく「何を検知したか」しか語らない**、CLI の終了コードは操作でなく事後チェックを反映しうる、と解説。順番は「まず実態 → それからメッセージ」
+- **特記 (agent の失敗の記録)**: 設計も PR レビューも通っていたのに、**実環境に適用した瞬間に 6 件の「壊れているのに緑のまま通る」問題**が出た。うち 3 件は出荷寸前 — ①認可パラメータ未固定で *認証無効フロント* を出荷しかけた ②OpenAI の鍵を持つ ai-agent が実際に無認可公開されていた (門を 1 枚足したのに、守るべき資源への別経路を数えていなかった) ③`staticIp` を egress と誤認した IaC で TTS を壊しかけた (レビューが阻止)。さらに **再発防止の smoke-test を書いた PR #88 で同種のバグを 6 個作った** (パス依存 / 未検証を ok と偽る / 無言スキップ / 対象漏れ / 参照先 output が常に空 / stderr 混入)。「終了コードを鵜呑みにしない」がテーマの PR で終了コード 0 の中身を鵜呑みにしていた
+- **持ち越し**:
+  - `deploy-frontend.sh` が旧 SWA 認証の app settings (`AZURE_CLIENT_ID`/`SECRET`) を必須にしたままでフロント未配置 (#69 の積み残し)
+  - **#86 の design-gate** — 3 つの Container App をどう守るか (IP 許可リスト / 内部 ingress + VNet / Container Apps 側 EasyAuth)。**「誰が宣言するか」を込みで決める**こと。現状の IP 制限は手動・IaC 外で再デプロイのたびに剥がれる
+  - `AUTO_DEPLOY_ENABLED=true` の解禁 (認可設定と 401 実測の完了が前提。GitHub Variables API は agent から触れないので user 操作)
+  - CORS preflight が EasyAuth に巻き込まれるリスクの実測 (smoke-test に判定は入れたが、フロント未配置のため未通過)
+
 ## 2026-08-06 — design-gate (#69 EasyAuth / SWA Free 化)
 
 - **対象**: issue #69「SWA Free 化 + Functions EasyAuth(Entra 自分限定) + CORS + 予算アラート」。根拠 ADR: [0013](../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md)
