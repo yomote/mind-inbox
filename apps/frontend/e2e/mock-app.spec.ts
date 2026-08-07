@@ -74,6 +74,11 @@ test.describe("mock ビルド (認証なし)", () => {
     await firstProblem.click();
     await expect(page).toHaveURL(/\/problems\/current$/);
     await expect(pageHeading(page, "困りごと詳細")).toBeVisible();
+
+    // 戻り道も踏む。ここが無いと「戻るボタンが消えた / 壊れた」まま緑で通る。
+    await page.getByRole("button", { name: "一覧へ" }).click();
+    await expect(page).toHaveURL(/\/problems$/);
+    await expect(pageHeading(page, "困りごと一覧")).toBeVisible();
   });
 
   test("[L3] 履歴画面が開く", async ({ page }) => {

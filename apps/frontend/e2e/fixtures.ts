@@ -9,18 +9,24 @@ import { test as base, expect, type Page } from "@playwright/test";
  * そのため全テストで pageerror と console.error を回収し、テスト終了時に落とす。
  */
 export const test = base.extend<{ pageErrors: string[] }>({
-  pageErrors: async ({ page }, use) => {
-    const errors: string[] = [];
+  // `auto: true` が要る。これが無いと、テスト側が `pageErrors` を destructure しない限り
+  // フィクスチャは**一度も起動しない** (= リスナも登録されず assert も走らない)。
+  // 「全テストに黙って効いている安全網」にしたいので auto にする。
+  pageErrors: [
+    async ({ page }, use) => {
+      const errors: string[] = [];
 
-    page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
-    page.on("console", (msg) => {
-      if (msg.type() === "error") errors.push(`console.error: ${msg.text()}`);
-    });
+      page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
+      page.on("console", (msg) => {
+        if (msg.type() === "error") errors.push(`console.error: ${msg.text()}`);
+      });
 
-    await use(errors);
+      await use(errors);
 
-    expect(errors, "ブラウザ側で未処理のエラーが出ている").toEqual([]);
-  },
+      expect(errors, "ブラウザ側で未処理のエラーが出ている").toEqual([]);
+    },
+    { auto: true },
+  ],
 });
 
 export { expect };
