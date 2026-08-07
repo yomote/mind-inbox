@@ -28,10 +28,10 @@ test.describe("mock ビルド (認証なし)", () => {
   test("[L3] 相談 → 発話 → 困りごと抽出 → 一覧まで通る", async ({ page }) => {
     await gotoHome(page);
 
-    // home.mdx: ホームの CTA は newConsultation 画面へ遷移する (直接セッション開始ではない)
+    // UI 仕様 (home.mdx): ホームからはまずテーマ入力画面へ遷移し、
+    // 空入力のままでも開始できる (new-consultation.mdx)
     await page.getByRole("button", { name: "新しい相談を始める" }).click();
     await expect(page).toHaveURL(/\/consultations\/new$/);
-    // new-consultation.mdx: 空入力でも開始可能
     await page.getByRole("button", { name: "対話を開始" }).click();
     await expect(page).toHaveURL(/\/consultations\/current$/);
 

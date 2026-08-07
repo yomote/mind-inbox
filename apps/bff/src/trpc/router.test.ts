@@ -152,13 +152,15 @@ describe("[L2] consultation.start", () => {
   });
 
   it.each(["", "   "])(
-    "starts with assistant opener when concern is empty or whitespace (%j) (new-consultation.mdx: 空入力でも開始可能)",
+    "starts with assistant opener (no AI call) when concern is empty or whitespace (%j)",
     async (concern) => {
-      // 無いと: 空入力開始が入口で拒否される / 空文字が AI Agent に流れる退行が静かに通る
+      // 無いと: UI 仕様 (new-consultation.mdx「空入力でも開始可能」) に反して空 concern が
+      // BAD_REQUEST になり、実環境でホームから相談を開始できない退行が静かに通る (2026-08-07 に実環境で発生)。
+      // また空メッセージが AI Agent に流れて 422 を引き起こす退行もここで止める
       const { session } = await makeCaller().consultation.start({ concern });
       expect(session.title).toBe("相談セッション");
       expect(session.messages).toHaveLength(1);
-      expect(session.messages[0]?.role).toBe("assistant");
+      expect(session.messages[0]).toMatchObject({ role: "assistant" });
       expect(session.messages[0]?.text.length).toBeGreaterThan(0);
       expect(sendChatMessage).not.toHaveBeenCalled();
     },
