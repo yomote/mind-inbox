@@ -80,12 +80,14 @@ export async function startNewConsultation(concern: string): Promise<Consultatio
   return {
     id: uid(),
     // タイトルは最初の発話から自動生成する方針。開始時は仮の見出しのみ。
-    title: concern || "新しい相談",
+    // 空入力時の見出しは new-consultation.mdx「空入力でも開始可能（タイトルは『相談セッション』）」に合わせる。
+    title: concern || "相談セッション",
     messages: [
       {
         id: uid(),
         role: "assistant",
-        text: `ありがとうございます。\nまずは「今いちばん気になっていること」を1つ教えてください。`,
+        // 受け止めトーンの初手 (dialogue session.mdx「開始直後の挙動」)。BFF の EMPTY_START_OPENER と揃える。
+        text: "今日はどんなことが気になっていますか?思いつくままで大丈夫です。",
         createdAt: nowText(),
       },
     ],

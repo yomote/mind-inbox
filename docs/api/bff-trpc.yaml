@@ -411,7 +411,6 @@ paths:
               properties:
                 concern:
                   type: string
-                  minLength: 1
               required:
                 - concern
               additionalProperties: false

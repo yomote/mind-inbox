@@ -151,11 +151,13 @@ describe("[L2] consultation.start", () => {
     });
   });
 
-  it("rejects empty concern with zod validation", async () => {
-    // 無いと: empty concern が AI Agent に流れて 500 を引き起こす退行が静かに通る
-    await expect(makeCaller().consultation.start({ concern: "" })).rejects.toBeInstanceOf(
-      TRPCError,
-    );
+  it("starts with assistant opener when concern is empty (new-consultation.mdx: 空入力でも開始可能)", async () => {
+    // 無いと: 空入力開始が入口で拒否される / 空文字が AI Agent に流れる退行が静かに通る
+    const { session } = await makeCaller().consultation.start({ concern: "   " });
+    expect(session.title).toBe("相談セッション");
+    expect(session.messages).toHaveLength(1);
+    expect(session.messages[0]?.role).toBe("assistant");
+    expect(session.messages[0]?.text.length).toBeGreaterThan(0);
     expect(sendChatMessage).not.toHaveBeenCalled();
   });
 });

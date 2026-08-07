@@ -68,6 +68,10 @@ function deriveTitle(concern: string): string {
   return trimmed.length > 26 ? `${trimmed.slice(0, 26)}…` : trimmed;
 }
 
+// 空入力で開始した場合の AI からの初手 (new-consultation.mdx「空入力でも開始可能」/
+// dialogue session.mdx「開始直後の挙動」)。受け止めトーンを崩さないこと。
+const EMPTY_START_OPENER = "今日はどんなことが気になっていますか?思いつくままで大丈夫です。";
+
 /**
  * ai-agent の抽出結果を Problem リポジトリに反映する。
  * new は新規 Problem を起こし、existing は既存に Mention を追記して mentionCount / lastMentionedAt を更新。
@@ -261,11 +265,30 @@ const healthRouter = router({
 
 const consultationRouter = router({
   start: publicProcedure
-    .input(z.object({ concern: z.string().min(1) }))
+    .input(z.object({ concern: z.string() }))
     .output(z.object({ session: SessionSchema }))
     .mutation(async ({ input }) => {
       const sessionId = randomUUID();
       console.log(`[consultation.start] sessionId=${sessionId}`);
+
+      // 空入力開始: ユーザー発話を作らず、AI の問いかけから始める。
+      // 空文字を ai-agent に流さない (会話履歴にも空メッセージを残さない)。
+      if (input.concern.trim().length === 0) {
+        return {
+          session: {
+            id: sessionId,
+            title: deriveTitle(input.concern),
+            messages: [
+              {
+                id: randomUUID(),
+                role: "assistant" as const,
+                text: EMPTY_START_OPENER,
+                createdAt: nowIso(),
+              },
+            ],
+          },
+        };
+      }
 
       const chatRes = await sendChatMessage({
         sessionId,

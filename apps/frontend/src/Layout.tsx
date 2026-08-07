@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  Alert,
   AppBar,
   Box,
   Button,
@@ -9,6 +10,7 @@ import {
   ListItemText,
   Menu,
   MenuItem,
+  Snackbar,
   Stack,
   Toolbar,
   Typography,
@@ -96,6 +98,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
   const [authStatus, setAuthStatus] = React.useState<AuthStatus>("loading");
   const [loading, setLoading] = React.useState(false);
+  const [actionError, setActionError] = React.useState<string | null>(null);
   const [listening, setListening] = React.useState(false);
   const [interimTranscript, setInterimTranscript] = React.useState("");
   const [voiceError, setVoiceError] = React.useState<string | null>(null);
@@ -490,6 +493,10 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
       setPlan(null);
       setSelectedHistory(null);
       transition("session");
+    } catch (err) {
+      // 無音失敗の禁止: 開始に失敗したことと次の動作を必ずユーザーに見せる
+      console.error("[handleStartConsultation]", err);
+      setActionError("相談を開始できませんでした。通信状況を確認して、もう一度お試しください。");
     } finally {
       setLoading(false);
     }
@@ -883,6 +890,16 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
           )}
         </Stack>
       </Container>
+      <Snackbar
+        open={actionError !== null}
+        autoHideDuration={8000}
+        onClose={() => setActionError(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <Alert severity="error" variant="filled" onClose={() => setActionError(null)}>
+          {actionError}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }
