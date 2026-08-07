@@ -75,8 +75,10 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0007](0007-problem-centric-two-layer-domain-model.md) — 困りごとを Problem 集約とする 2層ドメインモデル (Mention → Problem)
 - [0008](0008-pr-review-via-cloud-routine.md) — PR レビューを Claude Code on the web の Routine で行う
 - [0009](0009-on-demand-cd-via-github-actions-oidc.md) — デプロイは GitHub Actions のオンデマンド CD（手動 up/down + 夜間 teardown, OIDC）で行う
-- [0010](0010-voicevox-cpu-gpu-deploy-tier.md) — VOICEVOX を `voicevoxTier`(cpu/gpu) 単一スイッチで切替（既定 cpu）で up を高速・安価に _(Proposed)_
-- [0011](0011-github-projects-as-execution-dashboard.md) — GitHub Projects は実行状態のダッシュボードに徹し、設計の真実は docs に置く _(Proposed)_
+- [0010](0010-voicevox-cpu-gpu-deploy-tier.md) — VOICEVOX を `voicevoxTier`(cpu/gpu) 単一スイッチで切替（既定 cpu）で up を高速・安価に
+- [0011](0011-github-projects-as-execution-dashboard.md) — GitHub Projects は実行状態のダッシュボードに徹し、設計の真実は docs に置く
 - [0012](0012-grouping-in-ai-agent-with-bff-supplied-candidates.md) — Mention のグルーピングは AI Agent が担い、BFF が既存 Problem 候補を渡す
-- [0013](0013-standing-low-cost-dev-env-with-auto-deploy.md) — dev 環境は「常設・待機最小コスト + main マージ自動デプロイ」にする（0009 のオンデマンド teardown を置き換える） _(Proposed)_
-- [0014](0014-design-comprehension-gate-and-debrief.md) — 設計理解ゲートとゼミ型デブリーフで、user の意思決定・学習をループに組み込む _(Proposed)_
+- [0013](0013-standing-low-cost-dev-env-with-auto-deploy.md) — dev 環境は「常設・待機最小コスト + main マージ自動デプロイ」にする（0009 のオンデマンド teardown を置き換える）
+- [0014](0014-design-comprehension-gate-and-debrief.md) — 設計理解ゲートとゼミ型デブリーフで、user の意思決定・学習をループに組み込む
+- [0015](0015-proactive-agentic-workflow.md) — システムの能動化 — ガードレール付きプロアクティブ・エージェントワークフローを解禁する (思想転換)
+- [0016](0016-ai-agent-orchestration-on-maf.md) — AI Agent のオーケストレーション基盤を Semantic Kernel から Microsoft Agent Framework へ移行する
