@@ -54,23 +54,35 @@ az ad sp create --id "$CLIENT_ID"
 #   sts.windows.net 形式になり、EasyAuth 側の openIdIssuer (login.microsoftonline.com/<tenant>/v2.0)
 #   と一致せず「ログインできたのに API が 401」になる
 OBJ_ID="$(az ad app show --id "$CLIENT_ID" --query id -o tsv)"
-SCOPE_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
-az rest --method PATCH --url "https://graph.microsoft.com/v1.0/applications/$OBJ_ID" --body "{
-  \"api\": {
-    \"requestedAccessTokenVersion\": 2,
-    \"oauth2PermissionScopes\": [{
-      \"id\": \"$SCOPE_ID\", \"value\": \"access_as_user\", \"type\": \"User\", \"isEnabled\": true,
-      \"adminConsentDisplayName\": \"Access Mind Inbox BFF as user\",
-      \"adminConsentDescription\": \"Allows the SPA to call the Mind Inbox BFF (Functions EasyAuth) as the signed-in user.\",
-      \"userConsentDisplayName\": \"Access Mind Inbox BFF\",
-      \"userConsentDescription\": \"Allows this app to call the Mind Inbox backend on your behalf.\"
-    }]
-  }
-}"
+az rest --method PATCH --url "https://graph.microsoft.com/v1.0/applications/$OBJ_ID" \
+  --body '{"api": {"requestedAccessTokenVersion": 2}}'
+
+# ★ access_as_user スコープを公開する。
+#   Graph の仕様上、isEnabled:true の既存スコープを含む配列は丸ごと置換できない
+#   (Set isEnabled to false before attempting delete or update)。再実行しても安全なよう、
+#   既存スコープがあれば ID を再利用してスキップし、無いときだけ追加する。
+SCOPE_ID="$(az ad app show --id "$CLIENT_ID" \
+  --query "api.oauth2PermissionScopes[?value=='access_as_user'].id | [0]" -o tsv)"
+if [ -z "$SCOPE_ID" ]; then
+  SCOPE_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+  az rest --method PATCH --url "https://graph.microsoft.com/v1.0/applications/$OBJ_ID" --body "{
+    \"api\": {
+      \"oauth2PermissionScopes\": [{
+        \"id\": \"$SCOPE_ID\", \"value\": \"access_as_user\", \"type\": \"User\", \"isEnabled\": true,
+        \"adminConsentDisplayName\": \"Access Mind Inbox BFF as user\",
+        \"adminConsentDescription\": \"Allows the SPA to call the Mind Inbox BFF (Functions EasyAuth) as the signed-in user.\",
+        \"userConsentDisplayName\": \"Access Mind Inbox BFF\",
+        \"userConsentDescription\": \"Allows this app to call the Mind Inbox backend on your behalf.\"
+      }]
+    }
+  }"
+fi
+echo "SCOPE_ID=$SCOPE_ID"
 
 # ★ 自分自身の API への delegated permission を構成し、consent を事前付与する。
 #   これが無いと `.default` スコープが解決先を持たず、フロント (api://<clientId>/.default) が
 #   トークンを取れない
+#   (permission add は再実行すると already exists で失敗するが、その場合は設定済みなので無視してよい)
 az ad app permission add --id "$CLIENT_ID" --api "$CLIENT_ID" --api-permissions "$SCOPE_ID=Scope"
 az ad app permission grant --id "$CLIENT_ID" --api "$CLIENT_ID" \
   --scope "access_as_user" --consent-type AllPrincipals
@@ -175,7 +187,7 @@ az ad app show --id <clientId>   # → 出る (登録はある)
 az ad sp show --id <clientId>    # → Resource does not exist ← これが黒
 ```
 
-**対処**（§1 に反映済み。既存アプリ登録への後追い適用も同じコマンド）:
+**対処**（§1 に反映済み。既存スコープの有無をチェックしてから追加する再実行安全な形にしてあるため、既存アプリ登録への後追い適用も同じコマンドでよい）:
 
 1. `az ad sp create --id <clientId>`
 2. `requestedAccessTokenVersion: 2` を設定（v1 のままだと次は issuer 不一致で API 401 になる）
