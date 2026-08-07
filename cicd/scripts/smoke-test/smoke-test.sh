@@ -153,13 +153,18 @@ section "Container Apps should reject anonymous access"
 # 一覧取得に失敗したり空だったりすると for が 0 回まわり、検査区画ごと無言でスキップされる。
 # それでは「検査して問題なかった」のか「検査できていない」のかが出力から区別できず、
 # この検査自身が「静かに通る」経路になる。取得の成否と期待するアプリの存在を明示的に確かめる。
+# stderr は stdout に混ぜない。az containerapp は preview 警告バナーを stderr に出すことがあり、
+# 2>&1 で取り込むと警告文が一覧に紛れ込み、単語分割されて偽のアプリ名としてループに入る
+# (しかも rc=0 のままなので ng/warn にもならず気づけない)。
+# --only-show-errors で警告を抑え、エラー出力は別ファイルに退避して失敗時だけ読む。
+CA_ERR="$(mktemp)"
 set +e
-CA_NAMES="$(az containerapp list -g "$RG" --query "[].name" -o tsv 2>&1)"
+CA_NAMES="$(az containerapp list -g "$RG" --query "[].name" -o tsv --only-show-errors 2>"$CA_ERR")"
 ca_list_rc=$?
 set -e
 
 if [[ "$ca_list_rc" -ne 0 ]]; then
-  ng "Container Apps の一覧取得に失敗したため露出検査を実行できませんでした: ${CA_NAMES:0:160}"
+  ng "Container Apps の一覧取得に失敗したため露出検査を実行できませんでした: $(head -c 160 "$CA_ERR")"
   CA_NAMES=""
 elif [[ -z "$CA_NAMES" ]]; then
   warn "Container App が 1 件も見つかりませんでした (未デプロイなら正常。デプロイ済みならこの検査が効いていない)"
@@ -177,9 +182,11 @@ for expected in \
     || ng "$expected が Container Apps 一覧に見つかりません (露出検査の対象から漏れています)"
 done
 
-for CA in $CA_NAMES; do
+# 行単位で読む (単語分割に頼らない)。空行はスキップ。
+while IFS= read -r CA; do
+  [[ -z "$CA" ]] && continue
   CA_FQDN=$(az containerapp show -g "$RG" -n "$CA" \
-    --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+    --query "properties.configuration.ingress.fqdn" -o tsv --only-show-errors 2>/dev/null || true)
   if [[ -z "$CA_FQDN" ]]; then
     ok "$CA: 外部 ingress なし (公開されていない)"
     continue
@@ -207,7 +214,8 @@ for CA in $CA_NAMES; do
   else
     ng "$CA: 匿名アクセスに HTTP $ca_code が返った。アプリまで到達しており無認可で公開されている (issue #86)"
   fi
-done
+done <<< "$CA_NAMES"
+rm -f "$CA_ERR"
 
 section "SQL public access should be blocked"
 if [[ -n "$SQL_FQDN" ]]; then
