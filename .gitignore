@@ -23,3 +23,7 @@ __pycache__
 
 # viz-structure.sh が生成するルート artifacts (再生成可能)
 artifacts/
+
+# Playwright (L3) の生成物 — レポート / スクリーンショット / trace
+apps/frontend/playwright-report/
+apps/frontend/test-results/
