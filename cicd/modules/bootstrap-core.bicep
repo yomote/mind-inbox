@@ -914,6 +914,15 @@ resource functionAuthSettingsV2 'Microsoft.Web/sites/config@2023-12-01' = if (fu
     globalValidation: {
       requireAuthentication: true
       unauthenticatedClientAction: 'Return401'
+      // Functions の管理 API (/admin/*) を認証の対象外にする。
+      // 除外しないと EasyAuth が Azure 自身の管理呼び出しまで 401 で弾き、
+      //   - `az functionapp deployment source config-zip` の検証段階が Bad Request で落ちる
+      //   - `az functionapp function list` が Bad Request になり関数を列挙できない
+      // （2026-08-06 に実環境で発生。デプロイ自体は成功しているのに CD が赤くなる）。
+      // /admin/* は元々 **master key 必須** で、EasyAuth を外しても無認可では叩けない。
+      excludedPaths: [
+        '/admin/*'
+      ]
     }
     httpSettings: {
       requireHttps: true
