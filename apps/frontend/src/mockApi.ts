@@ -80,7 +80,8 @@ export async function startNewConsultation(concern: string): Promise<Consultatio
   return {
     id: uid(),
     // タイトルは最初の発話から自動生成する方針。開始時は仮の見出しのみ。
-    title: concern || "新しい相談",
+    // 空入力時の見出しは UI 仕様 (new-consultation.mdx)・BFF の deriveTitle と同じ「相談セッション」。
+    title: concern || "相談セッション",
     messages: [
       {
         id: uid(),

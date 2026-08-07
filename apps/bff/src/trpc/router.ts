@@ -261,22 +261,43 @@ const healthRouter = router({
 
 const consultationRouter = router({
   start: publicProcedure
-    .input(z.object({ concern: z.string().min(1) }))
+    .input(z.object({ concern: z.string() }))
     .output(z.object({ session: SessionSchema }))
     .mutation(async ({ input }) => {
       const sessionId = randomUUID();
       console.log(`[consultation.start] sessionId=${sessionId}`);
 
+      // 空入力でも開始可能 (UI 仕様 new-consultation.mdx / mockApi と同挙動)。
+      // テーマ未入力の開始は AI を呼ばず、最初の問いかけだけ返す
+      // (空メッセージを ai-agent に流すと 422 になるため入口で分岐する)。
+      const concern = input.concern.trim();
+      if (concern.length === 0) {
+        return {
+          session: {
+            id: sessionId,
+            title: deriveTitle(""),
+            messages: [
+              {
+                id: randomUUID(),
+                role: "assistant" as const,
+                text: "ありがとうございます。\nまずは「今いちばん気になっていること」を1つ教えてください。",
+                createdAt: nowIso(),
+              },
+            ],
+          },
+        };
+      }
+
       const chatRes = await sendChatMessage({
         sessionId,
-        message: input.concern,
+        message: concern,
       });
 
       const messages: ChatMessage[] = [
         {
           id: randomUUID(),
           role: "user",
-          text: input.concern,
+          text: concern,
           createdAt: nowIso(),
         },
         {
@@ -290,7 +311,7 @@ const consultationRouter = router({
       return {
         session: {
           id: sessionId,
-          title: deriveTitle(input.concern),
+          title: deriveTitle(concern),
           messages,
         },
       };
@@ -385,11 +406,9 @@ const consultationRouter = router({
 // ---- history ---------------------------------------------------------------
 
 const historyRouter = router({
-  list: publicProcedure
-    .output(z.array(HistoryItemSchema))
-    .query(async ({ ctx }) => {
-      return await ctx.historyRepo.list();
-    }),
+  list: publicProcedure.output(z.array(HistoryItemSchema)).query(async ({ ctx }) => {
+    return await ctx.historyRepo.list();
+  }),
 
   save: publicProcedure
     .input(

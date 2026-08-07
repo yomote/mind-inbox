@@ -25,6 +25,8 @@ test.describe("主要画面のスクリーンショット", () => {
     await page.screenshot(shot("01-home"));
 
     await page.getByRole("button", { name: "新しい相談を始める" }).click();
+    // UI 仕様 (home.mdx): テーマ入力画面を経由して対話を開始する
+    await page.getByRole("button", { name: "対話を開始" }).click();
     await page.getByPlaceholder("ここに入力 / 話して入力").fill("週末になると気分が落ち込む");
     await page.getByRole("button", { name: "送信" }).click();
     await expect(page.getByText("週末になると気分が落ち込む").first()).toBeVisible();
