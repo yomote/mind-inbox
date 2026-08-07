@@ -644,16 +644,23 @@ resource voicevoxContainerApp 'Microsoft.App/containerApps@2024-03-01' = if (ena
       managedEnvironmentId: sharedManagedEnvironment.id
       configuration: {
         activeRevisionsMode: 'Single'
-        // NOTE: ingress の IP 制限は **意図的にここに置いていない** (#86)。
-        // 一度 `sharedManagedEnvironment.properties.staticIp` を許可する形で実装したが、
-        // 実測の結果それは **inbound 用の IP** (4.190.8.64) で、Container App 間の
-        // 呼び出し元である **egress IP** (outboundIpAddresses = 130.33.178.89) とは
-        // 別物だった。あのまま入れると vv-wrapper からの正規アクセスまで弾いて TTS が壊れる。
+        // internal ingress (#86 / ADR 0017)。VOICEVOX エンジンの呼び出し元は
+        // **同じ CAE に居る vv-wrapper だけ**なので、外部 ingress を持つ理由が無い。
+        // external: false にすると FQDN が `*.internal.<region>.azurecontainerapps.io` になり、
+        // 環境の外からは名前解決すらできない = 到達経路そのものが消える。
+        //
+        // IP 許可リストは採らない。一度 `sharedManagedEnvironment.properties.staticIp` を
+        // 許可する形で実装したが、実測の結果それは **inbound 用の IP** (4.190.8.64) で、
+        // 呼び出し元の **egress IP** (outboundIpAddresses = 130.33.178.89) とは別物だった。
         // 正しい egress IP は各 Container App の outboundIpAddresses にしか無く、
-        // 自リソース定義内から自分の property を参照するのは循環参照になるため bicep では書けない。
-        // → 3 つの Container App をまとめてどう守るかは #86 の design-gate で決める。
+        // 自リソース定義内から自分の property を参照するのは循環参照になるため書けない。
+        // ADR 0017 が Option D (IP 許可リスト) を却下した理由でもある。
+        //
+        // vv-wrapper 側の接続先は deployment output `voicevoxBaseUrl` から毎回配線される
+        // (provision.sh が bootstrap → deploy-voicevox-wrapper.sh の順で走る) ため、
+        // internal 化で FQDN が変わっても次のデプロイで追随する。
         ingress: {
-          external: true
+          external: false
           targetPort: 50021
           transport: 'http'
         }
