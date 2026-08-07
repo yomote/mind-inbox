@@ -648,6 +648,19 @@ resource voicevoxContainerApp 'Microsoft.App/containerApps@2024-03-01' = if (ena
           external: true
           targetPort: 50021
           transport: 'http'
+          // VOICEVOX エンジンを呼ぶのは同一 CAE 内の vv-wrapper だけ。外から直接叩けると
+          // 無料の TTS / 計算資源として踏み台にされる (#86)。CAE の送信元 IP のみ許可し、
+          // それ以外は暗黙 Deny。
+          // ここを bicep に持たせるのが要点: 手動で設定しても bootstrap の再適用で
+          // ingress ごと上書きされて消える (2026-08-07 に実際に発生)。
+          ipSecurityRestrictions: [
+            {
+              name: 'cae-only'
+              ipAddressRange: '${sharedManagedEnvironment.properties.staticIp}/32'
+              action: 'Allow'
+              description: 'same Container Apps environment (vv-wrapper) only'
+            }
+          ]
         }
       }
       template: {

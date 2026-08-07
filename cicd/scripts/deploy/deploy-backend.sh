@@ -103,7 +103,35 @@ echo "Zip size: $ZIP_BYTES bytes ($ZIP_PATH)"
 echo ""
 echo "=== Deploying to Function App ==="
 cd "$ROOT_DIR"
+
+# Linux Consumption では config-zip が「パッケージ配置は成功しているのに、直後の
+# 状態確認 (SCM の deployments/latest) が Bad Request を返す」ことがある。
+# set -e のままだと *成功したデプロイ* でスクリプトが止まり、この後の env 配線と
+# フロント配置まで巻き添えで実行されない (2026-08-07 に実環境で発生)。
+# よって CLI の終了コードを鵜呑みにせず、**実際の配置結果**で成否を判定する。
+set +e
 az functionapp deployment source config-zip -g "$RG" -n "$FUNC_APP_NAME" --src "$ZIP_PATH"
+deploy_rc=$?
+set -e
+
+if [[ "$deploy_rc" -ne 0 ]]; then
+  echo "WARN: config-zip が非ゼロ終了 (rc=$deploy_rc)。実際の配置結果を検証します..." >&2
+
+  # 検証1: 直前に URL 版を削除しているので、URL が入っていれば「今回の実行が書いた」証拠。
+  new_pkg="$(az functionapp config appsettings list -g "$RG" -n "$FUNC_APP_NAME" \
+    --query "[?name=='WEBSITE_RUN_FROM_PACKAGE'].value | [0]" -o tsv 2>/dev/null || true)"
+  # 検証2: プラットフォームがパッケージを読み込み、関数を認識しているか。
+  fn_list="$(az functionapp function list -g "$RG" -n "$FUNC_APP_NAME" --query "[].name" -o tsv 2>/dev/null || true)"
+
+  if [[ "$new_pkg" == http* && -n "$fn_list" ]]; then
+    echo "  検証OK: パッケージが更新され、関数も認識されています:" >&2
+    echo "$fn_list" | sed 's/^/    - /' >&2
+    echo "  → CLI の状態確認のみの失敗とみなして続行します" >&2
+  else
+    echo "ERROR: 配置自体が失敗しています (package='${new_pkg:0:60}...' functions='${fn_list:-<none>}')" >&2
+    exit 1
+  fi
+fi
 
 # ── Wire BFF env vars to live Container Apps ──────────────────────────────────
 echo ""

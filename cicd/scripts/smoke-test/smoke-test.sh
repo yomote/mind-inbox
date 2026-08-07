@@ -140,6 +140,40 @@ if [[ -n "$FUNC_HOST" ]]; then
   fi
 fi
 
+# -------- Container Apps の露出 (#86) --------
+# 認可の門は Functions だけでは足りない。OpenAI の鍵を握る ai-agent をはじめ、
+# Container Apps は「もう一つの扉」であり、ここが無認可で開いていると
+# Functions の 401 を実測して安心していても財布が焼かれる。
+#
+# 無いと何が静かに通るか: ingress の IP 制限が剥がれても (bicep 管理のリソースは
+# 再デプロイで ingress ごと上書きされ、実際に voicevox で発生した) デプロイは緑のまま。
+# 気づく手段が「たまたま点検したとき」しかなくなる。
+section "Container Apps should reject anonymous access"
+for CA in $(az containerapp list -g "$RG" --query "[].name" -o tsv 2>/dev/null); do
+  CA_FQDN=$(az containerapp show -g "$RG" -n "$CA" \
+    --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+  if [[ -z "$CA_FQDN" ]]; then
+    ok "$CA: 外部 ingress なし (公開されていない)"
+    continue
+  fi
+
+  set +e
+  ca_code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 20 "https://$CA_FQDN/health")
+  ca_rc=$?
+  set -e
+
+  if [[ "$ca_rc" -ne 0 ]]; then
+    # 接続自体が確立できない = 到達できない。拒否されている側なので想定どおり。
+    ok "$CA: 匿名アクセスが接続段階で拒否された"
+  elif [[ "$ca_code" == "403" || "$ca_code" == "401" ]]; then
+    ok "$CA: 匿名アクセスが $ca_code で拒否された"
+  elif [[ "$ca_code" == "200" ]]; then
+    ng "$CA: 匿名アクセスが 200。無認可で公開されている (ingress の制限を確認: issue #86)"
+  else
+    warn "$CA: 匿名アクセスが HTTP $ca_code (401/403 もしくは接続拒否を期待)"
+  fi
+done
+
 section "SQL public access should be blocked"
 if [[ -n "$SQL_FQDN" ]]; then
   SQL_SERVER_NAME=${SQL_FQDN%%.*}

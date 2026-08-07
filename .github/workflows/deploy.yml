@@ -146,8 +146,19 @@ jobs:
           RG="$RG" ENVIRONMENT="$ENVIRONMENT" DEPLOYMENT="$DEPLOYMENT" VOICEVOX_TIER="$VOICEVOX_TIER" \
             ./cicd/scripts/deploy/provision.sh
 
-      - name: SWA URL を Actions サマリに出す
+      # デプロイのたびに「意図した接続が通り、それ以外が拒否される」ことを実測する。
+      # 無いと何が静かに通るか: 認可が外れても (EasyAuth の設定ミス・Container Apps の
+      # ingress 制限が再デプロイで剥がれる 等) デプロイは緑のままで、誰も気づかない。
+      # 実際 2026-08-06〜07 に「認証無効ビルドの出荷」「コンテナの無認可公開」
+      # 「IP 制限の剥がれ」が起き、いずれも偶然の点検でしか見つからなかった。
+      - name: Smoke test（認可と疎通の実測）
         if: steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
+        run: |
+          RG="$RG" DEPLOYMENT="$DEPLOYMENT" ./cicd/scripts/smoke-test/smoke-test.sh
+
+      - name: SWA URL を Actions サマリに出す
+        # smoke が落ちても URL は出す（切り分けの手掛かりになるため）。
+        if: always() && steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
         run: |
           HOST="$(az staticwebapp list -g "$RG" --query "[?starts_with(name, 'swa-')].defaultHostname | [0]" -o tsv 2>/dev/null || true)"
           if [ -n "$HOST" ]; then
