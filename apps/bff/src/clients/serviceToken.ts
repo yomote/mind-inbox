@@ -26,9 +26,19 @@ const EXPIRY_MARGIN_SEC = 300;
 
 const cache = new Map<string, CachedToken>();
 
+/**
+ * 取得中のリクエストを resource ごとに 1 本に束ねる。
+ *
+ * これが無いと、キャッシュが空 or 失効した直後に同時到着したリクエストが
+ * それぞれ MSI を叩く (コールドスタート明けのバーストで顕著)。キャッシュを
+ * 置いた目的の半分 — レイテンシとスロットリングの抑制 — が外れる。
+ */
+const inFlight = new Map<string, Promise<string>>();
+
 /** テスト用: キャッシュを空にする。 */
 export function resetServiceTokenCache(): void {
   cache.clear();
+  inFlight.clear();
 }
 
 function nowSec(): number {
@@ -57,6 +67,20 @@ export async function getServiceToken(resource: string): Promise<string | null> 
     return cached.token;
   }
 
+  // 同じ resource の取得が走っていれば相乗りする。
+  const pending = inFlight.get(resource);
+  if (pending) return pending;
+
+  const request = fetchToken(endpoint, header, resource).finally(() => {
+    // 成否にかかわらず外す。失敗を握ったままだと次のリクエストも同じ例外を貰い続ける。
+    inFlight.delete(resource);
+  });
+  inFlight.set(resource, request);
+
+  return request;
+}
+
+async function fetchToken(endpoint: string, header: string, resource: string): Promise<string> {
   const url = `${endpoint}?resource=${encodeURIComponent(resource)}&api-version=2019-08-01`;
   const res = await fetch(url, { headers: { "X-IDENTITY-HEADER": header } });
 

@@ -75,6 +75,58 @@ describe("serviceToken", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
+  it("[L1] 同時に来たリクエストは MSI 取得を 1 本に束ねる", async () => {
+    // 無いと何が静かに通るか: キャッシュが空 / 失効した直後のバースト
+    // (コールドスタート明けが典型) で、同時到着した数だけ MSI を叩く。
+    // 壊れないので気づけないが、キャッシュを置いた目的の半分が外れている。
+    setMsiEnv();
+    let resolveFetch: (r: Response) => void = () => {};
+    const gate = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockReturnValue(gate as Promise<Response>);
+
+    const all = Promise.all([
+      getServiceToken("api://ai-agent"),
+      getServiceToken("api://ai-agent"),
+      getServiceToken("api://ai-agent"),
+    ]);
+
+    resolveFetch(
+      new Response(
+        JSON.stringify({
+          access_token: "tok-1",
+          expires_on: String(Math.floor(Date.now() / 1000) + 3600),
+        }),
+        { status: 200 },
+      ),
+    );
+
+    await expect(all).resolves.toEqual(["tok-1", "tok-1", "tok-1"]);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("[L1] 取得に失敗しても in-flight を残さず、次の呼び出しは再取得する", async () => {
+    // 無いと何が静かに通るか: 失敗した Promise を握ったままになり、
+    // 一度の一時障害以降ずっと同じ例外を返し続ける (回復しない)。
+    setMsiEnv();
+    let call = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      call += 1;
+      if (call === 1) return new Response("no", { status: 500, statusText: "err" });
+      return new Response(
+        JSON.stringify({
+          access_token: "tok-ok",
+          expires_on: String(Math.floor(Date.now() / 1000) + 3600),
+        }),
+        { status: 200 },
+      );
+    });
+
+    await expect(getServiceToken("api://ai-agent")).rejects.toThrow();
+    await expect(getServiceToken("api://ai-agent")).resolves.toBe("tok-ok");
+  });
+
   it("[L1] 期限切れのキャッシュは使わず取り直す", async () => {
     setMsiEnv();
     let issued = 0;

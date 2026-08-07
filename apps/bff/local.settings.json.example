@@ -8,6 +8,10 @@
     "AI_AGENT_BASE_URL": "",
 
     "// VOICEVOX_BASE_URL": "未設定なら /api/tts が 204 を返し、フロントは Web Speech にフォールバック",
-    "VOICEVOX_BASE_URL": ""
+    "VOICEVOX_BASE_URL": "",
+
+    "// AI_AGENT_AUDIENCE / VOICEVOX_AUDIENCE": "Container Apps 組み込み認証 (#86 / ADR 0017) 向け。ローカルでは空のまま — 空なら Authorization を付けず、門の無いローカルサービスにそのまま繋がる (Azure 上でのみ bicep が値を配線する)",
+    "AI_AGENT_AUDIENCE": "",
+    "VOICEVOX_AUDIENCE": ""
   }
 }
