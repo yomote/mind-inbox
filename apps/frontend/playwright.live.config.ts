@@ -43,9 +43,17 @@ export default defineConfig({
       name: "chromium-live",
       use: {
         ...devices["Desktop Chrome"],
-        ...(process.env.E2E_CHROMIUM_PATH
-          ? { launchOptions: { executablePath: process.env.E2E_CHROMIUM_PATH } }
-          : {}),
+        launchOptions: {
+          // Playwright の既定は --autoplay-policy=no-user-gesture-required で、
+          // **実ブラウザでは起きうる自動再生ブロックが原理的に再現しない**。
+          // 2026-08-08 に「/api/tts は 200 なのに実機ではずんだもんではない声になる」
+          // 障害が E2E 全緑のまますり抜けた (#150)。実ブラウザと同じポリシーに戻し、
+          // 再生ブロックがテストで踏めるようにする。
+          args: ["--autoplay-policy=user-gesture-required"],
+          ...(process.env.E2E_CHROMIUM_PATH
+            ? { executablePath: process.env.E2E_CHROMIUM_PATH }
+            : {}),
+        },
       },
     },
   ],

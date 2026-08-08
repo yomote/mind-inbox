@@ -240,7 +240,9 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     isAuthenticated && currentRoute !== "onboarding" ? currentRoute : "onboarding";
 
   return (
-    <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
+    // data-voice-output: 実際に音を出した経路 (dialogue-session.mdx §5.5)。
+    // L4 live E2E が「ずんだもんで鳴ったか」を検証するための観測点 (#150)。
+    <Box data-voice-output={tts.outputMode} sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
       <AppBar
         position="fixed"
         elevation={0}

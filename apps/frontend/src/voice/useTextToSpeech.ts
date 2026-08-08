@@ -14,12 +14,20 @@
 
 import * as React from "react";
 import { ttsFetch } from "../api/http";
+import { acquireAudioElement, unlockAudioElement } from "./unlockedAudio";
 
 /** VOICEVOX 未設定時に BFF が返す 204 を「合成できなかった」として扱うための番兵。 */
 const TTS_STUB = "TTS_STUB";
 
 /** 合成済み WAV の保持上限。超えたら古い順に捨てる。 */
 const VOICE_CACHE_MAX = 30;
+
+/** 劣化時のメッセージ。無言で別の声に置き換えない (dialogue-session.mdx §5.5)。 */
+const MSG_SYNTH_STUB = "音声合成が未設定のため、ブラウザの読み上げで代用しています。";
+const MSG_SYNTH_FAILED =
+  "ずんだもんの音声を合成できませんでした。ブラウザの読み上げに切り替えています。";
+const MSG_PLAYBACK_BLOCKED =
+  "ブラウザに音声再生をブロックされました。画面をタップすると、ずんだもんの声に戻ります。";
 
 export type TextToSpeechOptions = {
   /** dev / mock ビルド: BFF が無いのでネットワークを叩かずブラウザ読み上げに直行する。 */
@@ -28,12 +36,23 @@ export type TextToSpeechOptions = {
   speaker: number;
 };
 
+/**
+ * 実際に音を出した経路 (dialogue-session.mdx §5.5)。
+ * `voicevox` 以外は「ずんだもん以外の声」であり劣化している。
+ */
+export type VoiceOutputMode = "idle" | "voicevox" | "browser-fallback";
+
 export type TextToSpeech = {
   /** 再生中か (VOICEVOX 再生 / ブラウザ読み上げの両方)。 */
   speaking: boolean;
   /** 読み上げが有効か。false の間は speak / speakOnce が何もしない。 */
   enabled: boolean;
   error: string | null;
+  /**
+   * 直近に実際に音を出した経路。UI は `data-voice-output` として公開し、
+   * L4 live E2E が「WAV は 200 なのに実際は別の声だった」を検知する (#150)。
+   */
+  outputMode: VoiceOutputMode;
   /** ユーザー操作 (タップ) の中で 1 度だけ呼ぶ。iOS の自動再生ブロックを解錠する。 */
   unlock: () => void;
   toggleEnabled: () => void;
@@ -49,6 +68,7 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
   const [speaking, setSpeaking] = React.useState(false);
   const [enabled, setEnabled] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  const [outputMode, setOutputMode] = React.useState<VoiceOutputMode>("idle");
 
   const activeAudioRef = React.useRef<HTMLAudioElement | null>(null);
   const activeAudioUrlRef = React.useRef<string | null>(null);
@@ -102,13 +122,23 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
     [speaker],
   );
 
-  /** ブラウザ内蔵の音声合成で読み上げる (VOICEVOX が無い時のフォールバック / mock デモ用)。 */
-  const speakWithBrowser = React.useCallback((text: string) => {
+  /**
+   * ブラウザ内蔵の音声合成で読み上げる (VOICEVOX が無い時のフォールバック / mock デモ用)。
+   *
+   * degradedReason を渡した場合は「ずんだもん以外の声になった」ことを画面に出す
+   * (dialogue-session.mdx §5.5: 無言で別の声に置き換えない)。standalone は想定内なので
+   * 理由なしで呼ぶ = 警告を出さない。
+   */
+  const speakWithBrowser = React.useCallback((text: string, degradedReason?: string) => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
       setSpeaking(false);
-      setError("このブラウザは音声読み上げに対応していません。");
+      setOutputMode("idle");
+      setError(degradedReason ?? "このブラウザは音声読み上げに対応していません。");
       return;
     }
+
+    setOutputMode("browser-fallback");
+    if (degradedReason) setError(degradedReason);
 
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
@@ -125,10 +155,16 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
     window.speechSynthesis.speak(utterance);
   }, []);
 
+  // **2 系統をどちらも解錠する** (#150): ブラウザ読み上げ (speechSynthesis) と
+  // ずんだもんの再生 (HTMLAudioElement) は別物で、前者だけ解錠しても後者は弾かれる。
   const unlock = React.useCallback(() => {
     if (audioUnlockedRef.current) return;
     audioUnlockedRef.current = true;
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    if (typeof window === "undefined") return;
+
+    unlockAudioElement();
+
+    if (!("speechSynthesis" in window)) return;
     try {
       const u = new SpeechSynthesisUtterance(" ");
       u.volume = 0;
@@ -154,41 +190,59 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
 
       setSpeaking(true);
 
+      // ① 合成 (VOICEVOX)。「音が届いていない」であり、再生の失敗とは別物として扱う。
+      let audioBlob: Blob;
       try {
         const cacheKey = `${speaker}:${text}`;
         const cache = voiceCacheRef.current;
-        const audioBlob = cache.get(cacheKey) || (await synthesizeWithVoicevox(text));
+        const cached = cache.get(cacheKey);
+        audioBlob = cached ?? (await synthesizeWithVoicevox(text));
 
-        if (!cache.has(cacheKey)) {
+        if (!cached) {
           cache.set(cacheKey, audioBlob);
           if (cache.size > VOICE_CACHE_MAX) {
             const oldest = cache.keys().next().value;
             if (oldest) cache.delete(oldest);
           }
         }
+      } catch (err) {
+        const stub = err instanceof Error && err.message === TTS_STUB;
+        speakWithBrowser(text, stub ? MSG_SYNTH_STUB : MSG_SYNTH_FAILED);
+        return;
+      }
 
-        const objectUrl = URL.createObjectURL(audioBlob);
-        activeAudioUrlRef.current = objectUrl;
+      // ② 再生。ジェスチャ内で解錠した要素を使い回す。都度 new Audio すると解錠が
+      // 引き継がれず、合成待ち (数秒) を挟むぶん自動再生ポリシーに弾かれやすい。
+      // 厳しさはブラウザ差があり desktop Chromium では再現しないが、解錠の穴自体は
+      // 実在するため塞ぐ (#150 の原因は未確定 — 確定は再発時の表示を待つ)。
+      const objectUrl = URL.createObjectURL(audioBlob);
+      activeAudioUrlRef.current = objectUrl;
 
-        const audio = new Audio(objectUrl);
-        activeAudioRef.current = audio;
-        audio.onended = () => {
-          setSpeaking(false);
-          if (activeAudioUrlRef.current) {
-            URL.revokeObjectURL(activeAudioUrlRef.current);
-            activeAudioUrlRef.current = null;
-          }
-          activeAudioRef.current = null;
-        };
-        audio.onerror = () => {
-          setSpeaking(false);
-          setError("音声の再生に失敗しました。");
-        };
+      const audio = acquireAudioElement(objectUrl);
+      activeAudioRef.current = audio;
+      audio.onended = () => {
+        setSpeaking(false);
+        if (activeAudioUrlRef.current) {
+          URL.revokeObjectURL(activeAudioUrlRef.current);
+          activeAudioUrlRef.current = null;
+        }
+        activeAudioRef.current = null;
+      };
+      audio.onerror = () => {
+        setSpeaking(false);
+        setOutputMode("idle");
+        setError("音声の再生に失敗しました。");
+      };
 
+      try {
         await audio.play();
+        setOutputMode("voicevox");
       } catch {
-        // VOICEVOX 失敗時 (stub 204 / 通信断 / 合成エラー) はブラウザ TTS にフォールバック。
-        speakWithBrowser(text);
+        // ブラウザに自動再生を止められた。ここで無言のままブラウザ読み上げに
+        // 置き換えると「ずんだもんが黙った」ようにしか見えない (#150 の実事象)。
+        // 次のタップで解錠をやり直せるよう、解錠済みフラグを戻す。
+        audioUnlockedRef.current = false;
+        speakWithBrowser(text, MSG_PLAYBACK_BLOCKED);
       }
     },
     [speakWithBrowser, standalone, stop, synthesizeWithVoicevox, speaker],
@@ -219,6 +273,7 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
     stop();
     setEnabled(true);
     setError(null);
+    setOutputMode("idle");
     lastSpokenIdRef.current = null;
     voiceCacheRef.current.clear();
   }, [stop]);
@@ -229,6 +284,7 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
     speaking,
     enabled,
     error,
+    outputMode,
     unlock,
     toggleEnabled,
     stop,

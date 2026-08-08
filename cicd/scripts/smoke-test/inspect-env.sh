@@ -271,7 +271,7 @@ if [[ -n "$CA_NAMES" ]]; then
       echo "| $CA | (Ready な revision なし) | — | — |"
       continue
     fi
-    if ! run az containerapp revision show -g "$RG" --app "$CA" -n "$REV" \
+    if ! run az containerapp revision show -g "$RG" -n "$CA" --revision "$REV" \
       --query '{image: properties.template.containers[0].image, created: properties.createdTime}' \
       -o json --only-show-errors; then
       echo "| $CA | \`$REV\` | (取得失敗: $RUN_ERR) | — |"

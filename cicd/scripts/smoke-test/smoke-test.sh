@@ -296,7 +296,7 @@ for ca in \
   fi
 
   set +e
-  ca_image="$(az containerapp revision show -g "$RG" --app "$ca" -n "$ca_rev" \
+  ca_image="$(az containerapp revision show -g "$RG" -n "$ca" --revision "$ca_rev" \
     --query 'properties.template.containers[0].image' -o tsv --only-show-errors 2>"$IMG_ERR")"
   ca_image_rc=$?
   set -e

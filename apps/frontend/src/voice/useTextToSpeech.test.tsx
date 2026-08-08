@@ -17,6 +17,7 @@ vi.mock("../api/http", () => ({
 
 import { ttsFetch } from "../api/http";
 import { useTextToSpeech } from "./useTextToSpeech";
+import { resetUnlockedAudioForTest } from "./unlockedAudio";
 
 /** speechSynthesis (ブラウザ内蔵読み上げ) は jsdom に無いので最小の偽物を置く。 */
 function stubSpeechSynthesis() {
@@ -58,6 +59,8 @@ let revokeSpy: ReturnType<typeof vi.fn<(url: string) => void>>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // 解錠済み要素はモジュールに残るので、テスト間で持ち越さない
+  resetUnlockedAudioForTest();
   playSpy = vi.spyOn(window.HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
   revokeSpy = vi.fn<(url: string) => void>();
   URL.createObjectURL = vi.fn(() => "blob:audio");
@@ -222,5 +225,93 @@ describe("[L1] useTextToSpeech — 自動読み上げ (speakOnce)", () => {
     });
 
     await waitFor(() => expect(vi.mocked(ttsFetch)).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("[L1] useTextToSpeech — 劣化の可視化と再生解錠 (#150)", () => {
+  it("VOICEVOX で鳴ったら outputMode は voicevox になる", async () => {
+    // 無いと: 実際にどの声で鳴ったかを誰も観測できず、L4 の data-voice-output 検証が
+    //         「常に緑」になって「WAV は 200 なのに別の声」を取り逃す
+    stubSpeechSynthesis();
+    vi.mocked(ttsFetch).mockResolvedValue(wavResponse());
+
+    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    await act(async () => {
+      await result.current.speak("こんにちは");
+    });
+
+    await waitFor(() => expect(result.current.outputMode).toBe("voicevox"));
+    expect(result.current.error).toBeNull();
+  });
+
+  it("再生をブラウザにブロックされたら、読み上げは続けたうえで劣化を画面に出す", async () => {
+    // 無いと: 2026-08-08 の実事象そのもの —「無言で別の声に置き換わる」ため、
+    //         ユーザーには「ずんだもんが黙った」としか見えず原因も追えない
+    const speak = stubSpeechSynthesis();
+    vi.mocked(ttsFetch).mockResolvedValue(wavResponse());
+    playSpy.mockRejectedValue(new DOMException("blocked", "NotAllowedError"));
+
+    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    await act(async () => {
+      await result.current.speak("こんにちは");
+    });
+
+    // 音は出し続ける (無音にはしない) が、別の声になったことは必ず見せる
+    await waitFor(() => expect(result.current.outputMode).toBe("browser-fallback"));
+    expect(speak).toHaveBeenCalled();
+    expect(result.current.error).toContain("ブロック");
+  });
+
+  it("合成に失敗したときは、再生ブロックとは別のメッセージを出す", async () => {
+    // 無いと: 「合成が届いていない」のか「再生できていない」のか切り分けられず、
+    //         再発時にどのホップを見ればよいか分からない
+    stubSpeechSynthesis();
+    vi.mocked(ttsFetch).mockResolvedValue({ status: 502, ok: false } as unknown as Response);
+
+    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    await act(async () => {
+      await result.current.speak("こんにちは");
+    });
+
+    await waitFor(() => expect(result.current.outputMode).toBe("browser-fallback"));
+    expect(result.current.error).toContain("合成できませんでした");
+  });
+
+  it("unlock は speechSynthesis だけでなく HTMLAudioElement も解錠する", async () => {
+    // 無いと: ずんだもんの再生 (Audio 要素) が未解錠のまま残り、合成待ちの数秒で
+    //         ジェスチャ文脈が切れるブラウザでは弾かれる (#150 の解錠の穴)
+    const speak = stubSpeechSynthesis();
+
+    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    await act(async () => {
+      result.current.unlock();
+    });
+
+    expect(playSpy).toHaveBeenCalled(); // 無音 WAV を実際に再生して解錠している
+    expect(speak).toHaveBeenCalled(); // ブラウザ読み上げ側の解錠も従来どおり行う
+  });
+
+  it("再生がブロックされた後は、次のタップで解錠をやり直せる", async () => {
+    // 無いと: 「画面をタップすると、ずんだもんの声に戻ります」という案内が嘘になる
+    //         (解錠済みフラグが立ったままで unlock が二度と実行されない)
+    stubSpeechSynthesis();
+    vi.mocked(ttsFetch).mockResolvedValue(wavResponse());
+    playSpy.mockRejectedValue(new DOMException("blocked", "NotAllowedError"));
+
+    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    await act(async () => {
+      result.current.unlock();
+    });
+    await act(async () => {
+      await result.current.speak("こんにちは");
+    });
+    await waitFor(() => expect(result.current.outputMode).toBe("browser-fallback"));
+
+    const callsBefore = playSpy.mock.calls.length;
+    await act(async () => {
+      result.current.unlock();
+    });
+
+    expect(playSpy.mock.calls.length).toBeGreaterThan(callsBefore);
   });
 });

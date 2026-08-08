@@ -84,6 +84,18 @@ main マージで常設 dev に自動反映させるには、リポジトリ **S
 - 原因: federated credential の subject 不一致。`deploy.yml` は既定ブランチ `main` の ref で動くため、subject は `repo:yomote/mind-inbox:ref:refs/heads/main`。
 - 対処: `setup-oidc.sh` を `BRANCH=main` で実行（既定）。別ブランチから動かすならそのブランチ分の credential を追加。
 
+> **マージ前のブランチで実環境を検証することはできない** (2026-08-08 に実際に踏んだ / #150)
+>
+> `workflow_dispatch` は `ref` にブランチを指定するとそのブランチ版の workflow ファイルで走るため、
+> 「マージせずに実環境へテストを当てられる」と考えたくなるが、**Azure login がここで落ちる**。
+> subject が `refs/heads/<ブランチ名>` になり、`main` 用の credential と一致しないため。
+>
+> 結果として、**実環境に対する検証 (golden-path / live E2E) はマージ後にしか実行できない**。
+> 「実環境で確かめてからマージする」は成立しないので、実環境の挙動に依存する修正は
+> 「マージ → 自動デプロイ → 実測」の順になることを前提に計画すること。
+> どうしてもマージ前に実行したい場合は、そのブランチ分の federated credential を追加する
+> (Azure 側の設定変更 = 人間の作業)。
+
 ### `AuthorizationFailed`（デプロイ中に権限エラー）
 
 - 原因: SP のロール不足。RG 作成/削除や Key Vault purge にはサブスクリプションスコープの権限が要る。
