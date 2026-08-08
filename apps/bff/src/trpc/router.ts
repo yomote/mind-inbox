@@ -10,13 +10,11 @@ import {
   sendChatMessage,
 } from "../clients/aiAgentClient";
 import { issueSpeechAuthToken } from "../clients/speechTokenClient";
+import type { ProblemRepository } from "../repositories/problemRepository";
 import {
   ActionPlanSchema,
   HistoryItemSchema,
   OrganizedResultSchema,
-} from "../repositories/historyRepository";
-import type { ProblemRepository } from "../repositories/problemRepository";
-import {
   ExtractionResultSchema,
   ProblemSchema,
   ProblemStatusSchema,

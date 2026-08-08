@@ -1,9 +1,10 @@
 import type { inferRouterInputs } from "@trpc/server";
 import { TRPCClientError } from "@trpc/client";
 import * as mock from "../mockApi";
-import type { ExtractionResult, Problem, ProblemFilter, TriageInput } from "../mockApi";
+import type { ExtractionResult, Problem, ProblemFilter, TriageInput } from "./types";
 import { trpc } from "../trpc/client";
 import type { AppRouter } from "../trpc/client";
+import { useMock } from "./http";
 
 /**
  * Problem / Mention の api 層（Phase C で mock→real を結線）。
@@ -11,8 +12,6 @@ import type { AppRouter } from "../trpc/client";
  * consultation.ts / history.ts と同じ `VITE_USE_MOCK` 分岐。real は BFF の
  * `consultation.extract` / `problem.*`（Phase B）を tRPC で叩く。
  */
-
-const useMock = import.meta.env.VITE_USE_MOCK === "true";
 
 /** BFF `problem.triage` の入力（discriminatedUnion）。UI のフラット TriageInput をこれに写す。 */
 type BffTriageInput = inferRouterInputs<AppRouter>["problem"]["triage"];

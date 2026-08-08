@@ -1,27 +1,6 @@
-import { z } from "zod";
-
-export const OrganizedResultSchema = z.object({
-  summary: z.string(),
-  emotions: z.array(z.string()),
-  priorities: z.array(z.string()),
-});
-
-export const ActionPlanSchema = z.object({
-  title: z.string(),
-  steps: z.array(z.string()),
-});
-
-export const HistoryItemSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  createdAt: z.string(),
-  result: OrganizedResultSchema,
-  plan: ActionPlanSchema,
-});
-
-export type OrganizedResult = z.infer<typeof OrganizedResultSchema>;
-export type ActionPlan = z.infer<typeof ActionPlanSchema>;
-export type HistoryItem = z.infer<typeof HistoryItemSchema>;
+// schema はドメイン層 (../trpc/domain.ts) が真実。ここは永続化実装のみを持つ
+// (repositories → domain の一方向依存。#138)。
+import type { HistoryItem } from "../trpc/domain";
 
 export interface HistoryRepository {
   list(): Promise<HistoryItem[]>;

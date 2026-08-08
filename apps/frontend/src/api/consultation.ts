@@ -1,11 +1,10 @@
 import * as mock from "../mockApi";
-import type { ActionPlan, ChatMessage, ConsultationSession, OrganizedResult } from "../mockApi";
+import type { ActionPlan, ChatMessage, ConsultationSession, OrganizedResult } from "./types";
 import { trpc } from "../trpc/client";
-import { chatStreamFetch, ttsPrefetchFetch } from "./http";
+import { chatStreamFetch, ttsPrefetchFetch, useMock } from "./http";
 import { parseSseJsonStream } from "./sse";
 import { appendStreamingReply, beginStreamingReply, clearStreamingReply } from "./streamingReply";
 
-const useMock = import.meta.env.VITE_USE_MOCK === "true";
 const voicevoxSpeaker = Number(import.meta.env.VITE_VOICEVOX_SPEAKER || "3");
 
 export async function startNewConsultation(concern: string): Promise<ConsultationSession> {

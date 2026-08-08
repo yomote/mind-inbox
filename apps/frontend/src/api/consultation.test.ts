@@ -22,6 +22,8 @@ vi.mock("../trpc/client", () => ({
 vi.mock("./http", () => ({
   chatStreamFetch: vi.fn(),
   ttsPrefetchFetch: vi.fn(async () => new Response(null, { status: 202 })),
+  // useMock は http.ts に一元化された (#137)。このテストは real 経路を検証する
+  useMock: false,
 }));
 
 import { trpc } from "../trpc/client";

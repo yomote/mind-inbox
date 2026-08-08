@@ -1,5 +1,5 @@
 import { ExtractReviewScreen } from "../../components/screens/ExtractReviewScreen";
-import type { ExtractionResult } from "../../mockApi";
+import type { ExtractionResult } from "../../api";
 
 const extraction: ExtractionResult = {
   sessionId: "s-preview",

@@ -62,11 +62,7 @@ describe("[L1] concatWavs", () => {
     expect(view.getUint32(4, true)).toBe(merged.byteLength - 8);
     // data の中身が a → b の順で並ぶ
     const samples: number[] = [];
-    const dv = new DataView(
-      parsed.data.buffer,
-      parsed.data.byteOffset,
-      parsed.data.byteLength,
-    );
+    const dv = new DataView(parsed.data.buffer, parsed.data.byteOffset, parsed.data.byteLength);
     for (let i = 0; i < parsed.data.length; i += 2) samples.push(dv.getInt16(i, true));
     expect(samples).toEqual([1, 2, 3, 4, 5]);
   });
