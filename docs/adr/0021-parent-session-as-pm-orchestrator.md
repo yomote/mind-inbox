@@ -1,8 +1,8 @@
 # 0021. 親セッションを PM ハブにして、並行作業は子セッションへ分配する (hub-and-spoke)
 
-- Status: Proposed
+- Status: Accepted (debrief #3, 2026-08-08)
 - Date: 2026-08-08
-- Deciders: omoteforlab (承認待ち)
+- Deciders: omoteforlab
 - Consulted: —
 - Informed: —
 

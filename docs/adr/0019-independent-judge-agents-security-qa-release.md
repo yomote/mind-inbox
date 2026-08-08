@@ -1,8 +1,8 @@
 # 0019. セキュリティ / QA / リリース判定を実装コンテキストから分離した独立 judge エージェントにする
 
-- Status: Proposed
+- Status: Accepted (debrief #3, 2026-08-08)
 - Date: 2026-08-06
-- Deciders: omoteforlab (承認待ち)
+- Deciders: omoteforlab
 - Consulted: —
 - Informed: —
 
