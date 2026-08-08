@@ -97,8 +97,8 @@ param enableOpenAi bool = false
 @description('Azure region for Azure OpenAI (e.g. japaneast, eastus, swedencentral).')
 param openAiLocation string = functionLocation
 
-// -------------------- Azure Speech (ADR 0022) --------------------
-@description('Enable Azure Speech (server STT, F0 無料枠から — ADR 0022)。')
+// -------------------- Azure Speech (ADR 0023) --------------------
+@description('Enable Azure Speech (server STT, F0 無料枠から — ADR 0023)。')
 param enableSpeech bool = false
 
 @description('Azure region for the Speech service.')

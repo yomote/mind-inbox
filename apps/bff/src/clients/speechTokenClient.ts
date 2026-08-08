@@ -1,5 +1,5 @@
 /**
- * Azure Speech (ADR 0022) 向けの一時 authorization token を発行する。
+ * Azure Speech (ADR 0023) 向けの一時 authorization token を発行する。
  *
  * 静的シークレットは配らない (ADR 0006 系譜)。Speech リソースは
  * `disableLocalAuth: true` で、認証は Functions の Managed Identity が取得する

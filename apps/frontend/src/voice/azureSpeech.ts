@@ -1,5 +1,5 @@
 /**
- * Azure Speech によるサーバー STT (#121 / ADR 0022)。
+ * Azure Speech によるサーバー STT (#121 / ADR 0023)。
  *
  * - トークンは BFF (`speech.issueToken`) が Managed Identity で発行する
  *   `aad#{resourceId}#{entraToken}` 形式。SPA にキーは渡らない

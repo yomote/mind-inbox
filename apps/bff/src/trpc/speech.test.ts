@@ -1,5 +1,5 @@
 /**
- * [L2] speech.issueToken (ADR 0022) の service-level test。
+ * [L2] speech.issueToken (ADR 0023) の service-level test。
  *
  * パターン: appRouter.createCaller(ctx) で HTTP レイヤをバイパスし、
  * 外部依存 (config / MSI トークン取得) は vi.mock で stub する。

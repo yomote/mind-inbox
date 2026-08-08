@@ -217,7 +217,7 @@ param openAiModelVersion string = '2024-11-20'
 @description('Deployment capacity in units of 1,000 tokens-per-minute (TPM). Subject to regional quota.')
 param openAiCapacity int = 10
 
-// -------------------- Azure Speech params (ADR 0022 / #121) --------------------
+// -------------------- Azure Speech params (ADR 0023 / #121) --------------------
 @description('Enable Azure Speech (server STT). F0 = 無料枠 月 5h、超過時は停止で課金なし。')
 param enableSpeech bool = false
 
@@ -231,7 +231,7 @@ param speechAccountName string = toLower('spch-${environmentName}-${replace(repl
   'F0'
   'S0'
 ])
-@description('Speech SKU。F0 (無料枠) から開始 — 有料化 (S0) は design-gate を通す (ADR 0022)。')
+@description('Speech SKU。F0 (無料枠) から開始 — 有料化 (S0) は design-gate を通す (ADR 0023)。')
 param speechSkuName string = 'F0'
 
 // -------------------- AI Agent Container App params --------------------
@@ -658,7 +658,7 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
                     value: voicevoxWrapperBaseUrl
                   }
                 ],
-            // Azure Speech (ADR 0022)。未設定なら BFF の speech.issueToken が
+            // Azure Speech (ADR 0023)。未設定なら BFF の speech.issueToken が
             // available:false を返し、フロントは Web Speech にフォールバックする。
             enableSpeech
               ? [
@@ -817,7 +817,7 @@ resource openAiDeployment 'Microsoft.CognitiveServices/accounts/deployments@2023
   }
 }
 
-// -------------------- Azure Speech (ADR 0022 / #121) --------------------
+// -------------------- Azure Speech (ADR 0023 / #121) --------------------
 // 音声入力のサーバー STT。認証は静的シークレット 0 (ADR 0006 系譜):
 //   - disableLocalAuth: true でサブスクリプションキーを無効化
 //   - BFF (Functions) の System Assigned MI に Speech User ロールを付与し、

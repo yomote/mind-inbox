@@ -263,7 +263,7 @@ const healthRouter = router({
 });
 
 // ---- speech ----------------------------------------------------------------
-// Azure Speech (ADR 0022) の一時 authorization token 発行。
+// Azure Speech (ADR 0023) の一時 authorization token 発行。
 // SPA にキーは渡さない — MI の Entra トークン由来の短寿命トークンのみ。
 // available: false はフロントに「Web Speech へフォールバックせよ」を伝えるシグナル。
 

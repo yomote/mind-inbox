@@ -14,7 +14,7 @@
     "AI_AGENT_AUDIENCE": "",
     "VOICEVOX_AUDIENCE": "",
 
-    "// SPEECH_RESOURCE_ID / SPEECH_REGION": "Azure Speech (ADR 0022)。ローカルでは空のまま — 未設定なら speech.issueToken が available:false を返し、フロントは Web Speech にフォールバック (Azure 上でのみ bicep が値を配線する)",
+    "// SPEECH_RESOURCE_ID / SPEECH_REGION": "Azure Speech (ADR 0023)。ローカルでは空のまま — 未設定なら speech.issueToken が available:false を返し、フロントは Web Speech にフォールバック (Azure 上でのみ bicep が値を配線する)",
     "SPEECH_RESOURCE_ID": "",
     "SPEECH_REGION": ""
   }

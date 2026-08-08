@@ -1,4 +1,4 @@
-# 0022. 音声入力の精度・長時間対応のためサーバー STT に Azure Speech (F0) を採用し、Web Speech をフォールバックに残す
+# 0023. 音声入力の精度・長時間対応のためサーバー STT に Azure Speech (F0) を採用し、Web Speech をフォールバックに残す
 
 - Status: Proposed
 - Date: 2026-08-08
