@@ -78,31 +78,36 @@ async function fakeEntraLogin(page: Page) {
   // token は必ず authorize の後に呼ばれる (OAuth code flow の順序) ため、
   // lastNonce はその時点で直前の authorize の値になっている。
   // 注意: route.fulfill は fetch の CORS 検査を免除しない (Playwright の仕様)。
-  // 実 Entra 同様に ACAO を返さないと、ブラウザが MSAL のトークン交換をブロックして
-  // handleRedirectPromise が失敗し「#code=... で止まる」(monitor run #5 の実落ち方)
+  // 実 Entra 同様に ACAO を返さないと、ブラウザが偽装応答をブロックする
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Headers": "*",
   };
-  await page.route("**/oauth2/v2.0/token", async (route) => {
-    if (route.request().method() === "OPTIONS") {
-      await route.fulfill({ status: 200, headers: corsHeaders });
-      return;
-    }
-    await route.fulfill({
-      headers: corsHeaders,
-      json: {
-        token_type: "Bearer",
-        scope: `api://${CLIENT_ID}/.default openid profile`,
-        expires_in: 3600,
-        ext_expires_in: 3600,
-        access_token: LIVE_BFF_TOKEN,
-        id_token: makeIdToken(lastNonce),
-        client_info: b64url({ uid: PROBE_UID, utid: TENANT_ID }),
-      },
-    });
-  });
+  // glob "**/oauth2/v2.0/token" はクエリ付き URL (token?client-request-id=...) に
+  // マッチせず、リクエストが実 Entra へ素通りして AADSTS9002313 (invalid_grant) で
+  // 400 になる (deploy run #90 の実落ち方)。クエリに依存しない述語でマッチさせる
+  await page.route(
+    (url) => url.pathname.endsWith("/oauth2/v2.0/token"),
+    async (route) => {
+      if (route.request().method() === "OPTIONS") {
+        await route.fulfill({ status: 200, headers: corsHeaders });
+        return;
+      }
+      await route.fulfill({
+        headers: corsHeaders,
+        json: {
+          token_type: "Bearer",
+          scope: `api://${CLIENT_ID}/.default openid profile`,
+          expires_in: 3600,
+          ext_expires_in: 3600,
+          access_token: LIVE_BFF_TOKEN,
+          id_token: makeIdToken(lastNonce),
+          client_info: b64url({ uid: PROBE_UID, utid: TENANT_ID }),
+        },
+      });
+    },
+  );
 }
 
 test("[L4] 相談 → 実AIの返事 → 実VOICEVOXの音声 まで デプロイ済み UI で通る", async ({ page }) => {
