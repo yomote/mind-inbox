@@ -138,6 +138,38 @@ class TestRunWorkflowStream:
         assert history.messages[-1].role.value == "assistant"
         assert contents[-1] == FailingStreamChatService.FALLBACK_REPLY
 
+    async def test_l1_retry_detected_even_when_tool_result_follows_user_message(
+        self, session_repo, approval_repo
+    ):
+        # 無いと: read-only ツールを実行したターンが落ちた場合、履歴末尾が
+        # system (Tool result) になるため「直前は user 発言」の判定が外れ、
+        # フォールバックで user 発言が重複する経路だけが取り残される
+        message = "受信箱の状況を教えてください。"
+        classification = {
+            "needs_retrieval": False,
+            "needs_tool": True,
+            "tool_name": "get_inbox_stats",  # read-only なので承認なしで実行される
+            "tool_args": {},
+        }
+        kernel = FakeKernel(FailingStreamChatService(classification, []))
+
+        with pytest.raises(RuntimeError, match="LLM connection lost"):
+            await collect(
+                run_workflow_stream(
+                    "s-tool", message, session_repo, approval_repo, kernel
+                )
+            )
+
+        # 落ちた時点の履歴末尾は system (Tool result) になっている
+        failed: ChatHistory = await session_repo.get("s-tool")
+        assert failed.messages[-1].role.value == "system"
+        assert "Tool result" in str(failed.messages[-1].content)
+
+        await run_workflow("s-tool", message, session_repo, approval_repo, kernel)
+
+        history: ChatHistory = await session_repo.get("s-tool")
+        assert [str(m.content) for m in history.messages].count(message) == 1
+
     async def test_l1_same_message_after_completed_turn_is_appended_again(
         self, session_repo, approval_repo
     ):
