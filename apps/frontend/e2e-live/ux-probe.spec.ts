@@ -219,7 +219,11 @@ test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間�
   const ttsRecords = recordTts(page);
   await fakeEntraLogin(page);
 
+  // 未認証で開くとオンボーディングが表示される (#112 / onboarding.mdx)。
+  // 「はじめる」でサインインが始まり、偽装 Entra が即座に認証済みで返すため
+  // そのままホームに到達する
   await page.goto("/");
+  await page.getByRole("button", { name: "はじめる" }).click({ timeout: 60_000 });
   await expect(page.getByRole("button", { name: "新しい相談を始める" })).toBeVisible({
     timeout: 60_000,
   });
