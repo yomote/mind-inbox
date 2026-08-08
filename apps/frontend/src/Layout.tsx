@@ -86,6 +86,27 @@ function deriveSessionTitle(text: string): string {
   return oneLine.length > 18 ? `${oneLine.slice(0, 18)}…` : oneLine;
 }
 
+/** 実際に音を出した経路 (dialogue session.mdx §5.5)。 */
+type VoiceOutputMode = "idle" | "voicevox" | "browser-fallback";
+
+/**
+ * 解錠用の無音 WAV (8kHz mono 8bit / 0.05 秒)。
+ *
+ * ずんだもんの再生は HTMLAudioElement を通るが、これは speechSynthesis とは
+ * 別に解錠が要る。合成に数秒かかり再生がタップから離れるため、ジェスチャ内で
+ * 一度 play() 実績を作った要素を使い回す (#150)。
+ */
+const SILENT_WAV_DATA_URI =
+  "data:audio/wav;base64,UklGRrQBAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YZ" +
+  "ABAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI" +
+  "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI" +
+  "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI" +
+  "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI" +
+  "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI" +
+  "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI" +
+  "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI" +
+  "CAgICA";
+
 export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const isDev = import.meta.env.DEV;
   // mock モード（VITE_USE_MOCK=true）は BFF も認証も無い自己完結デモ。
@@ -103,6 +124,9 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const [interimTranscript, setInterimTranscript] = React.useState("");
   const [voiceError, setVoiceError] = React.useState<string | null>(null);
   const [speaking, setSpeaking] = React.useState(false);
+  // 実際に音を出した経路。'voicevox' 以外は劣化しており、UI と data 属性の両方に出す
+  // (dialogue session.mdx §5.5)。「WAV は 200 なのに別の声だった」を検知可能にする。
+  const [voiceOutput, setVoiceOutput] = React.useState<VoiceOutputMode>("idle");
   const [ttsEnabled, setTtsEnabled] = React.useState(true);
 
   const [draftMessage, setDraftMessage] = React.useState("");
@@ -129,6 +153,8 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const voiceCacheRef = React.useRef<Map<string, Blob>>(new Map());
   // iOS は最初のタップ起点でしか音を出せないため、一度ジェスチャ内で「解錠」しておく。
   const audioUnlockedRef = React.useRef(false);
+  // ジェスチャ内で play() 実績を作った再生要素。以降の VOICEVOX 再生はこれを使い回す。
+  const unlockedAudioRef = React.useRef<HTMLAudioElement | null>(null);
 
   const speechRecognitionCtor = React.useMemo<SpeechRecognitionConstructor | undefined>(() => {
     if (typeof window === "undefined") return undefined;
@@ -249,12 +275,18 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   );
 
   // ブラウザ内蔵の音声合成で読み上げる（VOICEVOX が無い時のフォールバック / mock デモ用）。
-  const speakWithBrowser = React.useCallback((text: string) => {
+  // degradedReason を渡した場合は「ずんだもん以外の声になった」ことを画面に出す
+  // (dialogue session.mdx §5.5: 無言で別の声に置き換えない)。
+  const speakWithBrowser = React.useCallback((text: string, degradedReason?: string) => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
       setSpeaking(false);
-      setVoiceError("このブラウザは音声読み上げに対応していません。");
+      setVoiceOutput("idle");
+      setVoiceError(degradedReason ?? "このブラウザは音声読み上げに対応していません。");
       return;
     }
+
+    setVoiceOutput("browser-fallback");
+    if (degradedReason) setVoiceError(degradedReason);
 
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
@@ -273,10 +305,33 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
   // ユーザー操作（タップ）の中で一度だけ音声出力を解錠する。
   // iOS は最初のジェスチャ内で発話/再生しておかないと、以降の自動読み上げが無音になる。
+  //
+  // **2 系統をどちらも解錠する** (#150): ブラウザ読み上げ (speechSynthesis) と
+  // ずんだもんの再生 (HTMLAudioElement) は別物で、前者だけ解錠しても後者は弾かれる。
+  // 合成に数秒かかり再生がタップから離れるため、ここで play() 実績を作った要素を
+  // speakText 側で使い回す。
   const unlockAudioPlayback = React.useCallback(() => {
     if (audioUnlockedRef.current) return;
     audioUnlockedRef.current = true;
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    if (typeof window === "undefined") return;
+
+    try {
+      const el = new Audio(SILENT_WAV_DATA_URI);
+      void el
+        .play()
+        .then(() => {
+          el.pause();
+          el.currentTime = 0;
+        })
+        .catch(() => {
+          // ここで弾かれても後段の再生で改めて判定する（劣化は speakText が見せる）。
+        });
+      unlockedAudioRef.current = el;
+    } catch {
+      // 解錠失敗は致命ではない。
+    }
+
+    if (!("speechSynthesis" in window)) return;
     try {
       const u = new SpeechSynthesisUtterance(" ");
       u.volume = 0;
@@ -302,12 +357,14 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
       setSpeaking(true);
 
+      // ① 合成 (VOICEVOX)。失敗は「音が届いていない」であり、再生の失敗とは別物。
+      let audioBlob: Blob;
       try {
         const cacheKey = `${voicevoxSpeaker}:${text}`;
-        const audioBlob =
-          voiceCacheRef.current.get(cacheKey) || (await synthesizeWithVoicevox(text));
+        const cached = voiceCacheRef.current.get(cacheKey);
+        audioBlob = cached ?? (await synthesizeWithVoicevox(text));
 
-        if (!voiceCacheRef.current.has(cacheKey)) {
+        if (!cached) {
           voiceCacheRef.current.set(cacheKey, audioBlob);
           if (voiceCacheRef.current.size > 30) {
             const oldest = voiceCacheRef.current.keys().next().value;
@@ -316,29 +373,53 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
             }
           }
         }
+      } catch (err) {
+        const stub = err instanceof Error && err.message === "TTS_STUB";
+        speakWithBrowser(
+          text,
+          stub
+            ? "音声合成が未設定のため、ブラウザの読み上げで代用しています。"
+            : "ずんだもんの音声を合成できませんでした。ブラウザの読み上げに切り替えています。",
+        );
+        return;
+      }
 
-        const objectUrl = URL.createObjectURL(audioBlob);
-        activeAudioUrlRef.current = objectUrl;
+      // ② 再生。ジェスチャ内で解錠した要素を使い回す。都度 new Audio すると解錠が
+      // 引き継がれず、合成待ち (数秒) を挟むぶん自動再生ポリシーに弾かれやすい。
+      // 厳しさはブラウザ差があり desktop Chromium では再現しないが、解錠の穴自体は
+      // 実在するため塞ぐ (#150 の原因は未確定 — 確定は再発時の表示を待つ)。
+      const objectUrl = URL.createObjectURL(audioBlob);
+      activeAudioUrlRef.current = objectUrl;
 
-        const audio = new Audio(objectUrl);
-        activeAudioRef.current = audio;
-        audio.onended = () => {
-          setSpeaking(false);
-          if (activeAudioUrlRef.current) {
-            URL.revokeObjectURL(activeAudioUrlRef.current);
-            activeAudioUrlRef.current = null;
-          }
-          activeAudioRef.current = null;
-        };
-        audio.onerror = () => {
-          setSpeaking(false);
-          setVoiceError("音声の再生に失敗しました。");
-        };
+      const audio = unlockedAudioRef.current ?? new Audio();
+      audio.src = objectUrl;
+      activeAudioRef.current = audio;
+      audio.onended = () => {
+        setSpeaking(false);
+        if (activeAudioUrlRef.current) {
+          URL.revokeObjectURL(activeAudioUrlRef.current);
+          activeAudioUrlRef.current = null;
+        }
+        activeAudioRef.current = null;
+      };
+      audio.onerror = () => {
+        setSpeaking(false);
+        setVoiceOutput("idle");
+        setVoiceError("音声の再生に失敗しました。");
+      };
 
+      try {
         await audio.play();
+        setVoiceOutput("voicevox");
       } catch {
-        // VOICEVOX 失敗時はブラウザ TTS にフォールバック。
-        speakWithBrowser(text);
+        // ブラウザに自動再生を止められた。ここで無言のままブラウザ読み上げに
+        // 置き換えると「ずんだもんが黙った」ようにしか見えない (2026-08-08 の実事象)。
+        // 次のタップで解錠をやり直せるよう、解錠済みフラグを戻す。
+        audioUnlockedRef.current = false;
+        speakWithBrowser(
+          text,
+          "ブラウザに音声再生をブロックされました。画面をタップすると、ずんだもんの声に戻ります。",
+        );
       }
     },
     [
@@ -766,7 +847,9 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     isAuthenticated && currentRoute !== "onboarding" ? currentRoute : "onboarding";
 
   return (
-    <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
+    // data-voice-output: 実際に音を出した経路 (dialogue session.mdx §5.5)。
+    // L4 live E2E が「ずんだもんで鳴ったか」を検証するための観測点 (#150)。
+    <Box data-voice-output={voiceOutput} sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
       <AppBar
         position="fixed"
         elevation={0}
