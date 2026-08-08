@@ -156,6 +156,15 @@ jobs:
         run: |
           RG="$RG" DEPLOYMENT="$DEPLOYMENT" ./cicd/scripts/smoke-test/smoke-test.sh
 
+      # 無いと何が静かに通るか: 認可・疎通が緑でも「相談ユースケースそのもの」は別物。
+      # 2026-08-07〜08 に空 concern 拒否 / :latest no-op / BFF→CA 403 / TTS 断線が
+      # いずれも smoke 緑のまま発生した (#108)。ここで認証込みの実トークンで
+      # 対話 (実 AI) と音声合成まで通しで実測する。
+      - name: Golden path（相談ユースケースの実測・実 AI）
+        if: steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
+        run: |
+          RG="$RG" DEPLOYMENT="$DEPLOYMENT" ./cicd/scripts/smoke-test/golden-path.sh
+
       - name: SWA URL を Actions サマリに出す
         # smoke が落ちても URL は出す（切り分けの手掛かりになるため）。
         if: always() && steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))

@@ -1,0 +1,54 @@
+# ゴールデンパス定期監視 (#108 / ADR 0018)
+#
+# デプロイ契機ではなく**時間経過で壊れる**ものを毎日検出する。実例 (2026-08-08):
+# Functions の送信元 IP 変動で BFF → Container Apps が 403 になり、デプロイなしで
+# 対話が全滅した (その障害自体は認証の門への移行で根治済み — ADR 0017)。
+# Entra 設定のドリフト・トークン期限系・下流の死活など「昨日は通っていたのに」を
+# 朝イチで検出し、ユーザーが踏む前に赤くする。
+#
+# 失敗時: この workflow が fail になり GitHub が通知する。原因の切り分けは
+# ジョブログの NG 行 (どのホップで壊れたか) を見る。手動再実行は workflow_dispatch。
+name: golden-path-monitor
+
+on:
+  schedule:
+    - cron: "0 22 * * *" # 07:00 JST 毎朝
+  workflow_dispatch:
+
+permissions:
+  id-token: write # OIDC トークン取得に必須
+  contents: read
+
+env:
+  RG: rg-dev-mind-inbox
+  DEPLOYMENT: main-bootstrap
+
+jobs:
+  golden-path:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard — OIDC 設定済みか
+        id: guard
+        run: |
+          if [ -z "${{ vars.AZURE_CLIENT_ID }}" ] || [ -z "${{ vars.AZURE_TENANT_ID }}" ] || [ -z "${{ vars.AZURE_SUBSCRIPTION_ID }}" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::AZURE_* variables 未設定のためスキップ"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Azure login (OIDC, no stored secret)
+        if: steps.guard.outputs.run == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Golden path（相談ユースケースの実測・実 AI）
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          RG="$RG" DEPLOYMENT="$DEPLOYMENT" ./cicd/scripts/smoke-test/golden-path.sh
