@@ -13,9 +13,12 @@ import { fakeEntraLogin, liveEnvMissing } from "./entra-login";
  *   - `HTMLMediaElement.play()` が成功したか / 拒否されたか (拒否理由の名前)
  *   - ブラウザ内蔵読み上げ (speechSynthesis) が使われたか = ずんだもん以外の声
  *
- * assert しない理由: **未修正のバンドルが配信されている状態でも実行して、
- * 原因の切り分けに使う**ため (マージ前に ref 指定で dispatch する運用)。
+ * assert しない理由: **配信中のバンドルが何であれ実行して、原因の切り分けに使う**ため。
  * 合否判定は consultation-scenario の `data-voice-output` 検証が担当する。
+ *
+ * 実行はマージ後になる。`workflow_dispatch` に ref でブランチを指定してもブランチ版の
+ * workflow で走るが、**Azure login (OIDC) の subject が main 用 credential と一致せず
+ * 落ちる**ため、マージ前に実環境へ当てることはできない (runbook: azure-oidc-cd-setup.md)。
  */
 
 test.skip(liveEnvMissing, "LIVE_* env が未設定 (実環境向けのみ実行)");
