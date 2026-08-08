@@ -19,6 +19,10 @@ ENVIRONMENT="${ENVIRONMENT:-dev}"
 DEPLOYMENT="${DEPLOYMENT:-main-bootstrap}"
 # VOICEVOX tier(ADR 0010): cpu = 速く安く（既定）/ gpu = T4 で喋りが速い。
 VOICEVOX_TIER="${VOICEVOX_TIER:-cpu}"
+# コンテナ image タグ (#107): :latest 差し替えは ARM 的に no-op で新 image が反映されない。
+# CD (deploy.yml) は build-images の直近成功 run から sha-<full-sha> を解決して渡してくる。
+# 未指定なら各 deploy スクリプトの既定 (latest) に落ちる（スクリプト側が WARN を出す）。
+IMAGE_TAG="${IMAGE_TAG:-}"
 # Entra 認証(main-config)はUAMI事前準備が要るのでここでは有効化しない（個人デモは匿名SWAで可）。
 # true でも実際の有効化はせず案内ログのみ出す（変数名はその挙動を表す）。
 PRINT_ENTRA_AUTH_HINT="${PRINT_ENTRA_AUTH_HINT:-false}"
@@ -66,6 +70,15 @@ az deployment group create \
 
 if [[ "$PRINT_ENTRA_AUTH_HINT" == "true" ]]; then
   echo "==> [hint] Entra 認証(main-config) は UAMI 事前準備が要る。手順は iac/README §3 を参照（ここでは有効化しない）"
+fi
+
+# IMAGE_TAG が来ていれば子スクリプト (deploy-voicevox-wrapper / deploy-ai-agent) に届ける。
+# 空のまま export すると子側の既定 (latest) が効かなくなるため、指定時のみ export する。
+if [[ -n "$IMAGE_TAG" ]]; then
+  export IMAGE_TAG
+  echo "==> コンテナ image タグ: $IMAGE_TAG"
+else
+  echo "==> コンテナ image タグ: (未指定 → 各スクリプト既定の latest。既存 CA の更新は no-op になりうる #107)"
 fi
 
 # コンテナは BFF より先に（deploy-backend が wrapper/ai-agent の FQDN を func 設定へ配線するため）。

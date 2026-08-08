@@ -65,23 +65,38 @@ try:
   d=json.load(sys.stdin); ms=d['result']['data']['session']['messages']
   print(len([m for m in ms if m['role']=='assistant'][0]['text']))
 except Exception: print(0)")"
-[[ "$reply_len" -gt 0 ]] \
-  && ok "実 AI 応答が返る (assistant text ${reply_len} chars)" \
-  || ng "実 AI 応答が返らない: $(echo "$body" | head -c 300)"
+# stub 応答 (\"[stub] received: ...\") は「AI_AGENT_BASE_URL の結線が外れている」であり、
+# 実 AI 検証としては失敗。2026-08-08 に stub がここを緑ですり抜けた実績があるため明示的に落とす
+if echo "$body" | grep -q '\[stub\]'; then
+  ng "実 AI ではなく stub 応答が返っている。AI_AGENT_BASE_URL の結線が外れている"
+elif [[ "$reply_len" -gt 0 ]]; then
+  ok "実 AI 応答が返る (assistant text ${reply_len} chars)"
+else
+  ng "実 AI 応答が返らない: $(echo "$body" | head -c 300)"
+fi
 
 echo "== 4. consultation.sendMessage (実 AI 対話) =="
 body="$(curl -s -m 180 -X POST -H "$A" -H "Content-Type: application/json" \
   -d '{"sessionId":"golden-path-probe","message":"一言だけ返してください"}' "$H/api/trpc/consultation.sendMessage")"
-echo "$body" | grep -q '"reply":"' \
-  && ok "sendMessage が reply を返す" \
-  || ng "sendMessage が壊れている: $(echo "$body" | head -c 300)"
+if echo "$body" | grep -q '\[stub\]'; then
+  ng "sendMessage が stub 応答。AI_AGENT_BASE_URL の結線が外れている"
+elif echo "$body" | grep -q '"reply":"'; then
+  ok "sendMessage が reply を返す"
+else
+  ng "sendMessage が壊れている: $(echo "$body" | head -c 300)"
+fi
 
 echo "== 5. tts (実 VOICEVOX 合成) =="
 tmp="$(mktemp)"
 code="$(curl -s -m 180 -o "$tmp" -w '%{http_code}' -X POST -H "$A" -H "Content-Type: application/json" \
   -d '{"text":"ゴールデンパスのテストなのだ","speaker":3}' "$H/api/tts")"
-if [[ "$code" == "200" ]] && head -c 4 "$tmp" | grep -q "RIFF"; then
-  ok "VOICEVOX が WAV を返す ($(wc -c < "$tmp") bytes)"
+tts_bytes="$(wc -c < "$tmp")"
+# サイズ閾値はここが唯一の担当 (E2E 側は blob 消費との競合で body を読めない — #125)。
+# 「200 + RIFF ヘッダだが中身がほぼ空」の壊れ方をここで止める
+if [[ "$code" == "200" ]] && head -c 4 "$tmp" | grep -q "RIFF" && [[ "$tts_bytes" -gt 1000 ]]; then
+  ok "VOICEVOX が WAV を返す (${tts_bytes} bytes)"
+elif [[ "$code" == "200" ]]; then
+  ng "tts が 200 だが WAV として不正 (${tts_bytes} bytes / RIFF=$(head -c 4 "$tmp" | grep -c RIFF || true)) — 空/破損の疑い"
 elif [[ "$code" == "204" ]]; then
   ng "tts が 204 (stub)。VOICEVOX_BASE_URL の結線が外れている"
 else

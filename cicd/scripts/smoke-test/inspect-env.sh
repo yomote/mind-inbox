@@ -249,6 +249,45 @@ if [[ -n "$CA_NAMES" ]]; then
   echo "> 匿名 GET が \`401\`/\`403\` なら門で止まっている。\`200\` 等でアプリに到達しているなら無認可で公開されている ([#86](https://github.com/yomote/mind-inbox/issues/86))。"
 fi
 
+# --- 2.5 稼働 image (Container Apps) -------------------------------------------
+# #107: :latest 差し替えデプロイは ARM 的 no-op になり、「デプロイ緑・image は前日のまま」が
+# 起きうる。「実際に稼働している revision がどの image をいつから動かしているか」を出し、
+# 期待するコミット (sha-<sha>) が本当に載っているかを PR / 点検で突合できるようにする。
+
+h "稼働 image (Container Apps)"
+
+if [[ -n "$CA_NAMES" ]]; then
+  echo "| Container App | latestReady revision | 稼働 image | revision 作成 (UTC) |"
+  echo "| --- | --- | --- | --- |"
+  while IFS= read -r CA; do
+    [[ -z "$CA" ]] && continue
+    if ! run az containerapp show -g "$RG" -n "$CA" \
+      --query 'properties.latestReadyRevisionName' -o tsv --only-show-errors; then
+      echo "| $CA | (取得失敗: $RUN_ERR) | — | — |"
+      continue
+    fi
+    REV="$RUN_OUT"
+    if [[ -z "$REV" ]]; then
+      echo "| $CA | (Ready な revision なし) | — | — |"
+      continue
+    fi
+    if ! run az containerapp revision show -g "$RG" --app "$CA" -n "$REV" \
+      --query '{image: properties.template.containers[0].image, created: properties.createdTime}' \
+      -o json --only-show-errors; then
+      echo "| $CA | \`$REV\` | (取得失敗: $RUN_ERR) | — |"
+      continue
+    fi
+    REV_JSON="$RUN_OUT"
+    REV_IMAGE="$(echo "$REV_JSON" | jq1 'import json,sys;print(json.load(sys.stdin).get("image") or "(なし)")')"
+    REV_CREATED="$(echo "$REV_JSON" | jq1 'import json,sys;print(json.load(sys.stdin).get("created") or "(なし)")')"
+    echo "| $CA | \`$REV\` | \`$REV_IMAGE\` | $REV_CREATED |"
+  done <<<"$CA_NAMES"
+  echo
+  echo "> image が \`:latest\` のままなら、どのコミットが動いているか追跡できない ([#107](https://github.com/yomote/mind-inbox/issues/107))。CD は \`sha-<full-sha>\` タグでデプロイする。"
+else
+  echo "(Container App の一覧が取れていないため未検証。上の「露出」節の取得失敗理由を参照)"
+fi
+
 # --- 3. 配置 (Functions) -------------------------------------------------------
 
 h "配置 (Functions)"

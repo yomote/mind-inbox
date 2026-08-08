@@ -9,6 +9,10 @@ export const config = {
   // 未設定なら Authorization を付けない = 門を立てていない環境・ローカルではそのまま通る。
   aiAgentAudience: process.env["AI_AGENT_AUDIENCE"] || undefined,
   voicevoxAudience: process.env["VOICEVOX_AUDIENCE"] || undefined,
+  // Azure Speech (ADR 0023)。未設定なら speech.issueToken が available:false を返し、
+  // フロントは Web Speech にフォールバックする。
+  speechResourceId: process.env["SPEECH_RESOURCE_ID"] || undefined,
+  speechRegion: process.env["SPEECH_REGION"] || undefined,
 } as const;
 
 export type Config = typeof config;

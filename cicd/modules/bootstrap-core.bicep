@@ -87,6 +87,21 @@ param functionAuthEntraClientId string = ''
 @description('Container Apps の認証の門 (ADR 0017) の audience となる Entra app client ID。BFF はこの audience の Managed Identity トークンを付けて下流を呼ぶ。空なら AUDIENCE 設定を出力しない (= BFF はトークンを付けず、門が立っていれば 401 になる)。')
 param containerAppsGateClientId string = ''
 
+// BFF → 下流の base URL。ai-agent / vv-wrap の Container App はこのテンプレート外
+// (デプロイスクリプト) で作られるため FQDN をここから参照できない。しかし appSettings は
+// 全置換なので、ここで宣言しないと毎デプロイで消え、deploy-backend.sh が再結線して
+// 収束するまでの数分間 BFF が stub 化する (対話が [stub]・tts が 204 = 2026-08-08 実障害)。
+// 既知の FQDN をパラメータで固定し、環境再作成等で変わった場合は deploy-backend.sh の
+// 再結線が上書きする (こちらが真実を追従する側)。
+// 注意: Container App 再作成で FQDN が変わった後に bicep を**単独適用**すると、
+// 古い FQDN が復活する (BFF は fetch 失敗で例外)。bicep 適用後は必ず
+// deploy-backend.sh を続けて実行すること (provision.sh 経由なら自動で連続実行される)。
+@description('BFF が呼ぶ ai-agent Container App の base URL。空なら設定しない (deploy-backend.sh の再結線に任せる)。')
+param aiAgentBaseUrl string = ''
+
+@description('BFF が呼ぶ voicevox-wrapper Container App の base URL (エンジン直ではなく wrapper)。空なら設定しない (deploy-backend.sh の再結線に任せる)。')
+param voicevoxWrapperBaseUrl string = ''
+
 @description('Entra tenant ID. 単一テナント限定 (この tenant の identity のみ許可)。')
 param functionAuthEntraTenantId string = tenant().tenantId
 
@@ -201,6 +216,23 @@ param openAiModelVersion string = '2024-11-20'
 @minValue(1)
 @description('Deployment capacity in units of 1,000 tokens-per-minute (TPM). Subject to regional quota.')
 param openAiCapacity int = 10
+
+// -------------------- Azure Speech params (ADR 0023 / #121) --------------------
+@description('Enable Azure Speech (server STT). F0 = 無料枠 月 5h、超過時は停止で課金なし。')
+param enableSpeech bool = false
+
+@description('Azure region for the Speech service.')
+param speechLocation string = location
+
+@description('Speech account name (custom subdomain にも使うため globally unique)。')
+param speechAccountName string = toLower('spch-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}')
+
+@allowed([
+  'F0'
+  'S0'
+])
+@description('Speech SKU。F0 (無料枠) から開始 — 有料化 (S0) は design-gate を通す (ADR 0023)。')
+param speechSkuName string = 'F0'
 
 // -------------------- AI Agent Container App params --------------------
 // NOTE: ACR は廃止（#67 / ADR 0013）。image は GitHub Actions で ghcr に事前ビルドし、
@@ -562,8 +594,8 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
           }
           // 注意: bicep の appSettings は**全置換**。ここに無い設定は再デプロイで消えるため、
           // 恒久設定は az で後付けせず必ずここで宣言する (#94/#107 と同族の教訓)。
-          // AI_AGENT_BASE_URL / VOICEVOX_BASE_URL だけは Container App の作成順序の都合で
-          // deploy-backend.sh が毎回再結線する。
+          // AI_AGENT_BASE_URL / VOICEVOX_BASE_URL もパラメータで宣言する (下記)。
+          // deploy-backend.sh の再結線は FQDN 変化への追従・フォールバックとして残る。
           appSettings: concat(
             [
               {
@@ -608,7 +640,38 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
                     name: 'VOICEVOX_AUDIENCE'
                     value: 'api://${containerAppsGateClientId}'
                   }
+                ],
+            // 下流 base URL (パラメータ宣言の理由は param 定義箇所のコメント参照)
+            empty(aiAgentBaseUrl)
+              ? []
+              : [
+                  {
+                    name: 'AI_AGENT_BASE_URL'
+                    value: aiAgentBaseUrl
+                  }
+                ],
+            empty(voicevoxWrapperBaseUrl)
+              ? []
+              : [
+                  {
+                    name: 'VOICEVOX_BASE_URL'
+                    value: voicevoxWrapperBaseUrl
+                  }
+                ],
+            // Azure Speech (ADR 0023)。未設定なら BFF の speech.issueToken が
+            // available:false を返し、フロントは Web Speech にフォールバックする。
+            enableSpeech
+              ? [
+                  {
+                    name: 'SPEECH_RESOURCE_ID'
+                    value: resourceId('Microsoft.CognitiveServices/accounts', speechAccountName)
+                  }
+                  {
+                    name: 'SPEECH_REGION'
+                    value: speechLocation
+                  }
                 ]
+              : []
           )
 
         },
@@ -751,6 +814,43 @@ resource openAiDeployment 'Microsoft.CognitiveServices/accounts/deployments@2023
       version: openAiModelVersion
     }
     versionUpgradeOption: 'OnceCurrentVersionExpired'
+  }
+}
+
+// -------------------- Azure Speech (ADR 0023 / #121) --------------------
+// 音声入力のサーバー STT。認証は静的シークレット 0 (ADR 0006 系譜):
+//   - disableLocalAuth: true でサブスクリプションキーを無効化
+//   - BFF (Functions) の System Assigned MI に Speech User ロールを付与し、
+//     BFF が Entra トークン由来の一時トークン (aad#...) をフロントへ発行する
+// F0 は超過時「課金」ではなく「停止」なので予算事故が構造的に起きない (ADR 0013 と両立)。
+resource speechAccount 'Microsoft.CognitiveServices/accounts@2023-05-01' = if (enableSpeech) {
+  name: speechAccountName
+  location: speechLocation
+  kind: 'SpeechServices'
+  sku: {
+    name: speechSkuName
+  }
+  properties: {
+    // Entra 認証 (aad# authorization token) には custom subdomain が必須
+    customSubDomainName: speechAccountName
+    publicNetworkAccess: 'Enabled'
+    disableLocalAuth: true
+  }
+}
+
+// Cognitive Services Speech User — トークン取得 + Speech 利用の最小ロール
+var cognitiveServicesSpeechUserRoleId = subscriptionResourceId(
+  'Microsoft.Authorization/roleDefinitions',
+  'f2dc8367-1007-4938-bd23-fe263f013447'
+)
+
+resource speechRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableSpeech) {
+  name: guid(resourceGroup().id, speechAccountName, functionAppName, 'speech-user')
+  scope: speechAccount
+  properties: {
+    roleDefinitionId: cognitiveServicesSpeechUserRoleId
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
   }
 }
 
@@ -1089,6 +1189,9 @@ output voicevoxContainerAppName string = enableVoicevoxAca ? voicevoxContainerAp
 output voicevoxBaseUrl string = enableVoicevoxAca
   ? 'https://${voicevoxContainerApp.?properties.?configuration.?ingress.?fqdn ?? ''}'
   : ''
+output speechEnabled bool = enableSpeech
+output speechAccountName string = enableSpeech ? speechAccountName : ''
+output speechRegion string = enableSpeech ? speechLocation : ''
 output openAiEnabled bool = enableOpenAi
 output openAiEndpoint string = enableOpenAi ? (openAiAccount.?properties.?endpoint ?? '') : ''
 output openAiAccountName string = enableOpenAi ? openAiAccountName : ''

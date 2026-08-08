@@ -91,6 +91,76 @@ class TestChat:
         assert res.status_code == 500
 
 
+# ---- /chat/stream -----------------------------------------------------------
+
+
+def _parse_sse_events(payload: str) -> list[dict]:
+    """SSE テキストから data 行の JSON を順に取り出す (テスト用の簡易パース)。"""
+    events = []
+    for block in payload.split("\n\n"):
+        for line in block.split("\n"):
+            if line.startswith("data: "):
+                events.append(json.loads(line[len("data: ") :]))
+    return events
+
+
+class TestChatStream:
+    async def test_l2_chat_stream_emits_delta_then_done_as_sse(
+        self, client, monkeypatch
+    ):
+        # 無いと: SSE の枠組み (data 行 / event 順序 / content-type) が壊れても
+        # BFF は素通しするだけなので、フロントの逐次表示が全滅する退行が静かに通る
+        async def fake_stream(session_id, message, sr, ar, k):
+            from app.schemas import ChatStreamDelta, ChatStreamDone
+
+            yield ChatStreamDelta(text="こん")
+            yield ChatStreamDelta(text="にちは")
+            yield ChatStreamDone(response=ChatResponse(reply="こんにちは"))
+
+        monkeypatch.setattr(app_main, "run_workflow_stream", fake_stream)
+
+        async with client.stream(
+            "POST", "/chat/stream", json={"session_id": "s1", "message": "テスト"}
+        ) as res:
+            assert res.status_code == 200
+            assert res.headers["content-type"].startswith("text/event-stream")
+            body = ""
+            async for chunk in res.aiter_text():
+                body += chunk
+
+        events = _parse_sse_events(body)
+        assert [e["type"] for e in events] == ["delta", "delta", "done"]
+        assert (
+            "".join(e["text"] for e in events if e["type"] == "delta") == "こんにちは"
+        )
+        assert events[-1]["response"]["reply"] == "こんにちは"
+        assert events[-1]["response"]["requires_approval"] is False
+
+    async def test_l2_chat_stream_emits_error_event_on_exception(
+        self, client, monkeypatch
+    ):
+        # 無いと: ストリーム途中の例外が接続切断だけで終わり、フロントが
+        # フォールバックの判断材料 (error イベント) を得られない退行が静かに通る
+        async def broken_stream(session_id, message, sr, ar, k):
+            from app.schemas import ChatStreamDelta
+
+            yield ChatStreamDelta(text="途中")
+            raise RuntimeError("LLM connection lost")
+
+        monkeypatch.setattr(app_main, "run_workflow_stream", broken_stream)
+
+        async with client.stream(
+            "POST", "/chat/stream", json={"session_id": "s1", "message": "テスト"}
+        ) as res:
+            body = ""
+            async for chunk in res.aiter_text():
+                body += chunk
+
+        events = _parse_sse_events(body)
+        assert events[-1]["type"] == "error"
+        assert "LLM connection lost" in events[-1]["message"]
+
+
 # ---- /organize --------------------------------------------------------------
 
 
