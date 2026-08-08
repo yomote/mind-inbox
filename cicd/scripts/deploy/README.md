@@ -38,6 +38,22 @@ RG=<your-rg> DEPLOYMENT=<deployment-name> ./scripts/deploy/deploy-backend.sh
 - `backend/` をビルドし、production dependencies のみ残した zip を作成して
   `az functionapp deployment source config-zip` で反映します。
 
+## Container Apps (ai-agent / voicevox-wrapper)
+
+```bash
+cd cicd
+# IMAGE_TAG は sha-<full-sha> を明示指定すること (#107)
+RG=<your-rg> DEPLOYMENT=<deployment-name> IMAGE_TAG=sha-<full-sha> ./scripts/deploy/deploy-ai-agent.sh
+RG=<your-rg> DEPLOYMENT=<deployment-name> IMAGE_TAG=sha-<full-sha> ./scripts/deploy/deploy-voicevox-wrapper.sh
+```
+
+- image は `build-images.yml` が main マージ時に ghcr へ push 済み。スクリプトはタグ差し替えのみ。
+- **既定の `:latest` は既存 Container App の更新では効かない** (#107): `az containerapp update --image <同一文字列>`
+  は ARM 的に変更なし → 新 revision を作らない no-op になり、ghcr 側で latest の実体が進んでいても
+  反映されない。スクリプトは同一 image での update を検出して WARN を出す。
+- CD (`deploy.yml`) は「直近の build-images 成功 run の head SHA」から `sha-<full-sha>` を自動解決して渡し、
+  デプロイ後に smoke-test (`EXPECTED_IMAGE_TAG`) で稼働 revision のタグ一致を検証する。
+
 ## All
 
 ```bash

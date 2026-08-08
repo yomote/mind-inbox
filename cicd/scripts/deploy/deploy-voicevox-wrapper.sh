@@ -5,7 +5,10 @@
 #
 # image は build-images.yml が main マージ時に ghcr へ push 済み（#67 / ADR 0013）。
 # このスクリプトはビルドしない（`az acr build` 廃止）: 既存タグを Container App に差し替えるだけ。
-# 既定は :latest。特定コミットに固定したい時は IMAGE_TAG=sha-<full-sha> を渡す。
+# **IMAGE_TAG=sha-<full-sha> の明示指定を推奨** (#107): 既定の :latest は既存 CA の更新で
+# 「同一 image 文字列の update = ARM 的に変更なし → 新 revision を作らない no-op」になり、
+# ghcr 側の latest が進んでいても反映されない。CD (deploy.yml) は build-images の
+# 直近成功 run から sha タグを自動解決して渡す。
 # ghcr の image は public 前提でプル（registry secret 不要）。公開手順: docs/runbooks/ghcr-images.md
 #
 # 前提: main-bootstrap が enableVoicevoxWrapperAca=true でデプロイ済み / ghcr に image が push 済み
@@ -82,6 +85,16 @@ if [[ -z "$CA_EXISTS" ]]; then
     --query 'properties.configuration.ingress.fqdn' -o tsv)"
 else
   echo "Updating Container App '$CA_NAME'..."
+  # #107: 稼働中の image と同一文字列で update すると ARM 的に変更なし = 新 revision が
+  # 作られない。:latest のような可変タグはこの no-op に嵌まりやすいので、実際に据え置きに
+  # なるケース（現 image と同一）を検出して警告する。
+  CURRENT_IMAGE="$(az containerapp show -g "$RG" -n "$CA_NAME" \
+    --query 'properties.template.containers[0].image' -o tsv 2>/dev/null || true)"
+  if [[ -n "$CURRENT_IMAGE" && "$CURRENT_IMAGE" == "$IMAGE" ]]; then
+    echo "WARN: 現在の image と同一文字列 ($IMAGE) での update です。" >&2
+    echo "      ARM 的に変更なし → 新 revision は作られません (no-op, #107)。" >&2
+    echo "      ghcr 側でタグの実体が進んでいても反映されないため、IMAGE_TAG=sha-<full-sha> を指定してください。" >&2
+  fi
   FQDN="$(az containerapp update \
     --resource-group "$RG" \
     --name "$CA_NAME" \
