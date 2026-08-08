@@ -74,4 +74,4 @@ Chosen option: **"Option A" (PR 作成まで自動)**。PO が 2026-08-08 に選
 
 - 発端: #119 (応答が浅い) / #120 (即時性) / #121 (音声) / #122 (体験品質がループに伝わらない)
 - 関連 ADR: [0018 動作検証をループに組み込む](0018-runtime-verification-in-the-loop.md) (機能の検証 — 本 ADR は体験の検証と改善) / [0019 独立 judge](0019-independent-judge-agents-security-qa-release.md) (rubric-as-truth と新品コンテキストの流用元) / [0008 Routine](0008-pr-review-via-cloud-routine.md) / [0021 hub-and-spoke](0021-parent-session-as-pm-orchestrator.md) / [0014 ゲート](0014-design-comprehension-gate-and-debrief.md)
-- 実装計画: epic Issue (起票時にリンク)
+- 実装計画: [epic #123](https://github.com/yomote/mind-inbox/issues/123) (M0 プローブ / M1 rubric+judge / M2 改善 Routine / M3 運用固め)
