@@ -87,3 +87,4 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0019](0019-independent-judge-agents-security-qa-release.md) — セキュリティ / QA / リリース判定を実装コンテキストから分離した独立 judge エージェントにする
 - [0020](0020-hitl-choice-format-and-needs-human-queue.md) — 人間の確認は選択肢形式で出し、人間宿題は needs-human キューに一元化する
 - [0021](0021-parent-session-as-pm-orchestrator.md) — 親セッションを PM ハブにして、並行作業は子セッションへ分配する (hub-and-spoke)
+- [0022](0022-server-stt-azure-speech-f0.md) — 音声入力のサーバー STT に Azure Speech (F0・MI 認証) を採用し、Web Speech をフォールバックに残す
