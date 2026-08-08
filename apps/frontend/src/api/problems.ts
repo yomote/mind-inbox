@@ -13,8 +13,6 @@ import { useMock } from "./http";
  * `consultation.extract` / `problem.*`（Phase B）を tRPC で叩く。
  */
 
-
-
 /** BFF `problem.triage` の入力（discriminatedUnion）。UI のフラット TriageInput をこれに写す。 */
 type BffTriageInput = inferRouterInputs<AppRouter>["problem"]["triage"];
 
