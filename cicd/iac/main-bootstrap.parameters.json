@@ -49,6 +49,9 @@
     },
     "functionAuthEntraClientId": {
       "value": "a0f2c66e-e7ef-40c2-abda-32571470f23e"
+    },
+    "containerAppsGateClientId": {
+      "value": "28754f00-39c4-434c-9e02-c6fc9622557a"
     }
   }
 }

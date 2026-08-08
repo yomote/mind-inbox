@@ -92,6 +92,29 @@ fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
+
+# ── Auth gate (ADR 0017 / #86) ────────────────────────────────────────────────
+# Container Apps の組み込み認証 (Entra) を冪等に適用する。IP 許可リストは使わない —
+# Functions (Consumption) の実送信元 IP は possibleOutboundIpAddresses にすら
+# 含まれないことが実測で確認されており (2026-08-08、runbook 参照)、IP 方式は成立しない。
+GATE_CLIENT_ID="${GATE_CLIENT_ID:-$(_val containerAppsGateClientId)}"
+if [[ -n "$GATE_CLIENT_ID" ]]; then
+  echo ""
+  echo "=== Applying auth gate (audience: api://$GATE_CLIENT_ID) ==="
+  TENANT_ID="$(az account show --query tenantId -o tsv)"
+  az containerapp auth microsoft update -g "$RG" -n "$CA_NAME" \
+    --client-id "$GATE_CLIENT_ID" \
+    --issuer "https://login.microsoftonline.com/$TENANT_ID/v2.0" \
+    --allowed-token-audiences "api://$GATE_CLIENT_ID,$GATE_CLIENT_ID" \
+    --yes --output none
+  az containerapp auth update -g "$RG" -n "$CA_NAME" \
+    --enabled true --unauthenticated-client-action Return401 --output none
+  echo "  Auth gate: enabled (unauthenticated -> 401)"
+else
+  echo "WARN: containerAppsGateClientId が未設定 — 認証の門なしで公開されます (#86)。" >&2
+  echo "      runbook (container-apps-auth-gate.md) の手順で gate app を作成し parameters.json に設定してください。" >&2
+fi
+
 echo "=== Done ==="
 echo "Endpoint: https://${FQDN}"
 echo "Health:   https://${FQDN}/health"
