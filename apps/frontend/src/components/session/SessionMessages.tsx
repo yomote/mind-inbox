@@ -1,5 +1,5 @@
 import { Paper, Stack, Typography } from "@mui/material";
-import type { ChatMessage } from "../../mockApi";
+import type { ChatMessage } from "../../api";
 
 type SessionMessagesProps = {
   messages: ChatMessage[];

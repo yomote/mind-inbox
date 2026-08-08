@@ -1,6 +1,12 @@
 import { authEnabled, getAccessToken } from "../auth/msal";
 
 /**
+ * mock モード (VITE_USE_MOCK=true): BFF を呼ばず mockApi で自己完結するデモビルド (ADR 0004)。
+ * 判定はビルド時 (Vite の静的置換)。宣言はここ 1 箇所 — api 各モジュールはこれを import する。
+ */
+export const useMock = import.meta.env.VITE_USE_MOCK === "true";
+
+/**
  * BFF (Functions) への素の fetch を行うための共通ヘルパー。
  *
  * SWA Free には linked backend が無いため、フロントは **常に BFF のホストを前置**して

@@ -1,8 +1,7 @@
 import * as mock from "../mockApi";
-import type { ActionPlan, ChatMessage, ConsultationSession, OrganizedResult } from "../mockApi";
+import type { ActionPlan, ChatMessage, ConsultationSession, OrganizedResult } from "./types";
 import { trpc } from "../trpc/client";
-
-const useMock = import.meta.env.VITE_USE_MOCK === "true";
+import { useMock } from "./http";
 
 export async function startNewConsultation(concern: string): Promise<ConsultationSession> {
   if (useMock) return mock.startNewConsultation(concern);

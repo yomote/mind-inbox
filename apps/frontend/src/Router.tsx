@@ -10,7 +10,7 @@ import type {
   OrganizedResult,
   Problem,
   TriageInput,
-} from "./mockApi";
+} from "./api";
 import { SessionScreen } from "./components/session/SessionScreen";
 import { OnboardingScreen } from "./components/screens/OnboardingScreen";
 import { HomeScreen } from "./components/screens/HomeScreen";

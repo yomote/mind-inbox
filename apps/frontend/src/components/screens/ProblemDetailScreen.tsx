@@ -18,7 +18,7 @@ import EditRoundedIcon from "@mui/icons-material/EditRounded";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import ArchiveRoundedIcon from "@mui/icons-material/ArchiveRounded";
 import ReplayRoundedIcon from "@mui/icons-material/ReplayRounded";
-import type { Problem, Theme, TriageInput } from "../../mockApi";
+import type { Problem, Theme, TriageInput } from "../../api";
 import {
   AFFECT_COLOR,
   STATUS_COLOR,
