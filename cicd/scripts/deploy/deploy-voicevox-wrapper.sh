@@ -28,6 +28,9 @@ need() {
 }
 need az
 
+# shellcheck source=lib/containerapp-image.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/containerapp-image.sh"
+
 # ── Resolve deployment outputs (single API call) ──────────────────────────────
 echo "=== Resolving deployment outputs ==="
 _OUTPUTS="$(az deployment group show -g "$RG" -n "$DEPLOYMENT" \
@@ -85,16 +88,7 @@ if [[ -z "$CA_EXISTS" ]]; then
     --query 'properties.configuration.ingress.fqdn' -o tsv)"
 else
   echo "Updating Container App '$CA_NAME'..."
-  # #107: 稼働中の image と同一文字列で update すると ARM 的に変更なし = 新 revision が
-  # 作られない。:latest のような可変タグはこの no-op に嵌まりやすいので、実際に据え置きに
-  # なるケース（現 image と同一）を検出して警告する。
-  CURRENT_IMAGE="$(az containerapp show -g "$RG" -n "$CA_NAME" \
-    --query 'properties.template.containers[0].image' -o tsv 2>/dev/null || true)"
-  if [[ -n "$CURRENT_IMAGE" && "$CURRENT_IMAGE" == "$IMAGE" ]]; then
-    echo "WARN: 現在の image と同一文字列 ($IMAGE) での update です。" >&2
-    echo "      ARM 的に変更なし → 新 revision は作られません (no-op, #107)。" >&2
-    echo "      ghcr 側でタグの実体が進んでいても反映されないため、IMAGE_TAG=sha-<full-sha> を指定してください。" >&2
-  fi
+  warn_if_noop_image_update "$RG" "$CA_NAME" "$IMAGE"
   FQDN="$(az containerapp update \
     --resource-group "$RG" \
     --name "$CA_NAME" \
