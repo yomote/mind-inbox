@@ -31,10 +31,14 @@ test.skip(
 
 const b64url = (obj: unknown) => Buffer.from(JSON.stringify(obj)).toString("base64url");
 
+// 合成ユーザーの oid/sub (id_token) と client_info.uid は一致している必要がある
+// (食い違うと msal がアカウントを組み立てられず、原因の分かりにくい落ち方をする)
+const PROBE_UID = "11111111-2222-3333-4444-555555555555";
+
 /** 署名なし JWT (msal-browser は id_token の署名をクライアントでは検証しない)。 */
 function makeIdToken(nonce: string): string {
   const now = Math.floor(Date.now() / 1000);
-  const uid = "11111111-2222-3333-4444-555555555555";
+  const uid = PROBE_UID;
   const header = { alg: "RS256", typ: "JWT" };
   const payload = {
     aud: CLIENT_ID,
@@ -71,8 +75,9 @@ async function fakeEntraLogin(page: Page) {
     await route.fulfill({ status: 302, headers: { Location: location } });
   });
 
+  // token は必ず authorize の後に呼ばれる (OAuth code flow の順序) ため、
+  // lastNonce はその時点で直前の authorize の値になっている
   await page.route("**/oauth2/v2.0/token", async (route) => {
-    const uid = "11111111-2222-3333-4444-555555555555";
     await route.fulfill({
       json: {
         token_type: "Bearer",
@@ -81,7 +86,7 @@ async function fakeEntraLogin(page: Page) {
         ext_expires_in: 3600,
         access_token: LIVE_BFF_TOKEN,
         id_token: makeIdToken(lastNonce),
-        client_info: b64url({ uid, utid: TENANT_ID }),
+        client_info: b64url({ uid: PROBE_UID, utid: TENANT_ID }),
       },
     });
   });
