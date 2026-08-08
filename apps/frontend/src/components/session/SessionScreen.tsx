@@ -8,15 +8,18 @@ type SessionScreenProps = {
   session: ConsultationSession;
   draftMessage: string;
   loading: boolean;
-  sttSupported: boolean;
-  listening: boolean;
-  interimTranscript: string;
+  // STT (音声入力) は SessionComposer が useVoiceInput で自律的に扱う (#121 / ADR 0023)。
+  // 以下 4 つは呼び出し側 (Layout 経由の旧配線) がまだ渡してくるため型には残すが未使用。
+  // 旧配線の撤去は #112/#120 (Layout 作業中) との競合を避けてフォローアップで行う。
+  sttSupported?: boolean;
+  listening?: boolean;
+  interimTranscript?: string;
+  onToggleListening?: () => void;
   speaking: boolean;
   ttsEnabled: boolean;
   voiceError: string | null;
   onDraftMessageChange: (value: string) => void;
   onSendMessage: () => void;
-  onToggleListening: () => void;
   onToggleTtsEnabled: () => void;
   onStopSpeaking: () => void;
   onCrisisSupport: () => void;
@@ -29,15 +32,11 @@ export function SessionScreen({
   session,
   draftMessage,
   loading,
-  sttSupported,
-  listening,
-  interimTranscript,
   speaking,
   ttsEnabled,
   voiceError,
   onDraftMessageChange,
   onSendMessage,
-  onToggleListening,
   onToggleTtsEnabled,
   onStopSpeaking,
   onCrisisSupport,
@@ -57,13 +56,9 @@ export function SessionScreen({
           onChange={onDraftMessageChange}
           onSend={onSendMessage}
           loading={loading}
-          sttSupported={sttSupported}
-          listening={listening}
-          interimTranscript={interimTranscript}
           speaking={speaking}
           ttsEnabled={ttsEnabled}
           voiceError={voiceError}
-          onToggleListening={onToggleListening}
           onToggleTtsEnabled={onToggleTtsEnabled}
           onStopSpeaking={onStopSpeaking}
         />

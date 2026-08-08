@@ -1,0 +1,157 @@
+<title>報告会 — {{TITLE}}</title>
+<!--
+  報告会スライドの雛形。使い方:
+    1. このファイルをコピーし、<section class="slide"> を実際の論点で書き換える (1 論点 1 枚)
+    2. ナレーション原稿を scripts.json に書き、scripts/synthesize.py で合成
+    3. scripts/embed_audio.py で {/*__AUDIO__*/} と {/*__SCRIPTS__*/} に差し込む
+  進行ロジック (show / playNarration / stopAudio) には触らないこと — 触ると
+  briefing #1 と同じページング破壊が起きる。音声は所定のマーカーに入るだけでよい。
+  配色・意匠はテーマごとに変えてよい (artifact-design skill を読んでから)。
+-->
+<style>
+  :root {
+    --bg: #f4f5f3; --surface: #ffffff; --ink: #26323b; --ink-strong: #131e27;
+    --ink-muted: #5e6c75; --line: #dce1de; --accent: #2e6e60; --accent-soft: #e2efe9;
+    --amber: #a1751f; --amber-soft: #f5ecd9; --red: #a5403a; --code-bg: #edf0ed;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14191c; --surface: #1c2328; --ink: #ccd6d3; --ink-strong: #eef4f1;
+      --ink-muted: #8b9a96; --line: #313c3e; --accent: #5cae9b; --accent-soft: #20312c;
+      --amber: #cfa14e; --amber-soft: #322f1f; --red: #d4837c; --code-bg: #222a2d;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14191c; --surface: #1c2328; --ink: #ccd6d3; --ink-strong: #eef4f1;
+    --ink-muted: #8b9a96; --line: #313c3e; --accent: #5cae9b; --accent-soft: #20312c;
+    --amber: #cfa14e; --amber-soft: #322f1f; --red: #d4837c; --code-bg: #222a2d;
+  }
+  body {
+    background: var(--bg); color: var(--ink); margin: 0; font-size: 16px; line-height: 1.8;
+    font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic Medium", Meiryo, sans-serif;
+  }
+  .deck { max-width: 900px; margin: 0 auto; padding: 1.2rem 1.2rem 6rem; }
+  .slide { display: none; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 2rem 2.2rem 2.2rem; min-height: 60vh; }
+  .slide.active { display: block; }
+  h1, h2 { font-family: "Hiragino Mincho ProN", "Yu Mincho", serif; color: var(--ink-strong); line-height: 1.4; text-wrap: balance; }
+  h1 { font-size: 1.7rem; margin: 0.3rem 0 1rem; }
+  h2 { font-size: 1.35rem; margin: 0.2rem 0 1rem; }
+  .eyebrow { font-size: 0.75rem; letter-spacing: 0.15em; color: var(--accent); }
+  .approve { display: inline-block; background: var(--amber-soft); color: var(--amber); border-radius: 999px; padding: 0.05rem 0.7rem; font-size: 0.8rem; margin-left: 0.5rem; }
+  p { margin: 0.6rem 0; }
+  code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.86em; background: var(--code-bg); border-radius: 3px; padding: 0.05em 0.35em; }
+  strong { color: var(--ink-strong); }
+  ul { margin: 0.5rem 0; padding-left: 1.3rem; }
+  li { margin: 0.35rem 0; }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
+  th, td { border: 1px solid var(--line); padding: 0.45rem 0.65rem; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); color: var(--ink-strong); white-space: nowrap; }
+  pre.mermaid { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 0.8rem; overflow-x: auto; }
+  .callout { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 0.7rem 1rem; border-radius: 0 4px 4px 0; font-size: 0.92rem; margin: 1rem 0; }
+  .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+  details { margin-top: 1.4rem; font-size: 0.85rem; color: var(--ink-muted); }
+  details summary { cursor: pointer; }
+  .bignum { font-size: 2.2rem; font-family: "Hiragino Mincho ProN", "Yu Mincho", serif; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .statrow { display: flex; gap: 2rem; flex-wrap: wrap; margin: 1.2rem 0; }
+  .stat .lbl { font-size: 0.8rem; color: var(--ink-muted); }
+
+  .ctrl {
+    position: fixed; bottom: 0; left: 0; right: 0; background: var(--surface);
+    border-top: 1px solid var(--line); padding: 0.7rem 1rem; display: flex;
+    align-items: center; justify-content: center; gap: 1rem; flex-wrap: wrap;
+  }
+  .ctrl button {
+    font: inherit; font-size: 0.95rem; padding: 0.45rem 1.1rem; border-radius: 6px;
+    border: 1px solid var(--line); background: var(--surface); color: var(--ink-strong); cursor: pointer;
+  }
+  .ctrl button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .ctrl button.play { background: var(--accent); border-color: var(--accent); color: #fff; min-width: 11em; }
+  .ctrl .pos { font-variant-numeric: tabular-nums; color: var(--ink-muted); min-width: 4.5em; text-align: center; }
+  .note { font-size: 0.78rem; color: var(--ink-muted); text-align: center; width: 100%; }
+</style>
+
+<div class="deck">
+  <!-- ここから各スライド。data-n はスライド番号 = scripts.json のキーと対応させる -->
+  <section class="slide active" data-n="1">
+    <span class="eyebrow">{{EYEBROW}}</span>
+    <h1>{{見出し}}</h1>
+    <p>{{本文・図・表}}</p>
+    <details><summary>ナレーション原稿</summary><p id="s1"></p></details>
+  </section>
+
+  <section class="slide" data-n="2">
+    <span class="eyebrow">{{EYEBROW}}</span>
+    <h2>{{見出し}}</h2>
+    <details><summary>ナレーション原稿</summary><p id="s2"></p></details>
+  </section>
+</div>
+
+<div class="ctrl">
+  <button id="prev" aria-label="前のスライド">← 前</button>
+  <span class="pos" id="pos">1 / 1</span>
+  <button id="next" aria-label="次のスライド">次 →</button>
+  <button class="play" id="play">▶ ナレーション再生</button>
+  <span class="note">←/→ キーでも移動できます。ナレーションは VOICEVOX / ずんだもん。</span>
+</div>
+
+<script>
+// ==== 差し込み口 (embed_audio.py が埋める。手で書き換えない) ====
+const SCRIPTS = {/*__SCRIPTS__*/};
+const AUDIO = {/*__AUDIO__*/};
+
+// ==== 進行ロジック (触らない) ====
+for (const [n, t] of Object.entries(SCRIPTS)) {
+  const el = document.getElementById("s" + n);
+  if (el) el.textContent = t;
+}
+const slides = Array.from(document.querySelectorAll(".slide"));
+let cur = 0;
+const pos = document.getElementById("pos");
+const playBtn = document.getElementById("play");
+let voice = null;
+let audioEl = null;
+function pickVoice() {
+  const vs = speechSynthesis.getVoices().filter(v => v.lang && v.lang.startsWith("ja"));
+  voice = vs.find(v => /Kyoko|O-Ren|Google|Hattori|Nanami/i.test(v.name)) || vs[0] || null;
+}
+if ("speechSynthesis" in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+function stopAudio() {
+  if (audioEl) { audioEl.pause(); audioEl.currentTime = 0; audioEl = null; }
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
+  playBtn.textContent = "▶ ナレーション再生";
+}
+function show(i) {
+  stopAudio();
+  cur = Math.max(0, Math.min(slides.length - 1, i));
+  slides.forEach((s, j) => s.classList.toggle("active", j === cur));
+  pos.textContent = (cur + 1) + " / " + slides.length;
+  window.scrollTo({ top: 0 });
+}
+function playNarration() {
+  if (audioEl || ("speechSynthesis" in window && speechSynthesis.speaking)) { stopAudio(); return; }
+  const src = AUDIO[String(cur + 1)];
+  if (src) {
+    audioEl = new Audio(src);
+    audioEl.onended = () => { audioEl = null; playBtn.textContent = "▶ ナレーション再生"; };
+    playBtn.textContent = "⏸ 停止";
+    audioEl.play();
+    return;
+  }
+  // VOICEVOX を用意できなかった場合のフォールバック (skill Step 5)
+  if (!("speechSynthesis" in window)) { alert("このブラウザは読み上げに対応していません"); return; }
+  const u = new SpeechSynthesisUtterance(SCRIPTS[String(cur + 1)] || "");
+  u.lang = "ja-JP"; if (voice) u.voice = voice; u.rate = 1.4;
+  u.onend = () => { playBtn.textContent = "▶ ナレーション再生"; };
+  playBtn.textContent = "⏸ 停止";
+  speechSynthesis.speak(u);
+}
+document.getElementById("prev").addEventListener("click", () => show(cur - 1));
+document.getElementById("next").addEventListener("click", () => show(cur + 1));
+playBtn.addEventListener("click", playNarration);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowLeft") show(cur - 1);
+  else if (e.key === "ArrowRight") show(cur + 1);
+});
+show(0);
+</script>

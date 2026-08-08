@@ -217,6 +217,23 @@ param openAiModelVersion string = '2024-11-20'
 @description('Deployment capacity in units of 1,000 tokens-per-minute (TPM). Subject to regional quota.')
 param openAiCapacity int = 10
 
+// -------------------- Azure Speech params (ADR 0023 / #121) --------------------
+@description('Enable Azure Speech (server STT). F0 = 無料枠 月 5h、超過時は停止で課金なし。')
+param enableSpeech bool = false
+
+@description('Azure region for the Speech service.')
+param speechLocation string = location
+
+@description('Speech account name (custom subdomain にも使うため globally unique)。')
+param speechAccountName string = toLower('spch-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}')
+
+@allowed([
+  'F0'
+  'S0'
+])
+@description('Speech SKU。F0 (無料枠) から開始 — 有料化 (S0) は design-gate を通す (ADR 0023)。')
+param speechSkuName string = 'F0'
+
 // -------------------- AI Agent Container App params --------------------
 // NOTE: ACR は廃止（#67 / ADR 0013）。image は GitHub Actions で ghcr に事前ビルドし、
 // Container App は ghcr の public image を pull する（待機 ¥750/月 の ACR を除去）。
@@ -640,7 +657,21 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
                     name: 'VOICEVOX_BASE_URL'
                     value: voicevoxWrapperBaseUrl
                   }
+                ],
+            // Azure Speech (ADR 0023)。未設定なら BFF の speech.issueToken が
+            // available:false を返し、フロントは Web Speech にフォールバックする。
+            enableSpeech
+              ? [
+                  {
+                    name: 'SPEECH_RESOURCE_ID'
+                    value: resourceId('Microsoft.CognitiveServices/accounts', speechAccountName)
+                  }
+                  {
+                    name: 'SPEECH_REGION'
+                    value: speechLocation
+                  }
                 ]
+              : []
           )
 
         },
@@ -783,6 +814,43 @@ resource openAiDeployment 'Microsoft.CognitiveServices/accounts/deployments@2023
       version: openAiModelVersion
     }
     versionUpgradeOption: 'OnceCurrentVersionExpired'
+  }
+}
+
+// -------------------- Azure Speech (ADR 0023 / #121) --------------------
+// 音声入力のサーバー STT。認証は静的シークレット 0 (ADR 0006 系譜):
+//   - disableLocalAuth: true でサブスクリプションキーを無効化
+//   - BFF (Functions) の System Assigned MI に Speech User ロールを付与し、
+//     BFF が Entra トークン由来の一時トークン (aad#...) をフロントへ発行する
+// F0 は超過時「課金」ではなく「停止」なので予算事故が構造的に起きない (ADR 0013 と両立)。
+resource speechAccount 'Microsoft.CognitiveServices/accounts@2023-05-01' = if (enableSpeech) {
+  name: speechAccountName
+  location: speechLocation
+  kind: 'SpeechServices'
+  sku: {
+    name: speechSkuName
+  }
+  properties: {
+    // Entra 認証 (aad# authorization token) には custom subdomain が必須
+    customSubDomainName: speechAccountName
+    publicNetworkAccess: 'Enabled'
+    disableLocalAuth: true
+  }
+}
+
+// Cognitive Services Speech User — トークン取得 + Speech 利用の最小ロール
+var cognitiveServicesSpeechUserRoleId = subscriptionResourceId(
+  'Microsoft.Authorization/roleDefinitions',
+  'f2dc8367-1007-4938-bd23-fe263f013447'
+)
+
+resource speechRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableSpeech) {
+  name: guid(resourceGroup().id, speechAccountName, functionAppName, 'speech-user')
+  scope: speechAccount
+  properties: {
+    roleDefinitionId: cognitiveServicesSpeechUserRoleId
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
   }
 }
 
@@ -1121,6 +1189,9 @@ output voicevoxContainerAppName string = enableVoicevoxAca ? voicevoxContainerAp
 output voicevoxBaseUrl string = enableVoicevoxAca
   ? 'https://${voicevoxContainerApp.?properties.?configuration.?ingress.?fqdn ?? ''}'
   : ''
+output speechEnabled bool = enableSpeech
+output speechAccountName string = enableSpeech ? speechAccountName : ''
+output speechRegion string = enableSpeech ? speechLocation : ''
 output openAiEnabled bool = enableOpenAi
 output openAiEndpoint string = enableOpenAi ? (openAiAccount.?properties.?endpoint ?? '') : ''
 output openAiAccountName string = enableOpenAi ? openAiAccountName : ''

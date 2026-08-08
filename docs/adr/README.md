@@ -88,4 +88,6 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0020](0020-hitl-choice-format-and-needs-human-queue.md) — 人間の確認は選択肢形式で出し、人間宿題は needs-human キューに一元化する
 - [0021](0021-parent-session-as-pm-orchestrator.md) — 親セッションを PM ハブにして、並行作業は子セッションへ分配する (hub-and-spoke)
 - [0022](0022-autonomous-ux-improvement-loop.md) — UX 品質は自律改善ループで維持する (観測・評価・改善を自動化、人間は基準定義と例外裁定)
-- [0024](0024-chat-streaming-via-sse-side-channel.md) — チャット応答の逐次表示は SSE サイドチャネル (`/api/chat/stream`) で通す (0023 は並行ブランチ用に予約)
+- [0023](0023-server-stt-azure-speech-f0.md) — 音声入力のサーバー STT に Azure Speech (F0・MI 認証) を採用し、Web Speech をフォールバックに残す
+- [0024](0024-chat-streaming-via-sse-side-channel.md) — チャット応答の逐次表示は SSE サイドチャネル (`/api/chat/stream`) で通す
+- [0025](0025-deploy-container-images-by-immutable-sha-tag.md) — コンテナ image のデプロイは :latest ではなく不変 sha タグの解決 + 稼働検証で行う (#107)
