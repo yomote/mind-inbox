@@ -84,6 +84,9 @@ param applyFunctionAuthLockdown bool = false
 @description('Entra (Azure AD) app client ID used by the SPA and accepted by Function App EasyAuth. 空なら EasyAuth は構成しない。')
 param functionAuthEntraClientId string = ''
 
+@description('Container Apps の認証の門 (ADR 0017) の audience となる Entra app client ID。BFF はこの audience の Managed Identity トークンを付けて下流を呼ぶ。空なら AUDIENCE 設定を出力しない (= BFF はトークンを付けず、門が立っていれば 401 になる)。')
+param containerAppsGateClientId string = ''
+
 @description('Entra tenant ID. 単一テナント限定 (この tenant の identity のみ許可)。')
 param functionAuthEntraTenantId string = tenant().tenantId
 
@@ -557,36 +560,57 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
             )
             supportCredentials: false
           }
-          appSettings: [
-            {
-              name: 'AzureWebJobsStorage'
-              value: functionStorageConnectionString
-            }
-            {
-              name: 'FUNCTIONS_EXTENSION_VERSION'
-              value: '~4'
-            }
-            {
-              name: 'FUNCTIONS_WORKER_RUNTIME'
-              value: 'node'
-            }
-            {
-              name: 'WEBSITE_NODE_DEFAULT_VERSION'
-              value: '~22'
-            }
-            {
-              name: 'WEBSITE_RUN_FROM_PACKAGE'
-              value: '1'
-            }
-            {
-              name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING'
-              value: functionStorageConnectionString
-            }
-            {
-              name: 'WEBSITE_CONTENTSHARE'
-              value: functionContentShare
-            }
-          ]
+          // 注意: bicep の appSettings は**全置換**。ここに無い設定は再デプロイで消えるため、
+          // 恒久設定は az で後付けせず必ずここで宣言する (#94/#107 と同族の教訓)。
+          // AI_AGENT_BASE_URL / VOICEVOX_BASE_URL だけは Container App の作成順序の都合で
+          // deploy-backend.sh が毎回再結線する。
+          appSettings: concat(
+            [
+              {
+                name: 'AzureWebJobsStorage'
+                value: functionStorageConnectionString
+              }
+              {
+                name: 'FUNCTIONS_EXTENSION_VERSION'
+                value: '~4'
+              }
+              {
+                name: 'FUNCTIONS_WORKER_RUNTIME'
+                value: 'node'
+              }
+              {
+                name: 'WEBSITE_NODE_DEFAULT_VERSION'
+                value: '~22'
+              }
+              {
+                name: 'WEBSITE_RUN_FROM_PACKAGE'
+                value: '1'
+              }
+              {
+                name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING'
+                value: functionStorageConnectionString
+              }
+              {
+                name: 'WEBSITE_CONTENTSHARE'
+                value: functionContentShare
+              }
+            ],
+            // 認証の門 (ADR 0017 / #86) の audience。BFF はこの audience の
+            // Managed Identity トークンを取得して下流 Container Apps を呼ぶ (#104)
+            empty(containerAppsGateClientId)
+              ? []
+              : [
+                  {
+                    name: 'AI_AGENT_AUDIENCE'
+                    value: 'api://${containerAppsGateClientId}'
+                  }
+                  {
+                    name: 'VOICEVOX_AUDIENCE'
+                    value: 'api://${containerAppsGateClientId}'
+                  }
+                ]
+          )
+
         },
         enableFunctionVnetIntegration ? { vnetRouteAllEnabled: true } : {}
       )
@@ -1051,6 +1075,7 @@ output functionAppDefaultHostname string = functionApp.properties.defaultHostNam
 output staticSiteSkuName string = staticSiteSkuName
 output functionEasyAuthEnabled bool = functionEasyAuthEnabled
 output functionAuthEntraClientId string = functionAuthEntraClientId
+output containerAppsGateClientId string = containerAppsGateClientId
 output functionAuthEntraTenantId string = functionEasyAuthEnabled ? functionAuthEntraTenantId : ''
 output budgetAlertEnabled bool = enableBudgetAlert && !empty(budgetContactEmails)
 

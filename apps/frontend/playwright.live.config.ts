@@ -1,0 +1,52 @@
+import { defineConfig, devices } from "@playwright/test";
+
+/**
+ * L4 live E2E — **デプロイ済みの実環境 (SWA) に対する UI シナリオテスト** (#108 / ADR 0018)。
+ *
+ * mock 版 (playwright.config.ts) との違い:
+ *   - **実際にデプロイされた SWA の配信バンドル**を開く (ローカルビルドではない)。
+ *     これにより VITE_* の焼き込みミス (認証無効ビルドの出荷, #78 の事故クラス) や
+ *     SWA 配信・実オリジン CORS の破壊も検知範囲に入る
+ *   - 認証: MSAL の localStorage キャッシュに実トークンを注入してログイン画面を迂回する
+ *     (spec 参照)。**ログイン往復そのもの**は login-canary が Entra のログイン画面表示まで
+ *     を検証し、完走は人間の初回確認と分担する
+ *
+ * 必要な env:
+ *   LIVE_APP_URL         — デプロイ済み SWA (例: https://calm-field-xxx.azurestaticapps.net)
+ *   LIVE_BFF_URL         — 実環境 BFF (例: https://func-dev-mindbox.azurewebsites.net)
+ *   LIVE_BFF_TOKEN       — BFF の EasyAuth を通るアクセストークン
+ *   LIVE_ENTRA_CLIENT_ID — SPA の client ID (MSAL キャッシュ注入に使用)
+ *   LIVE_ENTRA_TENANT_ID — テナント ID (同上)
+ */
+
+export default defineConfig({
+  testDir: "./e2e-live",
+  outputDir: "./test-results-live",
+  fullyParallel: false,
+  workers: 1,
+  forbidOnly: !!process.env.CI,
+  retries: 0,
+  // 実 AI + コールドスタートを挟むため余裕を持たせる
+  timeout: 240_000,
+  expect: { timeout: 30_000 },
+  reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : [["list"]],
+
+  use: {
+    baseURL: process.env.LIVE_APP_URL ?? "",
+    screenshot: "only-on-failure",
+    trace: "retain-on-failure",
+    locale: "ja-JP",
+  },
+
+  projects: [
+    {
+      name: "chromium-live",
+      use: {
+        ...devices["Desktop Chrome"],
+        ...(process.env.E2E_CHROMIUM_PATH
+          ? { launchOptions: { executablePath: process.env.E2E_CHROMIUM_PATH } }
+          : {}),
+      },
+    },
+  ],
+});

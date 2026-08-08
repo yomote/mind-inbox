@@ -63,6 +63,9 @@ param applyFunctionAuthLockdown bool = false
 @description('Entra app client ID (SPA)。EasyAuth の audience かつ MSAL のクライアント。空なら EasyAuth 未構成。')
 param functionAuthEntraClientId string = ''
 
+@description('Container Apps の認証の門 (ADR 0017) の audience となる Entra app client ID。空なら BFF は下流へトークンを付けない。')
+param containerAppsGateClientId string = ''
+
 @description('Entra tenant ID。既定はデプロイ先テナント (単一テナント限定)。')
 param functionAuthEntraTenantId string = tenant().tenantId
 
@@ -120,6 +123,7 @@ module infra '../modules/bootstrap-core.bicep' = {
     staticSiteSkuName: staticSiteSkuName
     applyFunctionAuthLockdown: applyFunctionAuthLockdown
     functionAuthEntraClientId: functionAuthEntraClientId
+    containerAppsGateClientId: containerAppsGateClientId
     functionAuthEntraTenantId: functionAuthEntraTenantId
     functionExtraCorsOrigins: functionExtraCorsOrigins
     enableBudgetAlert: enableBudgetAlert
@@ -149,6 +153,7 @@ output functionAppDefaultHostname string = infra.outputs.functionAppDefaultHostn
 output staticSiteSkuName string = infra.outputs.staticSiteSkuName
 output functionEasyAuthEnabled bool = infra.outputs.functionEasyAuthEnabled
 output functionAuthEntraClientId string = infra.outputs.functionAuthEntraClientId
+output containerAppsGateClientId string = infra.outputs.containerAppsGateClientId
 output functionAuthEntraTenantId string = infra.outputs.functionAuthEntraTenantId
 output budgetAlertEnabled bool = infra.outputs.budgetAlertEnabled
 output sqlEnabled bool = infra.outputs.sqlEnabled

@@ -20,6 +20,7 @@ import LogoutRoundedIcon from "@mui/icons-material/LogoutRounded";
 import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import { useLocation, useNavigate } from "react-router-dom";
 import { authEnabled, getAccount, initAuth, login, logout } from "./auth/msal";
+import { ttsFetch } from "./api/http";
 import {
   createActionPlan,
   createProblemPlan,
@@ -228,11 +229,10 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
   const synthesizeWithVoicevox = React.useCallback(
     async (text: string): Promise<Blob> => {
-      const res = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, speaker: voicevoxSpeaker }),
-      });
+      // BFF 直叩き + Authorization は api/http.ts に集約 (#69)。相対 /api/tts のままだと
+      // SWA に投げて必ず失敗し、ブラウザ読み上げへ静かにフォールバックしていた
+      // (2026-08-08 実環境で発覚)。
+      const res = await ttsFetch(text, voicevoxSpeaker);
 
       if (res.status === 204) {
         // VOICEVOX_BASE_URL 未設定時の stub。フォールバックをトリガーする。
