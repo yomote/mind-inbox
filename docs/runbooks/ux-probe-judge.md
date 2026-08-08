@@ -24,6 +24,8 @@
 
 ## Steps
 
+**既定は無人** (#154 / [ADR 0026](../adr/0026-ux-improvement-loop-ab-protocol-and-mutation-boundary.md) D1) — 毎朝の Routine が下の 1〜4 を自動で回す。以下は **Routine が実行する手順であり、同時に手動フォールバックの手順**でもある (Routine 未登録時 / 個別に採点したい時は同じコマンドを人が打てばよい)。
+
 1. プローブを回す (毎朝 07:00 JST は自動。手動なら):
 
    ```bash
@@ -34,18 +36,35 @@
 2. 記録 JSON を取得する:
 
    ```bash
-   RUN_ID="$(gh run list -w golden-path-monitor.yml -L 1 --json databaseId -q '.[0].databaseId')"
-   gh run download "$RUN_ID" -n "ux-probe-$RUN_ID" -D /tmp/ux-probe
-   ls /tmp/ux-probe   # ux-probe-<timestamp>.json
+   PROBE_JSON="$(cicd/scripts/ux-probe/fetch-latest-probe.sh)"
+   echo "$PROBE_JSON"
    ```
 
-3. UX judge で採点する — Claude セッションから **新品コンテキストの subagent** として起動する
+   標準出力は**パスだけ**。診断は stderr に出る (混ぜると呼び出し側が壊れる)。
+   終了コード: `3` = artifact 無し (プローブ手前で fail / 全体スキップ) / `4` = turns 0 件。
+   どちらも「採点する材料がない」ので、その朝は採点をスキップして終わる (Common Issues 参照)。
+
+3. UX judge で採点する — **新品コンテキストの subagent** として起動する
    (実装セッション内で直接採点しない — 前提の混入を防ぐのが独立 judge の価値, ADR 0019/0022):
 
-   > Task(ux-reviewer): `/tmp/ux-probe/ux-probe-<timestamp>.json` を採点して
+   > Task(ux-reviewer): `$PROBE_JSON` を採点して
 
-4. レポート末尾の 1 行サマリ + `ux-judge-score` JSON ブロックを、**呼び出し元セッションが**
-   スコアボード Issue #127 にコメントとして転記する (judge 自身は投稿しない)。
+   レポートをファイルに保存する (例: `/tmp/ux-judge-report.md`)。
+
+4. 採点を検証してスコアボードへ投稿する:
+
+   ```bash
+   cicd/scripts/ux-probe/post-judge-score.sh /tmp/ux-judge-report.md
+   ```
+
+   **検証に落ちたら投稿しない** — 蓄積は時系列データで、壊れた 1 件が混ざるとトレンド判断が
+   そのぶん狂う。人が転記していた頃は目視が検証だったので、無人化にあたって検証を機械へ移した。
+   `validate-judge-score.py` が見るのは形式だけでなく、**total / max が scores と整合しているか**、
+   **verdict が rubric の閾値と一致するか**、**UNKNOWN に理由が付いているか**まで。
+   ここが狂うと M2 のトリガー判定がそのまま狂うため。
+
+   検証に落ちたときの終了コード: `2` = 採点ブロックが無い (judge が rubric の出力ルール 3 に
+   従っていない) / `3` = 内容が不整合。いずれもレポートは残るので、原因を見て judge を再実行する。
 
 5. トレンドを見る (蓄積コメントから JSON を抽出):
 
@@ -61,11 +80,39 @@
 
    (集計が育ったら M3 で可視化を整える — 現状は目視で足りる件数)
 
+### Routine の登録 (人間の 1 クリック宿題)
+
+Routine の登録は Web UI 操作が必要で **agent からは実行できない** — claude-code-remote MCP
+サーバー全体が承認ゲートの内側にあり、`create_trigger` / `create_session` はもちろん
+読み取り専用の `list_environments` すら `-32003 requires approval` で弾かれる
+(2026-08-08 に実測)。#90 / #92 / #156 が滞留しているのはすべてこの 1 つの原因による。
+登録の宿題は [#156](https://github.com/yomote/mind-inbox/issues/156)。
+
+登録する Routine のプロンプト (そのまま貼れる形):
+
+> Mind Inbox (yomote/mind-inbox) の UX 採点セッションです。`docs/runbooks/ux-probe-judge.md`
+> の Steps 2〜4 を実行してください。
+>
+> 1. `cicd/scripts/ux-probe/fetch-latest-probe.sh` で直近の記録 JSON を取得する。
+>    終了コード 3 (artifact 無し) / 4 (turns 0 件) の場合は、その旨だけを報告して終了する
+>    (採点する材料がないので Issue には何も投稿しない)。
+> 2. subagent `ux-reviewer` を**新品コンテキスト**で起動し、そのパスを採点させる。
+>    レポートを `/tmp/ux-judge-report.md` に保存する。
+> 3. `cicd/scripts/ux-probe/post-judge-score.sh /tmp/ux-judge-report.md` で検証・投稿する。
+>    検証に落ちたら投稿せず、失敗理由を Issue #127 にではなく**あなたの応答として**残す。
+>
+> rubric (`.github/claude/ux-rubric.md`) は読むだけで、**改定しないこと** (PO の専権)。
+> プロダクトコードは一切変更しないこと。
+
+スケジュール: 毎朝 08:00 JST (golden-path-monitor の 07:00 JST 実行が終わってから)。
+cron (UTC) では `0 23 * * *`。
+
 ## Verification
 
 - [ ] golden-path-monitor の run に artifact `ux-probe-<run_id>` があり、JSON の `turns` が 4 件ある
 - [ ] レイテンシ閾値超過があれば run の Annotations に warning が出ている
-- [ ] Issue #127 に採点コメントが増えている (verdict + JSON ブロック)
+- [ ] **人手を介さず** Issue #127 に採点コメントが増えている (verdict + JSON ブロック) — Routine 登録後の翌朝に確認する
+- [ ] 上の Steps 5 の jq が、増えたコメントを 1 行として抽出できる (蓄積が機械可読なままか)
 
 ## Rollback
 
