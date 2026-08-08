@@ -256,6 +256,74 @@ print("" if not d else (d.get("fqdn") or ""))' 2>/dev/null || true)
 done <<< "$CA_NAMES"
 rm -f "$CA_ERR"
 
+# -------- Container Apps の image 据え置き検知 (#107) --------
+# `az containerapp update --image <同一文字列>` は ARM 的に変更なし → 新 revision を作らない
+# no-op。:latest 運用だと「デプロイ緑・image は前日のまま」が誰にも見えずに続く (2026-08-07 実測)。
+#
+# 無いと何が静かに通るか: デプロイが no-op に退行しても (スクリプト側の回帰 / 手動 latest 実行)、
+# smoke は認可・疎通だけ見て緑のままになり、旧 image が本番相当環境で走り続ける。
+# ここで「実際に稼働している revision の image タグ」を期待値 (EXPECTED_IMAGE_TAG) と突合する。
+# 検証対象は ghcr の 2 サービスのみ (voicevox エンジンは bicep 管理の公式 image で対象外)。
+section "Container Apps running image should match expected tag (#107)"
+EXPECTED_IMAGE_TAG=${EXPECTED_IMAGE_TAG:-""}
+[[ -z "$EXPECTED_IMAGE_TAG" ]] && warn "EXPECTED_IMAGE_TAG 未指定: タグ一致検証は skip し、稼働タグの表示のみ行う"
+
+# 露出検査と同じく、エラー出力は捨てずに退避して失敗時に読む。2>/dev/null で潰すと
+# 「権限が無い」「リソース名が違う」「API が一時的に落ちた」がすべて同じ空文字になり、
+# NG は出ても**何を直せばいいか分からない**メッセージになる。
+IMG_ERR="$(mktemp)"
+
+for ca in \
+  "$(out aiAgentContainerAppName || true)" \
+  "$(out voicevoxWrapperContainerAppName || true)"; do
+  [[ -z "$ca" ]] && continue
+
+  # 判定材料は「実際に稼働している revision」(latestReadyRevisionName)。
+  # app template の image だけを見ると「update は通ったが revision が Ready にならず
+  # 旧 revision が走り続けている」ケースを見逃す。
+  set +e
+  ca_rev="$(az containerapp show -g "$RG" -n "$ca" \
+    --query 'properties.latestReadyRevisionName' -o tsv --only-show-errors 2>"$IMG_ERR")"
+  ca_rev_rc=$?
+  set -e
+  if [[ "$ca_rev_rc" -ne 0 ]]; then
+    ng "$ca: latestReadyRevisionName の取得に失敗しました: $(head -c 160 "$IMG_ERR")"
+    continue
+  fi
+  if [[ -z "$ca_rev" ]]; then
+    ng "$ca: Ready な revision がありません (デプロイした revision が起動に失敗している疑い)"
+    continue
+  fi
+
+  set +e
+  ca_image="$(az containerapp revision show -g "$RG" --app "$ca" -n "$ca_rev" \
+    --query 'properties.template.containers[0].image' -o tsv --only-show-errors 2>"$IMG_ERR")"
+  ca_image_rc=$?
+  set -e
+  if [[ "$ca_image_rc" -ne 0 ]]; then
+    ng "$ca: 稼働 revision ($ca_rev) の image 取得に失敗しました: $(head -c 160 "$IMG_ERR")"
+    continue
+  fi
+  if [[ -z "$ca_image" ]]; then
+    ng "$ca: 稼働 revision ($ca_rev) の image が空です (コンテナ定義が想定と違う)"
+    continue
+  fi
+
+  ca_tag="${ca_image##*:}"
+  if [[ -n "$EXPECTED_IMAGE_TAG" ]]; then
+    if [[ "$ca_tag" == "$EXPECTED_IMAGE_TAG" ]]; then
+      ok "$ca: 稼働 revision $ca_rev の image tag = $ca_tag (期待値と一致)"
+    else
+      ng "$ca: 稼働 image tag '$ca_tag' が期待 '$EXPECTED_IMAGE_TAG' と不一致 (revision $ca_rev)。:latest 差し替え no-op か revision 未昇格の疑い (#107)"
+    fi
+  elif [[ "$ca_tag" == "latest" ]]; then
+    warn "$ca: :latest で稼働中。どのコミットの image か追跡できず、据え置きも検知できない (#107)。IMAGE_TAG=sha-<full-sha> でのデプロイを推奨"
+  else
+    ok "$ca: 稼働 revision $ca_rev の image tag = $ca_tag (期待値未指定のため表示のみ)"
+  fi
+done
+rm -f "$IMG_ERR"
+
 section "SQL public access should be blocked"
 if [[ -n "$SQL_FQDN" ]]; then
   SQL_SERVER_NAME=${SQL_FQDN%%.*}

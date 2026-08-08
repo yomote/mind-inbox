@@ -38,6 +38,18 @@ RG=<your-rg> DEPLOYMENT=<deployment-name> ./scripts/deploy/deploy-backend.sh
 - `backend/` をビルドし、production dependencies のみ残した zip を作成して
   `az functionapp deployment source config-zip` で反映します。
 
+## Container Apps (ai-agent / voicevox-wrapper)
+
+```bash
+cd cicd
+# IMAGE_TAG は sha-<full-sha> を明示指定すること (:latest は no-op になる, #107)
+RG=<your-rg> DEPLOYMENT=<deployment-name> IMAGE_TAG=sha-<full-sha> ./scripts/deploy/deploy-ai-agent.sh
+RG=<your-rg> DEPLOYMENT=<deployment-name> IMAGE_TAG=sha-<full-sha> ./scripts/deploy/deploy-voicevox-wrapper.sh
+```
+
+タグの決め方・ロールバック・据え置きの確認手順は runbook
+[`ghcr-images.md`](../../../docs/runbooks/ghcr-images.md) が真実です。
+
 ## All
 
 ```bash

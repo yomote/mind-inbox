@@ -39,6 +39,7 @@ on:
 permissions:
   id-token: write # OIDC トークン取得に必須
   contents: read
+  actions: read # IMAGE_TAG 解決で build-images の run 履歴を読む (#107)
 
 concurrency:
   # 自動デプロイ / 手動 up / 手動 down を RG 単位で「同一グループ」に入れて直列化する。
@@ -137,6 +138,67 @@ jobs:
           # zip は ubuntu-latest に入っている想定。無い時だけ apt（毎回の update ~30-60s を回避）。
           command -v zip >/dev/null || { sudo apt-get update && sudo apt-get install -y zip; }
 
+      # :latest 差し替えは ARM 的にテンプレート変更なし → 新 revision を作らない no-op (#107)。
+      # ghcr 側で latest の実体が進んでいても Container Apps は据え置きのままになるため、
+      # 「直近の build-images 成功 run の head SHA」から不変タグ sha-<sha> を解決して渡す。
+      # 注: build-images は apps/services/** 変更時のみ走るので、デプロイ対象 commit と
+      # image の commit は一致しないことがある（「最後にビルドされた sha」が正）。
+      - name: Resolve IMAGE_TAG（直近 build-images 成功 run の SHA）
+        if: steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
+        timeout-minutes: 40 # build-images (timeout 30 分) の完了待ちを含むため
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # gh の API 呼び出しは一過性で落ちうる（5xx / rate limit / ネットワーク）。
+          # 素で書くと set -e で gh の生エラーのまま step が死に、「何が起きたのか」が
+          # ログを掘らないと分からない。rc を自前で見て、意図したメッセージに翻訳する。
+          GH_ERR="$(mktemp)"
+          gh_json() { # $1=説明, 以降=gh の引数。成功時は stdout に結果、失敗時は rc!=0
+            local label="$1"; shift
+            if ! gh "$@" 2>"$GH_ERR"; then
+              echo "::warning::$label に失敗しました: $(head -c 200 "$GH_ERR" | tr '\n' ' ')" >&2
+              return 1
+            fi
+          }
+
+          # 1) この commit 自身が build-images をトリガーしていれば完了を待つ。
+          #    待たないと「一つ前の image」を載せてしまい、それが当日最後の push だと
+          #    新 image が永遠に届かない（#107 と同じ据え置きが形を変えて残る）。
+          #    ここが取れなくても致命ではない（2 の解決に進めば直近の成功 image は載る）ので
+          #    warning に留める。
+          RUN_ID="$(gh_json "この commit の build-images run 検索" \
+            run list -R "$GITHUB_REPOSITORY" --workflow build-images.yml \
+            --commit "$GITHUB_SHA" --limit 1 --json databaseId --jq '.[0].databaseId // empty' || true)"
+          if [ -n "$RUN_ID" ]; then
+            STATUS="$(gh_json "build-images run #$RUN_ID の状態取得" \
+              run view -R "$GITHUB_REPOSITORY" "$RUN_ID" --json status --jq '.status' || true)"
+            # 取得できなかった場合は completed と決めつけず、待つ側に倒す（待ちすぎても
+            # 遅くなるだけだが、待たない側に倒すと古い image を載せてしまう）。
+            if [ "$STATUS" != "completed" ]; then
+              echo "この commit の build-images run #$RUN_ID (${STATUS:-状態不明}) の完了を待ちます..."
+              # 失敗/キャンセル（新しい push による cancel-in-progress 含む）でもデプロイ自体は
+              # 止めない: build の赤は build-images 側で見え、ここでは直近の成功 image で続行する。
+              gh run watch -R "$GITHUB_REPOSITORY" "$RUN_ID" --exit-status \
+                || echo "::warning::build-images run #$RUN_ID が成功しませんでした（または監視に失敗）。直近の成功 run の image で続行します。"
+            fi
+          fi
+
+          # 2) 直近の build-images 成功 run の head SHA → sha-<full-sha> タグ。
+          #    ここは代替手段が無いので、取得失敗も「成功 run ゼロ」も fail にする。
+          #    :latest へのフォールバックはしない（それこそが #107 の no-op を招く）。
+          if ! SHA="$(gh_json "直近の build-images 成功 run の取得" \
+            run list -R "$GITHUB_REPOSITORY" --workflow build-images.yml \
+            --branch main --status success --limit 1 --json headSha --jq '.[0].headSha // empty')"; then
+            echo "::error::build-images の run 一覧を取得できず IMAGE_TAG を解決できませんでした（GitHub API の一過性障害 / permissions: actions: read の不足）。上の warning の理由を確認し、再実行してください。"
+            exit 1
+          fi
+          if [ -z "$SHA" ]; then
+            echo "::error::build-images の成功 run が 1 件も見つかりません。ghcr に image が無い可能性が高いため、:latest へのフォールバックはしません（no-op どころか初回 pull 失敗になる）。Actions から build-images を workflow_dispatch で実行してから再デプロイしてください。"
+            exit 1
+          fi
+          echo "IMAGE_TAG=sha-$SHA" >> "$GITHUB_ENV"
+          echo "resolved IMAGE_TAG=sha-$SHA (build-images head SHA)"
+
       - name: Provision + deploy (up)
         if: steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
         env:
@@ -144,6 +206,7 @@ jobs:
           VOICEVOX_TIER: ${{ github.event.inputs.voicevox || 'cpu' }}
         run: |
           RG="$RG" ENVIRONMENT="$ENVIRONMENT" DEPLOYMENT="$DEPLOYMENT" VOICEVOX_TIER="$VOICEVOX_TIER" \
+            IMAGE_TAG="$IMAGE_TAG" \
             ./cicd/scripts/deploy/provision.sh
 
       # デプロイのたびに「意図した接続が通り、それ以外が拒否される」ことを実測する。
@@ -151,10 +214,13 @@ jobs:
       # ingress 制限が再デプロイで剥がれる 等) デプロイは緑のままで、誰も気づかない。
       # 実際 2026-08-06〜07 に「認証無効ビルドの出荷」「コンテナの無認可公開」
       # 「IP 制限の剥がれ」が起き、いずれも偶然の点検でしか見つからなかった。
+      # EXPECTED_IMAGE_TAG: 稼働 revision の image タグが「今回解決した sha」と一致するかを
+      # smoke-test 側で検証する (#107 再発検知)。update が no-op に戻るとここが NG で赤くなる。
       - name: Smoke test（認可と疎通の実測）
         if: steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
         run: |
-          RG="$RG" DEPLOYMENT="$DEPLOYMENT" ./cicd/scripts/smoke-test/smoke-test.sh
+          RG="$RG" DEPLOYMENT="$DEPLOYMENT" EXPECTED_IMAGE_TAG="$IMAGE_TAG" \
+            ./cicd/scripts/smoke-test/smoke-test.sh
 
       # 無いと何が静かに通るか: 認可・疎通が緑でも「相談ユースケースそのもの」は別物。
       # 2026-08-07〜08 に空 concern 拒否 / :latest no-op / BFF→CA 403 / TTS 断線が
