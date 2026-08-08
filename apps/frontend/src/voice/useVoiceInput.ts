@@ -11,7 +11,7 @@
  */
 
 import * as React from "react";
-import { startAzureRecognition, type RunningRecognition } from "./azureSpeech";
+import { tryStartAzureRecognition, type RunningRecognition } from "./azureSpeech";
 import { TranscriptStitcher } from "./stitcher";
 
 export type VoiceEngineKind = "azure" | "browser";
@@ -22,6 +22,12 @@ export type VoiceInput = {
   listening: boolean;
   /** 認識中のエンジン (listening 中のみ non-null)。 */
   engine: VoiceEngineKind | null;
+  /**
+   * 高精度認識 (Azure) を使うはずが**予期しない失敗**でブラウザ認識に落ちた状態。
+   * 想定内の未プロビジョニング (available:false) では立たない — 静かな品質劣化を
+   * 見えるようにするためのフラグ。
+   */
+  degraded: boolean;
   interimTranscript: string;
   /** 認識開始からの経過秒。録音状態の可視化に使う。 */
   elapsedSec: number;
@@ -45,6 +51,7 @@ function speechRecognitionCtor(): SpeechRecognitionConstructor | undefined {
 export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
   const [listening, setListening] = React.useState(false);
   const [engine, setEngine] = React.useState<VoiceEngineKind | null>(null);
+  const [degraded, setDegraded] = React.useState(false);
   const [interimTranscript, setInterimTranscript] = React.useState("");
   const [elapsedSec, setElapsedSec] = React.useState(0);
   const [error, setError] = React.useState<string | null>(null);
@@ -208,6 +215,7 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
     shouldListenRef.current = true;
     const seq = (sessionSeqRef.current += 1);
     setError(null);
+    setDegraded(false);
     startedAtRef.current = Date.now();
     setElapsedSec(0);
     setListening(true);
@@ -219,47 +227,48 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
     }
 
     void (async () => {
-      try {
-        const azure = await startAzureRecognition({
-          onFinal: (text) => stitcher.handleFinal(text),
-          onInterim: (text) => stitcher.handleInterim(text),
-          onFatal: (message) => {
-            // Azure が途中で継続不能になったら (ネットワーク断・無料枠停止 等)、
-            // 発話を失わないよう Web Speech に切り替えて続行を試みる。
-            if (azureRef.current) {
-              azureRef.current.stop();
-              azureRef.current = null;
-            }
-            stitcher.flush();
-            if (shouldListenRef.current && speechRecognitionCtor()) {
-              startBrowserEngine();
-            } else if (shouldListenRef.current) {
-              shouldListenRef.current = false;
-              setListening(false);
-              setEngine(null);
-              setError(message);
-            }
-          },
-        });
+      const outcome = await tryStartAzureRecognition({
+        onFinal: (text) => stitcher.handleFinal(text),
+        onInterim: (text) => stitcher.handleInterim(text),
+        onFatal: (message) => {
+          // Azure が途中で継続不能になったら (ネットワーク断・無料枠停止 等)、
+          // 発話を失わないよう Web Speech に切り替えて続行を試みる。
+          // これも「予期しない失敗」なので劣化として記録・表示する。
+          console.error(`[voice] Azure Speech の認識が中断されました: ${message}`);
+          if (azureRef.current) {
+            azureRef.current.stop();
+            azureRef.current = null;
+          }
+          stitcher.flush();
+          if (shouldListenRef.current && speechRecognitionCtor()) {
+            setDegraded(true);
+            startBrowserEngine();
+          } else if (shouldListenRef.current) {
+            shouldListenRef.current = false;
+            setListening(false);
+            setEngine(null);
+            setError(message);
+          }
+        },
+      });
 
-        // stop() 済み / 別世代なら破棄。
-        if (!shouldListenRef.current || sessionSeqRef.current !== seq) {
-          azure?.stop();
-          return;
-        }
-
-        if (azure) {
-          azureRef.current = azure;
-          setEngine("azure");
-          return;
-        }
-        // トークン発行不可 (available:false) → Web Speech へフォールバック。
-        startBrowserEngine();
-      } catch {
-        // BFF 未起動・SDK 初期化失敗など。音声入力自体は失わない。
-        if (!shouldListenRef.current || sessionSeqRef.current !== seq) return;
-        startBrowserEngine();
+      // stop() 済み / 別世代なら破棄。
+      if (!shouldListenRef.current || sessionSeqRef.current !== seq) {
+        if (outcome.kind === "started") outcome.recognition.stop();
+        return;
       }
+
+      if (outcome.kind === "started") {
+        azureRef.current = outcome.recognition;
+        setEngine("azure");
+        return;
+      }
+
+      // 予期しない失敗 (トークン取得エラー / SDK 初期化 / マイク取得) は
+      // ログ済み (tryStartAzureRecognition) の上で劣化として UI に出す。
+      // 想定内の unavailable (未プロビジョニング / ローカル) は静かにフォールバック。
+      if (outcome.kind === "failed") setDegraded(true);
+      startBrowserEngine();
     })();
   }, [startBrowserEngine, stitcher]);
 
@@ -284,6 +293,7 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
     supported,
     listening,
     engine,
+    degraded,
     interimTranscript,
     elapsedSec,
     error,

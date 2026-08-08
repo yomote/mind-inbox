@@ -4,14 +4,7 @@ import MicOffIcon from "@mui/icons-material/MicOff";
 import RecordVoiceOverIcon from "@mui/icons-material/RecordVoiceOver";
 import StopCircleIcon from "@mui/icons-material/StopCircle";
 import VolumeOffIcon from "@mui/icons-material/VolumeOff";
-import {
-  Button,
-  Chip,
-  CircularProgress,
-  Stack,
-  TextField,
-  Typography,
-} from "@mui/material";
+import { Button, Chip, CircularProgress, Stack, TextField, Typography } from "@mui/material";
 import * as React from "react";
 import { useVoiceInput } from "../../voice/useVoiceInput";
 
@@ -73,11 +66,7 @@ export function SessionComposer({
           onChange={(e) => onChange(e.target.value)}
           placeholder="ここに入力 / 話して入力"
         />
-        <Button
-          variant="outlined"
-          onClick={onSend}
-          disabled={loading || !value.trim()}
-        >
+        <Button variant="outlined" onClick={onSend} disabled={loading || !value.trim()}>
           {loading ? <CircularProgress size={20} /> : "送信"}
         </Button>
       </Stack>
@@ -121,9 +110,18 @@ export function SessionComposer({
           />
         )}
         {voice.listening && voice.engine && (
+          // degraded = 高精度認識に繋がるはずが予期しない失敗で落ちた状態。
+          // 「動いてはいるが精度が落ちている」ことをユーザーにも見えるようにする。
           <Chip
-            label={voice.engine === "azure" ? "高精度認識" : "ブラウザ認識"}
+            label={
+              voice.engine === "azure"
+                ? "高精度認識"
+                : voice.degraded
+                  ? "ブラウザ認識 (高精度認識に接続できず)"
+                  : "ブラウザ認識"
+            }
             variant="outlined"
+            color={voice.degraded ? "warning" : "default"}
             size="small"
           />
         )}
