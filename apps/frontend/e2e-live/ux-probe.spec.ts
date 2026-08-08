@@ -23,8 +23,10 @@ import { fakeEntraLogin, LIVE_APP_URL, LIVE_BFF_URL, liveEnvMissing } from "./en
 
 test.skip(liveEnvMissing, "LIVE_* env が未設定 (実環境向けのみ実行)");
 
-// 4 往復 × (実 AI + コールドスタート) を許容する。config の既定 240s では足りない
-test.setTimeout(900_000);
+// 4 往復 × (実 AI + コールドスタート) を許容する。config の既定 240s では足りない。
+// 待受予算 (下の per-hop timeout の合計): 到達+opener 120s + turn1 (210+30+120)s
+// + turn2〜4 (120+30+60)s×3 = 1,110s < 1,500s (余白は描画・fill 等の雑費分)
+test.setTimeout(1_500_000);
 
 /** シナリオ変更時は id を上げる (時系列比較の断絶点を明示するため)。 */
 const SCENARIO = {
@@ -43,6 +45,13 @@ const SCENARIO = {
 // PO が決める — それまでの仮置き。env で上書き可能
 const WARN_REPLY_VISIBLE_MS = Number(process.env.UX_PROBE_WARN_REPLY_MS ?? 10_000);
 const WARN_TTS_SYNTH_MS = Number(process.env.UX_PROBE_WARN_TTS_MS ?? 8_000);
+
+/**
+ * warn の分類 (レビュー指摘 — U6 の機械判定に速度と無関係な障害を混ぜないため):
+ * - "latency":    閾値超過 (#120) — ux-rubric U6 が数えるのはこれだけ
+ * - "functional": TTS 未観測 / status ≠ 200 等の機能障害 — レイテンシは欠測扱い
+ */
+type ProbeWarning = { category: "latency" | "functional"; message: string };
 
 type TtsRecord = {
   text: string;
@@ -70,7 +79,7 @@ type TurnRecord = {
     sendToTtsResponseMs: number | null;
   };
   ttsStatus: number | null;
-  warnings: string[];
+  warnings: ProbeWarning[];
 };
 
 type ProbeRecord = {
@@ -230,11 +239,16 @@ test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間�
   for (let i = 0; i < SCENARIO.userTurns.length; i++) {
     const userText = SCENARIO.userTurns[i];
 
+    // コールドスタート (Container Apps scale-to-zero, ADR 0013) は 1 往復目にしか
+    // 現れないので、2 往復目以降は待受を絞る (test.setTimeout の待受予算と整合させる)
+    const trpcTimeoutMs = i === 0 ? 210_000 : 120_000;
+    const ttsTimeoutMs = i === 0 ? 120_000 : 60_000;
+
     const trpcPromise = page.waitForResponse(
       (res) =>
         res.url().includes("/api/trpc/consultation.sendMessage") &&
         res.request().method() === "POST",
-      { timeout: 210_000 },
+      { timeout: trpcTimeoutMs },
     );
 
     await composer.fill(userText);
@@ -256,28 +270,38 @@ test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間�
     // 「ガイド」が含まれたとき index がずれるため使わない)
     const excerpt =
       assistantText.split("\n")[0].trim().slice(0, 40) || assistantText.trim().slice(0, 40);
-    await expect(page.getByText(excerpt).last()).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText(excerpt).last()).toBeVisible({ timeout: 30_000 });
     const visibleAt = Date.now();
 
     // TTS は応答描画後に非同期で走る (Layout が応答全文を text にして呼ぶ)。
     // 欠落・失敗は warn (200 + audio/wav の保証は consultation-scenario / golden-path hop5 が担当)
-    const tts = await waitForTtsOf(ttsRecords, assistantText, 120_000);
+    const tts = await waitForTtsOf(ttsRecords, assistantText, ttsTimeoutMs);
 
-    const warnings: string[] = [];
+    const warnings: ProbeWarning[] = [];
     const sendToReplyVisibleMs = visibleAt - sentAt;
     if (sendToReplyVisibleMs > WARN_REPLY_VISIBLE_MS) {
-      warnings.push(
-        `send→reply表示 ${sendToReplyVisibleMs}ms > 閾値 ${WARN_REPLY_VISIBLE_MS}ms (#120)`,
-      );
+      warnings.push({
+        category: "latency",
+        message: `send→reply表示 ${sendToReplyVisibleMs}ms > 閾値 ${WARN_REPLY_VISIBLE_MS}ms (#120)`,
+      });
     }
     const ttsSynthMs = tts?.responseAt !== undefined ? tts.responseAt - tts.requestAt : null;
     if (ttsSynthMs !== null && ttsSynthMs > WARN_TTS_SYNTH_MS) {
-      warnings.push(`TTS合成 ${ttsSynthMs}ms > 閾値 ${WARN_TTS_SYNTH_MS}ms (#120)`);
+      warnings.push({
+        category: "latency",
+        message: `TTS合成 ${ttsSynthMs}ms > 閾値 ${WARN_TTS_SYNTH_MS}ms (#120)`,
+      });
     }
     if (tts === undefined) {
-      warnings.push("TTS 応答を 120s 以内に観測できず (レイテンシ計測は欠測)");
+      warnings.push({
+        category: "functional",
+        message: `TTS 応答を ${ttsTimeoutMs / 1000}s 以内に観測できず (レイテンシ計測は欠測)`,
+      });
     } else if (tts.status !== 200) {
-      warnings.push(`TTS status ${tts.status} (200 以外 — 音声なしの体験になっている)`);
+      warnings.push({
+        category: "functional",
+        message: `TTS status ${tts.status} (200 以外 — 音声なしの体験になっている)`,
+      });
     }
 
     record.turns.push({

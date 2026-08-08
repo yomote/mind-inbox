@@ -115,7 +115,7 @@ jobs:
                   f"| {tts} | {len(t['warnings'])} |"
               )
               for w in t["warnings"]:
-                  print(f"::warning title=UX probe turn {t['index']}::{w}")
+                  print(f"::warning title=UX probe turn {t['index']} ({w['category']})::{w['message']}")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
               f.write("\n".join(lines) + "\n")
           print(f"summary written for {files[-1]}")

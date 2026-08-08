@@ -78,11 +78,15 @@
 
 ### U6 — レイテンシ (機械判定)
 
-記録 JSON の `turns[].warnings` と `timings` から**機械的に**付ける。主観を混ぜない。
+記録 JSON の `turns[].warnings` のうち **`category: "latency"` のみ**を数えて機械的に付ける。
+主観を混ぜない。`category: "functional"` (TTS 未観測 / status ≠ 200 等) は速度ではなく機能の
+障害なので U6 に**数えない** — その turn のレイテンシは欠測として扱う。
 
-- 0: レイテンシ warning が過半の turn にある、または欠測 (TTS 未観測等) が複数
-- 1: warning が 1 turn 以下
-- 2: 全 turn が閾値内 (warnings 空)
+- 0: latency warning が過半の turn にある
+- 1: latency warning が 1 turn 以下
+- 2: 全 turn で latency warning なし
+- UNKNOWN: functional warning による欠測 turn が複数あり、レイテンシを判定する材料がない
+  (functional の障害自体はスコアではなく UNKNOWN 一覧/レポート本文で PO に報告する)
 
 閾値そのものはプローブ側 (`apps/frontend/e2e-live/ux-probe.spec.ts` の thresholds、記録 JSON に
 埋め込まれる) が真実。#120 の正式な目標値が決まったらそちらを更新する。

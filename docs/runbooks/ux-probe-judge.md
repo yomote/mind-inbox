@@ -50,9 +50,13 @@
 5. トレンドを見る (蓄積コメントから JSON を抽出):
 
    ````bash
-   gh api repos/yomote/mind-inbox/issues/127/comments --paginate -q '.[].body' \
-     | awk '/^```json/{f=1;next}/^```/{f=0}f' \
-     | python3 -c "import sys,json; [print(d['scoredAt'],d['scenarioId'],f\"{d['total']}/{d['max']}\",d['verdict']) for d in map(json.loads,sys.stdin.read().split('\n\n')) ]" 2>/dev/null || true
+   # コメント本文から ```json ブロックを正規表現で切り出し (行区切りに依存しない)、
+   # ux-judge-score のみを 1 行 1 採点で出す
+   gh api repos/yomote/mind-inbox/issues/127/comments --paginate \
+     | jq -r '.[].body
+         | try (capture("(?s)```json\\s*(?<j>.*?)```").j | fromjson)
+         | select(.kind == "ux-judge-score")
+         | "\(.scoredAt)\t\(.scenarioId)\t\(.total)/\(.max)\t\(.verdict)\tUNKNOWN:\(.unknowns | length)"'
    ````
 
    (集計が育ったら M3 で可視化を整える — 現状は目視で足りる件数)
