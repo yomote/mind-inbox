@@ -40,10 +40,10 @@ HTML 1 枚 (Artifact で公開)。作成前に artifact-design skill を読む�
 
 ### Step 4 — 音声合成 (VOICEVOX)
 
-1. `cicd/scripts/local-voicevox/start-voicevox.sh` でローカル engine を起動 (docker。**イメージ pull のディスク残量に注意** — 足りなければ先に不要物を削除)
-2. スライドごとに `/audio_query` → `/synthesis` で WAV 生成
+1. `cicd/scripts/local-voicevox/start-voicevox.sh` でローカル engine を起動 (docker。daemon が落ちていれば `dockerd` を起動する。**イメージ pull のディスク残量とネットワークポリシーに注意** — 取得できない場合は Step 5 のフォールバックへ)
+2. スライドごとに `/audio_query` → `/synthesis` で WAV 生成。**`speedScale` は 1.5 を既定にする** (briefing #1 で PO が「1.5 倍が聞きやすい」と評価)
 3. 圧縮: ffmpeg があれば opus/mp3 化 (無ければ `apt-get install -y ffmpeg` を試す)。合計が Artifact の 16MB 制限に収まること。収まらなければ原稿を短くする (音質を落とすより先に)
-4. data URI で `<audio>` に埋め込み
+4. data URI で `<audio>` に埋め込み。**埋め込み後は必ず JS の構文チェックと機能確認をする** — briefing #1 で、プレイヤー差し替えの正規表現置換がスライド送り関数 `show()` ごと巻き込んで削除し、ページングが壊れた実績あり (音声部分だけ見て公開しない)
 5. **フォールバック**: engine が使えない環境では、ブラウザの speechSynthesis で原稿を読み上げる「▶ (ブラウザ読み上げ)」ボタンに切り替える。「音声なしで公開」はしない (聞き流し要件が PO 決定のため)
 
 ### Step 5 — 開催 (プレゼンター進行)
