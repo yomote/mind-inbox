@@ -1,6 +1,6 @@
 # 0023. 音声入力の精度・長時間対応のためサーバー STT に Azure Speech (F0) を採用し、Web Speech をフォールバックに残す
 
-- Status: Proposed
+- Status: Accepted (briefing #1, 2026-08-08)
 - Date: 2026-08-08
 - Deciders: user (PO 決定: Issue #121 2026-08-08 コメント), 実装セッション (起案)
 - Consulted: —

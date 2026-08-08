@@ -28,11 +28,12 @@ description: 節目の成果を音声ナレーション付きスライド + 対�
 
 ### Step 2 — スライド作成
 
-HTML 1 枚 (Artifact で公開)。作成前に artifact-design skill を読む。
+**`assets/deck-template.html` をコピーして中身を書き換える** (雛形にはスライド送り・音声プレイヤー・テーマ対応・音声の差し込み口が入っている)。装飾を変える前に artifact-design skill を読む。
 
 - 1 論点 = 1 スライド。構成の基本: ①今回の全体像 → ②〜⑧各論点 (何を作った / なぜ / 動くもの・証拠) → ⑨PO 判断事項 → ⑩次の一手
-- 各スライドに: 図解 or スクショ (文字の壁にしない) / ▶ 音声プレイヤー / スライド送り (ボタン + キーボード)
-- 比較表・mermaid は debrief と同じ流儀で
+- 各スライドに図解 or スクショを置く (文字の壁にしない)。比較表・mermaid は debrief と同じ流儀で
+- `data-n` とナレーション原稿の `<p id="sN">` はスライド番号で対応させる
+- **`<script>` 内の進行ロジックは触らない** — 意匠は CSS と本文で変える
 
 ### Step 3 — ナレーション原稿
 
@@ -40,11 +41,13 @@ HTML 1 枚 (Artifact で公開)。作成前に artifact-design skill を読む�
 
 ### Step 4 — 音声合成 (VOICEVOX)
 
-1. `cicd/scripts/local-voicevox/start-voicevox.sh` でローカル engine を起動 (docker。**イメージ pull のディスク残量に注意** — 足りなければ先に不要物を削除)
-2. スライドごとに `/audio_query` → `/synthesis` で WAV 生成
-3. 圧縮: ffmpeg があれば opus/mp3 化 (無ければ `apt-get install -y ffmpeg` を試す)。合計が Artifact の 16MB 制限に収まること。収まらなければ原稿を短くする (音質を落とすより先に)
-4. data URI で `<audio>` に埋め込み
-5. **フォールバック**: engine が使えない環境では、ブラウザの speechSynthesis で原稿を読み上げる「▶ (ブラウザ読み上げ)」ボタンに切り替える。「音声なしで公開」はしない (聞き流し要件が PO 決定のため)
+同梱スクリプトを使う (毎回書き直さない — briefing #1 で書き直しがページングを壊したため)。
+
+1. **engine 起動**: `cicd/scripts/local-voicevox/start-voicevox.sh` (docker。daemon が落ちていれば `dockerd` を起動。**イメージ pull のディスク残量とネットワークポリシーに注意** — 取得できなければ 5 のフォールバックへ)
+2. **原稿を `scripts.json`** に書く: `{"1": "1 枚目の原稿", "2": "..."}` (キー = スライド番号)
+3. **合成**: `python3 .claude/skills/briefing/scripts/synthesize.py scripts.json <out_dir>` — ずんだもん・`speedScale` 1.5 (PO 評価)・mp3 40kbps で `b64.json` を吐く。ffmpeg が無ければ `apt-get install -y ffmpeg`
+4. **埋め込み**: `python3 .claude/skills/briefing/scripts/embed_audio.py <deck>.html <out_dir>/b64.json scripts.json` — マーカーに差し込み、**進行ロジックの存在と JS 構文を自動検証**する。エラーが出たら公開しない
+5. **フォールバック**: engine が使えない場合は音声を埋め込まずに公開してよい (雛形が自動でブラウザ読み上げに切り替わる)。ただし PO にその旨を伝え、原因を needs-human Issue に積む。「音声なしで公開」はしない (聞き流し要件が PO 決定のため)
 
 ### Step 5 — 開催 (プレゼンター進行)
 
