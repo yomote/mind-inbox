@@ -97,6 +97,13 @@ param enableOpenAi bool = false
 @description('Azure region for Azure OpenAI (e.g. japaneast, eastus, swedencentral).')
 param openAiLocation string = functionLocation
 
+// -------------------- Azure Speech (ADR 0022) --------------------
+@description('Enable Azure Speech (server STT, F0 無料枠から — ADR 0022)。')
+param enableSpeech bool = false
+
+@description('Azure region for the Speech service.')
+param speechLocation string = functionLocation
+
 // -------------------- AI Agent Container App --------------------
 // NOTE: ACR は廃止（#67 / ADR 0013）。image は ghcr に事前ビルド（build-images.yml）。
 @description('Enable AI Agent on Azure Container Apps.')
@@ -146,6 +153,8 @@ module infra '../modules/bootstrap-core.bicep' = {
     autoCreateStaticSiteEntraAppRegistration: false
     enableOpenAi: enableOpenAi
     openAiLocation: openAiLocation
+    enableSpeech: enableSpeech
+    speechLocation: speechLocation
     enableAiAgentAca: enableAiAgentAca
     enableVoicevoxWrapperAca: enableVoicevoxWrapperAca
     enableSql: enableSql
@@ -172,6 +181,9 @@ output staticSiteEntraAppAutoCreated bool = infra.outputs.staticSiteEntraAppAuto
 output staticSiteEntraAppObjectId string = infra.outputs.staticSiteEntraAppObjectId
 output voicevoxContainerAppName string = infra.outputs.voicevoxContainerAppName
 output voicevoxBaseUrl string = infra.outputs.voicevoxBaseUrl
+output speechEnabled bool = infra.outputs.speechEnabled
+output speechAccountName string = infra.outputs.speechAccountName
+output speechRegion string = infra.outputs.speechRegion
 output openAiEnabled bool = infra.outputs.openAiEnabled
 output openAiEndpoint string = infra.outputs.openAiEndpoint
 output openAiAccountName string = infra.outputs.openAiAccountName
