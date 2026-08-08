@@ -1,0 +1,11 @@
+# 設計 docs archive
+
+役目を終えた計画書を退避する場所。**現行の方針をここから読まないこと** — 実装当時のスナップショットであり、後の ADR で覆されている記述を含む。
+
+現行の真実: [`docs/design/`](../) 直下 (要件 / ユースケース / ドメインモデル / v2 実装計画) と [`docs/adr/`](../../adr/README.md)。
+
+| ファイル                                                 | 何だったか                                                      | なぜ archive したか                                                                                                                                                                                                                                                                                                          |
+| -------------------------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`implementation_plan.md`](implementation_plan.md)       | PoC (話す→整理→プラン) の実装計画                               | PoC 完了                                                                                                                                                                                                                                                                                                                     |
+| [`implementation_plan_v1.md`](implementation_plan_v1.md) | v1 (Problem 中心 2層モデル) の実装計画                          | v1 完了 ([`implementation_plan_v2.md`](../implementation_plan_v2.md) が後継)                                                                                                                                                                                                                                                 |
+| [`deploy_plan.md`](deploy_plan.md)                       | PoC 期のデプロイ計画 (ACR ×2 / SQL Private Endpoint / GPU 前提) | [ADR 0013](../../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) (ghcr 移行・ACR 撤去・SQL 既定オフ) と [ADR 0010](../../adr/0010-voicevox-cpu-gpu-deploy-tier.md) (既定 cpu) で全面失効。現行は [ADR 0013](../../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) + [Runbook](../../runbooks/ghcr-images.md) |

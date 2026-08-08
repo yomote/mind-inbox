@@ -6,7 +6,7 @@ status: implemented
 owner: frontend
 ---
 
-import { OnboardingSpecPreview } from '../../../frontend/src/spec/previews/OnboardingSpecPreview'
+import { OnboardingSpecPreview } from "../../../frontend/src/spec/previews/OnboardingSpecPreview";
 
 ## 起動画面 / オンボーディング
 
@@ -24,4 +24,14 @@ import { OnboardingSpecPreview } from '../../../frontend/src/spec/previews/Onboa
 
 ## 遷移
 
-- はじめる -> `home`
+- はじめる -> 認証済みなら `home` / 未認証 (認証有効ビルド) なら Entra サインイン → 戻りで `home`
+- 認証済みで `/` を開いた場合はこの画面を出さず `home` へリダイレクト
+
+## 認証との関係 (#112)
+
+- **未認証ユーザーが最初に見る画面はこのオンボーディングである。** ページ読み込みだけで
+  Entra へリダイレクトしてはならない
+- 認証が必要になるのは「はじめる」を押した時。ここで初めてサインインへ誘導する
+- したがって **認証確定前にデータ読み込み API (履歴等) を呼ばない**。API 呼び出しは
+  トークン取得を経由するため、未認証時に呼ぶとログインリダイレクトを誘発し、
+  この画面が表示されないまま Entra へ飛ばされる (#112 の事故クラス)

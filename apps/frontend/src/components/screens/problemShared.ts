@@ -1,4 +1,4 @@
-import type { Affect, ProblemStatus, Theme } from "../../mockApi";
+import type { Affect, ProblemStatus, Theme } from "../../api";
 
 /**
  * Problem / Mention 系画面の共有表示ヘルパ。

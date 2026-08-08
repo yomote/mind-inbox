@@ -3,7 +3,7 @@ import { Button, Link, Paper, Stack } from "@mui/material";
 import ReadmeDoc from "../../../docs/frontend/ui_specs/README.mdx";
 import OnboardingDoc from "../../../docs/frontend/ui_specs/onboarding.mdx";
 import HomeDoc from "../../../docs/frontend/ui_specs/home.mdx";
-import DialogueSessionDoc from "../../../docs/frontend/ui_specs/dialogue session.mdx";
+import DialogueSessionDoc from "../../../docs/frontend/ui_specs/dialogue-session.mdx";
 import ResultDoc from "../../../docs/frontend/ui_specs/result.mdx";
 import ActionPlanDoc from "../../../docs/frontend/ui_specs/action-plan.mdx";
 import HistoryDoc from "../../../docs/frontend/ui_specs/history.mdx";
@@ -65,8 +65,7 @@ const hrefToDocKey: Record<string, DocKey> = {
   "./README.mdx": "readme",
   "./onboarding.mdx": "onboarding",
   "./home.mdx": "home",
-  "./dialogue%20session.mdx": "dialogueSession",
-  "./dialogue session.mdx": "dialogueSession",
+  "./dialogue-session.mdx": "dialogueSession",
   "./result.mdx": "result",
   "./action-plan.mdx": "actionPlan",
   "./history.mdx": "history",

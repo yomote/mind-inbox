@@ -1,72 +1,18 @@
+// 型の真実は api/types.ts (Problem 系はさらに BFF の domain.ts)。
+// このファイルは mock 実装専業 — 型を export しない (ADR 0004 の「真実」はデータと挙動)。
 import type {
+  ActionPlan,
+  ChatMessage,
+  ConsultationSession,
   ExtractionResult,
+  HistoryItem,
   Mention,
+  OrganizedResult,
   Problem,
-  ProblemStatus,
+  ProblemFilter,
   Theme,
-  TriageAction,
-} from "../../bff/src/trpc/domain";
-
-export type {
-  Affect,
-  ExtractedItem,
-  ExtractionResult,
-  GroupingOutcome,
-  Mention,
-  Problem,
-  ProblemStatus,
-  Theme,
-  TriageAction,
-} from "../../bff/src/trpc/domain";
-
-export type Screen =
-  | "onboarding"
-  | "home"
-  | "specPreview"
-  | "session"
-  | "result"
-  | "actionPlan"
-  | "history"
-  | "settings"
-  | "paused"
-  | "crisisSupport"
-  | "extractReview"
-  | "problemList"
-  | "problemDetail";
-
-export type ChatRole = "user" | "assistant";
-
-export type ChatMessage = {
-  id: string;
-  role: ChatRole;
-  text: string;
-  createdAt: string;
-};
-
-export type ConsultationSession = {
-  id: string;
-  title: string;
-  messages: ChatMessage[];
-};
-
-export type OrganizedResult = {
-  summary: string;
-  emotions: string[];
-  priorities: string[];
-};
-
-export type ActionPlan = {
-  title: string;
-  steps: string[];
-};
-
-export type HistoryItem = {
-  id: string;
-  title: string;
-  createdAt: string;
-  result: OrganizedResult;
-  plan: ActionPlan;
-};
+  TriageInput,
+} from "./api/types";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -85,7 +31,7 @@ export async function startNewConsultation(concern: string): Promise<Consultatio
       {
         id: uid(),
         role: "assistant",
-        // 受け止めトーンの初手 (dialogue session.mdx「開始直後の挙動」)。BFF の EMPTY_START_OPENER と揃える。
+        // 受け止めトーンの初手 (dialogue-session.mdx「開始直後の挙動」)。BFF の EMPTY_START_OPENER と揃える。
         text: "今日はどんなことが気になっていますか?思いつくままで大丈夫です。",
         createdAt: nowText(),
       },
@@ -577,11 +523,6 @@ export async function extractMentions(sessionId: string): Promise<ExtractionResu
   };
 }
 
-export type ProblemFilter = {
-  theme?: Theme;
-  status?: ProblemStatus;
-};
-
 /** UC-02 一覧。既定は直近言及順。store のスナップショット（複製）を返す。 */
 export async function loadProblems(filter?: ProblemFilter): Promise<Problem[]> {
   await wait(250);
@@ -602,18 +543,6 @@ export async function loadProblem(id: string): Promise<Problem | null> {
   const found = getProblem(id);
   return found ? clone(found) : null;
 }
-
-export type TriageInput = {
-  action: TriageAction;
-  problemId: string;
-  /** editTheme 用 */
-  theme?: Theme;
-  /** editTitle 用 */
-  title?: string;
-  /** relink / merge 用（移動する Mention / 統合先 Problem） */
-  mentionId?: string;
-  targetProblemId?: string;
-};
 
 /**
  * 事後トリアージ（mock）。store を書き換えて更新後の Problem を返す。

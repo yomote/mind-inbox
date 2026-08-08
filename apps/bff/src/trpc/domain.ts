@@ -12,7 +12,33 @@
  * NOTE(Phase D): まだ router からは参照しない（mock 先行）。tRPC 手続きへの結線は Phase B。
  */
 import { z } from "zod";
-import { ActionPlanSchema } from "../repositories/historyRepository";
+
+// ---- 相談の整理結果 / プラン / 履歴 ------------------------------------------
+// もとは repositories/historyRepository.ts に居たが、ドメイン型が永続化実装と同居して
+// trpc/ ⇄ repositories/ の双方向依存を作っていたためここへ移動 (#138)。
+
+export const OrganizedResultSchema = z.object({
+  summary: z.string(),
+  emotions: z.array(z.string()),
+  priorities: z.array(z.string()),
+});
+
+export const ActionPlanSchema = z.object({
+  title: z.string(),
+  steps: z.array(z.string()),
+});
+
+export const HistoryItemSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  createdAt: z.string(),
+  result: OrganizedResultSchema,
+  plan: ActionPlanSchema,
+});
+
+export type OrganizedResult = z.infer<typeof OrganizedResultSchema>;
+export type ActionPlan = z.infer<typeof ActionPlanSchema>;
+export type HistoryItem = z.infer<typeof HistoryItemSchema>;
 
 // ---- Theme（主テーマ: ライフホイール由来の固定7分類 + 未分類）-------------------
 // domain_model.md §2.4。`未分類` はテーマというより「未確定状態 / 自動分類の逃げ場」。

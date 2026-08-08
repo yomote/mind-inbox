@@ -9,7 +9,7 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import type { OrganizedResult } from "../../mockApi";
+import type { OrganizedResult } from "../../api";
 
 type ResultScreenProps = {
   result: OrganizedResult;

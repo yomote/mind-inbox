@@ -1,6 +1,12 @@
 import { authEnabled, getAccessToken } from "../auth/msal";
 
 /**
+ * mock モード (VITE_USE_MOCK=true): BFF を呼ばず mockApi で自己完結するデモビルド (ADR 0004)。
+ * 判定はビルド時 (Vite の静的置換)。宣言はここ 1 箇所 — api 各モジュールはこれを import する。
+ */
+export const useMock = import.meta.env.VITE_USE_MOCK === "true";
+
+/**
  * BFF (Functions) への素の fetch を行うための共通ヘルパー。
  *
  * SWA Free には linked backend が無いため、フロントは **常に BFF のホストを前置**して
@@ -28,5 +34,41 @@ export async function ttsFetch(text: string, speaker: number): Promise<Response>
       ...(await bffAuthHeaders()),
     },
     body: JSON.stringify({ text, speaker }),
+  });
+}
+
+/**
+ * TTS 文単位プリフェッチ (BFF /api/tts prefetch=true / #120)。
+ * ストリーミング中に確定した文を BFF 側で先行合成・キャッシュさせる。音声は返らない (202/204)。
+ */
+export async function ttsPrefetchFetch(text: string, speaker: number): Promise<Response> {
+  return fetch(`${bffBaseUrl()}/api/tts`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await bffAuthHeaders()),
+    },
+    body: JSON.stringify({ text, speaker, prefetch: true }),
+  });
+}
+
+/** チャット応答の SSE ストリーミング (BFF /api/chat/stream / #120, ADR 0024)。 */
+export async function chatStreamFetch(sessionId: string, message: string): Promise<Response> {
+  return fetch(`${bffBaseUrl()}/api/chat/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+      ...(await bffAuthHeaders()),
+    },
+    body: JSON.stringify({ sessionId, message }),
+  });
+}
+
+/** scale-to-zero の下流を温める warmup ping (BFF /api/warmup / #120)。 */
+export async function warmupFetch(): Promise<Response> {
+  return fetch(`${bffBaseUrl()}/api/warmup`, {
+    method: "GET",
+    headers: await bffAuthHeaders(),
   });
 }

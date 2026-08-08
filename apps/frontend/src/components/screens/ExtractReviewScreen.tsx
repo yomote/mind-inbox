@@ -2,7 +2,7 @@ import { Box, Button, Chip, Divider, Paper, Stack, Typography } from "@mui/mater
 import AutoAwesomeRoundedIcon from "@mui/icons-material/AutoAwesomeRounded";
 import ReplayRoundedIcon from "@mui/icons-material/ReplayRounded";
 import LocalFireDepartmentRoundedIcon from "@mui/icons-material/LocalFireDepartmentRounded";
-import type { ExtractionResult } from "../../mockApi";
+import type { ExtractionResult } from "../../api";
 import { AFFECT_COLOR } from "./problemShared";
 
 type ExtractReviewScreenProps = {

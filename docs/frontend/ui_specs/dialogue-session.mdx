@@ -1,7 +1,7 @@
 ---
-id: chat-session
+id: dialogue-session
 title: 対話セッション画面
-route: /session/:sessionId
+route: /consultations/current
 status: implemented
 owner: frontend
 ---
@@ -39,7 +39,7 @@ import { SessionSpecPreview } from '../../../frontend/src/spec/previews/SessionS
 ### 3.1 開始直後の挙動
 
 - **AI が先に話しかける**。ユーザーが最初の発話を強いられる無言の画面を作らない
-- 空入力で開始した場合（new-consultation.mdx「空入力でも開始可能」）: AI の初手は
+- 空入力で開始した場合（home.mdx: テーマ入力なしで直接対話開始が既定 — #110 でテーマ入力画面は廃止）: AI の初手は
   「今日はどんなことが気になっていますか?思いつくままで大丈夫です。」
   — **受け止めトーン**とし、指示形・尋問調（「〜を1つ教えてください」の連発）にしない
 - 相談テーマを入力して開始した場合: そのテーマを最初のユーザー発話として扱い、AI の応答から始まる
@@ -74,6 +74,8 @@ import { SessionSpecPreview } from '../../../frontend/src/spec/previews/SessionS
 - 時系列でメッセージを表示
 - AI応答中は送信ボタンにローディングを表示
 - メッセージ本文は改行を保持して表示
+- **AI 応答はトークン逐次表示 (ストリーミング)**: 応答生成中は AI メッセージバブルが先に現れ、届いたテキストから順に伸びていく。生成中はバブル末尾にキャレット (▍) を表示する (#120)
+- ストリーミングが使えない環境 (BFF 旧版 / 通信断) では従来どおり全文一括表示にフォールバックする。逐次表示は強化であり、対話の成立に必須ではない
 
 ### 5.3 入力欄
 
@@ -125,7 +127,8 @@ import { SessionSpecPreview } from '../../../frontend/src/spec/previews/SessionS
 | --- | --- |
 | initial | 初期メッセージ表示直後 |
 | chatting | ユーザーとAIが対話中 |
-| ai-thinking | API待機中（loading=true） |
+| ai-thinking | API待機中（loading=true・初トークン到達前） |
+| ai-streaming | AI応答をトークン逐次表示中（loading=true のまま、バブルが伸びる） |
 | paused | 一時中断画面に遷移 |
 | crisis-support | 危機時サポート画面に遷移 |
 
@@ -172,6 +175,7 @@ import { SessionSpecPreview } from '../../../frontend/src/spec/previews/SessionS
 
 - 空文字では送信できない
 - 送信中は送信ボタンにローディング表示
+- AI 応答は届いたテキストから逐次表示される（全文生成を待たずにバブルが現れる）。ストリーミング不能時は全文一括表示で成立する
 - 危機時サポートボタンから危機時サポートへ遷移できる
 - 一時保存 / 中断ボタンから中断画面へ遷移できる
 - 困りごとを抽出ボタン（primary）で抽出結果レビューへ遷移できる

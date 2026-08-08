@@ -1,5 +1,5 @@
 import { Paper, Stack, Typography } from "@mui/material";
-import type { ConsultationSession } from "../../mockApi";
+import type { ConsultationSession } from "../../api";
 import { SessionComposer } from "./SessionComposer";
 import { SessionControls } from "./SessionControls";
 import { SessionMessages } from "./SessionMessages";

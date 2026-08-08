@@ -66,6 +66,8 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 
 ## 既存 ADR
 
+無印 = Accepted。それ以外は末尾に Status を明記する (一覧から Superseded / Proposed が読めるように)。
+
 - [0001](0001-bff-as-trpc-not-rest.md) — BFF を REST ではなく tRPC で書く
 - [0002](0002-container-apps-not-aks.md) — サービス基盤に AKS ではなく Container Apps (scale-to-zero) を選ぶ
 - [0003](0003-two-phase-bicep.md) — IaC を bootstrap → config の 2-phase Bicep に分ける
@@ -74,7 +76,7 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0006](0006-azure-access-via-device-code.md) — 開発・運用での Azure アクセスは device-code を主とする
 - [0007](0007-problem-centric-two-layer-domain-model.md) — 困りごとを Problem 集約とする 2層ドメインモデル (Mention → Problem)
 - [0008](0008-pr-review-via-cloud-routine.md) — PR レビューを Claude Code on the web の Routine で行う
-- [0009](0009-on-demand-cd-via-github-actions-oidc.md) — デプロイは GitHub Actions のオンデマンド CD（手動 up/down + 夜間 teardown, OIDC）で行う
+- [0009](0009-on-demand-cd-via-github-actions-oidc.md) — デプロイは GitHub Actions のオンデマンド CD（手動 up/down + 夜間 teardown, OIDC）で行う — **Superseded by 0013**
 - [0010](0010-voicevox-cpu-gpu-deploy-tier.md) — VOICEVOX を `voicevoxTier`(cpu/gpu) 単一スイッチで切替（既定 cpu）で up を高速・安価に
 - [0011](0011-github-projects-as-execution-dashboard.md) — GitHub Projects は実行状態のダッシュボードに徹し、設計の真実は docs に置く
 - [0012](0012-grouping-in-ai-agent-with-bff-supplied-candidates.md) — Mention のグルーピングは AI Agent が担い、BFF が既存 Problem 候補を渡す
@@ -89,5 +91,6 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0021](0021-parent-session-as-pm-orchestrator.md) — 親セッションを PM ハブにして、並行作業は子セッションへ分配する (hub-and-spoke)
 - [0022](0022-autonomous-ux-improvement-loop.md) — UX 品質は自律改善ループで維持する (観測・評価・改善を自動化、人間は基準定義と例外裁定)
 - [0023](0023-server-stt-azure-speech-f0.md) — 音声入力のサーバー STT に Azure Speech (F0・MI 認証) を採用し、Web Speech をフォールバックに残す
-- [0025](0025-deploy-container-images-by-immutable-sha-tag.md) — コンテナ image のデプロイは :latest ではなく不変 sha タグの解決 + 稼働検証で行う (#107)
-- [0026](0026-cd-watchdog-routine.md) — CD の赤は毎時の watchdog Routine が検知し、診断と fix PR まで無人で進める
+- [0024](0024-chat-streaming-via-sse-side-channel.md) — チャット応答の逐次表示は SSE サイドチャネル (`/api/chat/stream`) で通す — **Proposed**
+- [0025](0025-deploy-container-images-by-immutable-sha-tag.md) — コンテナ image のデプロイは :latest ではなく不変 sha タグの解決 + 稼働検証で行う (#107) — **Proposed**
+- [0026](0026-cd-watchdog-routine.md) — CD の赤は毎時の watchdog Routine が検知し、診断と fix PR まで無人で進める — **Proposed**

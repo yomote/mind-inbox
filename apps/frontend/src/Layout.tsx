@@ -86,7 +86,7 @@ function deriveSessionTitle(text: string): string {
   return oneLine.length > 18 ? `${oneLine.slice(0, 18)}…` : oneLine;
 }
 
-/** 実際に音を出した経路 (dialogue session.mdx §5.5)。 */
+/** 実際に音を出した経路 (dialogue-session.mdx §5.5)。 */
 type VoiceOutputMode = "idle" | "voicevox" | "browser-fallback";
 
 /**
@@ -125,7 +125,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const [voiceError, setVoiceError] = React.useState<string | null>(null);
   const [speaking, setSpeaking] = React.useState(false);
   // 実際に音を出した経路。'voicevox' 以外は劣化しており、UI と data 属性の両方に出す
-  // (dialogue session.mdx §5.5)。「WAV は 200 なのに別の声だった」を検知可能にする。
+  // (dialogue-session.mdx §5.5)。「WAV は 200 なのに別の声だった」を検知可能にする。
   const [voiceOutput, setVoiceOutput] = React.useState<VoiceOutputMode>("idle");
   const [ttsEnabled, setTtsEnabled] = React.useState(true);
 
@@ -163,12 +163,22 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
   const sttSupported = Boolean(speechRecognitionCtor);
 
+  // 履歴の初期読み込みは認証確定後に行う (#112 / onboarding.mdx)。
+  // 未認証で API を呼ぶと getAccessToken() がログインリダイレクトを誘発し、
+  // オンボーディングが表示されないまま Entra へ飛ばされる。
   React.useEffect(() => {
+    if (authStatus !== "authenticated") return;
+
+    let active = true;
     void (async () => {
       const data = await loadHistories();
-      setHistories(data);
+      if (active) setHistories(data);
     })();
-  }, []);
+
+    return () => {
+      active = false;
+    };
+  }, [authStatus]);
 
   React.useEffect(() => {
     let active = true;
@@ -276,7 +286,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
   // ブラウザ内蔵の音声合成で読み上げる（VOICEVOX が無い時のフォールバック / mock デモ用）。
   // degradedReason を渡した場合は「ずんだもん以外の声になった」ことを画面に出す
-  // (dialogue session.mdx §5.5: 無言で別の声に置き換えない)。
+  // (dialogue-session.mdx §5.5: 無言で別の声に置き換えない)。
   const speakWithBrowser = React.useCallback((text: string, degradedReason?: string) => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
       setSpeaking(false);
@@ -847,7 +857,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     isAuthenticated && currentRoute !== "onboarding" ? currentRoute : "onboarding";
 
   return (
-    // data-voice-output: 実際に音を出した経路 (dialogue session.mdx §5.5)。
+    // data-voice-output: 実際に音を出した経路 (dialogue-session.mdx §5.5)。
     // L4 live E2E が「ずんだもんで鳴ったか」を検証するための観測点 (#150)。
     <Box data-voice-output={voiceOutput} sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
       <AppBar

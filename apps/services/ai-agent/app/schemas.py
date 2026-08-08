@@ -19,6 +19,27 @@ class ChatResponse(BaseModel):
     citations: list[str] = []
 
 
+class ChatStreamDelta(BaseModel):
+    """/chat/stream の SSE イベント: 逐次トークン (#120)。"""
+
+    type: Literal["delta"] = "delta"
+    text: str
+
+
+class ChatStreamDone(BaseModel):
+    """/chat/stream の SSE イベント: 完了。従来 /chat と同一の ChatResponse を運ぶ。"""
+
+    type: Literal["done"] = "done"
+    response: ChatResponse
+
+
+class ChatStreamError(BaseModel):
+    """/chat/stream の SSE イベント: 途中失敗。クライアントは非ストリーミングへフォールバックする。"""
+
+    type: Literal["error"] = "error"
+    message: str
+
+
 class ApproveRequest(BaseModel):
     approval_request_id: str
     approved: bool

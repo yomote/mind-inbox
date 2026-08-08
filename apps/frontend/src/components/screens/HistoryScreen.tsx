@@ -1,5 +1,5 @@
 import { Button, Paper, Stack, Typography } from "@mui/material";
-import type { HistoryItem } from "../../mockApi";
+import type { HistoryItem } from "../../api";
 
 type HistoryScreenProps = {
   histories: HistoryItem[];

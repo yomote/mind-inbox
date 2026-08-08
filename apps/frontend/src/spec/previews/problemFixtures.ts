@@ -1,5 +1,5 @@
 import { seedProblems } from "../../mockApi";
-import type { Problem } from "../../mockApi";
+import type { Problem } from "../../api";
 
 /**
  * spec プレビュー用の固定 Problem 群。
