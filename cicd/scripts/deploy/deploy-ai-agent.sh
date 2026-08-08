@@ -6,7 +6,10 @@
 #
 # image は build-images.yml が main マージ時に ghcr へ push 済み（#67 / ADR 0013）。
 # このスクリプトはビルドしない（`az acr build` 廃止）: 既存タグを Container App に差し替えるだけ。
-# 既定は :latest。特定コミットに固定したい時は IMAGE_TAG=sha-<full-sha> を渡す。
+# **IMAGE_TAG=sha-<full-sha> の明示指定を推奨** (#107): 既定の :latest は既存 CA の更新で
+# 「同一 image 文字列の update = ARM 的に変更なし → 新 revision を作らない no-op」になり、
+# ghcr 側の latest が進んでいても反映されない。CD (deploy.yml) は build-images の
+# 直近成功 run から sha タグを自動解決して渡す。
 # ghcr の image は public 前提でプル（registry secret 不要）。公開手順: docs/runbooks/ghcr-images.md
 #
 # 前提: main-bootstrap が enableAiAgentAca=true でデプロイ済み / ghcr に ai-agent image が push 済み
@@ -28,6 +31,9 @@ need() {
   command -v "$1" >/dev/null 2>&1 || { echo "ERROR: missing command: $1" >&2; exit 1; }
 }
 need az
+
+# shellcheck source=lib/containerapp-image.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/containerapp-image.sh"
 
 # ── Resolve deployment outputs (single API call) ──────────────────────────────
 echo "=== Resolving deployment outputs ==="
@@ -91,6 +97,7 @@ if [[ -z "$CA_EXISTS" ]]; then
     --query 'properties.configuration.ingress.fqdn' -o tsv)"
 else
   echo "Updating Container App '$CA_NAME'..."
+  warn_if_noop_image_update "$RG" "$CA_NAME" "$IMAGE"
   # MI を system-assigned に（既に有効なら no-op）。OpenAI への RBAC アクセスに必要。
   az containerapp identity assign \
     --resource-group "$RG" \
