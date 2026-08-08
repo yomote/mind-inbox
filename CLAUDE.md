@@ -18,7 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### ドキュメント更新ルール
 
-正典: [`docs/documentation/strategy.md`](docs/documentation/strategy.md) の「真実の所在マトリクス」(§2) と「エージェントが間違えやすい点」(§7.3)。実装と並行して更新する (PR テンプレ `.github/PULL_REQUEST_TEMPLATE.md` でもチェックリストで要求される)。毎回効く 3 つ:
+正典: [`docs/documentation/strategy.md`](docs/documentation/strategy.md) の「真実の所在マトリクス」(§2) と「エージェントが間違えやすい点」(§7.2)。実装と並行して更新する (PR テンプレ `.github/PULL_REQUEST_TEMPLATE.md` でもチェックリストで要求される)。毎回効く 3 つ:
 
 - **アーキテクチャに関わる判断は ADR を先に書く** — `docs/adr/` に MADR 形式で。実装より前に。後から書くと意図が薄れる
 - **エージェント起案の ADR は `Status: Proposed` で入れる** — `Accepted` へ遷移させるのは user のみ (design-gate / debrief の場で)。Proposed の判断を前提に実装を進めてよいが、承認キューとして残す ([ADR 0014](docs/adr/0014-design-comprehension-gate-and-debrief.md))
