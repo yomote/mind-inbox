@@ -90,15 +90,39 @@ export type TtsSynthesisRequest = {
   speakerId?: number;
 };
 
+export type TtsPrefetchResult = {
+  /** "cached" = 1 文以上を合成/ヒット済み / "pending" = 確定文がまだ無い / "stub" = VOICEVOX 未構成 */
+  status: "cached" | "pending" | "stub";
+  /** 対象になった確定文の数 (観測用) */
+  sentences: number;
+};
+
 /**
- * 文単位プリフェッチ (フロントがストリーミング中に確定文を送ってくる)。
- * 合成してキャッシュに置くだけで音声は返さない。
+ * ストリーミング中の**途中経過テキスト**を受け取り、確定した文だけを先行合成する (#120)。
  *
- * @returns "cached" = 合成済み / "stub" = VOICEVOX 未構成
+ * **文分割の責務は BFF だけが持つ** (PR #132 レビュー対応)。フロントは「今まで届いた
+ * テキスト」をそのまま投げるだけで、どこが文の切れ目かを知らない。こうしないと
+ * フロントと BFF が同じ分割アルゴリズムを持つ必要があり、別デプロイ単位である両者が
+ * ズレた瞬間にキャッシュが全ミスして先行合成が静かに無効化される (ADR 0024 参照)。
+ *
+ * 末尾の 1 文は書きかけの可能性があるため合成しない — 途中の断片を合成すると
+ * 最終合成時にキャッシュに乗らず、無駄な往復になる。
  */
-export async function prefetchTts(req: TtsSynthesisRequest): Promise<"cached" | "stub"> {
-  const wav = await synthesizeCached(req.text, req.speakerId);
-  return wav === null ? "stub" : "cached";
+export async function prefetchTts(req: TtsSynthesisRequest): Promise<TtsPrefetchResult> {
+  const sentences = splitTtsSentences(req.text);
+  // 末尾は「まだ伸びるかもしれない文」。ストリーム終端は最終合成 (synthesizeTts) が拾う。
+  const completed = sentences.slice(0, -1);
+  if (completed.length === 0) {
+    return { status: "pending", sentences: 0 };
+  }
+
+  const wavs = await mapWithLimit(completed, SYNTH_CONCURRENCY, (sentence) =>
+    synthesizeCached(sentence, req.speakerId),
+  );
+  if (wavs.some((w) => w === null)) {
+    return { status: "stub", sentences: completed.length };
+  }
+  return { status: "cached", sentences: completed.length };
 }
 
 /**

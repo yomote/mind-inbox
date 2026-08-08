@@ -74,7 +74,9 @@ describe("[L2] sendMessage — ストリーミング経路", () => {
     expect(trpc.consultation.sendMessage.mutate).not.toHaveBeenCalled();
   });
 
-  it("文が確定するたび TTS プリフェッチを撃つ (分割は BFF と同一アルゴリズム)", async () => {
+  it("プリフェッチには途中経過テキストをそのまま渡す (文分割は BFF の責務)", async () => {
+    // 無いと: フロント側に文分割を持たせる実装へ逆戻りしても気づけない。フロントと BFF は
+    // 別デプロイ単位なので、分割が両側にあるとズレた瞬間にキャッシュ全ミスで先行合成が死ぬ
     vi.mocked(chatStreamFetch).mockResolvedValue(
       sseResponse([
         { type: "delta", text: "一つ目の文はこれです。二つ目" },
@@ -88,10 +90,13 @@ describe("[L2] sendMessage — ストリーミング経路", () => {
 
     await sendMessage("s1", "m");
 
-    // 確定した 1 文目だけがプリフェッチされる (末尾の書きかけ文は送らない)
-    expect(vi.mocked(ttsPrefetchFetch).mock.calls.map(([text]) => text)).toEqual([
-      "一つ目の文はこれです。",
-    ]);
+    const sentTexts = vi.mocked(ttsPrefetchFetch).mock.calls.map(([text]) => text);
+    // 送るのは「今までに届いた累積テキスト」— 文の切れ目で切ったものではない
+    expect(sentTexts.length).toBeGreaterThan(0);
+    for (const sent of sentTexts) {
+      expect("一つ目の文はこれです。二つ目の文はこちらです。").toContain(sent);
+    }
+    expect(sentTexts[0]).toBe("一つ目の文はこれです。二つ目");
   });
 
   it("ストリーム不可 (HTTP 404) は tRPC mutation にフォールバックする", async () => {

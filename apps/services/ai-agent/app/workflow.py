@@ -68,6 +68,46 @@ async def _get_or_create_session(
     return history
 
 
+def _is_retry_of_last_user_turn(history: ChatHistory, message: str) -> bool:
+    """直近の履歴末尾が「同一内容の user 発言」で終わっているか。
+
+    そうなるのは **アシスタント応答を返せずにターンが落ちた直後だけ** — 正常な
+    ターンは必ず assistant メッセージで終わるため、同じ文面を後から送り直しても
+    間に assistant が挟まる。つまりこの条件は「失敗したターンの再試行」を意味する。
+    """
+    for msg in reversed(history.messages):
+        if msg.role.value == "system":
+            # ツール結果などの system メッセージは判定に関係しないので読み飛ばす
+            continue
+        return msg.role.value == "user" and str(msg.content) == message
+    return False
+
+
+async def _append_user_message_once(
+    session_id: str,
+    message: str,
+    history: ChatHistory,
+    session_repo: SessionRepository,
+) -> None:
+    """ユーザー発言を履歴に 1 回だけ積む (#120 / ストリーミング失敗の再試行に対する冪等化)。
+
+    ストリーミング (`run_workflow_stream`) が RESPOND 中に落ちると、ユーザー発言は
+    保存済みなのに assistant 応答が無い状態で終わる。フロントはそれを検知して同じ
+    sessionId / message で非ストリーミング `/chat` に自動フォールバックするため、
+    素朴に add_user_message すると「assistant を挟まない同一 user ターンの重複」が
+    履歴に残る。Mind Inbox の核は累積履歴 (後続ターンの文脈解釈にも効く) なので、
+    再試行と判定できる場合は積み直さない。
+    """
+    if _is_retry_of_last_user_turn(history, message):
+        logger.info(
+            "Workflow[RECEIVE] session=%s — 直前の失敗ターンの再試行と判定、user メッセージの重複追加を抑止",
+            session_id,
+        )
+        return
+    history.add_user_message(message)
+    await session_repo.save(session_id, history)
+
+
 async def _classify(message: str, kernel: Kernel) -> dict:
     """LLM でメッセージを分類し、必要なツール・RAG 検索を判定する。"""
     prompt = f"""Analyze the user message and respond with JSON only. No markdown.
@@ -179,8 +219,7 @@ async def _prepare_respond(
     """RECEIVE → CLASSIFY → RETRIEVE_IF_NEEDED → PLAN → APPROVAL_IF_NEEDED → EXECUTE_TOOL。"""
     logger.info("Workflow[RECEIVE] session=%s", session_id)
     history = await _get_or_create_session(session_id, session_repo)
-    history.add_user_message(message)
-    await session_repo.save(session_id, history)
+    await _append_user_message_once(session_id, message, history, session_repo)
 
     logger.info("Workflow[CLASSIFY]")
     classification = await _classify(message, kernel)

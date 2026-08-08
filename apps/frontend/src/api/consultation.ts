@@ -1,14 +1,9 @@
 import * as mock from "../mockApi";
 import type { ActionPlan, ChatMessage, ConsultationSession, OrganizedResult } from "../mockApi";
-import { splitTtsSentences } from "../../../bff/src/audio/sentences";
 import { trpc } from "../trpc/client";
 import { chatStreamFetch, ttsPrefetchFetch } from "./http";
 import { parseSseJsonStream } from "./sse";
-import {
-  appendStreamingReply,
-  beginStreamingReply,
-  clearStreamingReply,
-} from "./streamingReply";
+import { appendStreamingReply, beginStreamingReply, clearStreamingReply } from "./streamingReply";
 
 const useMock = import.meta.env.VITE_USE_MOCK === "true";
 const voicevoxSpeaker = Number(import.meta.env.VITE_VOICEVOX_SPEAKER || "3");
@@ -50,7 +45,9 @@ function asChatStreamEvent(raw: unknown): ChatStreamEvent | null {
         response: {
           reply: response.reply,
           requires_approval:
-            typeof response.requires_approval === "boolean" ? response.requires_approval : undefined,
+            typeof response.requires_approval === "boolean"
+              ? response.requires_approval
+              : undefined,
           approval_request_id:
             typeof response.approval_request_id === "string" ? response.approval_request_id : null,
           citations: Array.isArray(response.citations)
@@ -61,26 +58,39 @@ function asChatStreamEvent(raw: unknown): ChatStreamEvent | null {
     }
   }
   if (event.type === "error") {
-    return { type: "error", message: typeof event.message === "string" ? event.message : "unknown" };
+    return {
+      type: "error",
+      message: typeof event.message === "string" ? event.message : "unknown",
+    };
   }
   return null;
 }
 
+/** プリフェッチ要求の最小間隔 (ms)。delta 毎に投げると往復が過剰になるため間引く。 */
+const PREFETCH_INTERVAL_MS = 400;
+
 /**
- * ストリーミング中に文が確定するたび、その文の TTS を BFF に先行合成させる (#120)。
- * 応答完了後の全文 TTS (Layout の自動読み上げ) が文キャッシュにヒットして速くなる。
- * 分割アルゴリズムは BFF と共有 (splitTtsSentences) — ここが揃わないとキャッシュが外れる。
+ * ストリーミングの途中経過テキストを BFF に渡し、確定した文を先行合成させる (#120)。
+ *
+ * **フロントは文の切れ目を判定しない** — 「今までに届いたテキスト」を丸ごと渡し、
+ * どこまでが確定文かは BFF (`prefetchTts`) が決める。フロントと BFF は別デプロイ
+ * 単位なので、両者が同じ分割アルゴリズムを持つと片方だけ再デプロイした瞬間に
+ * キャッシュが全ミスして先行合成が静かに無効化される (PR #132 レビュー / ADR 0024)。
+ * ここが時間間引きなのも同じ理由で、間引き方がズレても「往復が増減する」だけで
+ * キャッシュヒット率には影響しない。
  */
-function prefetchCompletedSentences(accumulated: string, alreadyPrefetched: number): number {
-  const sentences = splitTtsSentences(accumulated);
-  // 末尾の 1 文はまだ途中の可能性があるのでプリフェッチしない
-  const completed = sentences.length - 1;
-  for (let i = alreadyPrefetched; i < completed; i++) {
-    void ttsPrefetchFetch(sentences[i], voicevoxSpeaker).catch(() => {
+function createSentencePrefetcher() {
+  let lastSentAt = 0;
+
+  return (accumulated: string) => {
+    const now = Date.now();
+    if (now - lastSentAt < PREFETCH_INTERVAL_MS) return;
+    lastSentAt = now;
+
+    void ttsPrefetchFetch(accumulated, voicevoxSpeaker).catch(() => {
       // プリフェッチはベストエフォート — 失敗しても最終合成が普通に走る
     });
-  }
-  return Math.max(alreadyPrefetched, completed);
+  };
 }
 
 async function sendMessageStreaming(
@@ -96,7 +106,7 @@ async function sendMessageStreaming(
   beginStreamingReply(messageId);
 
   let accumulated = "";
-  let prefetchedSentences = 0;
+  const prefetchSentences = createSentencePrefetcher();
   let finalReply: string | null = null;
 
   for await (const raw of parseSseJsonStream(res.body)) {
@@ -105,7 +115,7 @@ async function sendMessageStreaming(
     if (event.type === "delta") {
       accumulated += event.text;
       appendStreamingReply(event.text);
-      prefetchedSentences = prefetchCompletedSentences(accumulated, prefetchedSentences);
+      prefetchSentences(accumulated);
     } else if (event.type === "done") {
       finalReply = event.response.reply;
     } else {

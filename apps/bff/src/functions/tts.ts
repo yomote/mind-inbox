@@ -37,14 +37,19 @@ async function ttsHandler(req: HttpRequest, context: InvocationContext): Promise
   }
 
   const { text, speaker, prefetch } = parsed.data;
-  context.log(`[tts] text(len)=${text.length} speaker=${speaker ?? 3} prefetch=${Boolean(prefetch)}`);
+  context.log(
+    `[tts] text(len)=${text.length} speaker=${speaker ?? 3} prefetch=${Boolean(prefetch)}`,
+  );
 
   try {
     if (prefetch) {
+      // text は「ストリーミングで今までに届いた途中経過」。どこが文の切れ目かの判断は
+      // BFF 側 (prefetchTts) が単独で持つ — フロントに分割ロジックを置かない (ADR 0024)。
       const result = await prefetchTts({ text, speakerId: speaker });
+      context.log(`[tts] prefetch status=${result.status} sentences=${result.sentences}`);
       // stub (VOICEVOX 未構成) でも 204 で返す — プリフェッチは fire-and-forget なので
       // フロントは結果を使わないが、区別できるようにはしておく。
-      return result === "stub" ? { status: 204 } : { status: 202 };
+      return result.status === "stub" ? { status: 204 } : { status: 202 };
     }
 
     const audio = await synthesizeTts({ text, speakerId: speaker });

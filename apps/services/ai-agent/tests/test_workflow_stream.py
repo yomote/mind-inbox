@@ -12,10 +12,11 @@
 
 import json
 
+import pytest
 from semantic_kernel.contents import ChatHistory
 
 from app.schemas import ChatStreamDelta, ChatStreamDone
-from app.workflow import run_workflow_stream
+from app.workflow import run_workflow, run_workflow_stream
 
 
 class FakeChatService:
@@ -31,6 +32,28 @@ class FakeChatService:
     async def get_streaming_chat_message_content(self, chat_history, settings):
         for chunk in self._stream_chunks:
             yield chunk
+
+
+class FailingStreamChatService(FakeChatService):
+    """RESPOND のストリーミング途中で落ちる chat service (実運用の接続断を模す)。
+
+    _classify (非ストリーミング) は分類 JSON を、_respond (非ストリーミング) は
+    通常の応答文を返す — フォールバック経路をそのまま流せるようにするため、
+    呼び出し内容 (分類プロンプトか否か) で返り値を切り替える。
+    """
+
+    CLASSIFY_MARKER = "Respond with this exact JSON structure"
+    FALLBACK_REPLY = "取り直した応答です。"
+
+    async def get_chat_message_content(self, chat_history, settings):
+        is_classify = any(
+            self.CLASSIFY_MARKER in str(m.content) for m in chat_history.messages
+        )
+        return json.dumps(self._classification) if is_classify else self.FALLBACK_REPLY
+
+    async def get_streaming_chat_message_content(self, chat_history, settings):
+        yield "途中まで"
+        raise RuntimeError("LLM connection lost")
 
 
 class FakeKernel:
@@ -76,6 +99,63 @@ class TestRunWorkflowStream:
         roles = [m.role.value for m in history.messages]
         assert roles[-2:] == ["user", "assistant"]
         assert str(history.messages[-1].content) == "それは大変でしたね。"
+
+    async def test_l1_streaming_failure_then_fallback_keeps_single_user_turn(
+        self, session_repo, approval_repo
+    ):
+        # 再現テスト (PR #132 レビュー major): ストリーミングが RESPOND 中に落ちると
+        # ユーザー発言だけが保存された状態で終わる。フロントは同一 sessionId / message で
+        # 非ストリーミング /chat に自動フォールバックするため、冪等化が無いと
+        # 「assistant を挟まない同一 user ターンの重複」が履歴に残り、累積履歴
+        # (プロダクトの核) と後続ターンの文脈解釈が壊れる。
+        message = "最近よく眠れていません。"
+        service = FailingStreamChatService(NO_TOOL, [])
+        kernel = FakeKernel(service)
+
+        # 1) ストリーミングが途中で失敗する
+        with pytest.raises(RuntimeError, match="LLM connection lost"):
+            await collect(
+                run_workflow_stream(
+                    "s-retry", message, session_repo, approval_repo, kernel
+                )
+            )
+
+        history_after_failure: ChatHistory = await session_repo.get("s-retry")
+        assert [str(m.content) for m in history_after_failure.messages].count(
+            message
+        ) == 1
+
+        # 2) フロントの自動フォールバック (同一 sessionId / message で非ストリーミング)
+        res = await run_workflow(
+            "s-retry", message, session_repo, approval_repo, kernel
+        )
+        assert res.reply == FailingStreamChatService.FALLBACK_REPLY
+
+        history: ChatHistory = await session_repo.get("s-retry")
+        contents = [str(m.content) for m in history.messages]
+        # ユーザー発言は 1 回だけ / 末尾は assistant 応答で閉じている
+        assert contents.count(message) == 1
+        assert history.messages[-1].role.value == "assistant"
+        assert contents[-1] == FailingStreamChatService.FALLBACK_REPLY
+
+    async def test_l1_same_message_after_completed_turn_is_appended_again(
+        self, session_repo, approval_repo
+    ):
+        # 冪等化のやり過ぎ防止: assistant 応答を挟んで同じ文面を送り直すのは
+        # 正当な再発言なので、履歴に 2 回積まれなければならない
+        # (無いと「同じ言葉を繰り返した」という事実が履歴から消える)
+        message = "やっぱり不安です。"
+        kernel = FakeKernel(FakeChatService(NO_TOOL, ["わかりました。"]))
+
+        await collect(
+            run_workflow_stream("s-dup", message, session_repo, approval_repo, kernel)
+        )
+        await collect(
+            run_workflow_stream("s-dup", message, session_repo, approval_repo, kernel)
+        )
+
+        history: ChatHistory = await session_repo.get("s-dup")
+        assert [str(m.content) for m in history.messages].count(message) == 2
 
     async def test_l1_side_effecting_tool_yields_done_only_with_approval(
         self, session_repo, approval_repo
