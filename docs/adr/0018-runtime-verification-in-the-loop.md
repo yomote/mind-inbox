@@ -1,6 +1,6 @@
 # 0018. 動作検証をループに組み込む — 実態の読み取り・PR への証跡・ローカルブラウザ検証
 
-- Status: Proposed
+- Status: Accepted (debrief #3, 2026-08-08)
 - Date: 2026-08-07
 - Deciders: omoteforlab
 - Consulted: —

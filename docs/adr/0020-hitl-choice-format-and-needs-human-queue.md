@@ -1,8 +1,8 @@
 # 0020. 人間の確認は選択肢形式で出し、人間宿題は needs-human キューに一元化する
 
-- Status: Proposed
+- Status: Accepted (debrief #3, 2026-08-08)
 - Date: 2026-08-07
-- Deciders: omoteforlab (承認待ち)
+- Deciders: omoteforlab
 - Consulted: —
 - Informed: —
 
