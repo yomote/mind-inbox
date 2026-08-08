@@ -639,21 +639,9 @@ uvicorn app.main:app --reload --port 8001
 
 ### 7.2 システムプロンプト改修
 
-現状の `workflow.py` は "inbox 管理用汎用 AI" 向けのプロンプト。以下に変更する。
+当初の `workflow.py` は "inbox 管理用汎用 AI" 向けのプロンプトだったため、「モヤモヤの言語化を助ける対話 AI」へ改修した (共感優先 / 3 文以内 / 問いかけを 1 つ含める)。
 
-```python
-CHAT_SYSTEM_PROMPT = """\
-あなたは「Mind Inbox」の対話 AI です。
-ユーザーが頭の中のモヤモヤや悩みを言語化できるよう、
-共感的かつ具体的な問いかけで対話を深めてください。
-
-応答ルール:
-- 返答は 3 文以内に収める
-- 評価・アドバイスはせず、まず気持ちに寄り添う
-- 具体的なエピソードや感情を引き出す問いかけを 1 つ含める
-- ユーザーと同じ言語（原則日本語）で答える
-"""
-```
+**文面はここに転記しない** — 真実は `apps/services/ai-agent/app/prompts/chat.py`。自律改善ループ (ADR 0022 / [ADR 0026](../adr/0026-ux-improvement-loop-ab-protocol-and-mutation-boundary.md)) がこのファイルを自動で書き換えるため、doc 側にコピーを置くと**改定のたびに静かに陳腐化する**。
 
 ### 7.3 `organizer.py` 設計方針
 

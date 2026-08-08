@@ -20,6 +20,7 @@ from semantic_kernel import Kernel
 from semantic_kernel.contents import ChatHistory
 
 from .kernel import get_execution_settings
+from .prompts import CHAT_SYSTEM_PROMPT
 from .rag import retrieve
 from .repositories import ApprovalRepository, SessionRepository
 from .schemas import (
@@ -32,18 +33,6 @@ from .schemas import (
 from .tools import execute_tool, is_side_effecting
 
 logger = logging.getLogger(__name__)
-
-CHAT_SYSTEM_PROMPT = """\
-あなたは「Mind Inbox」の対話 AI です。
-ユーザーが頭の中のモヤモヤや悩みを言語化できるよう、
-共感的かつ具体的な問いかけで対話を深めてください。
-
-応答ルール:
-- 返答は 3 文以内に収める
-- 評価・アドバイスはせず、まず気持ちに寄り添う
-- 具体的なエピソードや感情を引き出す問いかけを 1 つ含める
-- ユーザーと同じ言語（原則日本語）で答える
-"""
 
 
 class WorkflowState(str, Enum):
