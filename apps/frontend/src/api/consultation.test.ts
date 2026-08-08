@@ -26,7 +26,7 @@ vi.mock("./http", () => ({
 
 import { trpc } from "../trpc/client";
 import { chatStreamFetch, ttsPrefetchFetch } from "./http";
-import { sendMessage } from "./consultation";
+import { sendMessage, startNewConsultation } from "./consultation";
 import { clearStreamingReply, getStreamingReply } from "./streamingReply";
 
 function sseResponse(events: object[]): Response {
@@ -135,6 +135,28 @@ describe("[L2] sendMessage — ストリーミング経路", () => {
 
     expect(message.text).toBe("取り直した全文");
     // 中途半端な「途中」バブルが残らない
+    expect(getStreamingReply()).toBeNull();
+  });
+
+  it("新しい相談の開始で前セッションの途中経過を捨てる (幽霊バブル防止)", async () => {
+    // 無いと: ストアはモジュール global で「同じ id の最終メッセージが messages に
+    // 現れたら隠す」方式のため、セッションが変わると id が一致せず前セッションの応答が
+    // 新セッションに幽霊バブル (キャレット付き) として表示される。
+    // アプリ内遷移ではリロードが挟まらないので実際に踏む (ブラウザで再現確認済み)。
+    vi.mocked(chatStreamFetch).mockResolvedValue(
+      sseResponse([
+        { type: "delta", text: "前セッションの応答" },
+        { type: "done", response: { reply: "前セッションの応答" } },
+      ]),
+    );
+    await sendMessage("s1", "m");
+    expect(getStreamingReply()).not.toBeNull();
+
+    vi.mocked(trpc.consultation.start.mutate).mockResolvedValue({
+      session: { id: "s2", title: "相談セッション", messages: [] },
+    } as never);
+    await startNewConsultation("");
+
     expect(getStreamingReply()).toBeNull();
   });
 });

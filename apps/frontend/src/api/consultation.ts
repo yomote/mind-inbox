@@ -9,6 +9,11 @@ const useMock = import.meta.env.VITE_USE_MOCK === "true";
 const voicevoxSpeaker = Number(import.meta.env.VITE_VOICEVOX_SPEAKER || "3");
 
 export async function startNewConsultation(concern: string): Promise<ConsultationSession> {
+  // 直前セッションのストリーミング途中経過を必ず捨てる。ストアはモジュール global で
+  // 「最終メッセージと同じ id が messages に現れたら隠す」方式のため、セッションが
+  // 変わると id が一致しなくなり、前セッションの応答が新セッションに幽霊バブルとして
+  // 出てしまう (アプリ内遷移ではリロードが挟まらないので実際に踏む)。
+  clearStreamingReply();
   if (useMock) return mock.startNewConsultation(concern);
   const { session } = await trpc.consultation.start.mutate({ concern });
   return session;
