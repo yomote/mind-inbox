@@ -76,9 +76,22 @@ async function fakeEntraLogin(page: Page) {
   });
 
   // token は必ず authorize の後に呼ばれる (OAuth code flow の順序) ため、
-  // lastNonce はその時点で直前の authorize の値になっている
+  // lastNonce はその時点で直前の authorize の値になっている。
+  // 注意: route.fulfill は fetch の CORS 検査を免除しない (Playwright の仕様)。
+  // 実 Entra 同様に ACAO を返さないと、ブラウザが MSAL のトークン交換をブロックして
+  // handleRedirectPromise が失敗し「#code=... で止まる」(monitor run #5 の実落ち方)
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "*",
+  };
   await page.route("**/oauth2/v2.0/token", async (route) => {
+    if (route.request().method() === "OPTIONS") {
+      await route.fulfill({ status: 200, headers: corsHeaders });
+      return;
+    }
     await route.fulfill({
+      headers: corsHeaders,
       json: {
         token_type: "Bearer",
         scope: `api://${CLIENT_ID}/.default openid profile`,
@@ -93,6 +106,13 @@ async function fakeEntraLogin(page: Page) {
 }
 
 test("[L4] 相談 → 実AIの返事 → 実VOICEVOXの音声 まで デプロイ済み UI で通る", async ({ page }) => {
+  // 落ちたときの一次情報。CORS ブロック等はブラウザ console にしか出ず、
+  // CI では trace を開けないためログへ流しておく
+  page.on("console", (msg) => {
+    if (msg.type() === "error") console.log(`[browser:error] ${msg.text()}`);
+  });
+  page.on("pageerror", (err) => console.log(`[browser:pageerror] ${err.message}`));
+
   await fakeEntraLogin(page);
 
   // 実バンドルは未認証だと読み込み時にログインへリダイレクトされる
