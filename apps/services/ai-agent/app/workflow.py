@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import Optional, Union
 
 from semantic_kernel import Kernel
 from semantic_kernel.contents import ChatHistory
@@ -20,7 +22,13 @@ from semantic_kernel.contents import ChatHistory
 from .kernel import get_execution_settings
 from .rag import retrieve
 from .repositories import ApprovalRepository, SessionRepository
-from .schemas import ApprovalRecord, ChatResponse, Plan
+from .schemas import (
+    ApprovalRecord,
+    ChatResponse,
+    ChatStreamDelta,
+    ChatStreamDone,
+    Plan,
+)
 from .tools import execute_tool, is_side_effecting
 
 logger = logging.getLogger(__name__)
@@ -104,19 +112,24 @@ Respond with this exact JSON structure:
         }
 
 
+def _build_call_history(history: ChatHistory, rag_context: str) -> ChatHistory:
+    """RAG コンテキストがある場合だけ system メッセージを足した呼び出し用履歴を作る。"""
+    if not rag_context:
+        return history
+    call_history = ChatHistory()
+    for msg in history.messages:
+        call_history.messages.append(msg)
+    call_history.add_system_message(f"Relevant context:\n{rag_context}")
+    return call_history
+
+
 async def _respond(
     history: ChatHistory,
     kernel: Kernel,
     rag_context: str = "",
 ) -> str:
     """最終的なアシスタント返答を生成する。"""
-    if rag_context:
-        call_history = ChatHistory()
-        for msg in history.messages:
-            call_history.messages.append(msg)
-        call_history.add_system_message(f"Relevant context:\n{rag_context}")
-    else:
-        call_history = history
+    call_history = _build_call_history(history, rag_context)
 
     svc = kernel.get_service("chat")
     result = await svc.get_chat_message_content(
@@ -125,13 +138,45 @@ async def _respond(
     return str(result)
 
 
-async def run_workflow(
+async def _respond_stream(
+    history: ChatHistory,
+    kernel: Kernel,
+    rag_context: str = "",
+) -> AsyncIterator[str]:
+    """_respond のストリーミング版。トークン (チャンク) 文字列を逐次 yield する。"""
+    call_history = _build_call_history(history, rag_context)
+
+    svc = kernel.get_service("chat")
+    async for chunk in svc.get_streaming_chat_message_content(
+        chat_history=call_history, settings=get_execution_settings()
+    ):
+        text = str(chunk) if chunk is not None else ""
+        if text:
+            yield text
+
+
+@dataclass
+class _TurnPlan:
+    """RESPOND 直前までの共通前段 (RECEIVE〜EXECUTE_TOOL) の結果。
+
+    run_workflow (一括) と run_workflow_stream (SSE) が同じ状態遷移を共有する
+    ための内部表現。approval が入っている場合は RESPOND せずそれを返す。
+    """
+
+    history: ChatHistory
+    rag_context: str = ""
+    citations: list[str] = field(default_factory=list)
+    approval: Optional[ChatResponse] = None
+
+
+async def _prepare_respond(
     session_id: str,
     message: str,
     session_repo: SessionRepository,
     approval_repo: ApprovalRepository,
     kernel: Kernel,
-) -> ChatResponse:
+) -> _TurnPlan:
+    """RECEIVE → CLASSIFY → RETRIEVE_IF_NEEDED → PLAN → APPROVAL_IF_NEEDED → EXECUTE_TOOL。"""
     logger.info("Workflow[RECEIVE] session=%s", session_id)
     history = await _get_or_create_session(session_id, session_repo)
     history.add_user_message(message)
@@ -167,11 +212,16 @@ async def run_workflow(
             rag_context=rag_context,
         )
         await approval_repo.save(record)
-        return ChatResponse(
-            reply=f"「{tool_name}」を実行するには承認が必要です。実行してよろしいですか？",
-            requires_approval=True,
-            approval_request_id=record.id,
+        return _TurnPlan(
+            history=history,
+            rag_context=rag_context,
             citations=citations,
+            approval=ChatResponse(
+                reply=f"「{tool_name}」を実行するには承認が必要です。実行してよろしいですか？",
+                requires_approval=True,
+                approval_request_id=record.id,
+                citations=citations,
+            ),
         )
 
     if needs_tool:
@@ -184,11 +234,60 @@ async def run_workflow(
             history.add_system_message(f"Tool error: {exc}")
         await session_repo.save(session_id, history)
 
+    return _TurnPlan(history=history, rag_context=rag_context, citations=citations)
+
+
+async def run_workflow(
+    session_id: str,
+    message: str,
+    session_repo: SessionRepository,
+    approval_repo: ApprovalRepository,
+    kernel: Kernel,
+) -> ChatResponse:
+    plan = await _prepare_respond(
+        session_id, message, session_repo, approval_repo, kernel
+    )
+    if plan.approval is not None:
+        return plan.approval
+
     logger.info("Workflow[RESPOND]")
-    reply = await _respond(history, kernel, rag_context)
-    history.add_assistant_message(reply)
-    await session_repo.save(session_id, history)
-    return ChatResponse(reply=reply, citations=citations)
+    reply = await _respond(plan.history, kernel, plan.rag_context)
+    plan.history.add_assistant_message(reply)
+    await session_repo.save(session_id, plan.history)
+    return ChatResponse(reply=reply, citations=plan.citations)
+
+
+async def run_workflow_stream(
+    session_id: str,
+    message: str,
+    session_repo: SessionRepository,
+    approval_repo: ApprovalRepository,
+    kernel: Kernel,
+) -> AsyncIterator[Union[ChatStreamDelta, ChatStreamDone]]:
+    """run_workflow のストリーミング版 (#120 / ADR 0022)。
+
+    RESPOND だけを LLM ストリーミングで逐次 yield し、完了時に従来 /chat と
+    同一形の ChatResponse を ChatStreamDone で返す。承認が要るターンは
+    逐次配信するものが無いので done のみを返す。履歴保存は一括版と同じ
+    タイミング (全文確定後) で行う。
+    """
+    plan = await _prepare_respond(
+        session_id, message, session_repo, approval_repo, kernel
+    )
+    if plan.approval is not None:
+        yield ChatStreamDone(response=plan.approval)
+        return
+
+    logger.info("Workflow[RESPOND] streaming")
+    parts: list[str] = []
+    async for token in _respond_stream(plan.history, kernel, plan.rag_context):
+        parts.append(token)
+        yield ChatStreamDelta(text=token)
+
+    reply = "".join(parts)
+    plan.history.add_assistant_message(reply)
+    await session_repo.save(session_id, plan.history)
+    yield ChatStreamDone(response=ChatResponse(reply=reply, citations=plan.citations))
 
 
 async def resume_after_approval(
