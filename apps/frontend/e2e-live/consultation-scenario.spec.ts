@@ -157,10 +157,13 @@ test("[L4] 相談 → 実AIの返事 → 実VOICEVOXの音声 まで デプロ�
   await expect(page.getByText(/\[stub\]/)).toHaveCount(0);
 
   // 実 VOICEVOX: /api/tts が **実 BFF ホスト宛に** 呼ばれ、audio (WAV) が返ること。
-  // 相対 /api/tts に退行すると waitForResponse がタイムアウトして落ちる
+  // 相対 /api/tts に退行すると waitForResponse がタイムアウトして落ちる。
+  // 検証はステータス + Content-Type まで: 200 + audio/wav は BFF が実 wrapper から
+  // 音声を得た場合のみ返る (未結線 = 204 / wrapper 失敗 = 502)。バイト列の実体
+  // (RIFF マジック・サイズ) は curl 版 golden-path hop5 が毎回検証しており、
+  // ここで response.body() を読むとページ側の blob 消費と競合して 0 バイトになる
+  // (deploy run #93 の実落ち方 — status/headers の検証は競合しない)
   const tts = await ttsResponse;
   expect(tts.status(), "tts status").toBe(200);
-  const ttsBody = await tts.body();
-  expect(ttsBody.length, "tts body size").toBeGreaterThan(1000);
-  expect(ttsBody.subarray(0, 4).toString("ascii"), "WAV magic").toBe("RIFF");
+  expect(tts.headers()["content-type"] ?? "", "tts content-type").toContain("audio/wav");
 });
