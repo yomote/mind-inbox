@@ -36,14 +36,22 @@ export async function* parseSseJsonStream(
     }
   };
 
+  // CRLF は LF に正規化してから走査する (末尾に孤立した \r が残った場合は
+  // 次チャンクで \r\n が完成してから置換されるので取りこぼさない)。
+  const normalize = () => {
+    buffer = buffer.replace(/\r\n/g, "\n");
+  };
+
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
+      normalize();
       yield* drainEvents();
     }
     buffer += decoder.decode();
+    normalize();
     yield* drainEvents();
   } finally {
     reader.releaseLock();
