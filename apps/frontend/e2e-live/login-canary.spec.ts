@@ -19,9 +19,9 @@ test.skip(!LIVE_APP_URL, "LIVE_APP_URL が未設定 (実環境向けのみ実行
 test("[L4] 始める → Entra ログイン画面がエラーなしで表示される", async ({ page }) => {
   await page.goto("/");
 
-  // 認証ありビルドの初回はオンボーディング。「始める」で Entra へリダイレクトされる。
+  // 認証ありビルドの初回はオンボーディング。「はじめる」で Entra へリダイレクトされる。
   // リダイレクトが起きない = 認証無効ビルド (VITE_ENTRA_* 空) の出荷なので落とす
-  await page.getByRole("button", { name: "始める" }).click();
+  await page.getByRole("button", { name: "はじめる" }).click();
   await page.waitForURL(/login\.microsoftonline\.com/, { timeout: 60_000 });
 
   // AADSTS エラー画面 (アプリ登録破壊系) でなく、サインイン UI が出ていること
