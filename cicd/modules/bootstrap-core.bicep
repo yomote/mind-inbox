@@ -87,6 +87,21 @@ param functionAuthEntraClientId string = ''
 @description('Container Apps の認証の門 (ADR 0017) の audience となる Entra app client ID。BFF はこの audience の Managed Identity トークンを付けて下流を呼ぶ。空なら AUDIENCE 設定を出力しない (= BFF はトークンを付けず、門が立っていれば 401 になる)。')
 param containerAppsGateClientId string = ''
 
+// BFF → 下流の base URL。ai-agent / vv-wrap の Container App はこのテンプレート外
+// (デプロイスクリプト) で作られるため FQDN をここから参照できない。しかし appSettings は
+// 全置換なので、ここで宣言しないと毎デプロイで消え、deploy-backend.sh が再結線して
+// 収束するまでの数分間 BFF が stub 化する (対話が [stub]・tts が 204 = 2026-08-08 実障害)。
+// 既知の FQDN をパラメータで固定し、環境再作成等で変わった場合は deploy-backend.sh の
+// 再結線が上書きする (こちらが真実を追従する側)。
+// 注意: Container App 再作成で FQDN が変わった後に bicep を**単独適用**すると、
+// 古い FQDN が復活する (BFF は fetch 失敗で例外)。bicep 適用後は必ず
+// deploy-backend.sh を続けて実行すること (provision.sh 経由なら自動で連続実行される)。
+@description('BFF が呼ぶ ai-agent Container App の base URL。空なら設定しない (deploy-backend.sh の再結線に任せる)。')
+param aiAgentBaseUrl string = ''
+
+@description('BFF が呼ぶ voicevox-wrapper Container App の base URL (エンジン直ではなく wrapper)。空なら設定しない (deploy-backend.sh の再結線に任せる)。')
+param voicevoxWrapperBaseUrl string = ''
+
 @description('Entra tenant ID. 単一テナント限定 (この tenant の identity のみ許可)。')
 param functionAuthEntraTenantId string = tenant().tenantId
 
@@ -562,8 +577,8 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
           }
           // 注意: bicep の appSettings は**全置換**。ここに無い設定は再デプロイで消えるため、
           // 恒久設定は az で後付けせず必ずここで宣言する (#94/#107 と同族の教訓)。
-          // AI_AGENT_BASE_URL / VOICEVOX_BASE_URL だけは Container App の作成順序の都合で
-          // deploy-backend.sh が毎回再結線する。
+          // AI_AGENT_BASE_URL / VOICEVOX_BASE_URL もパラメータで宣言する (下記)。
+          // deploy-backend.sh の再結線は FQDN 変化への追従・フォールバックとして残る。
           appSettings: concat(
             [
               {
@@ -607,6 +622,23 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
                   {
                     name: 'VOICEVOX_AUDIENCE'
                     value: 'api://${containerAppsGateClientId}'
+                  }
+                ],
+            // 下流 base URL (パラメータ宣言の理由は param 定義箇所のコメント参照)
+            empty(aiAgentBaseUrl)
+              ? []
+              : [
+                  {
+                    name: 'AI_AGENT_BASE_URL'
+                    value: aiAgentBaseUrl
+                  }
+                ],
+            empty(voicevoxWrapperBaseUrl)
+              ? []
+              : [
+                  {
+                    name: 'VOICEVOX_BASE_URL'
+                    value: voicevoxWrapperBaseUrl
                   }
                 ]
           )
