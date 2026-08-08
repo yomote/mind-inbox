@@ -14,7 +14,7 @@ import {
   Typography,
 } from "@mui/material";
 import LocalFireDepartmentRoundedIcon from "@mui/icons-material/LocalFireDepartmentRounded";
-import type { Problem, Theme } from "../../mockApi";
+import type { Problem, Theme } from "../../api";
 import { STATUS_COLOR, STATUS_LABEL, THEME_OPTIONS, relativeDays } from "./problemShared";
 
 type SortKey = "recent" | "frequent";

@@ -17,6 +17,11 @@ describe("[L1] ttsFetch", () => {
   const fetchSpy = vi.fn(async () => new Response(null, { status: 200 }));
 
   beforeEach(() => {
+    // isolate:false では module registry がワーカー内で共有される。#137 以降 api 各モジュールが
+    // ./http を import するため、msal を mock しない他テストが先に走ると実 msal に束縛された
+    // http.ts がキャッシュされ、下の動的 import がそれを掴む (CI で実際に発生した順序依存 fail)。
+    // レジストリを破棄してから import し、vi.mock("../auth/msal") が必ず効く状態にする。
+    vi.resetModules();
     vi.stubGlobal("fetch", fetchSpy);
     vi.stubEnv("VITE_BFF_BASE_URL", "https://bff.example.com");
   });

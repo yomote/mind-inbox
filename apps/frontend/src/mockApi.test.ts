@@ -22,10 +22,8 @@ import {
   organizeResult,
   sendMessage,
   triageProblem,
-  type ActionPlan,
-  type HistoryItem,
-  type OrganizedResult,
 } from "./mockApi";
+import type { ActionPlan, HistoryItem, OrganizedResult } from "./api/types";
 // Problem 系の shape は domain.ts（BFF = 型の真実 / CLAUDE.md §8.3）の zod schema を
 // 直接 import して縛る。inline コピーだと .int()/.min(1) などランタイムバリデータの
 // 乖離をこのテストが検知できなくなる（PR #44 レビュー指摘）。

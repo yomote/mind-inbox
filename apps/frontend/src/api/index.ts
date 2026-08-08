@@ -15,23 +15,4 @@ export {
   createProblemPlan,
 } from "./problems";
 
-export type {
-  ActionPlan,
-  Affect,
-  ChatMessage,
-  ChatRole,
-  ConsultationSession,
-  ExtractedItem,
-  ExtractionResult,
-  GroupingOutcome,
-  HistoryItem,
-  Mention,
-  OrganizedResult,
-  Problem,
-  ProblemFilter,
-  ProblemStatus,
-  Screen,
-  Theme,
-  TriageAction,
-  TriageInput,
-} from "../mockApi";
+export type * from "./types";

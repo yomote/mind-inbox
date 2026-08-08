@@ -24,10 +24,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
-import {
-  ActionPlanSchema,
-  OrganizedResultSchema,
-} from "../src/repositories/historyRepository.ts";
+import { ActionPlanSchema, OrganizedResultSchema } from "../src/trpc/domain.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "../../..");

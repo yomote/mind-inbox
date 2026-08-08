@@ -6,11 +6,13 @@
 
 ## ファイル構成
 
-| ファイル        | 真実の所在                                     | 生成方法                                          | 関連 issue                                          |
-| --------------- | ---------------------------------------------- | ------------------------------------------------- | --------------------------------------------------- |
-| `bff-trpc.yaml` | `apps/bff/src/trpc/router.ts` の zod schema    | `npm run docs:openapi:bff` (router introspection) | [#8](https://github.com/yomote/mind-inbox/issues/8) |
-| `ai-agent.yaml` | `apps/services/ai-agent/app/main.py` (FastAPI) | `app.openapi()` を YAML 化                        | [#9](https://github.com/yomote/mind-inbox/issues/9) |
-| `voicevox.yaml` | `apps/services/voicevox/app/main.py` (FastAPI) | 同上                                              | [#9](https://github.com/yomote/mind-inbox/issues/9) |
+| ファイル        | 真実の所在                                  | 生成方法                                          | 関連 issue                                          |
+| --------------- | ------------------------------------------- | ------------------------------------------------- | --------------------------------------------------- |
+| `bff-trpc.yaml` | `apps/bff/src/trpc/router.ts` の zod schema | `npm run docs:openapi:bff` (router introspection) | [#8](https://github.com/yomote/mind-inbox/issues/8) |
+
+FastAPI 2 サービス (ai-agent / voicevox) の OpenAPI 生成は**未整備** ([#9](https://github.com/yomote/mind-inbox/issues/9) 未完)。
+`ai-agent.yaml` / `voicevox.yaml` はまだ存在せず、CI ゲートも無い。真実は各サービスの pydantic 実装
+(ai-agent は `app/schemas.py`) にある。#9 を実装するまでこの README に載せない。
 
 ### `bff-trpc.yaml` の生成方式
 
@@ -23,8 +25,8 @@
 
 ## 更新フロー
 
-1. 該当する router / FastAPI コードを変更
-2. ローカルで再生成 (例: `npm run docs:openapi:bff` / `make docs-openapi-python`)
+1. 該当する router のコードを変更
+2. ローカルで再生成 (`npm run docs:openapi:bff`)
 3. commit に含める
 4. CI が再度生成し `git diff --exit-code` で乖離をチェック
 

@@ -27,17 +27,17 @@
 
 ## 2. 真実の所在マトリクス
 
-| 領域                | 真実 (single source of truth)       | 派生物                                                 |
-| ------------------- | ----------------------------------- | ------------------------------------------------------ |
-| UI 仕様             | **MDX (`docs/frontend/ui_specs/`)** | preview コンポーネント / mockApi.ts / 実装             |
-| BFF API (tRPC)      | **TS の zod schema**                | OpenAPI (`docs/api/bff-trpc.yaml` 自動生成)            |
-| AI Agent / VOICEVOX | **FastAPI コード**                  | OpenAPI (`docs/api/{ai-agent,voicevox}.yaml` 自動生成) |
-| アーキテクチャ判断  | **ADR (`docs/adr/`)**               | CLAUDE.md 内のリンクのみ                               |
-| 運用手順            | **Runbook (`docs/runbooks/`)**      | (なし)                                                 |
-| 実行状態 (計画・進捗) | **GitHub Issues + Projects**      | docs へのリンクのみ (設計内容は board に書かない, ADR 0011) |
-| コンセプト          | `docs/concept_deck.md`              | (現状維持)                                             |
-| 基本設計            | `docs/design/`                      | (現状維持)                                             |
-| テスト戦略          | `docs/testing/strategy.md`          | (現状維持)                                             |
+| 領域                  | 真実 (single source of truth)       | 派生物                                                      |
+| --------------------- | ----------------------------------- | ----------------------------------------------------------- |
+| UI 仕様               | **MDX (`docs/frontend/ui_specs/`)** | preview コンポーネント / mockApi.ts / 実装                  |
+| BFF API (tRPC)        | **TS の zod schema**                | OpenAPI (`docs/api/bff-trpc.yaml` 自動生成)                 |
+| AI Agent / VOICEVOX   | **FastAPI コード (pydantic)**       | OpenAPI 生成は未整備 (#9 未完。生成物・CI ゲートとも無い)   |
+| アーキテクチャ判断    | **ADR (`docs/adr/`)**               | CLAUDE.md 内のリンクのみ                                    |
+| 運用手順              | **Runbook (`docs/runbooks/`)**      | (なし)                                                      |
+| 実行状態 (計画・進捗) | **GitHub Issues + Projects**        | docs へのリンクのみ (設計内容は board に書かない, ADR 0011) |
+| コンセプト            | `docs/concept_deck.md`              | (現状維持)                                                  |
+| 基本設計              | `docs/design/`                      | (現状維持)                                                  |
+| テスト戦略            | `docs/testing/strategy.md`          | (現状維持)                                                  |
 
 ### 乖離した時のルール
 
@@ -56,11 +56,9 @@
 docs/
   concept_deck.md       # コンセプト (現状維持)
   design/               # 基本設計・実装計画 (現状維持)
-  api/                  # ★ 新設 — 生成 OpenAPI を commit (手書き禁止)
+  api/                  # 生成 OpenAPI を commit (手書き禁止)
     README.md
-    bff-trpc.yaml       # CI 生成
-    ai-agent.yaml       # CI 生成
-    voicevox.yaml       # CI 生成
+    bff-trpc.yaml       # CI 生成 (FastAPI 2 サービス分は未整備 — #9)
   frontend/
     ui_specs/           # MDX UI 仕様 (現状維持、真実)
     ui_design.md        # (現状維持)
@@ -68,10 +66,10 @@ docs/
     README.md
     template.md
     NNNN-*.md           # 4 桁連番
-  runbooks/             # ★ 新設 — 運用手順
+  runbooks/             # 運用手順
     README.md
     template.md
-    deploy.md, rollback.md, ...
+    {name}.md           # 1 手順 = 1 ファイル
   documentation/        # この戦略
     strategy.md
   testing/
@@ -95,25 +93,20 @@ docs/
 
 ### 4.2 BFF tRPC OpenAPI
 
-| 項目     | 内容                                                      |
-| -------- | --------------------------------------------------------- |
-| 場所     | `docs/api/bff-trpc.yaml` (生成、commit 必須)              |
-| 真実か   | 派生 (真実は `apps/bff/src/trpc/router.ts` の zod schema) |
-| 生成方法 | `trpc-to-openapi` 等で router から YAML 出力スクリプト    |
-| 守り方   | CI で再生成 → `git diff --exit-code`                      |
-| いつ更新 | 自動 (zod 変更時に CI が再生成)                           |
-| 非ゴール | 手書き編集                                                |
+| 項目     | 内容                                                                                                                   |
+| -------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 場所     | `docs/api/bff-trpc.yaml` (生成、commit 必須)                                                                           |
+| 真実か   | 派生 (真実は `apps/bff/src/trpc/router.ts` の zod schema)                                                              |
+| 生成方法 | `apps/bff/scripts/generate-openapi.mjs` (router introspection。`trpc-to-openapi` は不使用 — `docs/api/README.md` 参照) |
+| 守り方   | CI で再生成 → `git diff --exit-code`                                                                                   |
+| いつ更新 | 自動 (zod 変更時に CI が再生成)                                                                                        |
+| 非ゴール | 手書き編集                                                                                                             |
 
 ### 4.3 FastAPI OpenAPI (AI Agent / VOICEVOX)
 
-| 項目     | 内容                                              |
-| -------- | ------------------------------------------------- |
-| 場所     | `docs/api/ai-agent.yaml` `docs/api/voicevox.yaml` |
-| 真実か   | 派生 (真実は FastAPI 実装)                        |
-| 生成方法 | `app.openapi()` の出力を YAML 化するスクリプト    |
-| 守り方   | CI で再生成 → diff fail                           |
-| いつ更新 | 自動                                              |
-| 非ゴール | 手書き編集                                        |
+**未整備** (#9 未完)。生成物 (`ai-agent.yaml` / `voicevox.yaml`)・生成スクリプト・CI ゲートのいずれも
+まだ存在しない。真実は FastAPI 実装 (ai-agent は `app/schemas.py` の pydantic) にあり、BFF との
+整合は L0 契約テスト (`apps/bff/scripts/contract-check.mjs`) が守っている。#9 を実装したらこの節を戻す。
 
 ### 4.4 ADR (Architecture Decision Records)
 
@@ -158,7 +151,7 @@ docs/
 | ドキュメント         | チェック                                                      |
 | -------------------- | ------------------------------------------------------------- |
 | OpenAPI (BFF)        | 再生成 → `git diff --exit-code docs/api/bff-trpc.yaml`        |
-| OpenAPI (FastAPI x2) | 同上                                                          |
+| OpenAPI (FastAPI x2) | 未整備 (#9) — CI ゲートはまだ無い                             |
 | MDX UI 仕様          | preview コンポーネントが TS コンパイル可 + 簡易 render テスト |
 | ADR                  | 番号衝突なし / template の必須セクションが揃う                |
 | Runbook              | リンク切れなし (markdownlint)                                 |

@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { Box, Paper, Stack, Typography } from "@mui/material";
-import type { ChatMessage } from "../../mockApi";
+import type { ChatMessage } from "../../api";
 import { getStreamingReply, subscribeStreamingReply } from "../../api/streamingReply";
 
 type SessionMessagesProps = {
@@ -26,10 +26,7 @@ export function SessionMessages({ messages }: SessionMessagesProps) {
           sx={{
             p: 1.5,
             borderRadius: 2,
-            bgcolor:
-              m.role === "assistant"
-                ? "background.default"
-                : "background.paper",
+            bgcolor: m.role === "assistant" ? "background.default" : "background.paper",
           }}
         >
           <Typography variant="caption" color="text.secondary">

@@ -7,7 +7,7 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import type { ActionPlan } from "../../mockApi";
+import type { ActionPlan } from "../../api";
 
 type ActionPlanScreenProps = {
   plan: ActionPlan;
