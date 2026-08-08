@@ -131,8 +131,26 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const consultation = useConsultation(transition, {
     ready: authStatus === "authenticated",
   });
-  const { speakOnce, reset: resetTts } = tts;
-  const { reset: resetConsultation } = consultation;
+  const { speakOnce, unlock, reset: resetTts, toggleEnabled: toggleTtsEnabled } = tts;
+  const { reset: resetConsultation, startConsultation, sendDraftMessage } = consultation;
+
+  // iOS は最初のユーザージェスチャ内で一度発話しておかないと、以降の自動読み上げが無音になる。
+  // 相談フロー (consultation) と読み上げ (tts) は互いを知らないので、「どのタップが音声の
+  // 起点になるか」を知っている Layout がここで束ねる (#141 のレビュー指摘: 分離で配線が消えた)。
+  const startConsultationWithAudio = React.useCallback(() => {
+    unlock();
+    return startConsultation();
+  }, [startConsultation, unlock]);
+
+  const sendDraftMessageWithAudio = React.useCallback(() => {
+    unlock();
+    return sendDraftMessage();
+  }, [sendDraftMessage, unlock]);
+
+  const toggleTtsEnabledWithAudio = React.useCallback(() => {
+    unlock();
+    toggleTtsEnabled();
+  }, [toggleTtsEnabled, unlock]);
 
   const handleLogin = React.useCallback(() => {
     if (isDev || authStatus === "authenticated") {
@@ -320,9 +338,9 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
                 transition={transition}
                 setDraftMessage={consultation.setDraftMessage}
                 handleLogin={handleLogin}
-                handleStartConsultation={consultation.startConsultation}
-                handleSendMessage={consultation.sendDraftMessage}
-                toggleTtsEnabled={tts.toggleEnabled}
+                handleStartConsultation={startConsultationWithAudio}
+                handleSendMessage={sendDraftMessageWithAudio}
+                toggleTtsEnabled={toggleTtsEnabledWithAudio}
                 stopSpeaking={tts.stop}
                 handleOrganize={consultation.organize}
                 handleExtract={consultation.extract}

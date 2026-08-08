@@ -183,6 +183,28 @@ describe("[L1] useTextToSpeech — 自動読み上げ (speakOnce)", () => {
     await waitFor(() => expect(vi.mocked(ttsFetch)).toHaveBeenCalledTimes(1));
   });
 
+  it("OFF の間に届いたメッセージは既読にせず、ON に戻したら読む", async () => {
+    // 無いと: 読み上げ OFF 中に届いた 1 件が「読み上げ済み」として消費され、
+    //         ON に戻してもその返事だけ永久に読まれない (PR #152 レビュー minor)
+    stubSpeechSynthesis();
+    vi.mocked(ttsFetch).mockResolvedValue(wavResponse());
+
+    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    act(() => result.current.toggleEnabled()); // OFF
+
+    await act(async () => {
+      result.current.speakOnce("m-1", "OFF 中に届いた返事");
+    });
+    expect(ttsFetch).not.toHaveBeenCalled();
+
+    act(() => result.current.toggleEnabled()); // ON に戻す
+    await act(async () => {
+      result.current.speakOnce("m-1", "OFF 中に届いた返事");
+    });
+
+    await waitFor(() => expect(vi.mocked(ttsFetch)).toHaveBeenCalledTimes(1));
+  });
+
   it("reset 後は同じ id をもう一度読み上げられる (ログアウト → 再ログイン)", async () => {
     // 無いと: ログアウトしても読み上げ済み id が残り、次のユーザーの最初の返事が読まれない
     stubSpeechSynthesis();

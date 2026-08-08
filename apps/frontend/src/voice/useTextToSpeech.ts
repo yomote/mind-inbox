@@ -196,6 +196,10 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
 
   const speakOnce = React.useCallback(
     (id: string, text: string) => {
+      // OFF の間に届いたメッセージは「既読」にしない。ここで消費してしまうと、
+      // ユーザーが読み上げを ON に戻してもその 1 件だけ永久に読まれない (旧実装は
+      // ttsEnabled の判定が呼び出し側の effect にあり id を消費しなかった)。
+      if (!enabledRef.current) return;
       if (lastSpokenIdRef.current === id) return;
       lastSpokenIdRef.current = id;
       void speak(text);
