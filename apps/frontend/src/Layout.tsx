@@ -137,12 +137,22 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
   const sttSupported = Boolean(speechRecognitionCtor);
 
+  // 履歴の初期読み込みは認証確定後に行う (#112 / onboarding.mdx)。
+  // 未認証で API を呼ぶと getAccessToken() がログインリダイレクトを誘発し、
+  // オンボーディングが表示されないまま Entra へ飛ばされる。
   React.useEffect(() => {
+    if (authStatus !== "authenticated") return;
+
+    let active = true;
     void (async () => {
       const data = await loadHistories();
-      setHistories(data);
+      if (active) setHistories(data);
     })();
-  }, []);
+
+    return () => {
+      active = false;
+    };
+  }, [authStatus]);
 
   React.useEffect(() => {
     let active = true;
