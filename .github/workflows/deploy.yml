@@ -165,6 +165,22 @@ jobs:
         run: |
           RG="$RG" DEPLOYMENT="$DEPLOYMENT" ./cicd/scripts/smoke-test/golden-path.sh
 
+      # UI 込みのシナリオテスト (L4 live E2E)。curl 版 golden-path.sh は API ホップの
+      # 切り分け用で、フロント↔BFF の結線破壊 (TTS のオリジン違い等, 2026-08-08 実事象)
+      # はここでしか捕まらない。実 UI (production ビルド) を Playwright で操作する。
+      - name: Golden path scenario（UI 込み E2E・実環境）
+        if: steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
+        run: |
+          OUTPUTS="$(az deployment group show -g "$RG" -n "$DEPLOYMENT" --query 'properties.outputs' -o json)"
+          FUNC_HOST="$(echo "$OUTPUTS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('functionAppDefaultHostname',{}).get('value',''))")"
+          SPA_ID="$(echo "$OUTPUTS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('functionAuthEntraClientId',{}).get('value',''))")"
+          export LIVE_BFF_URL="https://$FUNC_HOST"
+          export LIVE_BFF_TOKEN="$(az account get-access-token --scope "api://$SPA_ID/.default" --query accessToken -o tsv)"
+          cd apps/frontend
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+          pnpm run test:e2e:live
+
       - name: SWA URL を Actions サマリに出す
         # smoke が落ちても URL は出す（切り分けの手掛かりになるため）。
         if: always() && steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))

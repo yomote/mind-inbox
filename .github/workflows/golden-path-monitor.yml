@@ -48,7 +48,33 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Golden path（相談ユースケースの実測・実 AI）
+      - name: Golden path（API ホップ切り分け・実 AI）
         if: steps.guard.outputs.run == 'true'
         run: |
           RG="$RG" DEPLOYMENT="$DEPLOYMENT" ./cicd/scripts/smoke-test/golden-path.sh
+
+      - name: Setup Node 22
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        if: steps.guard.outputs.run == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      # UI 込みのシナリオテスト。フロント↔BFF の結線破壊はここでしか捕まらない
+      - name: Golden path scenario（UI 込み E2E・実環境）
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          OUTPUTS="$(az deployment group show -g "$RG" -n "$DEPLOYMENT" --query 'properties.outputs' -o json)"
+          FUNC_HOST="$(echo "$OUTPUTS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('functionAppDefaultHostname',{}).get('value',''))")"
+          SPA_ID="$(echo "$OUTPUTS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('functionAuthEntraClientId',{}).get('value',''))")"
+          export LIVE_BFF_URL="https://$FUNC_HOST"
+          export LIVE_BFF_TOKEN="$(az account get-access-token --scope "api://$SPA_ID/.default" --query accessToken -o tsv)"
+          cd apps/frontend
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+          pnpm run test:e2e:live

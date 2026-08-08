@@ -19,7 +19,7 @@ import AccountCircleRoundedIcon from "@mui/icons-material/AccountCircleRounded";
 import LogoutRoundedIcon from "@mui/icons-material/LogoutRounded";
 import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import { useLocation, useNavigate } from "react-router-dom";
-import { authEnabled, getAccount, initAuth, login, logout } from "./auth/msal";
+import { authEnabled, getAccessToken, getAccount, initAuth, login, logout } from "./auth/msal";
 import {
   createActionPlan,
   createProblemPlan,
@@ -228,9 +228,18 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
   const synthesizeWithVoicevox = React.useCallback(
     async (text: string): Promise<Blob> => {
-      const res = await fetch("/api/tts", {
+      // SWA Free には linked backend が無いので、tRPC と同じく BFF (Functions) を
+      // 直叩きする (#69)。相対 /api/tts のままだと SWA に投げて必ず失敗し、
+      // ブラウザ読み上げへ静かにフォールバックしていた (2026-08-08 実環境で発覚)。
+      // EasyAuth の門があるため tRPC 同様にアクセストークンも付ける。
+      const base = import.meta.env.VITE_BFF_BASE_URL ?? "";
+      const token = authEnabled ? await getAccessToken() : null;
+      const res = await fetch(`${base}/api/tts`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ text, speaker: voicevoxSpeaker }),
       });
 
