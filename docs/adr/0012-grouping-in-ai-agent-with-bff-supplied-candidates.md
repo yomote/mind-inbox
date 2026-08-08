@@ -46,5 +46,5 @@ Chosen option: **"Option A"**。`/extract` は `ExtractRequest{ session_id, exis
 ## Links
 
 - 関連 ADR: [0007](0007-problem-centric-two-layer-domain-model.md)（Problem 中心 2層 / 自動グルーピング + 事後トリアージ）
-- 実装: PR #57（Phase A `/extract`） / [implementation_plan_v1 §3](../design/implementation_plan_v1.md)
+- 実装: PR #57（Phase A `/extract`） / [implementation_plan_v1 §3](../design/archive/implementation_plan_v1.md)
 - 契約: `apps/bff/src/trpc/domain.ts`（`ExtractionResult` / `GroupingOutcome`）

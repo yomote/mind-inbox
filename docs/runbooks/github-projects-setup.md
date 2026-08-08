@@ -24,11 +24,11 @@ Mind Inbox の実行状態 (今どこまで進み・次に何をやり・どの�
 
 既定の `Title` / `Assignees` / `Labels` / `Linked pull requests` に加え、**3 つだけ**追加する。これ以上増やさない。
 
-| フィールド | 型 | 選択肢 | 用途 |
-| --- | --- | --- | --- |
-| `Status` | Single select (既定) | `Backlog` / `Next` / `In progress` / `In review` / `Done` | 実行状態。PR と自動連動 |
-| `Phase` | Single select | `D (done)` / `A: AI Agent` / `B: BFF` / `C: 結線` | `implementation_plan_v1` の Phase と **1:1**。doc ロードマップとの唯一の接続点 |
-| `Area` | Single select | `frontend` / `bff` / `ai-agent` / `voicevox` / `infra` / `docs` | 並行セッションの担当領域の衝突可視化。既存ラベルと対応 |
+| フィールド | 型                   | 選択肢                                                          | 用途                                                                           |
+| ---------- | -------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `Status`   | Single select (既定) | `Backlog` / `Next` / `In progress` / `In review` / `Done`       | 実行状態。PR と自動連動                                                        |
+| `Phase`    | Single select        | `D (done)` / `A: AI Agent` / `B: BFF` / `C: 結線`               | `implementation_plan_v1` の Phase と **1:1**。doc ロードマップとの唯一の接続点 |
+| `Area`     | Single select        | `frontend` / `bff` / `ai-agent` / `voicevox` / `infra` / `docs` | 並行セッションの担当領域の衝突可視化。既存ラベルと対応                         |
 
 - `Status` の選択肢は上記 5 つに揃える (Built-in Workflow がこの名前を参照する)。
 - `Phase` の選択肢は `implementation_plan_v1` の Phase 見出しと**文言も個数も 1:1**にする (ADR 0011)。Phase が増えたら **doc を直してから**選択肢を足す。
@@ -57,12 +57,12 @@ Project → **Settings → Workflows** で以下を有効化 (手で Status を�
 
 board と同じ Issue データから GitHub が自動でチャートを起こす。**追加のデータ源は作らない** (スナップショット HTML を別途持たない — ADR 0011 の「真実は 1 か所」)。Project 上部の **`Insights` タブ**で、以下のチャートを保存する:
 
-| チャート | 種類 | Group by | 見たいこと |
-| --- | --- | --- | --- |
-| `詰まり具合` | Column / Pie | `Status` | Backlog〜Done の分布。In review に滞留していないか |
-| `ロードマップ消化` | Column | `Phase` | どの Phase が残っているか (doc の Phase と対応) |
-| `領域の偏り` | Column | `Area` | frontend / bff / ai-agent のどこに寄っているか |
-| `進捗の推移` | Line (time) | `Status` = Done | Done 件数が増え続けているか (burn-up) |
+| チャート           | 種類         | Group by        | 見たいこと                                         |
+| ------------------ | ------------ | --------------- | -------------------------------------------------- |
+| `詰まり具合`       | Column / Pie | `Status`        | Backlog〜Done の分布。In review に滞留していないか |
+| `ロードマップ消化` | Column       | `Phase`         | どの Phase が残っているか (doc の Phase と対応)    |
+| `領域の偏り`       | Column       | `Area`          | frontend / bff / ai-agent のどこに寄っているか     |
+| `進捗の推移`       | Line (time)  | `Status` = Done | Done 件数が増え続けているか (burn-up)              |
 
 - 現在系 (Status/Phase/Area) は即使える。**時系列 (burn-up) は board にアイテムを載せた時点から履歴が貯まる**ため、最初の数週間はグラフが育つのを待つ。
 - チャートは何枚でも保存できるが、上記 4 枚から増やさない (board 同様、最小構成を保つ)。
@@ -109,5 +109,5 @@ board と同じ Issue データから GitHub が自動でチャートを起こ�
 ## Related
 
 - ADR: [0011 GitHub Projects は実行状態のダッシュボードに徹する](../adr/0011-github-projects-as-execution-dashboard.md)
-- ロードマップ: [`docs/design/implementation_plan_v1.md`](../design/implementation_plan_v1.md)
+- ロードマップ: [`docs/design/archive/implementation_plan_v1.md`](../design/archive/implementation_plan_v1.md) (archive — v1 完了済み)
 - 関連 Runbook: [`claude-pr-review.md`](./claude-pr-review.md) (PR レビュー Routine)
