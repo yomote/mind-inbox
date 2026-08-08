@@ -90,8 +90,13 @@ echo "== 5. tts (実 VOICEVOX 合成) =="
 tmp="$(mktemp)"
 code="$(curl -s -m 180 -o "$tmp" -w '%{http_code}' -X POST -H "$A" -H "Content-Type: application/json" \
   -d '{"text":"ゴールデンパスのテストなのだ","speaker":3}' "$H/api/tts")"
-if [[ "$code" == "200" ]] && head -c 4 "$tmp" | grep -q "RIFF"; then
-  ok "VOICEVOX が WAV を返す ($(wc -c < "$tmp") bytes)"
+tts_bytes="$(wc -c < "$tmp")"
+# サイズ閾値はここが唯一の担当 (E2E 側は blob 消費との競合で body を読めない — #125)。
+# 「200 + RIFF ヘッダだが中身がほぼ空」の壊れ方をここで止める
+if [[ "$code" == "200" ]] && head -c 4 "$tmp" | grep -q "RIFF" && [[ "$tts_bytes" -gt 1000 ]]; then
+  ok "VOICEVOX が WAV を返す (${tts_bytes} bytes)"
+elif [[ "$code" == "200" ]]; then
+  ng "tts が 200 だが WAV として不正 (${tts_bytes} bytes / RIFF=$(head -c 4 "$tmp" | grep -c RIFF || true)) — 空/破損の疑い"
 elif [[ "$code" == "204" ]]; then
   ng "tts が 204 (stub)。VOICEVOX_BASE_URL の結線が外れている"
 else
