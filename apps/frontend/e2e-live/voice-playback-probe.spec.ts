@@ -1,4 +1,4 @@
-import { test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { fakeEntraLogin, liveEnvMissing } from "./entra-login";
 
 /**
@@ -77,7 +77,19 @@ test("[L4] 音声再生プローブ: play() の成否とブラウザ読み上げ
   await startButton.click();
 
   // 開始時の問いかけ → TTS 合成 (実測 5〜9 秒) → 再生 までを待つ。
-  await page.waitForTimeout(30_000);
+  // 固定スリープにせず「再生の結果が出たか」でポーリングする (レビュー指摘)。
+  // どの結果でも記録が目的なので、出なければ待ち切って観測なしとして記録する。
+  await expect
+    .poll(
+      async () => {
+        const p = await page.evaluate(() => window.__voiceProbe);
+        const spokenAloud = (p?.spoken ?? []).filter((t) => t.trim().length > 0);
+        return (p?.playOk ?? 0) > 0 || (p?.playRejected.length ?? 0) > 0 || spokenAloud.length > 0;
+      },
+      { timeout: 60_000, intervals: [1_000] },
+    )
+    .toBe(true)
+    .catch(() => console.log("[voice-probe] 60s 以内に再生の結果を観測できず (合成手前で停止した可能性)"));
 
   const probe = await page.evaluate(() => window.__voiceProbe);
   // ずんだもん以外の声で喋ったか = 無音の解錠発話 (" ") 以外が speechSynthesis に渡ったか

@@ -52,9 +52,6 @@ type AppRouterProps = {
   loading: boolean;
   session: ConsultationSession | null;
   draftMessage: string;
-  sttSupported: boolean;
-  listening: boolean;
-  interimTranscript: string;
   speaking: boolean;
   ttsEnabled: boolean;
   voiceError: string | null;
@@ -72,7 +69,6 @@ type AppRouterProps = {
   handleLogin: () => void;
   handleStartConsultation: () => Promise<void>;
   handleSendMessage: () => Promise<void>;
-  toggleListening: () => void;
   toggleTtsEnabled: () => void;
   stopSpeaking: () => void;
   handleOrganize: () => Promise<void>;
@@ -125,9 +121,6 @@ export function AppRouter({
   loading,
   session,
   draftMessage,
-  sttSupported,
-  listening,
-  interimTranscript,
   speaking,
   ttsEnabled,
   voiceError,
@@ -145,7 +138,6 @@ export function AppRouter({
   handleLogin,
   handleStartConsultation,
   handleSendMessage,
-  toggleListening,
   toggleTtsEnabled,
   stopSpeaking,
   handleOrganize,
@@ -218,15 +210,11 @@ export function AppRouter({
                 session={session!}
                 draftMessage={draftMessage}
                 loading={loading}
-                sttSupported={sttSupported}
-                listening={listening}
-                interimTranscript={interimTranscript}
                 speaking={speaking}
                 ttsEnabled={ttsEnabled}
                 voiceError={voiceError}
                 onDraftMessageChange={setDraftMessage}
                 onSendMessage={handleSendMessage}
-                onToggleListening={toggleListening}
                 onToggleTtsEnabled={toggleTtsEnabled}
                 onStopSpeaking={stopSpeaking}
                 onCrisisSupport={() => transition("crisisSupport")}
