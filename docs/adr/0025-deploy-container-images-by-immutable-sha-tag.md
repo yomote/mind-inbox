@@ -1,4 +1,4 @@
-# 0024. コンテナ image のデプロイは :latest ではなく不変 sha タグの解決 + 稼働検証で行う
+# 0025. コンテナ image のデプロイは :latest ではなく不変 sha タグの解決 + 稼働検証で行う
 
 - Status: Proposed
 - Date: 2026-08-08
