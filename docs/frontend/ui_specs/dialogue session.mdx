@@ -74,6 +74,8 @@ import { SessionSpecPreview } from '../../../frontend/src/spec/previews/SessionS
 - 時系列でメッセージを表示
 - AI応答中は送信ボタンにローディングを表示
 - メッセージ本文は改行を保持して表示
+- **AI 応答はトークン逐次表示 (ストリーミング)**: 応答生成中は AI メッセージバブルが先に現れ、届いたテキストから順に伸びていく。生成中はバブル末尾にキャレット (▍) を表示する (#120)
+- ストリーミングが使えない環境 (BFF 旧版 / 通信断) では従来どおり全文一括表示にフォールバックする。逐次表示は強化であり、対話の成立に必須ではない
 
 ### 5.3 入力欄
 
@@ -113,7 +115,8 @@ import { SessionSpecPreview } from '../../../frontend/src/spec/previews/SessionS
 | --- | --- |
 | initial | 初期メッセージ表示直後 |
 | chatting | ユーザーとAIが対話中 |
-| ai-thinking | API待機中（loading=true） |
+| ai-thinking | API待機中（loading=true・初トークン到達前） |
+| ai-streaming | AI応答をトークン逐次表示中（loading=true のまま、バブルが伸びる） |
 | paused | 一時中断画面に遷移 |
 | crisis-support | 危機時サポート画面に遷移 |
 
@@ -160,6 +163,7 @@ import { SessionSpecPreview } from '../../../frontend/src/spec/previews/SessionS
 
 - 空文字では送信できない
 - 送信中は送信ボタンにローディング表示
+- AI 応答は届いたテキストから逐次表示される（全文生成を待たずにバブルが現れる）。ストリーミング不能時は全文一括表示で成立する
 - 危機時サポートボタンから危機時サポートへ遷移できる
 - 一時保存 / 中断ボタンから中断画面へ遷移できる
 - 困りごとを抽出ボタン（primary）で抽出結果レビューへ遷移できる

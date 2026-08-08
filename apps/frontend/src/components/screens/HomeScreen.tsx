@@ -1,4 +1,6 @@
+import * as React from "react";
 import { Button, Paper, Stack } from "@mui/material";
+import { requestWarmup } from "../../api/warmup";
 
 type HomeScreenProps = {
   onStartConsultation: () => void;
@@ -13,6 +15,11 @@ export function HomeScreen({
   onHistory,
   onSpecPreview,
 }: HomeScreenProps) {
+  // ホーム閲覧中に scale-to-zero の下流を温めておく (#120)。fire-and-forget +
+  // スロットルは requestWarmup 側。認証後の画面なので Authorization も付く (ADR 0017)。
+  React.useEffect(() => {
+    requestWarmup();
+  }, []);
   return (
     <Paper sx={{ p: 3, borderRadius: 3 }}>
       <Stack spacing={1.5}>
