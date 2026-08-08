@@ -20,7 +20,7 @@ export async function startNewConsultation(concern: string): Promise<Consultatio
 }
 
 /**
- * チャット応答ストリーミング (#120 / ADR 0022) の SSE イベント。
+ * チャット応答ストリーミング (#120 / ADR 0024) の SSE イベント。
  * wire 契約の真実は ai-agent の pydantic (ChatStreamDelta / Done / Error)。
  */
 type ChatStreamEvent =
@@ -145,7 +145,7 @@ export async function sendMessage(sessionId: string, text: string): Promise<Chat
   try {
     return await sendMessageStreaming(sessionId, text, messageId);
   } catch (err) {
-    // ストリーミングは強化であって依存にしない (ADR 0022) — 失敗したら従来の
+    // ストリーミングは強化であって依存にしない (ADR 0024) — 失敗したら従来の
     // tRPC mutation で全文を取り直す。途中経過バブルはここで消す。
     console.warn("[sendMessage] streaming failed — falling back to tRPC mutation", err);
     clearStreamingReply();

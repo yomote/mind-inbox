@@ -264,7 +264,7 @@ async def run_workflow_stream(
     approval_repo: ApprovalRepository,
     kernel: Kernel,
 ) -> AsyncIterator[Union[ChatStreamDelta, ChatStreamDone]]:
-    """run_workflow のストリーミング版 (#120 / ADR 0022)。
+    """run_workflow のストリーミング版 (#120 / ADR 0024)。
 
     RESPOND だけを LLM ストリーミングで逐次 yield し、完了時に従来 /chat と
     同一形の ChatResponse を ChatStreamDone で返す。承認が要るターンは

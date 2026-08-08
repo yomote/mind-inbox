@@ -46,7 +46,7 @@ export async function ttsPrefetchFetch(text: string, speaker: number): Promise<R
   });
 }
 
-/** チャット応答の SSE ストリーミング (BFF /api/chat/stream / #120, ADR 0022)。 */
+/** チャット応答の SSE ストリーミング (BFF /api/chat/stream / #120, ADR 0024)。 */
 export async function chatStreamFetch(sessionId: string, message: string): Promise<Response> {
   return fetch(`${bffBaseUrl()}/api/chat/stream`, {
     method: "POST",

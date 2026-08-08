@@ -1,5 +1,5 @@
 /**
- * チャット応答ストリーミング (#120 / ADR 0022) の BFF 側サービス。
+ * チャット応答ストリーミング (#120 / ADR 0024) の BFF 側サービス。
  *
  * ai-agent の POST /chat/stream (SSE) をバイトストリームのまま素通しする。
  * イベント契約の真実は ai-agent の pydantic (ChatStreamDelta / Done / Error) で、

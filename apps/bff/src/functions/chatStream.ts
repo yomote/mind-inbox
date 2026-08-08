@@ -3,7 +3,7 @@ import { z } from "zod";
 import { openChatStream } from "../chat/chatStream";
 
 /**
- * POST /api/chat/stream — チャット応答の SSE ストリーミング (#120 / ADR 0022)。
+ * POST /api/chat/stream — チャット応答の SSE ストリーミング (#120 / ADR 0024)。
  *
  * tRPC は request/response 前提でトークン逐次配信ができないため、/api/tts と同じ
  * 「非 tRPC の別経路」パターンで置く。イベント契約 (delta/done/error) の真実は

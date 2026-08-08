@@ -3,7 +3,7 @@ FastAPI entrypoint for the AI Agent.
 
 Endpoints:
   POST /chat        — 会話ターン
-  POST /chat/stream — 会話ターン (SSE ストリーミング / #120, ADR 0022)
+  POST /chat/stream — 会話ターン (SSE ストリーミング / #120, ADR 0024)
   POST /extract  — セッション全文を Mention[] に抽出 + 既存 Problem へグルーピング (ADR 0007)
   POST /organize — セッション履歴を OrganizedResult に変換 (deprecated: Phase C で /extract に置換)
   POST /plan     — OrganizedResult から ActionPlan を生成
@@ -111,7 +111,7 @@ async def chat(
         200: {
             "description": (
                 "SSE (text/event-stream)。data 行の JSON は "
-                "ChatStreamDelta / ChatStreamDone / ChatStreamError のいずれか (#120, ADR 0022)。"
+                "ChatStreamDelta / ChatStreamDone / ChatStreamError のいずれか (#120, ADR 0024)。"
             ),
             "content": {"text/event-stream": {}},
         }
