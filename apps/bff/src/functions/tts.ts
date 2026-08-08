@@ -1,6 +1,6 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from "@azure/functions";
 import { z } from "zod";
-import { synthesize } from "../clients/voicevoxClient";
+import { prefetchTts, synthesizeTts } from "../tts/ttsService";
 
 /**
  * POST /api/tts — テキスト → audio/wav バイナリ。
@@ -8,11 +8,16 @@ import { synthesize } from "../clients/voicevoxClient";
  * tRPC は JSON シリアライズ前提のため、TTS は別経路で扱う。
  * VOICEVOX_BASE_URL 未設定（stub）時は 204 を返し、
  * フロントは Web SpeechSynthesis にフォールバックする。
+ *
+ * #120: 合成は文単位の分割 + 並行 + キャッシュ (ttsService)。`prefetch: true` は
+ * ストリーミング中のフロントが確定文を先行合成させるための呼び方で、音声は返さず
+ * 202 (キャッシュ済み) を返す。
  */
 
 const TtsRequestSchema = z.object({
   text: z.string().min(1),
   speaker: z.number().int().nonnegative().optional(),
+  prefetch: z.boolean().optional(),
 });
 
 async function ttsHandler(req: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
@@ -31,11 +36,23 @@ async function ttsHandler(req: HttpRequest, context: InvocationContext): Promise
     };
   }
 
-  const { text, speaker } = parsed.data;
-  context.log(`[tts] text(len)=${text.length} speaker=${speaker ?? 3}`);
+  const { text, speaker, prefetch } = parsed.data;
+  context.log(
+    `[tts] text(len)=${text.length} speaker=${speaker ?? 3} prefetch=${Boolean(prefetch)}`,
+  );
 
   try {
-    const audio = await synthesize({ text, speakerId: speaker });
+    if (prefetch) {
+      // text は「ストリーミングで今までに届いた途中経過」。どこが文の切れ目かの判断は
+      // BFF 側 (prefetchTts) が単独で持つ — フロントに分割ロジックを置かない (ADR 0024)。
+      const result = await prefetchTts({ text, speakerId: speaker });
+      context.log(`[tts] prefetch status=${result.status} sentences=${result.sentences}`);
+      // stub (VOICEVOX 未構成) でも 204 で返す — プリフェッチは fire-and-forget なので
+      // フロントは結果を使わないが、区別できるようにはしておく。
+      return result.status === "stub" ? { status: 204 } : { status: 202 };
+    }
+
+    const audio = await synthesizeTts({ text, speakerId: speaker });
 
     if (!audio) {
       return { status: 204 };

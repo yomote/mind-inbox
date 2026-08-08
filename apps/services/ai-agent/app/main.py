@@ -2,7 +2,8 @@
 FastAPI entrypoint for the AI Agent.
 
 Endpoints:
-  POST /chat     — 会話ターン
+  POST /chat        — 会話ターン
+  POST /chat/stream — 会話ターン (SSE ストリーミング / #120, ADR 0024)
   POST /extract  — セッション全文を Mention[] に抽出 + 既存 Problem へグルーピング (ADR 0007)
   POST /organize — セッション履歴を OrganizedResult に変換 (deprecated: Phase C で /extract に置換)
   POST /plan     — OrganizedResult から ActionPlan を生成
@@ -14,6 +15,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 
 from .agents import get_chat_client
 from .config import get_settings
@@ -32,6 +34,7 @@ from .schemas import (
     ApproveResponse,
     ChatRequest,
     ChatResponse,
+    ChatStreamError,
     ExtractionResult,
     ExtractRequest,
     HealthResponse,
@@ -40,7 +43,7 @@ from .schemas import (
     PlanRequest,
     PlanResponse,
 )
-from .workflow import resume_after_approval, run_workflow
+from .workflow import resume_after_approval, run_workflow, run_workflow_stream
 
 settings = get_settings()
 logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
@@ -100,6 +103,48 @@ async def chat(
     except Exception as exc:
         logger.error("POST /chat error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post(
+    "/chat/stream",
+    responses={
+        200: {
+            "description": (
+                "SSE (text/event-stream)。data 行の JSON は "
+                "ChatStreamDelta / ChatStreamDone / ChatStreamError のいずれか (#120, ADR 0024)。"
+            ),
+            "content": {"text/event-stream": {}},
+        }
+    },
+)
+async def chat_stream(
+    req: ChatRequest,
+    session_repo: SessionRepository = Depends(get_session_repo),
+    approval_repo: ApprovalRepository = Depends(get_approval_repo),
+) -> StreamingResponse:
+    """/chat のストリーミング版。契約の真実は schemas.ChatStream* (done は ChatResponse を運ぶ)。"""
+
+    async def event_stream():
+        try:
+            async for event in run_workflow_stream(
+                req.session_id,
+                req.message,
+                session_repo,
+                approval_repo,
+                get_kernel(),
+            ):
+                yield f"data: {event.model_dump_json()}\n\n"
+        except Exception as exc:
+            # SSE は 200 を返した後なので HTTP エラーにできない。error イベントで伝え、
+            # クライアント (BFF/フロント) が非ストリーミングへフォールバックする。
+            logger.error("POST /chat/stream error: %s", exc, exc_info=True)
+            yield f"data: {ChatStreamError(message=str(exc)).model_dump_json()}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/extract", response_model=ExtractionResult)
