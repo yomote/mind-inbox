@@ -166,16 +166,21 @@ jobs:
           RG="$RG" DEPLOYMENT="$DEPLOYMENT" ./cicd/scripts/smoke-test/golden-path.sh
 
       # UI 込みのシナリオテスト (L4 live E2E)。curl 版 golden-path.sh は API ホップの
-      # 切り分け用で、フロント↔BFF の結線破壊 (TTS のオリジン違い等, 2026-08-08 実事象)
-      # はここでしか捕まらない。実 UI (production ビルド) を Playwright で操作する。
+      # 切り分け用。ここでは**デプロイ済みの実 SWA バンドル**を Playwright で操作し、
+      # VITE_* 焼き込みミス・実オリジン CORS・フロント↔BFF の結線破壊 (TTS のオリジン
+      # 違い等, 2026-08-08 実事象) まで検知する。ログイン経路のカナリア込み。
       - name: Golden path scenario（UI 込み E2E・実環境）
         if: steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
         run: |
           OUTPUTS="$(az deployment group show -g "$RG" -n "$DEPLOYMENT" --query 'properties.outputs' -o json)"
-          FUNC_HOST="$(echo "$OUTPUTS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('functionAppDefaultHostname',{}).get('value',''))")"
-          SPA_ID="$(echo "$OUTPUTS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('functionAuthEntraClientId',{}).get('value',''))")"
-          export LIVE_BFF_URL="https://$FUNC_HOST"
-          export LIVE_BFF_TOKEN="$(az account get-access-token --scope "api://$SPA_ID/.default" --query accessToken -o tsv)"
+          _val() { echo "$OUTPUTS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('$1',{}).get('value',''))"; }
+          export LIVE_APP_URL="https://$(_val staticSiteDefaultHostname)"
+          export LIVE_BFF_URL="https://$(_val functionAppDefaultHostname)"
+          export LIVE_ENTRA_CLIENT_ID="$(_val functionAuthEntraClientId)"
+          export LIVE_ENTRA_TENANT_ID="$(_val functionAuthEntraTenantId)"
+          export LIVE_BFF_TOKEN="$(az account get-access-token --scope "api://$LIVE_ENTRA_CLIENT_ID/.default" --query accessToken -o tsv)"
+          # 実トークンをログ・trace への漏出から守る (レビュー指摘)
+          echo "::add-mask::$LIVE_BFF_TOKEN"
           cd apps/frontend
           pnpm install --frozen-lockfile
           pnpm exec playwright install --with-deps chromium
