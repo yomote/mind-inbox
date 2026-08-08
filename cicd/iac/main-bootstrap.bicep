@@ -66,6 +66,12 @@ param functionAuthEntraClientId string = ''
 @description('Container Apps の認証の門 (ADR 0017) の audience となる Entra app client ID。空なら BFF は下流へトークンを付けない。')
 param containerAppsGateClientId string = ''
 
+@description('BFF が呼ぶ ai-agent Container App の base URL。appSettings 全置換で消えないよう bicep で宣言する。空なら deploy-backend.sh の再結線に任せる。')
+param aiAgentBaseUrl string = ''
+
+@description('BFF が呼ぶ voicevox-wrapper Container App の base URL。appSettings 全置換で消えないよう bicep で宣言する。空なら deploy-backend.sh の再結線に任せる。')
+param voicevoxWrapperBaseUrl string = ''
+
 @description('Entra tenant ID。既定はデプロイ先テナント (単一テナント限定)。')
 param functionAuthEntraTenantId string = tenant().tenantId
 
@@ -124,6 +130,8 @@ module infra '../modules/bootstrap-core.bicep' = {
     applyFunctionAuthLockdown: applyFunctionAuthLockdown
     functionAuthEntraClientId: functionAuthEntraClientId
     containerAppsGateClientId: containerAppsGateClientId
+    aiAgentBaseUrl: aiAgentBaseUrl
+    voicevoxWrapperBaseUrl: voicevoxWrapperBaseUrl
     functionAuthEntraTenantId: functionAuthEntraTenantId
     functionExtraCorsOrigins: functionExtraCorsOrigins
     enableBudgetAlert: enableBudgetAlert

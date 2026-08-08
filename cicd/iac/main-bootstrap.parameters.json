@@ -52,6 +52,12 @@
     },
     "containerAppsGateClientId": {
       "value": "28754f00-39c4-434c-9e02-c6fc9622557a"
+    },
+    "aiAgentBaseUrl": {
+      "value": "https://ca-dev-mindbox-ai-agent.ambitiousmushroom-7817b78d.japaneast.azurecontainerapps.io"
+    },
+    "voicevoxWrapperBaseUrl": {
+      "value": "https://ca-dev-mindbox-vv-wrap.ambitiousmushroom-7817b78d.japaneast.azurecontainerapps.io"
     }
   }
 }
