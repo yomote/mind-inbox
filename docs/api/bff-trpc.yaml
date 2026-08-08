@@ -1442,3 +1442,52 @@ paths:
                     - sourceProblemId
                     - targetProblemId
                   additionalProperties: false
+  /api/trpc/speech.issueToken:
+    get:
+      operationId: speech.issueToken
+      tags:
+        - speech
+      summary: speech.issueToken
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - type: object
+                    properties:
+                      available:
+                        type: boolean
+                        enum:
+                          - false
+                      authToken:
+                        enum:
+                          - "null"
+                        nullable: true
+                      region:
+                        enum:
+                          - "null"
+                        nullable: true
+                    required:
+                      - available
+                      - authToken
+                      - region
+                    additionalProperties: false
+                  - type: object
+                    properties:
+                      available:
+                        type: boolean
+                        enum:
+                          - true
+                      authToken:
+                        type: string
+                        minLength: 1
+                      region:
+                        type: string
+                        minLength: 1
+                    required:
+                      - available
+                      - authToken
+                      - region
+                    additionalProperties: false
