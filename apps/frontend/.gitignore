@@ -10,6 +10,8 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+# 認証有効ビルドの e2e (auth-gate.spec.ts) 用の出力先
+dist-e2e-auth
 *.local
 
 # Editor directories and files
