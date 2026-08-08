@@ -194,7 +194,45 @@ if [[ ${#settings[@]} -gt 0 ]]; then
     -g "$RG" -n "$FUNC_APP_NAME" \
     --settings "${settings[@]}" >/dev/null
   echo "  Applied ${#settings[@]} env vars; restarting Function App"
-  az functionapp restart -g "$RG" -n "$FUNC_APP_NAME" >/dev/null
+
+  # appsettings set 直後の restart は設定の伝播とレースし、ワーカーが旧スナップショット
+  # (bicep full-replace 直後 = BASE_URL なし) のまま起動しうる (2026-08-08 実障害:
+  # 結線済みのはずが tts が 204 stub のまま配信)。「設定したか」ではなく挙動
+  # (tts が 204 でないこと) で収束を確認し、stub のままなら伝播を待って restart を
+  # やり直す (ADR 0018)。トークンは golden-path.sh と同じ実行主体の az 資格で取る。
+  SPA_CLIENT_ID="$(_val functionAuthEntraClientId)"
+  converged=0
+  for attempt in 1 2 3; do
+    az functionapp restart -g "$RG" -n "$FUNC_APP_NAME" >/dev/null
+    if [[ -z "$SPA_CLIENT_ID" || -z "$vv_wrapper_url" ]]; then
+      echo "  (収束確認スキップ: SPA client ID か VOICEVOX 結線が無く、tts 非 204 を期待できない)"
+      converged=1
+      break
+    fi
+    TOKEN="$(az account get-access-token --scope "api://$SPA_CLIENT_ID/.default" --query accessToken -o tsv 2>/dev/null || true)"
+    if [[ -z "$TOKEN" ]]; then
+      echo "  WARN: トークン取得不可のため収束確認をスキップ (後段の golden path が検証する)" >&2
+      converged=1
+      break
+    fi
+    sleep 20 # ホスト起動待ち
+    code="$(curl -s -o /dev/null -m 180 -w '%{http_code}' -X POST \
+      -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+      -d '{"text":"結線確認なのだ","speaker":3}' \
+      "https://$FUNC_APP_NAME.azurewebsites.net/api/tts" || true)"
+    if [[ "$code" == "204" ]]; then
+      echo "  (attempt $attempt/3) tts=204 stub — 設定が未反映。伝播を待って再 restart" >&2
+      sleep 20
+    else
+      echo "  tts=$code — env 反映を挙動で確認 (204 stub ではない)"
+      converged=1
+      break
+    fi
+  done
+  if [[ "$converged" -ne 1 ]]; then
+    echo "ERROR: 再 restart 後も tts が 204 (stub)。VOICEVOX_BASE_URL がワーカーに反映されていない" >&2
+    exit 1
+  fi
 else
   echo "  No Container Apps available to wire; BFF will use stub responses"
 fi
