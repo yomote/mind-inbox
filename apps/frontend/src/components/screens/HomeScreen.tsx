@@ -1,14 +1,14 @@
 import { Button, Paper, Stack } from "@mui/material";
 
 type HomeScreenProps = {
-  onNewConsultation: () => void;
+  onStartConsultation: () => void;
   onProblemList?: () => void;
   onHistory: () => void;
   onSpecPreview?: () => void;
 };
 
 export function HomeScreen({
-  onNewConsultation,
+  onStartConsultation,
   onProblemList,
   onHistory,
   onSpecPreview,
@@ -16,7 +16,7 @@ export function HomeScreen({
   return (
     <Paper sx={{ p: 3, borderRadius: 3 }}>
       <Stack spacing={1.5}>
-        <Button variant="contained" onClick={onNewConsultation}>
+        <Button variant="contained" onClick={onStartConsultation}>
           新しい相談を始める
         </Button>
         {onProblemList && (

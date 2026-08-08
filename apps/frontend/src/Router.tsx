@@ -14,7 +14,6 @@ import type {
 import { SessionScreen } from "./components/session/SessionScreen";
 import { OnboardingScreen } from "./components/screens/OnboardingScreen";
 import { HomeScreen } from "./components/screens/HomeScreen";
-import { NewConsultationScreen } from "./components/screens/NewConsultationScreen";
 import { PausedScreen } from "./components/screens/PausedScreen";
 import { CrisisSupportScreen } from "./components/screens/CrisisSupportScreen";
 import { ResultScreen } from "./components/screens/ResultScreen";
@@ -31,7 +30,6 @@ export const ROUTE_PATHS = {
   onboarding: "/",
   home: "/home",
   specPreview: "/spec",
-  newConsultation: "/consultations/new",
   session: "/consultations/current",
   result: "/consultations/current/result",
   actionPlan: "/consultations/current/action-plan",
@@ -51,7 +49,6 @@ type AppRouterProps = {
   isAuthenticated: boolean;
   isDev: boolean;
   DevSpecMdxPreview: React.LazyExoticComponent<React.ComponentType<unknown>> | null;
-  concern: string;
   loading: boolean;
   session: ConsultationSession | null;
   draftMessage: string;
@@ -71,7 +68,6 @@ type AppRouterProps = {
   themeMode: PaletteMode;
   onToggleTheme: () => void;
   transition: (next: AppRoute) => void;
-  setConcern: (value: string) => void;
   setDraftMessage: (value: string) => void;
   handleLogin: () => void;
   handleStartConsultation: () => Promise<void>;
@@ -126,7 +122,6 @@ export function AppRouter({
   isAuthenticated,
   isDev,
   DevSpecMdxPreview,
-  concern,
   loading,
   session,
   draftMessage,
@@ -146,7 +141,6 @@ export function AppRouter({
   themeMode,
   onToggleTheme,
   transition,
-  setConcern,
   setDraftMessage,
   handleLogin,
   handleStartConsultation,
@@ -182,9 +176,9 @@ export function AppRouter({
         element={
           <ProtectedRoute authStatus={authStatus}>
             <HomeScreen
-              // UI 仕様 (home.mdx): 新しい相談を始める → newConsultation 画面へ遷移。
-              // 直接 start を呼ぶとテーマ入力画面を飛ばしてしまう
-              onNewConsultation={() => transition("newConsultation")}
+              // UI 仕様 (home.mdx): テーマ入力画面は挟まず直接対話を開始する
+              // (タイトルは最初の発話から自動生成 — 2026-08-07 user 決定で newConsultation 画面を廃止)
+              onStartConsultation={() => void handleStartConsultation()}
               onProblemList={() => void handleOpenProblemList()}
               onHistory={() => transition("history")}
               onSpecPreview={isDev ? () => transition("specPreview") : undefined}
@@ -212,20 +206,6 @@ export function AppRouter({
             ) : (
               <Navigate to={ROUTE_PATHS.home} replace />
             )}
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path={ROUTE_PATHS.newConsultation}
-        element={
-          <ProtectedRoute authStatus={authStatus}>
-            <NewConsultationScreen
-              concern={concern}
-              loading={loading}
-              onConcernChange={setConcern}
-              onBack={() => transition("home")}
-              onStart={handleStartConsultation}
-            />
           </ProtectedRoute>
         }
       />

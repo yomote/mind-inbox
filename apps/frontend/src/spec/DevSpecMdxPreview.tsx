@@ -3,7 +3,6 @@ import { Button, Link, Paper, Stack } from "@mui/material";
 import ReadmeDoc from "../../../docs/frontend/ui_specs/README.mdx";
 import OnboardingDoc from "../../../docs/frontend/ui_specs/onboarding.mdx";
 import HomeDoc from "../../../docs/frontend/ui_specs/home.mdx";
-import NewConsultationDoc from "../../../docs/frontend/ui_specs/new-consultation.mdx";
 import DialogueSessionDoc from "../../../docs/frontend/ui_specs/dialogue session.mdx";
 import ResultDoc from "../../../docs/frontend/ui_specs/result.mdx";
 import ActionPlanDoc from "../../../docs/frontend/ui_specs/action-plan.mdx";
@@ -19,7 +18,6 @@ type DocKey =
   | "readme"
   | "onboarding"
   | "home"
-  | "newConsultation"
   | "dialogueSession"
   | "result"
   | "actionPlan"
@@ -35,7 +33,6 @@ const docs: Record<DocKey, React.ComponentType<Record<string, unknown>>> = {
   readme: ReadmeDoc,
   onboarding: OnboardingDoc,
   home: HomeDoc,
-  newConsultation: NewConsultationDoc,
   dialogueSession: DialogueSessionDoc,
   result: ResultDoc,
   actionPlan: ActionPlanDoc,
@@ -52,7 +49,6 @@ const labels: Array<{ key: DocKey; label: string }> = [
   { key: "readme", label: "一覧" },
   { key: "onboarding", label: "オンボード" },
   { key: "home", label: "ホーム" },
-  { key: "newConsultation", label: "新規相談" },
   { key: "dialogueSession", label: "対話" },
   { key: "result", label: "整理結果" },
   { key: "actionPlan", label: "行動プラン" },
@@ -69,7 +65,6 @@ const hrefToDocKey: Record<string, DocKey> = {
   "./README.mdx": "readme",
   "./onboarding.mdx": "onboarding",
   "./home.mdx": "home",
-  "./new-consultation.mdx": "newConsultation",
   "./dialogue%20session.mdx": "dialogueSession",
   "./dialogue session.mdx": "dialogueSession",
   "./result.mdx": "result",

@@ -28,11 +28,9 @@ test.describe("mock ビルド (認証なし)", () => {
   test("[L3] 相談 → 発話 → 困りごと抽出 → 一覧まで通る", async ({ page }) => {
     await gotoHome(page);
 
-    // UI 仕様 (home.mdx): ホームからはまずテーマ入力画面へ遷移し、
-    // 空入力のままでも開始できる (new-consultation.mdx)
+    // UI 仕様 (home.mdx): テーマ入力画面は挟まず、直接対話セッションが始まる
+    // (タイトルは最初の発話から自動生成 — newConsultation 画面は 2026-08-07 に廃止)
     await page.getByRole("button", { name: "新しい相談を始める" }).click();
-    await expect(page).toHaveURL(/\/consultations\/new$/);
-    await page.getByRole("button", { name: "対話を開始" }).click();
     await expect(page).toHaveURL(/\/consultations\/current$/);
 
     const composer = page.getByPlaceholder("ここに入力 / 話して入力");

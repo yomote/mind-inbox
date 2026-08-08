@@ -154,7 +154,7 @@ describe("[L2] consultation.start", () => {
   it.each(["", "   "])(
     "starts with assistant opener (no AI call) when concern is empty or whitespace (%j)",
     async (concern) => {
-      // 無いと: UI 仕様 (new-consultation.mdx「空入力でも開始可能」) に反して空 concern が
+      // 無いと: UI 仕様 (home.mdx: テーマ入力なしで直接対話開始) に反して空 concern が
       // BAD_REQUEST になり、実環境でホームから相談を開始できない退行が静かに通る (2026-08-07 に実環境で発生)。
       // また空メッセージが AI Agent に流れて 422 を引き起こす退行もここで止める
       const { session } = await makeCaller().consultation.start({ concern });
