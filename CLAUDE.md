@@ -42,6 +42,7 @@ user の意思決定と技術学習をループに組み込む仕組み ([ADR 00
 
 - **設計 → 実装の境界では必ず `design-gate` skill を通す** — 新機能 / Phase 着手 / ADR 級判断の実装を始める前に、設計を可視化して user に提示し、理解確認の対話と**明示的な承認**を取る。承認前に実装に入らない (バグ修正・既承認設計内の作業は対象外)
 - **マージ / Proposed ADR が溜まったら `debrief` skill** — ゼミ形式で「何を作ったか / なぜ / 代替案」を解説し、Proposed ADR を user が Accept/Reject する。溜まっていたらエージェントから提案してよい
+- **リリース級の節目は `briefing` skill (報告会)** — 音声ナレーション付きスライドでエージェントが説明し切り、PO は聞き流しながら随時質問するだけ (Issue #116 対策)。「資料を読んでおいて」で終えない。承認事項は選択肢形式でその場で取る
 - **「あれなんだっけ?」には `explain` skill** — 真実ソースを引いて図解で即答する
 - **無人セッション (Routine 等) ではゲートを通せない** — 不可逆な判断 (DB スキーマ破壊的変更 / 外部サービス・課金追加 / 公開 API の形 / データ削除) は実装せず Issue に質問を積む。可逆な判断は Proposed ADR を書いて進め、次の debrief で追認を受ける
 - **リリースは「リリース PR (`main → release`)」で表現し、そこで `release-gate` skill を通す** (main への機能 PR / dev への日常 auto-deploy は対象外) — 実装セッション自身に Go/No-Go を判定させず、独立 judge (いずれも新品コンテキストの subagent) に判定させる ([ADR 0019](docs/adr/0019-independent-judge-agents-security-qa-release.md) / [Runbook](docs/runbooks/review-agents.md))。security-reviewer は脆弱性スキャナ総動員 + 動的チェック、qa-reviewer はゴールデンパス/UI 挙動の受け入れテスト (L3 E2E) を作成・実行 (L3 の所有者)、biz-owner-reviewer は UI を実操作して違和感を報告、release-judge が 4 レポートをコンセプト整合含めて突合し、FAIL は宛先つき作業指示に変換。blocker はリリース PR のスレッド + ブランチ保護でマージ不可。審査基準は `.github/claude/{security,qa,biz-owner,release}-rubric.md` (rubric-as-truth)。🟢 でも merge / deploy は人間
