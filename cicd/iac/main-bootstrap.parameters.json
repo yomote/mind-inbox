@@ -32,6 +32,12 @@
     "enableAiAgentAca": {
       "value": true
     },
+    "enableSpeech": {
+      "value": true
+    },
+    "speechLocation": {
+      "value": "japaneast"
+    },
     "enableVoicevoxWrapperAca": {
       "value": true
     },
