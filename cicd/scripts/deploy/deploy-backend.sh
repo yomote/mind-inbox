@@ -204,6 +204,9 @@ if [[ ${#settings[@]} -gt 0 ]]; then
   converged=0
   for attempt in 1 2 3; do
     az functionapp restart -g "$RG" -n "$FUNC_APP_NAME" >/dev/null
+    # 既知の限界: 鮮度の代理指標は tts (204/非204 が機械判定できる) のみ。
+    # VOICEVOX 結線が無く AI_AGENT_BASE_URL だけ wire する構成ではこのループは
+    # 自己修復できず、後段の golden-path (hop3/4 の stub 検出) が検知網になる
     if [[ -z "$SPA_CLIENT_ID" || -z "$vv_wrapper_url" ]]; then
       echo "  (収束確認スキップ: SPA client ID か VOICEVOX 結線が無く、tts 非 204 を期待できない)"
       converged=1
@@ -216,21 +219,35 @@ if [[ ${#settings[@]} -gt 0 ]]; then
       break
     fi
     sleep 20 # ホスト起動待ち
-    code="$(curl -s -o /dev/null -m 180 -w '%{http_code}' -X POST \
-      -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-      -d '{"text":"結線確認なのだ","speaker":3}' \
-      "https://$FUNC_APP_NAME.azurewebsites.net/api/tts" || true)"
-    if [[ "$code" == "204" ]]; then
+    # 000 (接続断) や restart 直後の一時 401/5xx は「収束の証拠」ではない (レビュー指摘)。
+    # 確定応答 — 200 = env 反映済み / 204 = 旧スナップショット — が得られるまで probe を粘る
+    code=""
+    for probe in 1 2 3 4; do
+      code="$(curl -s -o /dev/null -m 180 -w '%{http_code}' -X POST \
+        -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+        -d '{"text":"結線確認なのだ","speaker":3}' \
+        "https://$FUNC_APP_NAME.azurewebsites.net/api/tts" || true)"
+      case "$code" in
+        200 | 204) break ;;
+        *)
+          echo "  (probe $probe/4) tts=$code — 起動途中/一時断として再試行" >&2
+          sleep 15
+          ;;
+      esac
+    done
+    if [[ "$code" == "200" ]]; then
+      echo "  tts=200 — env 反映を挙動で確認"
+      converged=1
+      break
+    elif [[ "$code" == "204" ]]; then
       echo "  (attempt $attempt/3) tts=204 stub — 設定が未反映。伝播を待って再 restart" >&2
       sleep 20
     else
-      echo "  tts=$code — env 反映を挙動で確認 (204 stub ではない)"
-      converged=1
-      break
+      echo "  (attempt $attempt/3) tts=$code — 確定応答が得られない。再 restart して再試行" >&2
     fi
   done
   if [[ "$converged" -ne 1 ]]; then
-    echo "ERROR: 再 restart 後も tts が 204 (stub)。VOICEVOX_BASE_URL がワーカーに反映されていない" >&2
+    echo "ERROR: env 反映を確認できなかった (最後の tts=${code:-<none>})。204 なら VOICEVOX_BASE_URL 未反映、それ以外なら BFF/wrapper の死活を確認すること" >&2
     exit 1
   fi
 else

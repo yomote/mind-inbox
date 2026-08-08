@@ -127,6 +127,10 @@ test("[L4] 相談 → 実AIの返事 → 実VOICEVOXの音声 まで デプロ�
   ).toBeVisible();
   await expect(page.locator("text=ガイド").nth(1)).toBeVisible({ timeout: 210_000 });
 
+  // stub 応答 ("[stub] received: ...") も「ガイドの返事」として描画されるため、
+  // 上の可視性チェックだけでは BASE_URL 結線切れが緑ですり抜ける (2026-08-08 実障害)
+  await expect(page.getByText(/\[stub\]/)).toHaveCount(0);
+
   // 実 VOICEVOX: /api/tts が **実 BFF ホスト宛に** 呼ばれ、audio (WAV) が返ること。
   // 相対 /api/tts に退行すると waitForResponse がタイムアウトして落ちる
   const tts = await ttsResponse;
