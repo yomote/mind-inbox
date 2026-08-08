@@ -93,6 +93,9 @@ param containerAppsGateClientId string = ''
 // 収束するまでの数分間 BFF が stub 化する (対話が [stub]・tts が 204 = 2026-08-08 実障害)。
 // 既知の FQDN をパラメータで固定し、環境再作成等で変わった場合は deploy-backend.sh の
 // 再結線が上書きする (こちらが真実を追従する側)。
+// 注意: Container App 再作成で FQDN が変わった後に bicep を**単独適用**すると、
+// 古い FQDN が復活する (BFF は fetch 失敗で例外)。bicep 適用後は必ず
+// deploy-backend.sh を続けて実行すること (provision.sh 経由なら自動で連続実行される)。
 @description('BFF が呼ぶ ai-agent Container App の base URL。空なら設定しない (deploy-backend.sh の再結線に任せる)。')
 param aiAgentBaseUrl string = ''
 
