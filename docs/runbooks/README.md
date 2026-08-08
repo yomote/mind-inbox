@@ -60,9 +60,6 @@ Runbook PR は実際にその手順を**踏んだ人**が書くか、レビュ�
 - `container-apps-auth-gate.md` — Container Apps の認証の門 (組み込み認証 + Managed Identity)。IP 許可リストが成立しない実測記録つき (#86 / ADR 0017)
 - `review-agents.md` — 独立 judge エージェント (security / QA / biz-owner / release) の運用とリリース PR ゲート (ADR 0019)
 
-(初期 4 本は #12 で起こす)
-
-- `deploy.md` — `deploy-all.sh` の前提・流れ・検証
-- `rollback.md` — Functions zip 戻し / Container App revision 切り替え
-- `cleanup-env.md` — `cleanup-env.sh` の使いどころ
-- `incident-response.md` — インシデント発生時の最初の動き
+未作成 (必要になった時に起こす。存在しない文書をここに列挙しない):
+`deploy-all.sh` / `cleanup-env.sh` / `golden-path.sh` 等のデプロイ・撤収系は
+当面 `cicd/scripts/*/README.md` とスクリプトのヘッダコメントが手順の真実。
