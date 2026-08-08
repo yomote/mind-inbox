@@ -8,7 +8,7 @@ type SessionMessagesProps = {
 };
 
 export function SessionMessages({ messages }: SessionMessagesProps) {
-  // ストリーミング中の AI 応答 (#120 / dialogue session.mdx §5.2)。
+  // ストリーミング中の AI 応答 (#120 / dialogue-session.mdx §5.2)。
   // 最終メッセージ (同じ id) が messages に入ったら重複表示しない。
   const streaming = useSyncExternalStore(
     subscribeStreamingReply,

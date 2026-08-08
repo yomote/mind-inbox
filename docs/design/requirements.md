@@ -162,4 +162,4 @@ PoC では「話す → 整理 → プラン生成」の一気通貫が疎通済
 - ✅ `use_cases.md`（UC-01〜05 詳細化・SSD）
 - ✅ `domain_model.md`（2層 Mention → Problem）
 - ✅ [ADR 0007](../adr/0007-problem-centric-two-layer-domain-model.md)（Accepted）→ basic_design §4 / §10 更新済み
-- → 次は実装: [`implementation_plan_v1.md`](./implementation_plan_v1.md) Phase D（型 & モック先行）
+- → 次は実装: [`archive/implementation_plan_v1.md`](./archive/implementation_plan_v1.md) Phase D（型 & モック先行）

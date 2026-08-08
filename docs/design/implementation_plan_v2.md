@@ -2,7 +2,7 @@
 
 作成: 2026-08-06 / 対象: [ADR 0015](../adr/0015-proactive-agentic-workflow.md)（能動化・思想転換）+ [ADR 0016](../adr/0016-ai-agent-orchestration-on-maf.md)（SK → MAF 移行）を実装に落とすロードマップ
 承認: design-gate #1（2026-08-06, [journal](../debrief/journal.md)）で両 ADR とも Accepted
-関連: [`implementation_plan_v1.md`](./implementation_plan_v1.md)（v1 = Problem 中心 2層の実装。完了）
+関連: [`archive/implementation_plan_v1.md`](./archive/implementation_plan_v1.md)（v1 = Problem 中心 2層の実装。完了）
 
 ---
 
@@ -10,15 +10,15 @@
 
 ### 0.1 現状 → v2 のギャップ
 
-| レイヤ | 現状 | v2 要件 | ギャップ |
-| --- | --- | --- | --- |
-| オーケストレーション | 手書き FSM（`workflow.py`, 7状態直列） | graph Workflow + checkpoint | MAF へ置換（M1） |
-| HITL 承認 | 自前 `ApprovalRepository` | MAF 組み込み HITL | MAF へ置換（M1） |
-| LLM 呼び出し | SK `ChatHistory` + 単発 structured | MAF ChatAgent / structured output | MAF へ置換（M1） |
-| tools | PoC スタブ（FAQ / inbox） | `@ai_function`、read / write 区分 | 置換 + 実体化（M1 / M3） |
-| ナレッジ | `rag.py` スタブ | Mention / Problem embedding 索引 + RAG | 新規（M2・**再ゲート**） |
-| プロアクティブ | なし（受動のみ） | 内部整理 / ウォッチ / 深掘り + 受信箱 | 新規（M3） |
-| スケジュール実行 | なし | 定期ワークフロー実行基盤 | 新規（M3） |
+| レイヤ               | 現状                                   | v2 要件                                | ギャップ                 |
+| -------------------- | -------------------------------------- | -------------------------------------- | ------------------------ |
+| オーケストレーション | 手書き FSM（`workflow.py`, 7状態直列） | graph Workflow + checkpoint            | MAF へ置換（M1）         |
+| HITL 承認            | 自前 `ApprovalRepository`              | MAF 組み込み HITL                      | MAF へ置換（M1）         |
+| LLM 呼び出し         | SK `ChatHistory` + 単発 structured     | MAF ChatAgent / structured output      | MAF へ置換（M1）         |
+| tools                | PoC スタブ（FAQ / inbox）              | `@ai_function`、read / write 区分      | 置換 + 実体化（M1 / M3） |
+| ナレッジ             | `rag.py` スタブ                        | Mention / Problem embedding 索引 + RAG | 新規（M2・**再ゲート**） |
+| プロアクティブ       | なし（受動のみ）                       | 内部整理 / ウォッチ / 深掘り + 受信箱  | 新規（M3）               |
+| スケジュール実行     | なし                                   | 定期ワークフロー実行基盤               | 新規（M3）               |
 
 ### 0.2 実装原則（v1 計画を踏襲 + M1 特有）
 

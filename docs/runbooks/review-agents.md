@@ -35,21 +35,20 @@ release-judge ← 4 レポート + CI レイヤ別結果を突合
 人間がリリース PR をマージ → stg/prod へ deploy (deploy-*.sh)
 ```
 
-分離の原則: **judge は必ず subagent (新品コンテキスト) として起動する**。実装セッション自身に審査させない。役割ごとの持ち物:
+分離の原則: **judge は必ず subagent (新品コンテキスト) として起動する**。実装セッション自身に審査させない (理由は [ADR 0019](../adr/0019-independent-judge-agents-security-qa-release.md))。
 
-- **security-reviewer**: 環境で使える脆弱性スキャナを総動員 (npm audit / pip-audit / osv-scanner / gitleaks / semgrep / bandit / trivy 等) し、結果を rubric に照らして判定する。アプリを起動できる場合は動的チェック (外部通信の観察・未認証アクセス実測・応答ヘッダ) も実施。使えなかった分は UNKNOWN 明記
-- **qa-reviewer**: 「欲しかった機能が揃っているか / 変な動きをしないか」を受け入れマトリクスで検証し、**ゴールデンパス・UI 挙動・ユーザビリティ観点のシナリオテスト (L3 E2E) を作成・実行**する。L3 レイヤの所有者。ビジュアルの美的評価はしない (MDX 仕様との乖離のみ)。プロダクトコードは触らない (テストコードのみ)
-- **biz-owner-reviewer**: ビジネスオーナーとして**アプリを実際に起動・操作**し (stub モード + Playwright、スクショつき)、文言・導線・期待とのズレ・コンセプト体現・「普通に考えておかしいよね」の違和感を報告する。アサーション的な仕様突合はしない (QA の担当)
-- **release-judge**: 4 レポート + CI を突き合わせ、「この品質で出してよいか」「コンセプト ([`docs/concept_deck.md`](../concept_deck.md)) とズレていないか」を判定する。FAIL/UNKNOWN は**宛先つき作業指示リスト** (実装 / qa-reviewer / security-reviewer / biz-owner-reviewer / 人間) に変換して返す。レポートが欠けた領域は UNKNOWN = GO は出ない (デフォルト NO-GO)
+**各 judge が何を見るか・何をやらないかは rubric が正典** — 下の表から辿る (ここには再掲しない)。スキャナの一覧も [`security-rubric.md`](../../.github/claude/security-rubric.md) の「スキャンツールの併用」が正典。
 
 ## 構成ファイル (rubric-as-truth)
 
-| 役割 | 審査基準 (直すのはここ) | subagent 定義 |
-| --- | --- | --- |
-| security-reviewer | [`.github/claude/security-rubric.md`](../../.github/claude/security-rubric.md) | `.claude/agents/security-reviewer.md` |
-| qa-reviewer | [`.github/claude/qa-rubric.md`](../../.github/claude/qa-rubric.md) | `.claude/agents/qa-reviewer.md` |
-| biz-owner-reviewer | [`.github/claude/biz-owner-rubric.md`](../../.github/claude/biz-owner-rubric.md) | `.claude/agents/biz-owner-reviewer.md` |
-| release-judge | [`.github/claude/release-rubric.md`](../../.github/claude/release-rubric.md) | `.claude/agents/release-judge.md` |
+共通規約 (Severity / 出力ルール) は [`.github/claude/_common.md`](../../.github/claude/_common.md)。
+
+| 役割               | 一言 (**詳細は rubric が正典**)                                                              | 審査基準 (直すのはここ)                                           | subagent 定義                          |
+| ------------------ | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------- |
+| security-reviewer  | スキャナ総動員 + 動的チェック + 攻撃面追跡。使えなかった分は UNKNOWN 明記                    | [`security-rubric.md`](../../.github/claude/security-rubric.md)   | `.claude/agents/security-reviewer.md`  |
+| qa-reviewer        | 受け入れマトリクス + L3 E2E の作成・実行 (**L3 レイヤの所有者**)。プロダクトコードは触らない | [`qa-rubric.md`](../../.github/claude/qa-rubric.md)               | `.claude/agents/qa-reviewer.md`        |
+| biz-owner-reviewer | 実操作ウォークスルー (stub + Playwright、スクショつき) + 違和感                              | [`biz-owner-rubric.md`](../../.github/claude/biz-owner-rubric.md) | `.claude/agents/biz-owner-reviewer.md` |
+| release-judge      | 4 レポート + CI を突合 → GO/NO-GO + 宛先つき作業指示 (**既定 NO-GO**)                        | [`release-rubric.md`](../../.github/claude/release-rubric.md)     | `.claude/agents/release-judge.md`      |
 
 subagent 定義は薄いラッパで、観点はすべて rubric 側に置く。**観点変更 = rubric の PR** (Routine や agent 定義をいじらない)。
 

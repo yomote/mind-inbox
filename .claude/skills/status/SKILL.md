@@ -65,7 +65,7 @@ PO の応答待ちを先頭に出すための材料を引く:
 
 ### Step 4 — 次アクションを1つ選ぶ
 
-v1 ロードマップ（`docs/design/implementation_plan_v1.md`）の順序（D→A→B→C）で、**まだ着手していない最も早い Phase** を「次アクション」に据える。v1 が動いていない場合のみ並行ストリームの小粒を候補にする。
+v1 ロードマップ（`docs/design/archive/implementation_plan_v1.md`）の順序（D→A→B→C）で、**まだ着手していない最も早い Phase** を「次アクション」に据える。v1 が動いていない場合のみ並行ストリームの小粒を候補にする。
 
 ### Step 5 — 出力
 
@@ -126,4 +126,4 @@ user が「HTML で」「レポートにまとめて」「見れる形で」等�
 
 - ADR 0011（実行状態 = Issues + Projects）: `docs/adr/0011-github-projects-as-execution-dashboard.md`
 - Runbook（board セットアップ）: `docs/runbooks/github-projects-setup.md`
-- v1 ロードマップ: `docs/design/implementation_plan_v1.md`
+- v1 ロードマップ: `docs/design/archive/implementation_plan_v1.md`
