@@ -28,6 +28,10 @@ artifacts/
 apps/frontend/playwright-report/
 apps/frontend/test-results/
 
+# Playwright (L4 live) + UX プローブの生成物 — 記録は workflow artifact が真実 (#123 M0)
+apps/frontend/test-results-live/
+apps/frontend/probe-results/
+
 # Claude Code personal settings
 .claude/settings.local.json
 .claude/worktrees/
