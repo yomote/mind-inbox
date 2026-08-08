@@ -9,6 +9,7 @@ import {
   organize as organizeAiAgent,
   sendChatMessage,
 } from "../clients/aiAgentClient";
+import { issueSpeechAuthToken } from "../clients/speechTokenClient";
 import {
   ActionPlanSchema,
   HistoryItemSchema,
@@ -261,6 +262,31 @@ const healthRouter = router({
   }),
 });
 
+// ---- speech ----------------------------------------------------------------
+// Azure Speech (ADR 0023) の一時 authorization token 発行。
+// SPA にキーは渡さない — MI の Entra トークン由来の短寿命トークンのみ。
+// available: false はフロントに「Web Speech へフォールバックせよ」を伝えるシグナル。
+
+const SpeechTokenSchema = z.discriminatedUnion("available", [
+  z.object({
+    available: z.literal(false),
+    authToken: z.null(),
+    region: z.null(),
+  }),
+  z.object({
+    available: z.literal(true),
+    // Speech SDK にそのまま渡す "aad#{resourceId}#{entraToken}" 形式
+    authToken: z.string().min(1),
+    region: z.string().min(1),
+  }),
+]);
+
+const speechRouter = router({
+  issueToken: publicProcedure.output(SpeechTokenSchema).query(async () => {
+    return await issueSpeechAuthToken();
+  }),
+});
+
 // ---- consultation ----------------------------------------------------------
 
 const consultationRouter = router({
@@ -491,6 +517,7 @@ const problemRouter = router({
 
 export const appRouter = router({
   health: healthRouter,
+  speech: speechRouter,
   consultation: consultationRouter,
   history: historyRouter,
   problem: problemRouter,
