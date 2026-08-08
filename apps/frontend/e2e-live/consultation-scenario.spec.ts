@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 /**
  * [L4] 相談ユースケースのシナリオテスト — **デプロイ済みの実環境**。
  *
- * ゴールデンパス: (デプロイ済み SWA を開く) → ホーム → 相談開始 → AI の問いかけ →
+ * ゴールデンパス: (デプロイ済み SWA を開く) → 認証 → 相談開始 → AI の問いかけ →
  * 発話 → **実 AI の返事** → **実 VOICEVOX の音声取得**。
  *
  * 実際に配信されているバンドルを実オリジンで操作するため、以下の実事故クラスを検知する:
@@ -11,9 +11,11 @@ import { expect, test, type Page } from "@playwright/test";
  *   - フロント↔BFF の結線破壊 (TTS のオリジン違い, 2026-08-08)
  *   - 実オリジンの CORS / EasyAuth / 下流 Container Apps の門 (403/401 系)
  *
- * 認証: MSAL の localStorage キャッシュ形式で「アカウント + 実アクセストークン」を
- * 注入し、ログイン画面を迂回する (実ログイン往復は login-canary.spec.ts と人間の
- * 初回確認が担当)。トークンは実物なので EasyAuth の検証はフルに通る。
+ * 認証: **Entra のプロトコル面 (authorize / token エンドポイント) を route で偽装**し、
+ * access_token に実トークンを返す。msal は正規の手順で自分のキャッシュに書き込むため、
+ * msal のキャッシュ形式 (v5 でスキーマ刷新 + 暗号化) に依存しない。
+ * ※ 初版は localStorage へのキャッシュ直接注入だったが、v5 の暗号化で成立せず廃止。
+ * 実ログイン往復そのものは login-canary.spec.ts と人間の初回確認が担当。
  */
 
 const LIVE_APP_URL = process.env.LIVE_APP_URL ?? "";
@@ -27,80 +29,69 @@ test.skip(
   "LIVE_* env が未設定 (実環境向けのみ実行)",
 );
 
-/**
- * MSAL (msal-browser, cacheLocation=localStorage) のキャッシュ形式でアカウントと
- * アクセストークンを注入する。アプリの getAccount() が非 null を返し、
- * acquireTokenSilent がこの実トークンをキャッシュヒットで返すようになる。
- *
- * 形式が msal のバージョンで変わったらこのテストが落ちて気づく (それ自体が検知)。
- */
-async function seedMsalCache(page: Page) {
-  const uid = "11111111-2222-3333-4444-555555555555"; // 合成 (ログイン画面迂回用)
-  const homeAccountId = `${uid}.${TENANT_ID}`;
-  const environment = "login.microsoftonline.com";
-  const target = `api://${CLIENT_ID}/.default`;
+const b64url = (obj: unknown) => Buffer.from(JSON.stringify(obj)).toString("base64url");
 
-  // 実トークンの exp をそのままキャッシュ有効期限に使う
-  const payload = JSON.parse(
-    Buffer.from(LIVE_BFF_TOKEN.split(".")[1], "base64url").toString("utf8"),
-  ) as { exp: number };
-
-  const accountKey = `${homeAccountId}-${environment}-${TENANT_ID}`;
-  const accountEntity = {
-    homeAccountId,
-    environment,
-    realm: TENANT_ID,
-    localAccountId: uid,
-    username: "goldenpath-probe@e2e.local",
+/** 署名なし JWT (msal-browser は id_token の署名をクライアントでは検証しない)。 */
+function makeIdToken(nonce: string): string {
+  const now = Math.floor(Date.now() / 1000);
+  const uid = "11111111-2222-3333-4444-555555555555";
+  const header = { alg: "RS256", typ: "JWT" };
+  const payload = {
+    aud: CLIENT_ID,
+    iss: `https://login.microsoftonline.com/${TENANT_ID}/v2.0`,
+    iat: now,
+    nbf: now,
+    exp: now + 3600,
+    nonce,
+    oid: uid,
+    sub: uid,
+    tid: TENANT_ID,
+    preferred_username: "goldenpath-probe@e2e.local",
     name: "Golden Path Probe",
-    authorityType: "MSSTS",
+    ver: "2.0",
   };
-  const atKey = `${homeAccountId}-${environment}-accesstoken-${CLIENT_ID.toLowerCase()}-${TENANT_ID}-${target.toLowerCase()}`;
-  const atEntity = {
-    homeAccountId,
-    environment,
-    credentialType: "AccessToken",
-    clientId: CLIENT_ID,
-    secret: LIVE_BFF_TOKEN,
-    realm: TENANT_ID,
-    target,
-    cachedAt: String(Math.floor(Date.now() / 1000)),
-    expiresOn: String(payload.exp),
-    extendedExpiresOn: String(payload.exp),
-    tokenType: "Bearer",
-  };
+  return `${b64url(header)}.${b64url(payload)}.e2e-fake-signature`;
+}
 
-  await page.addInitScript(
-    ({ accountKey, accountEntity, atKey, atEntity, clientId, homeAccountId, uid, tenantId }) => {
-      localStorage.setItem(accountKey, JSON.stringify(accountEntity));
-      localStorage.setItem("msal.account.keys", JSON.stringify([accountKey]));
-      localStorage.setItem(
-        `msal.token.keys.${clientId}`,
-        JSON.stringify({ idToken: [], accessToken: [atKey], refreshToken: [] }),
-      );
-      localStorage.setItem(atKey, JSON.stringify(atEntity));
-      localStorage.setItem(
-        `msal.${clientId}.active-account-filters`,
-        JSON.stringify({ homeAccountId, localAccountId: uid, tenantId }),
-      );
-    },
-    {
-      accountKey,
-      accountEntity,
-      atKey,
-      atEntity,
-      clientId: CLIENT_ID,
-      homeAccountId,
-      uid,
-      tenantId: TENANT_ID,
-    },
-  );
+/**
+ * Entra のログイン往復を route で偽装する。
+ * - authorize: nonce/state を拾って即 redirect_uri へ #code=...&state=... で戻す
+ * - token: access_token に **実トークン** を返す (BFF の EasyAuth はフルに検証される)
+ */
+async function fakeEntraLogin(page: Page) {
+  let lastNonce = "";
+
+  await page.route("**/oauth2/v2.0/authorize*", async (route) => {
+    const url = new URL(route.request().url());
+    lastNonce = url.searchParams.get("nonce") ?? "";
+    const state = url.searchParams.get("state") ?? "";
+    const redirectUri = url.searchParams.get("redirect_uri") ?? LIVE_APP_URL;
+    // msal-browser は response_mode=fragment。code はダミー (token 側も偽装するため)
+    const location = `${redirectUri}#code=e2e-fake-code&state=${encodeURIComponent(state)}&session_state=e2e`;
+    await route.fulfill({ status: 302, headers: { Location: location } });
+  });
+
+  await page.route("**/oauth2/v2.0/token", async (route) => {
+    const uid = "11111111-2222-3333-4444-555555555555";
+    await route.fulfill({
+      json: {
+        token_type: "Bearer",
+        scope: `api://${CLIENT_ID}/.default openid profile`,
+        expires_in: 3600,
+        ext_expires_in: 3600,
+        access_token: LIVE_BFF_TOKEN,
+        id_token: makeIdToken(lastNonce),
+        client_info: b64url({ uid, utid: TENANT_ID }),
+      },
+    });
+  });
 }
 
 test("[L4] 相談 → 実AIの返事 → 実VOICEVOXの音声 まで デプロイ済み UI で通る", async ({ page }) => {
-  await seedMsalCache(page);
+  await fakeEntraLogin(page);
 
-  // 認証済みキャッシュがあるため "/" → home へ (実バンドルの認証ゲートを通過)
+  // 実バンドルは未認証だと読み込み時にログインへリダイレクトされる
+  // (偽装 Entra が即座に認証済みで返すため、そのままホームに到達する)
   await page.goto("/");
   await expect(page.getByRole("button", { name: "新しい相談を始める" })).toBeVisible({
     timeout: 60_000,
