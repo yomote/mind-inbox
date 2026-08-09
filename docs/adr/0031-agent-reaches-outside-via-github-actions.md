@@ -12,11 +12,11 @@ Technical Story: 2026-08-09、ADR 0030 (永続化) の設計中に Azure の料�
 
 エージェントのセッションはサンドボックスの中で動いており、外の世界に届かない経路が 3 種類ある。これまでその場しのぎで個別に迂回してきたが、**同じ壁に 4 回ぶつかって 4 回別々の回避策を作っている**ため、パターンとして固定する。
 
-| 壁 | 実測 | これまでの回避 |
-| --- | --- | --- |
-| **egress ポリシー** — 環境の Network access が `Trusted` で、許可リスト外は CONNECT が 403 | `learn.microsoft.com` / `azure.microsoft.com` / `prices.azure.com` がプロキシログに `connect_rejected` として記録。`*.blob.core.windows.net` も同様 | bicep CLI が取れない → `iac-validate.yml` を作って runner でビルド (#—) / artifact が落とせない → Issue コメント運搬へ ([ADR 0029](0029-probe-record-transport-via-issue-comment.md)) |
-| **Azure のトークンが無い** — 対話ログインは device code が要り、無人セッションでは不可 ([ADR 0006](0006-azure-access-via-device-code.md))。ただし `management.azure.com` 自体は到達可能 (400 応答を確認) | 「Portal で確認してください」という人手宿題が発生し続けている | `inspect-env.sh` を書いたが、実行は人間 ([ADR 0018](0018-runtime-verification-in-the-loop.md) ①) |
-| **MCP の承認ゲート** — `claude-code-remote` は読み取り専用の `list_environments` すら `-32003 requires approval` | 子セッション起動・Routine 登録が不可 | 起票パケット + user の 1 クリック ([ADR 0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) D1) |
+| 壁                                                                                                                                                                                                       | 実測                                                                                                                                                | これまでの回避                                                                                                                                                                        |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **egress ポリシー** — 環境の Network access が `Trusted` で、許可リスト外は CONNECT が 403                                                                                                               | `learn.microsoft.com` / `azure.microsoft.com` / `prices.azure.com` がプロキシログに `connect_rejected` として記録。`*.blob.core.windows.net` も同様 | bicep CLI が取れない → `iac-validate.yml` を作って runner でビルド (#—) / artifact が落とせない → Issue コメント運搬へ ([ADR 0029](0029-probe-record-transport-via-issue-comment.md)) |
+| **Azure のトークンが無い** — 対話ログインは device code が要り、無人セッションでは不可 ([ADR 0006](0006-azure-access-via-device-code.md))。ただし `management.azure.com` 自体は到達可能 (400 応答を確認) | 「Portal で確認してください」という人手宿題が発生し続けている                                                                                       | `inspect-env.sh` を書いたが、実行は人間 ([ADR 0018](0018-runtime-verification-in-the-loop.md) ①)                                                                                      |
+| **MCP の承認ゲート** — `claude-code-remote` は読み取り専用の `list_environments` すら `-32003 requires approval`                                                                                         | 子セッション起動・Routine 登録が不可                                                                                                                | 起票パケット + user の 1 クリック ([ADR 0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) D1)                                                                       |
 
 一方で GitHub Actions の runner は **egress 制限を受けず**、**OIDC で Azure に入れ** (`deploy.yml` / `golden-path-monitor.yml` で実績あり)、しかも**エージェントは GitHub MCP でワークフローを起動でき (`actions_run_trigger`)、ログを読める (`get_job_logs`)**。つまり「エージェントの手足」として既に使える状態にある。
 
@@ -67,13 +67,85 @@ Chosen option: **"Option C"**。runner は egress 制限を受けず OIDC で Az
 - **MCP の承認ゲート (子セッション起動 / Routine 登録) はこの ADR では解決しない**。ADR 0028 D1 のまま。D6 が救うのは「セッション内のチェックイン」だけで、**セッションを跨ぐ定期実行は依然として人手登録**
 - **D6 のチェックインはセッションと運命を共にする**。セッションが終われば消えるので、「PR を最後まで見届ける」の保証にはならない (見届ける主体が消えるという意味では整合しているが、取りこぼしはありうる)
 
-## 補足: なぜ承認を「記憶」させられないのか (2026-08-09 の観測)
+## 補足: claude-code-remote MCP が使えない根本原因 (2026-08-09 特定)
 
-MCP サーバーの識別子が**セッションごとに変わる UUID** で現れることを、同一セッション内で観測した — 会話の途中で Gmail のツール群が `mcp__Gmail__*` から `mcp__09495523-9ab7-4fc9-8d56-ac6bddc39b49__*` に切り替わり、claude-code-remote は `mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__*` として現れた。
+> ⚠️ **本節は 2 回書き直している。** ①「サーバー名が UUID だから許可規則が照合できない」→ **誤り** (Gmail も UUID 名だが正常に動く)。②「`requiresUserInteraction` 注釈が付いているから」→ **機構としては近いが不正確**。以下がセッションの実設定ファイルとログを読んで確定させた事実。
 
-`permissions.allow` の規則はツール名で照合するため、**サーバー名が変わる相手を静的な規則で先に許可することが原理的にできない**。[ADR 0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) が「`.claude/settings.json` に `permissions.allow` を書いても `-32003` が消えなかった」と記録した現象は、これで説明がつく (当時は「プラットフォーム側のゲート」とだけ結論していた)。
+### 事実 1: セッションの MCP 設定が、全ツールを `always_ask` にしている
 
-したがって **repo 側の設定でこの確認を消すことはできない**。D6 のように「そもそも MCP を経由しない手段に置き換える」のが唯一の回避策になる。
+`/tmp/mcp-config-<session>.json` にセッションの MCP 設定が実在し、**ツール単位の `permission_policy`** を持つ。
+
+| サーバー               | 読み取り系                                                                                                   | 書き込み系   | `X-MCP-Server-Origin` |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------ | ------------ | --------------------- |
+| Gmail                  | `always_allow` (`list_labels` / `search_threads` / `get_message` …)                                          | `always_ask` | `directory`           |
+| **claude-code-remote** | **`always_ask`** (`list_triggers` / `list_sessions` / `list_environments` / `list_repos` / `get_session` も) | `always_ask` | **`statsig`**         |
+
+**Gmail は同じファイル内で読み書きを正しく分けている。** つまり設定形式は読み取りの自動許可に対応しており、claude-code-remote 側で**読み取り専用ツールまで一律 `always_ask` になっているのは設定の異常**と考えるのが自然。配信元が `statsig` (フィーチャーフラグ) である点もこれと整合する。
+
+### 事実 2: サーバー側 `always_ask` は `permissions.allow` で上書きできない
+
+**2 通りの名前で実験し、どちらも失敗した。**
+
+| 実験                                                                             | 結果                |
+| -------------------------------------------------------------------------------- | ------------------- |
+| `permissions.allow` に呼び出し名 `mcp__bf7c680d-…__list_triggers` を追加         | `-32003` のまま     |
+| `permissions.allow` に**正式名** `mcp__Claude_Code_Remote__list_triggers` を追加 | **`-32003` のまま** |
+
+これは文書化された挙動と一致する — 「サーバー側で `ask` に設定されたツールは、allow 規則が効かず毎回プロンプトが出る。プロンプトを出せないモードでは拒否される」([permissions docs](https://code.claude.com/docs/en/permissions))。**リポジトリ側の設定では原理的に解除できない。**
+
+### 事実 3: 呼び出し名と承認名が食い違っている
+
+MCP ログの実物:
+
+```text
+Tool 'list_triggers' returned -32003 needs_approval
+  (tool_name=mcp__Claude_Code_Remote__list_triggers) — surfacing retroactive approval card
+```
+
+**呼ぶときは `mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__list_triggers`、承認カードと許可判定は `mcp__Claude_Code_Remote__list_triggers`。** 手で許可規則を書こうとしたときに必ず間違える。ログディレクトリも `mcp-logs-Claude-Code-Remote` と `mcp-logs-bf7c680d-…` の 2 つに分裂している。
+
+### 事実 4: 承認カードは「事後」に出るため、承認しても呼び出しは成功しない (2026-08-09 に PO と共同で実証)
+
+PO の「あなたが 2 回呼んで NG にしているのでは」という仮説を検証するため、**1 回だけ呼んでターンを終える**実験を行った。結果:
+
+```text
+05:43:42  set_session_title 失敗 -32003 → surfacing retroactive approval card
+05:43:47  失敗 -32003                        ← 5 秒後。呼び出しは 1 回なのに 2 件目
+          ← ここで PO が承認カードを押した (承認は成功)
+05:44:32  set_session_title 失敗 -32003 → また承認カード提示
+05:44:35  失敗 -32003
+```
+
+確定した 3 点:
+
+1. **2 件目の失敗はエージェントのリトライではない。** 1 回の呼び出しに対して必ず 2 件の失敗が記録される = **ハーネス側の内部リトライ**。前版で「判別できていない」としていた点が決着した
+2. **承認は永続しない。** PO が承認した後の呼び出しも `needs_approval` になり、新しいカードが出た (`always_ask` の設定どおり)
+3. **承認カードは `retroactive` — 呼び出しが失敗した後に出る。** 既に失敗した呼び出しは承認しても復活せず、次の呼び出しはまた失敗から始まる
+
+**したがって成功する経路が構造的に存在しない。** 「実行前に承認を要する」という方針に対し、承認の提示が「実行後」になっているため噛み合っていない。これは方針 (読み取り系まで `always_ask` にするか) の是非とは別の、機構としての不整合である。
+
+なお **承認 UI 自体は正常に動作している** — カードは表示され、PO は押せた。ローカルの設定ファイルには何も書かれず、承認はサーバー側に記録される。
+
+### 公開されている同種の報告 (2026-08-09 調査)
+
+**この症状は広く報告されている。** `anthropics/claude-code` の Issue に同型のものが複数あり、いずれも **open・Anthropic からの公式回答なし**。
+
+| Issue                                                                                                                                                                                                  | 内容                                                                                                                                                                                                                             | 一致度                                             |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| [#61044](https://github.com/anthropics/claude-code/issues/61044)                                                                                                                                       | Routine (無人 CCR セッション) で MCP ツールが `requires approval` で失敗。承認 UI が出ない。ラベル `area:mcp` / `area:permissions` / `area:routines` / `platform:web` / `duplicate`。**「以前は動いていた (regression)」と明記** | 症状は同じ。ただし**無人 Routine 限定**の報告      |
+| [#61027](https://github.com/anthropics/claude-code/issues/61027) / [#61097](https://github.com/anthropics/claude-code/issues/61097) / [#61143](https://github.com/anthropics/claude-code/issues/61143) | 同上。コネクタを Routine に追加し「承認不要」と UI が表示していても失敗                                                                                                                                                          | 同上                                               |
+| [#43397](https://github.com/anthropics/claude-code/issues/43397)                                                                                                                                       | クラウドの定期タスクが MCP コネクタにアクセスできない                                                                                                                                                                            | 近縁                                               |
+| [#76264](https://github.com/anthropics/claude-code/issues/76264)                                                                                                                                       | **読み取り専用のセッション管理 MCP ツールが毎回承認を要求し、事前承認する方法が無い。** `permissions.allow` / `bypassPermissions` / `PreToolUse` フックの **3 つすべてが効かない**ことを報告者が検証済み                         | **本 ADR の実験結果と独立に一致**。事実 2 の裏付け |
+
+**未報告と思われる点 (本リポジトリ固有の発見)**: 上記はいずれも「無人だから承認 UI が出ない」という筋書きだが、**本セッションは対話セッションで承認カードが実際に出て、PO が承認に成功したにもかかわらず呼び出しが失敗した**。カードが `retroactive` (失敗後) に出ること、および約 5 秒後のハーネス内部リトライは、公開 Issue には見当たらない。報告する価値がある。
+
+### 結論
+
+- **リポジトリ側でも user の設定でも直せない。** 原因は Anthropic 側がセッションごとに配信する MCP 設定にあり、読み取り専用ツールまで `always_ask` になっている
+- **「前はできたはず」は妥当** — 配信がフラグ由来で、ログのサーバー名が旧 `Claude-Code-Remote` から UUID へ移行した形跡がある
+- 取れる手は変わらない: ① MCP を経由しない代替 (D6 の `CronCreate`) ② `claude --teleport` でターミナルに引き込む (事実 4 の 2 秒再試行があるため成功するとは限らない) ③ user が web UI で操作する
+
+**未確認の 1 点**: 事実 4 の「2 秒後の再試行」がクライアント側の実装なのかサーバー応答なのかは、ログからは判別できていない。
 
 ## Pros and Cons of the Options
 
