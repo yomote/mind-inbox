@@ -19,7 +19,7 @@ import { z } from "zod";
 import { appRouter } from "../trpc/router";
 import { createContext } from "../trpc/context";
 import { openChatStream } from "../chat/chatStream";
-import { prefetchTts, synthesizeTts } from "../tts/ttsService";
+import { planTts, prefetchTts, synthesizeTts } from "../tts/ttsService";
 import { warmupDownstreams } from "../warmup/warmupService";
 
 /** 入口が違っても同じログが出るように、ログ関数だけ差し込めるようにする。 */
@@ -85,6 +85,8 @@ const TtsRequestSchema = z.object({
   text: z.string().min(1),
   speaker: z.number().int().nonnegative().optional(),
   prefetch: z.boolean().optional(),
+  /** #185: 合成せず読み上げ単位の文の並びだけ返す (フロントの逐次再生用)。 */
+  plan: z.boolean().optional(),
 });
 
 /** VOICEVOX 合成 (`POST /api/tts`)。未構成なら 204 でフロントに縮退を促す。 */
@@ -100,12 +102,21 @@ export async function handleTts(
     return new Response(`Invalid request: ${parsed.error.message}`, { status: 400 });
   }
 
-  const { text, speaker, prefetch } = parsed.data;
+  const { text, speaker, prefetch, plan } = parsed.data;
   logger.log(
-    `[tts] text(len)=${text.length} speaker=${speaker ?? 3} prefetch=${Boolean(prefetch)}`,
+    `[tts] text(len)=${text.length} speaker=${speaker ?? 3} prefetch=${Boolean(prefetch)} plan=${Boolean(plan)}`,
   );
 
   try {
+    if (plan) {
+      // 文分割の真実は BFF が単独で持つ (ADR 0024)。フロントはこの並びをそのまま
+      // 1 文ずつ投げ返して逐次再生する (#185)。
+      const result = planTts({ text, speakerId: speaker });
+      if (result.status === "stub") return new Response(null, { status: 204 });
+      logger.log(`[tts] plan sentences=${result.sentences.length}`);
+      return Response.json({ sentences: result.sentences }, { status: 200 });
+    }
+
     if (prefetch) {
       // text は「ストリーミングで今までに届いた途中経過」。どこが文の切れ目かの判断は
       // BFF 側 (prefetchTts) が単独で持つ — フロントに分割ロジックを置かない (ADR 0024)。

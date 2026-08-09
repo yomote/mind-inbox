@@ -7,6 +7,7 @@ import VolumeOffIcon from "@mui/icons-material/VolumeOff";
 import { Button, Chip, CircularProgress, Stack, TextField, Typography } from "@mui/material";
 import * as React from "react";
 import { useVoiceInput } from "../../voice/useVoiceInput";
+import type { TtsStatus } from "../../voice/useTextToSpeech";
 
 type SessionComposerProps = {
   value: string;
@@ -14,6 +15,8 @@ type SessionComposerProps = {
   onSend: () => void;
   loading: boolean;
   speaking: boolean;
+  /** 読み上げの進行状態 (#185)。合成中と再生中を分けて出すために使う。 */
+  ttsStatus?: TtsStatus;
   ttsEnabled: boolean;
   voiceError: string | null;
   onToggleTtsEnabled: () => void;
@@ -26,12 +29,19 @@ function formatElapsed(totalSec: number): string {
   return `${min}:${String(sec).padStart(2, "0")}`;
 }
 
+/** 認識途中テキストを入力欄の末尾に継ぐ。区切りは appendTranscript と揃える。 */
+function withInterim(committed: string, interim: string): string {
+  if (!interim) return committed;
+  return committed.trim().length > 0 ? `${committed}\n${interim}` : interim;
+}
+
 export function SessionComposer({
   value,
   onChange,
   onSend,
   loading,
   speaking,
+  ttsStatus,
   ttsEnabled,
   voiceError,
   onToggleTtsEnabled,
@@ -56,15 +66,39 @@ export function SessionComposer({
   }, []);
 
   const voice = useVoiceInput(appendTranscript);
+  const inputRef = React.useRef<HTMLTextAreaElement | HTMLInputElement | null>(null);
+
+  /**
+   * マイクボタン (#186)。**同期で** 入力欄にフォーカスしてから開始する。
+   * 押した後にユーザーが入力欄をクリックし直さないと手直し・送信できない、
+   * という往復をここで無くす。
+   */
+  const handleToggleVoice = React.useCallback(() => {
+    if (!voice.listening) inputRef.current?.focus();
+    voice.toggle();
+  }, [voice]);
+
+  // 認識途中テキストは**入力欄の中**に出す (#186)。以前は入力欄の外の小さな
+  // キャプションだったため、喋っている最中は入力欄が空に見えて「入っていない」
+  // と受け取られていた。確定すると stitcher が value 側へ commit する。
+  const displayValue = voice.listening ? withInterim(value, voice.interimTranscript) : value;
 
   return (
     <Stack spacing={1}>
       <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
         <TextField
           fullWidth
-          value={value}
+          multiline
+          minRows={1}
+          maxRows={6}
+          inputRef={inputRef}
+          value={displayValue}
           onChange={(e) => onChange(e.target.value)}
           placeholder="ここに入力 / 話して入力"
+          // 認識中は表示が「確定テキスト + 未確定テール」の合成なので、直接編集させると
+          // 確定時に二重に入る。停止すれば未確定分は確定して普通に編集できる。
+          slotProps={{ input: { readOnly: voice.listening } }}
+          helperText={voice.listening ? "認識中は編集できません。停止すると編集できます。" : " "}
         />
         <Button variant="outlined" onClick={onSend} disabled={loading || !value.trim()}>
           {loading ? <CircularProgress size={20} /> : "送信"}
@@ -75,7 +109,7 @@ export function SessionComposer({
         <Button
           variant={voice.listening ? "contained" : "outlined"}
           color={voice.listening ? "secondary" : "primary"}
-          onClick={voice.toggle}
+          onClick={handleToggleVoice}
           disabled={!voice.supported || loading}
           startIcon={voice.listening ? <MicOffIcon /> : <MicIcon />}
         >
@@ -99,12 +133,47 @@ export function SessionComposer({
           読み上げ停止
         </Button>
 
-        {voice.listening && (
+        {/*
+          読み上げの待ち時間を見えるようにする (#185)。合成には数秒かかるのに以前は
+          画面が何も変わらず、「待てば鳴るのか、もう終わったのか」が判別できなかった。
+          合成中と再生中を別の表示にして、どちらでも停止できることを示す。
+        */}
+        {ttsStatus === "synthesizing" && (
+          <Chip
+            icon={<CircularProgress size={12} color="inherit" />}
+            label="ずんだもんが準備中…"
+            variant="outlined"
+            size="small"
+            data-testid="tts-status"
+          />
+        )}
+        {ttsStatus === "playing" && (
+          <Chip
+            icon={<GraphicEqIcon />}
+            label="読み上げ中"
+            color="primary"
+            size="small"
+            data-testid="tts-status"
+          />
+        )}
+
+        {voice.phase === "preparing" && (
+          // 押した直後〜マイクが開くまで (#186)。この区間に喋られた内容は落ちるので、
+          // 「押した = もう聞いている」と誤解させないために別表示にする。
+          <Chip
+            icon={<CircularProgress size={12} color="inherit" />}
+            label="マイクを準備中…"
+            color="default"
+            variant="outlined"
+            size="small"
+          />
+        )}
+        {voice.phase === "listening" && (
           // 録音状態の可視化 (#121): 経過時間つきで「聞き続けている」ことを示す。
           // エンジンの無音タイムアウトで裏側が再起動しても、ユーザーが停止するまでこの表示は続く。
           <Chip
             icon={<GraphicEqIcon />}
-            label={`認識中 ${formatElapsed(voice.elapsedSec)}`}
+            label={`聞いています ${formatElapsed(voice.elapsedSec)}`}
             color="secondary"
             size="small"
           />
@@ -130,12 +199,6 @@ export function SessionComposer({
       {!voice.supported && (
         <Typography variant="caption" color="warning.main">
           このブラウザは音声入力に対応していません。
-        </Typography>
-      )}
-
-      {voice.interimTranscript && (
-        <Typography variant="caption" color="text.secondary">
-          音声認識中: {voice.interimTranscript}
         </Typography>
       )}
 

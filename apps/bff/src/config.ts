@@ -13,6 +13,14 @@ export const config = {
   // フロントは Web Speech にフォールバックする。
   speechResourceId: process.env["SPEECH_RESOURCE_ID"] || undefined,
   speechRegion: process.env["SPEECH_REGION"] || undefined,
+  // Cosmos DB (ADR 0030)。**COSMOS_ENDPOINT が真偽の分岐点** — 未設定なら in-memory
+  // リポジトリのまま動く (ローカル / テストの既定 = ADR 0030 D7)。
+  // 接続文字列やキーは持たない (disableLocalAuth: true / D3)。認証は Functions の
+  // Managed Identity + data plane RBAC のみ。
+  cosmosEndpoint: process.env["COSMOS_ENDPOINT"] || undefined,
+  cosmosDatabase: process.env["COSMOS_DATABASE"] || "mindinbox",
+  cosmosProblemsContainer: process.env["COSMOS_PROBLEMS_CONTAINER"] || "problems",
+  cosmosHistoryContainer: process.env["COSMOS_HISTORY_CONTAINER"] || "history",
 } as const;
 
 export type Config = typeof config;

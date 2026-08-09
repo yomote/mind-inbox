@@ -56,6 +56,15 @@ jobs:
         run: |
           RG="$RG" DEPLOYMENT="$DEPLOYMENT" ./cicd/scripts/smoke-test/golden-path.sh
 
+      # 永続化の実測 (#165 / ADR 0030)。「前回 run が保存したものが今も読めるか」を見て、
+      # 新しいマーカーを次回 run のために置く。毎朝 1 回なので 24 時間のアイドルを挟む =
+      # Functions Y1 のリサイクルを確実に経た後の実測になる (デプロイ直後のスモークでは
+      # 絶対に捕まらない層)。AI は呼ばないのでコストは実質ゼロ。
+      - name: 永続化プローブ（前回 run のデータが残っているか）
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          RG="$RG" DEPLOYMENT="$DEPLOYMENT" ./cicd/scripts/smoke-test/persistence-probe.sh
+
       - name: Setup Node 22
         if: steps.guard.outputs.run == 'true'
         uses: actions/setup-node@v4

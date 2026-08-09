@@ -17,11 +17,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../chat/chatStream", () => ({ openChatStream: vi.fn() }));
-vi.mock("../tts/ttsService", () => ({ prefetchTts: vi.fn(), synthesizeTts: vi.fn() }));
+vi.mock("../tts/ttsService", () => ({
+  planTts: vi.fn(),
+  prefetchTts: vi.fn(),
+  synthesizeTts: vi.fn(),
+}));
 vi.mock("../warmup/warmupService", () => ({ warmupDownstreams: vi.fn() }));
 
 import { openChatStream } from "../chat/chatStream";
-import { prefetchTts, synthesizeTts } from "../tts/ttsService";
+import { planTts, prefetchTts, synthesizeTts } from "../tts/ttsService";
 import { warmupDownstreams } from "../warmup/warmupService";
 import { handleChatStream, handleTrpc, handleTts, handleWarmup } from "./handlers";
 
@@ -75,6 +79,29 @@ describe("[L2] handleTts — status 表", () => {
     expect(res.status).toBe(expected);
     expect(res.body).toBeNull();
     expect(synthesizeTts).not.toHaveBeenCalled();
+  });
+
+  it("plan → 200 で文の並びだけを返し、合成には行かない", async () => {
+    // 無いと: #185 の逐次再生が「全文一括」に戻っても status は 200 のままなので気づけない。
+    // plan で合成まで走ると VOICEVOX を二重に叩く (音は鳴るので他の手段では見えない)。
+    vi.mocked(planTts).mockReturnValue({ status: "ok", sentences: ["あ。", "い。"] });
+
+    const res = await handleTts(postJson("http://x/api/tts", { text: "あ。い。", plan: true }), silent);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ sentences: ["あ。", "い。"] });
+    expect(synthesizeTts).not.toHaveBeenCalled();
+    expect(prefetchTts).not.toHaveBeenCalled();
+  });
+
+  it("plan stub → 204 (VOICEVOX 未構成)", async () => {
+    // 無いと: 未構成でも 200 + 空の並びが返り、フロントがブラウザ読み上げへ縮退できない
+    vi.mocked(planTts).mockReturnValue({ status: "stub" });
+
+    const res = await handleTts(postJson("http://x/api/tts", { text: "あ。", plan: true }), silent);
+
+    expect(res.status).toBe(204);
+    expect(res.body).toBeNull();
   });
 
   it("returns 502 when synthesis throws", async () => {

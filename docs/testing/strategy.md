@@ -78,14 +78,14 @@ Mind Inbox は **コーディングエージェント駆動の高速開発** を
 
 ### L0 契約 (Contract Test)
 
-| 項目               | 内容                                                                                            |
-| ------------------ | ----------------------------------------------------------------------------------------------- |
-| **目的**           | BFF と AI Agent が同じ I/O を別言語で書いているため、片側だけ変更されても気づけるようにする     |
-| **対象**           | `consultation.organize` `consultation.createPlan` `consultation.approve` などの I/O JSON Schema |
-| **フレームワーク** | TS スクリプト + JSON Schema diff                                                                |
-| **書き方の指針**   | tRPC の zod と pydantic からそれぞれ JSON Schema を生成し、構造を比較。差分があれば fail        |
-| **非ゴール**       | フィールドの値の妥当性 (それは L2 でやる)                                                       |
-| **実行コマンド**   | `npm run test:contract`                                                                         |
+| 項目               | 内容                                                                                                                                                                                                                                                |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **目的**           | BFF と AI Agent が同じ I/O を別言語で書いているため、片側だけ変更されても気づけるようにする                                                                                                                                                         |
+| **対象**           | ai-agent の全エンドポイント (`/chat` `/chat/stream` `/extract` `/organize` `/plan` `/approve`) の I/O。BFF 側の真実は `apps/bff/src/clients/aiAgentContracts.ts` + `apps/bff/src/trpc/domain.ts` の zod、ai-agent 側は `app/schemas.py` の pydantic |
+| **フレームワーク** | TS スクリプト + JSON Schema diff (`apps/bff/scripts/contract-check.mjs` / 比較器は `apps/bff/src/contract/schemaDiff.ts`)                                                                                                                           |
+| **書き方の指針**   | zod と pydantic からそれぞれ JSON Schema を生成し、**ネストを再帰展開したフィールドパス** (`items[].mention.affect.valence`) 単位で 型 / nullable / 欠落可能性 / enum メンバ集合 を比較。差分があれば fail                                          |
+| **非ゴール**       | フィールドの値の妥当性 (それは L2 でやる)。数値の min/max・description などの注釈差、camelCase↔snake_case・`Optional[T]`↔`z.nullable()` の表現差は**意図的に無視**する (false positive を出すと誰も直さなくなる)                                    |
+| **実行コマンド**   | `npm run test:contract` (比較器自身の回帰は `apps/bff/src/contract/schemaDiff.test.ts` が守る)                                                                                                                                                      |
 
 ### L1 単体 (Unit Test)
 

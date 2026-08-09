@@ -1,5 +1,7 @@
-import { historyRepository, type HistoryRepository } from "../repositories/historyRepository";
-import { problemRepository, type ProblemRepository } from "../repositories/problemRepository";
+import { resolveUserId } from "../auth/clientPrincipal";
+import type { HistoryRepository } from "../repositories/historyRepository";
+import type { ProblemRepository } from "../repositories/problemRepository";
+import { createRepositories } from "../repositories/repositoryFactory";
 
 /**
  * tRPC コンテキスト。
@@ -8,6 +10,10 @@ import { problemRepository, type ProblemRepository } from "../repositories/probl
  *
  * req は Web 標準の Request で持つ (Azure Functions の型に依存しない)。
  * BFF の入口は Functions だけではなく、ローカル配信サーバからも同じ router を叩く。
+ *
+ * **userId は repo のコンストラクタに束ねてある** (ADR 0030 D5)。ここで解決して
+ * `createRepositories` に渡すので、`ProblemRepository` / `HistoryRepository` の
+ * シグネチャにはユーザーの概念が現れない — router もテストも userId を知らない。
  */
 export type TrpcContext = {
   req: Request;
@@ -16,5 +22,6 @@ export type TrpcContext = {
 };
 
 export function createContext(req: Request): TrpcContext {
-  return { req, historyRepo: historyRepository, problemRepo: problemRepository };
+  const userId = resolveUserId(req);
+  return { req, ...createRepositories(userId) };
 }

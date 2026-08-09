@@ -1,5 +1,6 @@
 import { Paper, Stack, Typography } from "@mui/material";
 import type { ConsultationSession } from "../../api";
+import type { TtsStatus } from "../../voice/useTextToSpeech";
 import { SessionComposer } from "./SessionComposer";
 import { SessionControls } from "./SessionControls";
 import { SessionMessages } from "./SessionMessages";
@@ -11,6 +12,8 @@ type SessionScreenProps = {
   // STT (音声入力) は SessionComposer が useVoiceInput で自律的に扱う (#121 / ADR 0023)。
   // 旧配線 (sttSupported / listening / interimTranscript / onToggleListening) は #133 で撤去済み。
   speaking: boolean;
+  /** 読み上げの進行状態 (#185)。合成中の待ち時間を画面に出すために使う。 */
+  ttsStatus?: TtsStatus;
   ttsEnabled: boolean;
   voiceError: string | null;
   onDraftMessageChange: (value: string) => void;
@@ -28,6 +31,7 @@ export function SessionScreen({
   draftMessage,
   loading,
   speaking,
+  ttsStatus,
   ttsEnabled,
   voiceError,
   onDraftMessageChange,
@@ -52,6 +56,7 @@ export function SessionScreen({
           onSend={onSendMessage}
           loading={loading}
           speaking={speaking}
+          ttsStatus={ttsStatus}
           ttsEnabled={ttsEnabled}
           voiceError={voiceError}
           onToggleTtsEnabled={onToggleTtsEnabled}

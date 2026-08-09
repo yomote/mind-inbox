@@ -11,7 +11,8 @@ import { contextLogger, toFetchRequest, toHttpResponseInit } from "../http/azure
  *
  * #120: 合成は文単位の分割 + 並行 + キャッシュ (ttsService)。`prefetch: true` は
  * ストリーミング中のフロントが確定文を先行合成させるための呼び方で、音声は返さず
- * 202 (キャッシュ済み) を返す。status の決定は http/handlers.ts に集約している。
+ * 202 (キャッシュ済み) を返す。`plan: true` は合成せず読み上げ単位の文だけを返す (#185)。
+ * status の決定は http/handlers.ts に集約している。
  */
 async function ttsHandler(req: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
   const response = await handleTts(await toFetchRequest(req), contextLogger(context));

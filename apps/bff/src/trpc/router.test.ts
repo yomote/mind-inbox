@@ -8,7 +8,9 @@
  *   - aiAgentClient 内部の HTTP 通信 / fetch の挙動 (それは aiAgentClient の test 範疇)
  *   - LLM 出力の妥当性 (それは ai-agent 側 L1)
  *   - UI 描画 / Azure Functions の HTTP wrapping (それは L3 / L4)
- *   - historyRepository の永続化保証 (本番は Cosmos DB に置き換わる)
+ *   - repository の永続化保証。ここは常に InMemory* を注入する。本番の Cosmos 実装
+ *     (ADR 0030) は cosmosRepositories.test.ts が、実環境での残存は
+ *     cicd/scripts/smoke-test/persistence-probe.sh が見る
  */
 
 import { TRPCError } from "@trpc/server";
