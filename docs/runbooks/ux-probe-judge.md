@@ -8,7 +8,7 @@
 
 ## Prerequisites
 
-- `gh` CLI (repo read + issues write) — **無い環境では GitHub MCP で代替する** (下記「gh が無い環境でのフォールバック」)
+- `gh` CLI (repo read + issues write) — **満たせるのは人間の手元だけ**。agent セッションでは使えないので GitHub MCP で代替する (下記「agent セッションでは gh が使えない」)
 - 採点は Claude セッションから subagent `ux-reviewer` を起動できること
 - 背景理解: [ADR 0022](../adr/0022-autonomous-ux-improvement-loop.md) / rubric は `.github/claude/ux-rubric.md` (**真実**)
 
@@ -93,12 +93,30 @@
 — MCP が許可されたセッションからは `list_triggers` / `create_trigger` / `update_trigger` が
 そのまま通る。#90 / #92 も同じ理由で滞留していたので、同様に解ける見込み。
 
-### gh が無い環境でのフォールバック
+### agent セッションでは gh が使えない — GitHub MCP で代替する
 
-Claude Code on the web の実行環境には **`gh` CLI が無く**、`GITHUB_TOKEN` での
-`api.github.com` 直叩きも 403 になる (2026-08-09 実測)。上の 2 本のスクリプトはどちらも
-冒頭で `command -v gh` を見て終了コード 1 で落ちるため、その環境では GitHub MCP で代替する
-(Routine のプロンプトにも同じ手順が入っている):
+**Prerequisites の「`gh` CLI」を満たせるのは人間の手元だけ**で、Claude Code on the web の
+agent セッションでは満たせない。2026-08-09 に実測した内容:
+
+- `gh` は最初から入っていない。**apt で入れることはできる** (`apt-get install gh` → 2.45.0)
+- しかし入れても使えない。`GH_TOKEN` / `GITHUB_TOKEN` は環境変数として存在するが、
+  `api.github.com` への直接アクセスがゲートウェイで拒否される:
+
+  ```text
+  $ gh run list -R yomote/mind-inbox -w golden-path-monitor.yml
+  HTTP 403: GitHub access is not enabled for this session.
+            An org admin must connect the Claude GitHub App for this organization.
+  ```
+
+  `curl` で直に叩いても同じ 403。egress プロキシではなくゲートウェイ側の判断なので、
+  **インストールでは解けない** (`github.com` への素の HTTPS も 403 — ただし git の
+  fetch/push は別経路の credential helper を通るので普通に動く)
+
+- したがって `fetch-latest-probe.sh` / `post-judge-score.sh` は、**どちらも意図した実行環境
+  (無人 Routine) では冒頭の `command -v gh` で終了コード 1 になり、そのままでは機能しない**
+
+恒久対策は未決 ([#160](https://github.com/yomote/mind-inbox/issues/160))。それまでは
+GitHub MCP で代替する (Routine のプロンプトにも同じ手順が入っている):
 
 - **記録 JSON の取得** (Step 2 の代替):
   1. `actions_list` (method=`list_workflow_runs`, resource_id=`golden-path-monitor.yml`, per_page=1) → 最新 run ID
