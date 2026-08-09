@@ -258,6 +258,23 @@ paths:
                 sessionId:
                   type: string
                   minLength: 1
+                messages:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      role:
+                        type: string
+                        enum:
+                          - user
+                          - assistant
+                      text:
+                        type: string
+                    required:
+                      - role
+                      - text
+                    additionalProperties: false
+                  default: []
               required:
                 - sessionId
               additionalProperties: false
