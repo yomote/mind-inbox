@@ -59,6 +59,9 @@ Runbook PR は実際にその手順を**踏んだ人**が書くか、レビュ�
 - `entra-spa-auth-and-budget.md` — 常設 dev の認可 (Entra SPA + Functions EasyAuth) と予算アラート (#69 / ADR 0013)
 - `container-apps-auth-gate.md` — Container Apps の認証の門 (組み込み認証 + Managed Identity)。IP 許可リストが成立しない実測記録つき (#86 / ADR 0017)
 - `review-agents.md` — 独立 judge エージェント (security / QA / biz-owner / release) の運用とリリース PR ゲート (ADR 0019)
+- `ops-inspect.md` — サンドボックスの外にある事実 (Azure の実態 / egress の外のページ) をエージェントが自力で取る (ADR 0031)。**許可ネットワークドメインの写しもここ**
+- `ux-probe-judge.md` — UX 体験プローブの記録と毎朝の無人採点 (ADR 0027 / 0029)
+- `cd-watchdog.md` — CD の赤を毎時検知して診断・fix PR まで進める watchdog Routine (ADR 0026)
 
 未作成 (必要になった時に起こす。存在しない文書をここに列挙しない):
 `deploy-all.sh` / `cleanup-env.sh` / `golden-path.sh` 等のデプロイ・撤収系は
