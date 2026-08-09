@@ -8,7 +8,8 @@
 - `curl` が使えること
 - Azure にログイン済み: `az login`
 
-> 注意: 現状の IaC では、SQL の診断設定は作成されますが `logs/metrics` のカテゴリが **未指定** です。そのため Log Analytics にデータが入らない可能性が高いです（= テストで検出したいポイント）。
+> 注意: **SQL 一式は `enableSql=true` の時だけ作られる**（既定 false / [ADR 0013](../../../docs/adr/0013-standing-low-cost-dev-env-with-auto-deploy.md)）。既定構成では §2.4 以降の SQL 系チェックは自動 skip される。
+> 有効にした場合、SQL の診断設定は作成されるが `logs/metrics` のカテゴリが **未指定**のため Log Analytics にデータが入らない可能性が高い（= テストで検出したいポイント）。
 
 ## 0. 必要情報
 

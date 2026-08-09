@@ -4,8 +4,16 @@
 
 現行の真実: [`docs/design/`](../) 直下 (要件 / ユースケース / ドメインモデル / v2 実装計画) と [`docs/adr/`](../../adr/README.md)。
 
-| ファイル                                                 | 何だったか                                                      | なぜ archive したか                                                                                                                                                                                                                                                                                                          |
-| -------------------------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`implementation_plan.md`](implementation_plan.md)       | PoC (話す→整理→プラン) の実装計画                               | PoC 完了                                                                                                                                                                                                                                                                                                                     |
-| [`implementation_plan_v1.md`](implementation_plan_v1.md) | v1 (Problem 中心 2層モデル) の実装計画                          | v1 完了 ([`implementation_plan_v2.md`](../implementation_plan_v2.md) が後継)                                                                                                                                                                                                                                                 |
-| [`deploy_plan.md`](deploy_plan.md)                       | PoC 期のデプロイ計画 (ACR ×2 / SQL Private Endpoint / GPU 前提) | [ADR 0013](../../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) (ghcr 移行・ACR 撤去・SQL 既定オフ) と [ADR 0010](../../adr/0010-voicevox-cpu-gpu-deploy-tier.md) (既定 cpu) で全面失効。現行は [ADR 0013](../../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) + [Runbook](../../runbooks/ghcr-images.md) |
+| ファイル                                                 | 何だったか                             | 状態                                                                         |
+| -------------------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------- |
+| [`implementation_plan_v1.md`](implementation_plan_v1.md) | v1 (Problem 中心 2層モデル) の実装計画 | v1 完了 ([`implementation_plan_v2.md`](../implementation_plan_v2.md) が後継) |
+| [`basic_design_poc.md`](basic_design_poc.md)             | PoC フェーズの基本設計書 (2026-05-01)  | PoC 完了。現行構造は [ルート README](../../../README.md) と各 ADR が真典     |
+
+## 削除したもの
+
+内容が全面失効し、参照先も無くなったため削除した。掘り返す場合は git 履歴から。
+
+| ファイル                 | 何だったか                                                      | なぜ削除したか                                                                                                                                    |
+| ------------------------ | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `implementation_plan.md` | PoC (話す→整理→プラン) の実装計画                               | PoC 完了。後継の v1 / v2 計画が現行                                                                                                               |
+| `deploy_plan.md`         | PoC 期のデプロイ計画 (ACR ×2 / SQL Private Endpoint / GPU 前提) | [ADR 0013](../../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) と [ADR 0010](../../adr/0010-voicevox-cpu-gpu-deploy-tier.md) で全面失効 |

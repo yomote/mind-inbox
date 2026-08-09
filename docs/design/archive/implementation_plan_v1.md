@@ -70,7 +70,7 @@ Phase C: 結線・後片付け
 
 ### D1. ドメイン型定義
 
-- **変更対象**: `apps/bff/src/trpc`（型のソース。basic_design §8.3 に従い型はここから import）に `Mention` / `Problem` / `Theme` を追加。
+- **変更対象**: `apps/bff/src/trpc`（型のソース。PoC 期設計 §8.3 に従い型はここから import）に `Mention` / `Problem` / `Theme` を追加。
 - **要点**: `domain_model.md §2` の属性に従う。`Theme` は固定7分類 + `未分類` の union 型。
 - **完了条件**: フロント / BFF 双方から参照できる型が定義され、コンパイルが通る。
 

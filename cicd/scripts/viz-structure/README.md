@@ -41,5 +41,5 @@ cd cicd/scripts/viz-structure
 - `artifacts/topology/latest/logical-edges.json`
 - `artifacts/topology/latest/resource-roles.tsv`
 - `artifacts/topology/latest/resource-roles.md`
-- `docs/iac/topology.svg`
-- `docs/iac/topology_resource_roles.md`
+- `docs/cicd/iac/infra_arch.svg`
+- `docs/cicd/iac/infra_arch_resource_roles.md`（commit 対象の生成物。手書きで直さない）
