@@ -4,18 +4,7 @@
 
 OpenAI の鍵 (Managed Identity) を持つ ai-agent と、その隣の vv-wrap を、**Container Apps 組み込み認証 (Entra)** で守る。BFF (Functions) は自身の Managed Identity でトークンを取得して通る。voicevox 本体は internal ingress (#101) のため門は不要。
 
-## なぜ IP 許可リストではないのか (実測記録 2026-08-08)
-
-応急処置だった IP 許可リストは**原理的に機能しない**ことが実測で確定した:
-
-- Functions (Consumption) の実送信元 IP が、`possibleOutboundIpAddresses` の 20 個の**どれでもない** IP から出ており、リストをいくら同期しても 403 が再発した
-- 許可リストを一時的に全開放すると全経路が疎通 (実 AI 応答まで確認) → 詰まりの犯人が IP 制限だと確定
-- ADR 0017 が Option D (IP 許可リスト) を「IP 変動に脆い」と退けた判断の実地裏付け
-
-> **切り分けに使ったプローブ**: この開発環境からは Functions/Container Apps に直接届かないため、
-> ACI (curlimages/curl) を RG 内に使い捨てで立て、`az account get-access-token --scope api://<spa-client-id>/.default`
-> で取った実トークンを付けて BFF を叩き、`az container logs` で結果を読む。ログは ARM 経由なので
-> egress 制限下でも読める。終わったら `az container delete`。
+> **IP 許可リストに戻さないこと。** 原理的に機能しないことが実測で確定している ([ADR 0017](../adr/0017-container-apps-access-via-auth-gate.md) Option D / 下の実測記録)。
 
 ## 一度きりのセットアップ
 
@@ -72,6 +61,17 @@ curl -s -o /dev/null -w '%{http_code}\n' "https://<vv-wrap-fqdn>/health"    # �
 | BFF 経由の対話が 500 (`/chat failed — 403`) | (旧) IP 許可リストが残っている。`az containerapp show` の `ipSecurityRestrictions` を確認し全撤去する。認証の門と IP 制限は併用しない (IP 制限が門より手前で評価され、Functions の実 IP は予測不能) |
 | 匿名直叩きが 200                            | 門が立っていない。deploy スクリプトの `Applying auth gate` ログを確認。`containerAppsGateClientId` 未設定なら WARN が出ているはず                                                                   |
 | トークン取得が失敗 (AADSTS500011)           | gate アプリの SP 未作成。`az ad sp show --id <GATE_ID>` で確認                                                                                                                                      |
+
+**この環境から直接届かないときの切り分けプローブ**: ACI (curlimages/curl) を RG 内に使い捨てで立て、`az account get-access-token --scope api://<spa-client-id>/.default` のトークンを付けて BFF を叩き、`az container logs` で読む (ARM 経由なので egress 制限下でも読める)。終わったら `az container delete`。
+
+<details>
+<summary>IP 許可リストが機能しないことの実測記録 (2026-08-08)</summary>
+
+- Functions (Consumption) の実送信元 IP が `possibleOutboundIpAddresses` の 20 個の**どれでもない** IP から出ており、リストをいくら同期しても 403 が再発した
+- 許可リストを一時的に全開放すると全経路が疎通 (実 AI 応答まで確認) → 詰まりの犯人が IP 制限だと確定
+- [ADR 0017](../adr/0017-container-apps-access-via-auth-gate.md) が Option D を「IP 変動に脆い」と退けた判断の実地裏付け
+
+</details>
 
 ## ローカル開発
 

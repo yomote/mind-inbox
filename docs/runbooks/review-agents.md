@@ -8,36 +8,23 @@
 
 セキュリティレビュー / QA レビュー / リリース判定を回したい・観点を変えたい・動かない時。
 
-## 全体像 (ループのどこに入るか)
+## 全体像 (どこで何が走るか)
 
-```
-実装セッション ── pr-readiness (自己チェック)
-      │ PR 作成
-      ▼
-PR レビュー Routine (ADR 0008: doc 整合・バグ・テンプレ)
-      ├─→ security-reviewer subagent (PR にセキュリティ関連差分がある時)
-      ▼
-人間 merge
-      │ 節目が来たら: リリース PR (main → release) を開く
-      │ ※ main への機能 PR / dev への日常 auto-deploy には差し込まない
-      ▼
-/release-gate skill (リリース PR で起動 — Routine or 手動)
-      ├─ 開発リリースレポート作成 (事実の列挙のみ・自己判定なし)
-      ├─→ security-reviewer (スキャナ総動員 + 動的チェック)          ┐
-      ├─→ qa-reviewer (受け入れマトリクス + ゴールデンパス/UI 挙動 L3) ┤ 並列・新品コンテキスト
-      ├─→ biz-owner-reviewer (実操作ウォークスルー + 違和感)          ┘
-      ▼
-release-judge ← 4 レポート + CI レイヤ別結果を突合
-      │   (機能揃ってる? コンセプトとズレてない? テスト/QA やった?
-      │    → 🟢 GO / 🟡 / 🔴 NO-GO + 宛先つき作業指示リスト)
-      │   blocker はリリース PR のスレッドに → 未解決ならマージ不可 (ブランチ保護)
-      ▼
+```text
+PR 作成 → PR レビュー Routine (ADR 0008) [+ security-reviewer] → 人間 merge
+                                                                    │ 節目
+リリース PR (main → release) → /release-gate                        ▼
+   ├─ 開発リリースレポート (事実の列挙のみ・自己判定なし)
+   ├─→ security-reviewer / qa-reviewer / biz-owner-reviewer  (並列・新品コンテキスト)
+   └─→ release-judge ← 4 レポート + CI を突合 → 🟢 / 🟡 / 🔴 + 宛先つき作業指示
+                        blocker はリリース PR のスレッドへ → 未解決ならマージ不可
 人間がリリース PR をマージ → stg/prod へ deploy (deploy-*.sh)
 ```
 
-分離の原則: **judge は必ず subagent (新品コンテキスト) として起動する**。実装セッション自身に審査させない (理由は [ADR 0019](../adr/0019-independent-judge-agents-security-qa-release.md))。
+main への機能 PR / dev の日常 auto-deploy には差し込まない。
 
-**各 judge が何を見るか・何をやらないかは rubric が正典** — 下の表から辿る (ここには再掲しない)。スキャナの一覧も [`security-rubric.md`](../../.github/claude/security-rubric.md) の「スキャンツールの併用」が正典。
+- **judge は必ず subagent (新品コンテキスト) で起動する** — 実装セッション自身に審査させない ([ADR 0019](../adr/0019-independent-judge-agents-security-qa-release.md))
+- **各 judge の観点は rubric が正典** — 下の表から辿る。スキャナ一覧も [`security-rubric.md`](../../.github/claude/security-rubric.md) が正典
 
 ## 構成ファイル (rubric-as-truth)
 
