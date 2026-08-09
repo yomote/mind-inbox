@@ -67,48 +67,60 @@ Chosen option: **"Option C"**。runner は egress 制限を受けず OIDC で Az
 - **MCP の承認ゲート (子セッション起動 / Routine 登録) はこの ADR では解決しない**。ADR 0028 D1 のまま。D6 が救うのは「セッション内のチェックイン」だけで、**セッションを跨ぐ定期実行は依然として人手登録**
 - **D6 のチェックインはセッションと運命を共にする**。セッションが終われば消えるので、「PR を最後まで見届ける」の保証にはならない (見届ける主体が消えるという意味では整合しているが、取りこぼしはありうる)
 
-## 補足: なぜ承認を「記憶」させられないのか (2026-08-09 に根本原因を特定)
+## 補足: claude-code-remote MCP が使えない根本原因 (2026-08-09 特定)
 
-> ⚠️ **本節は 2026-08-09 に全面的に書き直した。** 当初は「MCP サーバー名がセッションごとに変わる UUID なので `permissions.allow` が照合できない」と結論していたが、**これは誤りだった** — Gmail コネクタも UUID 名 (`mcp__09495523-…`) で現れるが、承認なしで正常に呼べることを実測で確認したため。以下が実測とドキュメントで裏を取った本当の原因。
+> ⚠️ **本節は 2 回書き直している。** ①「サーバー名が UUID だから許可規則が照合できない」→ **誤り** (Gmail も UUID 名だが正常に動く)。②「`requiresUserInteraction` 注釈が付いているから」→ **機構としては近いが不正確**。以下がセッションの実設定ファイルとログを読んで確定させた事実。
 
-### 原因: `anthropic/requiresUserInteraction` 注釈
+### 事実 1: セッションの MCP 設定が、全ツールを `always_ask` にしている
 
-MCP サーバーは、ツールの `tools/list` 応答に `_meta["anthropic/requiresUserInteraction"] = true` を付けることで、**そのツールを「毎回、人間の承認を必須」にできる** ([Claude Code docs / MCP](https://code.claude.com/docs/en/mcp))。この注釈が付いたツールは:
+`/tmp/mcp-config-<session>.json` にセッションの MCP 設定が実在し、**ツール単位の `permission_policy`** を持つ。
 
-- `acceptEdits` / `auto` / `bypassPermissions` のどのモードでも**毎回プロンプトが出る**
-- **「次回から確認しない」の選択肢が出ない**
-- **`permissions.allow` の許可規則が効かない**
-- `dontAsk` モード (プロンプトを出さないモード) では**拒否される**
+| サーバー               | 読み取り系                                                                                                   | 書き込み系   | `X-MCP-Server-Origin` |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------ | ------------ | --------------------- |
+| Gmail                  | `always_allow` (`list_labels` / `search_threads` / `get_message` …)                                          | `always_ask` | `directory`           |
+| **claude-code-remote** | **`always_ask`** (`list_triggers` / `list_sessions` / `list_environments` / `list_repos` / `get_session` も) | `always_ask` | **`statsig`**         |
 
-`claude-code-remote` の `create_session` / `set_session_title` / `list_triggers` / `send_later` 等の挙動は、この仕様と完全に一致する。
+**Gmail は同じファイル内で読み書きを正しく分けている。** つまり設定形式は読み取りの自動許可に対応しており、claude-code-remote 側で**読み取り専用ツールまで一律 `always_ask` になっているのは設定の異常**と考えるのが自然。配信元が `statsig` (フィーチャーフラグ) である点もこれと整合する。
 
-### なぜクラウドセッションでは「聞かれもせず」拒否されるのか
+### 事実 2: サーバー側 `always_ask` は `permissions.allow` で上書きできない
 
-同じドキュメントにこう書かれている — Remote Control のような**ワンタップ承認ができる面では、この注釈付きツールに限りワンタップが差し止められ、完全なプロンプト (ターミナルのダイアログ) でしか答えられない**。
+**2 通りの名前で実験し、どちらも失敗した。**
 
-**Claude Code on the web のセッションにはターミナルのダイアログが無い。** したがって承認要求が人間に到達できず、`-32003 MCP tool call requires approval` として即座に拒否される。設定では変えられない。
+| 実験                                                                             | 結果                |
+| -------------------------------------------------------------------------------- | ------------------- |
+| `permissions.allow` に呼び出し名 `mcp__bf7c680d-…__list_triggers` を追加         | `-32003` のまま     |
+| `permissions.allow` に**正式名** `mcp__Claude_Code_Remote__list_triggers` を追加 | **`-32003` のまま** |
 
-### 「前はできたはず」は正しい
+これは文書化された挙動と一致する — 「サーバー側で `ask` に設定されたツールは、allow 規則が効かず毎回プロンプトが出る。プロンプトを出せないモードでは拒否される」([permissions docs](https://code.claude.com/docs/en/permissions))。**リポジトリ側の設定では原理的に解除できない。**
 
-この注釈が効くのは **Claude Code v2.1.199 以降**で、それ以前のバージョンは**注釈を無視して通常の権限フローを適用していた**。つまり以前は許可規則で通せた。本セッションの実測値は `2.1.226`。**PO の「前はできたはずなのに劣化した」という認識は正確**で、劣化ではなく仕様変更である。
+### 事実 3: 呼び出し名と承認名が食い違っている
 
-### 実測の記録 (2026-08-09)
+MCP ログの実物:
 
-| 試したこと                                                                                       | 結果                                                      |
-| ------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
-| `list_triggers` / `set_session_title` / `create_session` (claude-code-remote)                    | すべて `-32003 requires approval`                         |
-| `~/.claude/launcher-settings.json` の `permissions.allow` にサーバー名とツール名を追加して再試行 | **変化なし** (仕様どおり許可規則が効かない)               |
-| **Gmail コネクタ (同じく UUID 名) の `list_labels`**                                             | **正常応答** — UUID 名や MCP 一般の問題ではないことが確定 |
-| `mcp__github__*` (安定名)                                                                        | 正常応答                                                  |
-| Claude Code のバージョン                                                                         | `2.1.226` (注釈が効く 2.1.199 以降)                       |
+```text
+Tool 'list_triggers' returned -32003 needs_approval
+  (tool_name=mcp__Claude_Code_Remote__list_triggers) — surfacing retroactive approval card
+```
 
-**未確認の 1 点**: 当該ツールに実際に `_meta` 注釈が付いているかはサーバー側の応答なので直接は読めていない。上記 5 つの観測すべてと文書化された仕様が一致することからの強い推定。
+**呼ぶときは `mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__list_triggers`、承認カードと許可判定は `mcp__Claude_Code_Remote__list_triggers`。** 手で許可規則を書こうとしたときに必ず間違える。ログディレクトリも `mcp-logs-Claude-Code-Remote` と `mcp-logs-bf7c680d-…` の 2 つに分裂している。
 
-### したがって取れる手
+### 事実 4: 承認カードを出した 2 秒後に再試行して諦めている
 
-1. **MCP を経由しない手段に置き換える** (D6 の `CronCreate` がこれ)
-2. **ターミナルで承認する** — `claude --teleport <session-id>` でこのセッションを手元の端末に引き込めば、プロンプトが描画できるようになる
-3. **user が web UI で操作する** (Routine 登録・セッション作成・セッション名変更)
+```text
+04:23:40  Tool 'list_triggers' failed after 0s: -32003
+04:23:40  → surfacing retroactive approval card
+04:23:42  Tool 'list_triggers' failed after 0s: -32003    ← 2 秒後
+```
+
+**この形が全 3 ツール・全時刻で再現している。** 人間が承認カードに気づいて押すには 2 秒は短すぎる。**仮に人が見ていても成功しない。**
+
+### 結論
+
+- **リポジトリ側でも user の設定でも直せない。** 原因は Anthropic 側がセッションごとに配信する MCP 設定にあり、読み取り専用ツールまで `always_ask` になっている
+- **「前はできたはず」は妥当** — 配信がフラグ由来で、ログのサーバー名が旧 `Claude-Code-Remote` から UUID へ移行した形跡がある
+- 取れる手は変わらない: ① MCP を経由しない代替 (D6 の `CronCreate`) ② `claude --teleport` でターミナルに引き込む (事実 4 の 2 秒再試行があるため成功するとは限らない) ③ user が web UI で操作する
+
+**未確認の 1 点**: 事実 4 の「2 秒後の再試行」がクライアント側の実装なのかサーバー応答なのかは、ログからは判別できていない。
 
 ## Pros and Cons of the Options
 
