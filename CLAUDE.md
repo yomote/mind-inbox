@@ -54,6 +54,18 @@ PR を作成したら放置せず、**merge / close されるまで追従する*
 - PR を作ったら `subscribe_pr_activity` で監視を有効化する
 - レビュー ([ADR 0008](docs/adr/0008-pr-review-via-cloud-routine.md) の Routine 含む) や CI コメントが付いたら調査し、**小さく確実な修正は push**、曖昧 / 重大な指摘は確認を取る。**再レビューが Resolve するまで追う**
 - webhook は CI 成功・新規 push・マージ遷移を配信しないので、定期チェックインで取りこぼしを補い、merge / close で監視を終える
+- **定期チェックインは `send_later` ではなく `CronCreate` を使う** — MCP 側は承認ゲートに当たり毎回確認を求められる ([ADR 0031](docs/adr/0031-agent-reaches-outside-via-github-actions.md) D6)
+
+#### マージの常設承認 (2026-08-09 PO 決定)
+
+**main への PR は、CI が緑でレビュー指摘が解決していればエージェントがマージしてよい。** 都度の確認は不要 — 毎回聞かれる方が PO のコストになる、という判断。マージ後は関連 Issue の close と持ち越しの確認まで済ませる。
+
+**例外 (必ず人間が押す)**:
+
+- **リリース PR (`main → release`)** — judge が 🟢 でも merge / deploy は人間 ([ADR 0019](docs/adr/0019-independent-judge-agents-security-qa-release.md))。この常設承認は**適用されない**
+- `needs-human` ラベルの付いた PR / 未解決のレビュースレッドが残っている PR
+- PO が明示的に「保留」と言った PR
+- **`Status: Proposed` の ADR を実装まで含む PR** — ADR 本文のマージは可 (承認キューとして残す運用) だが、その判断に依存する**不可逆な実装**を含むなら裁定を待つ
 
 ## Commands
 
