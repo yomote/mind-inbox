@@ -108,9 +108,17 @@ Step 2 で立った各 trigger について、**diff に対応するテスト/do
 
 PR テンプレ貼り付け用 (`.github/PULL_REQUEST_TEMPLATE.md` の該当欄だけ):
 \`\`\`markdown
-| Unit / contract | ... | / | E2E | ... | / | Live verification | ... | / | UI 確認 | ... |
+## Verification
+
+| Check | Result |
+| --- | --- |
+| Unit / contract | ... |
+| E2E | ... |
+| Live verification | ... |
+| UI 確認 | ... |
 
 ## Known limitations
+
 - ...
 \`\`\`
 ```

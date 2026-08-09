@@ -38,7 +38,7 @@ RG=<your-rg> DEPLOYMENT=<your-deployment-name> ./scripts/smoke-test/smoke-test.s
 
 ## 1.5 実態ダンプ（判定しない・PR に貼る用）
 
-`smoke-test.sh` が「合否」を出すのに対し、`inspect-env.sh` は **「今どうなっているか」を read-only で吐くだけ**のスクリプト（[ADR 0018](../../../docs/adr/0018-runtime-verification-in-the-loop.md)）。PR の「動作検証」欄にそのまま貼れる markdown を出す。
+`smoke-test.sh` が「合否」を出すのに対し、`inspect-env.sh` は **「今どうなっているか」を read-only で吐くだけ**のスクリプト（[ADR 0018](../../../docs/adr/0018-runtime-verification-in-the-loop.md)）。PR の `Verification` 欄にそのまま貼れる markdown を出す。
 
 ```bash
 RG=<your-rg> DEPLOYMENT=<your-deployment-name> cicd/scripts/smoke-test/inspect-env.sh

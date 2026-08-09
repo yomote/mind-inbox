@@ -7,7 +7,7 @@
 | ファイル                                                 | 何だったか                             | 状態                                                                         |
 | -------------------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------- |
 | [`implementation_plan_v1.md`](implementation_plan_v1.md) | v1 (Problem 中心 2層モデル) の実装計画 | v1 完了 ([`implementation_plan_v2.md`](../implementation_plan_v2.md) が後継) |
-| [`basic_design_poc.md`](basic_design_poc.md)             | PoC フェーズの基本設計書 (2026-05-01)  | PoC 完了。現行構造は [ルート README](../../../README.md) と各 ADR が真典     |
+| [`basic_design_poc.md`](basic_design_poc.md)             | PoC フェーズの基本設計書 (2026-05-01)  | PoC 完了。現行構造は [ルート README](../../../README.md) と各 ADR が正典     |
 
 ## 削除したもの
 

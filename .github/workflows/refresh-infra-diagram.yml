@@ -8,8 +8,7 @@
 # 反映方法: 差分があるときだけ PR を開く (main へ直 push しない)。
 #   「いつの間にかインフラが変わっていた」が、レビュー可能な差分として人の目に入る。
 #
-# 止めたいとき: Actions の UI でこのワークフローを disable する (ファイルは残してよい)。
-# 頻度を変えたいとき: 下の cron を変える (UTC 指定)。
+# 運用手順 (止め方 / 頻度変更 / トラブルシュート): docs/runbooks/refresh-infra-diagram.md
 
 name: refresh-infra-diagram
 

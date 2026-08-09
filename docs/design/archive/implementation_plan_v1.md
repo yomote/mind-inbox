@@ -1,7 +1,7 @@
 # Mind Inbox — v1 実装方針計画（Problem 中心 2層モデル）
 
 作成: 2026-06-22 / 対象: [ADR 0007](../../adr/0007-problem-centric-two-layer-domain-model.md) の 2層モデル（Mention → Problem）を実装に落とすロードマップ
-関連: [`requirements.md`](../requirements.md) / [`use_cases.md`](../use_cases.md) / [`domain_model.md`](../domain_model.md) / PoC: [`implementation_plan.md`](./README.md)
+関連: [`requirements.md`](../requirements.md) / [`use_cases.md`](../use_cases.md) / [`domain_model.md`](../domain_model.md) / PoC 期の計画: [archive index](./README.md) (`implementation_plan.md` は削除済み)
 
 ---
 
