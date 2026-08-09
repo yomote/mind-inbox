@@ -16,7 +16,10 @@
 import { TRPCError } from "@trpc/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../clients/aiAgentClient", () => ({
+// ExtractError は router が instanceof で判定するので、実物を残したまま関数だけ差し替える
+// (丸ごと差し替えるとクラスが undefined になり、失敗の種別判定が黙って死ぬ)。
+vi.mock("../clients/aiAgentClient", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../clients/aiAgentClient")>()),
   sendChatMessage: vi.fn(),
   organize: vi.fn(),
   extract: vi.fn(),
@@ -25,6 +28,7 @@ vi.mock("../clients/aiAgentClient", () => ({
 }));
 
 import {
+  ExtractError,
   approve as approveAiAgent,
   createPlan as createPlanAiAgent,
   extract as extractAiAgent,
@@ -386,7 +390,11 @@ describe("[L2] consultation.extract", () => {
     expect(result.newProblemCount).toBe(1);
     expect(result.items[0].grouping.kind).toBe("new");
     // 初回は既存候補が空で ai-agent を呼ぶ
-    expect(extractAiAgent).toHaveBeenCalledWith({ sessionId: "s1", existingProblems: [] });
+    expect(extractAiAgent).toHaveBeenCalledWith({
+      sessionId: "s1",
+      existingProblems: [],
+      messages: [],
+    });
 
     // 永続化されて problem.get で引ける
     const problem = await caller.problem.get({ id: "prob-1" });
@@ -821,5 +829,58 @@ describe("[L2] problem.triage — エラー", () => {
         toProblemId: "p2",
       }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+describe("[L2] consultation.extract — 失敗の伝え方 (#183)", () => {
+  it("会話をそのまま ai-agent へ渡す", async () => {
+    // 無いと: 会話を送らない実装に戻り、ai-agent のプロセスメモリ頼みになる。
+    //         メモリが生きている間は動くので、ローカルでも CI でも緑のまま通り、
+    //         scale-to-zero した実環境でだけ 404 になる (#183 の元症状)。
+    vi.mocked(extractAiAgent).mockResolvedValue(newExtraction("prob-1"));
+    const caller = makeCaller();
+
+    await caller.consultation.extract({
+      sessionId: "s1",
+      messages: [
+        { role: "assistant", text: "どうしましたか" },
+        { role: "user", text: "眠れない" },
+      ],
+    });
+
+    expect(extractAiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [
+          { role: "assistant", text: "どうしましたか" },
+          { role: "user", text: "眠れない" },
+        ],
+      }),
+    );
+  });
+
+  it.each([
+    ["session-missing", "NOT_FOUND"],
+    ["llm-parse-failed", "BAD_GATEWAY"],
+    ["upstream-failed", "INTERNAL_SERVER_ERROR"],
+  ])("%s は %s として種別つきでクライアントへ返す", async (kind, code) => {
+    // 無いと: 失敗の理由が message に潰れてクライアントへ届かず、画面は
+    //         「何が起きたか分からないエラー」しか出せない。原因の切り分けが
+    //         ユーザーにも開発者にもできない状態に戻る (#183)。
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(extractAiAgent).mockRejectedValue(new ExtractError(kind as never, "boom"));
+    const caller = makeCaller();
+
+    await expect(caller.consultation.extract({ sessionId: "s1" })).rejects.toMatchObject({
+      code,
+      message: kind,
+    });
+  });
+
+  it("種別のない例外はそのまま上げる (握り潰さない)", async () => {
+    // 無いと: 想定外の失敗まで extract 専用の分類に丸められ、本当の原因が消える
+    vi.mocked(extractAiAgent).mockRejectedValue(new Error("想定外"));
+    const caller = makeCaller();
+
+    await expect(caller.consultation.extract({ sessionId: "s1" })).rejects.toThrow("想定外");
   });
 });

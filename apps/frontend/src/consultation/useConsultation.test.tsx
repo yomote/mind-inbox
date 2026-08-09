@@ -10,7 +10,10 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../api", () => ({
+// ExtractFailed は hook が instanceof で種別を見るので実物を残す
+// (丸ごと差し替えるとクラスが undefined になり、文面の出し分けが黙って死ぬ)。
+vi.mock("../api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api")>()),
   startNewConsultation: vi.fn(),
   sendMessage: vi.fn(),
   organizeResult: vi.fn(),
@@ -25,6 +28,7 @@ vi.mock("../api", () => ({
 }));
 
 import {
+  ExtractFailed,
   createActionPlan,
   createProblemPlan,
   extractMentions,
@@ -402,5 +406,66 @@ describe("[L1] useConsultation — reset", () => {
     await waitFor(() => expect(result.current.session).toBeNull());
     expect(result.current.problems).toEqual([]);
     expect(result.current.draftMessage).toBe("");
+  });
+});
+
+describe("[L1] useConsultation — 抽出の失敗をユーザーに見せる (#183)", () => {
+  it("会話全文を渡して抽出する", async () => {
+    // 無いと: 会話を送らない実装に戻り、ai-agent のプロセスメモリ頼みになる。
+    //         メモリが生きている間は動くので手元では気づけず、scale-to-zero した
+    //         実環境でだけ抽出が落ちる (#183 の元症状)。
+    const current = session();
+    vi.mocked(startNewConsultation).mockResolvedValue(current);
+    vi.mocked(extractMentions).mockResolvedValue({
+      sessionId: "s1",
+      items: [],
+      newProblemCount: 0,
+      updatedProblemCount: 0,
+    });
+    const transition = vi.fn();
+    const { result } = renderHook(() => useConsultation(transition, { ready: true }));
+
+    await act(async () => await result.current.startConsultation());
+    await act(async () => await result.current.extract());
+
+    expect(extractMentions).toHaveBeenCalledWith("s1", current.messages);
+  });
+
+  it.each([
+    ["session-missing", "取り出せませんでした"],
+    ["llm-parse-failed", "整理に失敗しました"],
+    ["upstream-failed", "通信状況"],
+  ])("%s は理由に応じた案内を出し、画面を遷移させない", async (kind, expected) => {
+    // 無いと: 押しても何も起きない状態に戻る。以前は catch が無く、遷移もせず
+    //         スピナーが止まるだけで、押した本人には何が起きたか一切分からなかった。
+    //         「壊れている」と「困りごとが 0 件だった」も区別できない (#183 / ADR 0018)。
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(startNewConsultation).mockResolvedValue(session());
+    vi.mocked(extractMentions).mockRejectedValue(new ExtractFailed(kind as never));
+    const transition = vi.fn();
+    const { result } = renderHook(() => useConsultation(transition, { ready: true }));
+
+    await act(async () => await result.current.startConsultation());
+    transition.mockClear();
+    await act(async () => await result.current.extract());
+
+    expect(result.current.actionError).toContain(expected);
+    expect(transition).not.toHaveBeenCalled();
+    // 失敗しても操作不能にならない (スピナーが回りっぱなしにならない)
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("エラーは閉じられる (次の操作を妨げない)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(startNewConsultation).mockResolvedValue(session());
+    vi.mocked(extractMentions).mockRejectedValue(new ExtractFailed("upstream-failed"));
+    const { result } = renderHook(() => useConsultation(vi.fn(), { ready: true }));
+
+    await act(async () => await result.current.startConsultation());
+    await act(async () => await result.current.extract());
+    expect(result.current.actionError).not.toBeNull();
+
+    act(() => result.current.clearActionError());
+    expect(result.current.actionError).toBeNull();
   });
 });

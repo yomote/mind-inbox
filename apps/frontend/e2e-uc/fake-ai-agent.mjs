@@ -80,6 +80,16 @@ const TOPICS = [
     affect: { label: "うんざり", valence: "negative", intensity: 0.45 },
   },
   {
+    // #183 の「ai-agent が会話を忘れていても抽出できる」専用。他 spec と題材を重ねない。
+    key: "exercise",
+    keywords: ["運動", "体を動かす", "ジム"],
+    title: "運動する時間が取れない",
+    theme: "心と体",
+    statement: "動きたいのに時間が取れず、体がなまっている",
+    tags: ["運動"],
+    affect: { label: "もどかしさ", valence: "negative", intensity: 0.35 },
+  },
+  {
     key: "commute",
     keywords: ["通勤", "満員電車"],
     title: "通勤がしんどい",
@@ -130,8 +140,14 @@ function findExisting(existingProblems, topic) {
   return existingProblems.find((p) => p.title === topic.title);
 }
 
-function extract(sessionId, existingProblems) {
-  const messages = sessions.get(sessionId) ?? [];
+/**
+ * @param givenMessages 呼び出し側が同送した会話 (#183)。実サービスと同じく**あればこちらを優先**する。
+ *   実サービスのセッション履歴はプロセスメモリで、scale-to-zero・スケールアウト・リビジョン
+ *   差し替えのいずれでも消える。ここを実装しないと、この層は「履歴が生きている前提」でしか
+ *   成功パスを通せず、本番で壊れる条件を一度も踏めない。
+ */
+function extract(sessionId, existingProblems, givenMessages = []) {
+  const messages = givenMessages.length > 0 ? givenMessages : (sessions.get(sessionId) ?? []);
   const spoken = messages.join("\n");
 
   // 同じ型は 1 セッション 1 Mention に畳む (同じ話を 2 回言っても 2 件にはしない)。
@@ -206,10 +222,24 @@ const routes = {
     };
   },
 
-  "POST /extract": (body) => ({
-    status: 200,
-    json: extract(body.session_id, body.existing_problems ?? []),
-  }),
+  "POST /extract": (body) => {
+    // 実サービスに合わせ、会話が渡っていれば履歴を見ない (#183)。
+    // ユーザー発話だけを見る (抽出対象は吐き出しであって AI の相槌ではない)。
+    const given = (body.messages ?? []).filter((m) => m.role === "user").map((m) => m.text);
+    return {
+      status: 200,
+      json: extract(body.session_id, body.existing_problems ?? [], given),
+    };
+  },
+
+  /**
+   * テスト用: セッション履歴だけを捨てる (#183)。
+   * scale-to-zero でレプリカが落ちた / スケールアウトで別レプリカに当たった状況を作る。
+   */
+  "POST /__drop-sessions": () => {
+    sessions.clear();
+    return { status: 200, json: { ok: true } };
+  },
 
   "POST /organize": (body) => {
     const messages = sessions.get(body.session_id) ?? [];

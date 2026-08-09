@@ -29,6 +29,7 @@ from .repositories import SessionRepository
 from .schemas import (
     THEMES,
     Affect,
+    ConversationMessage,
     ExistingProblemRef,
     ExtractedItem,
     ExtractionResult,
@@ -37,6 +38,20 @@ from .schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class ExtractionUnavailable(Exception):
+    """抽出の材料 (会話) が手に入らなかった。呼び出し側は 404 で返す。"""
+
+
+class ExtractionParseError(Exception):
+    """LLM の応答を JSON として解釈できなかった (#183)。
+
+    **「困りごとが 0 件だった」と混同しないための独立した失敗**。以前はここで warning を
+    出して空の結果を返しており、画面には「追跡する困りごとは見つかりませんでした」と
+    表示されていた — 壊れているのに正常終了に見える、最も気づけない壊れ方だった。
+    """
+
 
 _THEME_LIST = "、".join(THEMES)
 
@@ -75,6 +90,15 @@ _EXTRACT_PROMPT = """\
 
 困りごとが無ければ mentions は空配列にしてください。
 """
+
+
+def _format_messages(messages: list[ConversationMessage]) -> str:
+    """呼び出し側から渡された会話をテキストに整形する (#183)。"""
+    lines = []
+    for m in messages:
+        label = "ユーザー" if m.role == "user" else "AI"
+        lines.append(f"{label}: {m.text}")
+    return "\n".join(lines)
 
 
 def _format_history(history: ChatHistory) -> str:
@@ -135,12 +159,20 @@ async def extract(
     existing_problems: list[ExistingProblemRef],
     session_repo: SessionRepository,
     client: BaseChatClient,
+    messages: list[ConversationMessage] | None = None,
 ) -> ExtractionResult:
-    history = await session_repo.get(session_id)
-    if history is None:
-        raise ValueError(f"Session not found: {session_id!r}")
-
-    conversation = _format_history(history)
+    # 会話が渡されていればそれを使う (#183)。session_repo はプロセスメモリなので、
+    # scale-to-zero・スケールアウト・リビジョン差し替えのいずれでも消える。
+    # 渡されない場合は従来どおり履歴を見る (旧クライアントとの互換)。
+    if messages:
+        conversation = _format_messages(messages)
+    else:
+        history = await session_repo.get(session_id)
+        if history is None:
+            raise ExtractionUnavailable(
+                f"Session not found and no messages were provided: {session_id!r}"
+            )
+        conversation = _format_history(history)
     prompt = _EXTRACT_PROMPT.format(
         conversation=conversation,
         existing_problems=_format_existing(existing_problems),
@@ -154,14 +186,11 @@ async def extract(
 
     try:
         data = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning("Extract JSON parse failed: %r", raw)
-        return ExtractionResult(
-            session_id=session_id,
-            items=[],
-            new_problem_count=0,
-            updated_problem_count=0,
-        )
+    except json.JSONDecodeError as exc:
+        # 空の結果を返すと「困りごとは見つかりませんでした」と表示され、壊れたことが
+        # ユーザーにもログにも伝わらない (#183)。失敗として上げる。
+        logger.error("Extract JSON parse failed: %r", raw)
+        raise ExtractionParseError("LLM の応答を解釈できませんでした") from exc
 
     known = {p.id: p for p in existing_problems}
     now = datetime.now(timezone.utc).isoformat()

@@ -1,4 +1,11 @@
-import { expect, extractProblems, gotoHome, startConsultationAndSay, test } from "./fixtures";
+import {
+  dropAiAgentSessions,
+  expect,
+  extractProblems,
+  gotoHome,
+  startConsultationAndSay,
+  test,
+} from "./fixtures";
 
 /**
  * [L3-real] UC-01 モヤモヤを吐き出して困りごとに整理する
@@ -41,6 +48,37 @@ test.describe("UC-01 モヤモヤを吐き出して困りごとに整理する",
     await expect(page).toHaveURL(/\/problems$/);
     await expect(page.getByText(TOPIC.problemTitle, { exact: true })).toBeVisible();
     await expect(page.getByText(TOPIC.theme, { exact: true }).first()).toBeVisible();
+  });
+
+  test("[L3-real] ai-agent が会話を忘れていても抽出できる (レプリカが落ちた状況)", async ({
+    page,
+    request,
+  }) => {
+    // 無いと: 「対話はできたのに抽出だけ失敗する」(#183 の実症状) を**この層では踏めない**。
+    //         fake は実サービスと同じくセッション履歴をプロセス内に持つため、履歴が生きて
+    //         いる前提でしか成功パスを通しておらず、scale-to-zero でレプリカが落ちる本番
+    //         だけで壊れる。会話をリクエストに載せる実装 (#183) が剥がれても緑のまま通る。
+    // 題材は他 spec と重ねない (BFF の Problem リポジトリは全 spec で共有の in-memory)。
+    // 重ねると別 spec の件数・並び・回数バッジを動かして、そちらを落とす。
+    const utterance = "運動する時間が全然取れていない";
+    const problemTitle = "運動する時間が取れない";
+
+    await gotoHome(page);
+    await startConsultationAndSay(page, utterance);
+
+    // ここでレプリカが落ちた / 別レプリカに当たった状況を作る
+    await dropAiAgentSessions(request);
+
+    await extractProblems(page);
+
+    // 会話はブラウザから同送されているので、履歴が無くても抽出は成立する
+    await expect(page.getByText("今回の話から 1 件の困りごとを見つけました")).toBeVisible();
+    await expect(page.getByText(problemTitle, { exact: true })).toBeVisible();
+
+    // 後片付け: Problem リポジトリは全 spec で共有の in-memory なので、
+    // 作ったものを残すと後続 spec の件数・並び・回数バッジを動かす。
+    await page.getByRole("button", { name: "これは違う（却下）" }).click();
+    await expect(page.getByText(problemTitle, { exact: true })).toHaveCount(0);
   });
 
   test("[L3-real] 抽出ゼロ件なら Problem を作らず受け止めだけ返す (代替フロー 2a)", async ({

@@ -11,6 +11,7 @@
 
 import * as React from "react";
 import {
+  ExtractFailed,
   createActionPlan,
   createProblemPlan,
   extractMentions,
@@ -91,6 +92,25 @@ const FAILURE_MESSAGE = {
   dismiss: "却下できませんでした。通信状況を確認して、もう一度お試しください。",
 } as const;
 
+/**
+ * 抽出の失敗は原因で案内を変える (#183)。
+ *
+ * 「抽出できませんでした」だけだと、通信の問題なのか・相談の内容が失われたのか・
+ * AI 側が壊れているのかが分からず、ユーザーは次に何をすればいいか判断できない。
+ * 種別の判定は api 層 (`ExtractFailed.kind`)、文面はここ = UI の持ち場。
+ */
+function extractFailureMessage(err: unknown): string {
+  if (!(err instanceof ExtractFailed)) return FAILURE_MESSAGE.extract;
+  switch (err.kind) {
+    case "session-missing":
+      return "この相談の内容を取り出せませんでした。お手数ですが、もう一度お試しください。";
+    case "llm-parse-failed":
+      return "困りごとの整理に失敗しました。相談の内容は残っています。もう一度お試しください。";
+    default:
+      return FAILURE_MESSAGE.extract;
+  }
+}
+
 /** runAction の結果。失敗しても throw せず、呼び出し側が後続処理を止められるようにする。 */
 type ActionOutcome<T> = { ok: true; value: T } | { ok: false };
 
@@ -143,14 +163,20 @@ export function useConsultation(
    * 足すときは必ずこのラッパを通すこと。
    */
   const runAction = React.useCallback(
-    async <T>(failureMessage: string, action: () => Promise<T>): Promise<ActionOutcome<T>> => {
+    async <T>(
+      // 原因によって案内を変えたい操作があるので関数も受ける (#183)。
+      // 固定文面で足りる大多数はそのまま string を渡せばよい。
+      failureMessage: string | ((err: unknown) => string),
+      action: () => Promise<T>,
+    ): Promise<ActionOutcome<T>> => {
       if (loadingRef.current) return { ok: false };
       setBusy(true);
       try {
         return { ok: true, value: await action() };
       } catch (err) {
-        console.error(`[useConsultation] ${failureMessage}`, err);
-        setActionError(failureMessage);
+        const message = typeof failureMessage === "function" ? failureMessage(err) : failureMessage;
+        console.error(`[useConsultation] ${message}`, err);
+        setActionError(message);
         return { ok: false };
       } finally {
         setBusy(false);
@@ -235,7 +261,12 @@ export function useConsultation(
 
   const extract = React.useCallback(async () => {
     if (!session) return;
-    const outcome = await runAction(FAILURE_MESSAGE.extract, () => extractMentions(session.id));
+    // 会話はこちらが持っているので渡す (#183)。ai-agent のセッション履歴はプロセスメモリで、
+    // scale-to-zero・スケールアウト・リビジョン差し替えのいずれでも消えるため、
+    // それに依存すると「対話はできたのに抽出だけ 404」になる。
+    const outcome = await runAction(extractFailureMessage, () =>
+      extractMentions(session.id, session.messages),
+    );
     if (!outcome.ok) return;
 
     setExtraction(outcome.value);

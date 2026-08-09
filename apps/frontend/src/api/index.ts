@@ -8,6 +8,7 @@ export {
 export { loadHistories, saveHistory } from "./history";
 
 export {
+  ExtractFailed,
   extractMentions,
   loadProblems,
   loadProblem,

@@ -30,6 +30,29 @@ export type {
 } from "./aiAgentContracts";
 
 /**
+ * `/extract` が失敗した理由。**フロントが文面と復帰導線を出し分けるための機械可読な種別**
+ * (#183)。以前は理由が失われ、画面には何も出なかった。
+ */
+export type ExtractFailureKind =
+  /** 会話が手に入らない (404)。会話を送れば解消する。 */
+  | "session-missing"
+  /** LLM の応答を解釈できなかった (502)。「0 件」とは別物。 */
+  | "llm-parse-failed"
+  /** それ以外の上流失敗 (5xx / ネットワーク断)。 */
+  | "upstream-failed";
+
+export class ExtractError extends Error {
+  // パラメータプロパティ短縮記法は erasableSyntaxOnly で使えないため明示代入する。
+  readonly kind: ExtractFailureKind;
+
+  constructor(kind: ExtractFailureKind, message: string) {
+    super(message);
+    this.name = "ExtractError";
+    this.kind = kind;
+  }
+}
+
+/**
  * ai-agent サービスへの HTTP クライアント。
  * AI_AGENT_BASE_URL 未設定時は stub レスポンスを返す。
  */
@@ -111,26 +134,37 @@ export async function extract(req: ExtractRequest): Promise<ExtractionResult> {
   const url = `${config.aiAgentBaseUrl}/extract`;
   console.log(`[aiAgentClient] POST ${url}`);
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: await serviceHeaders(config.aiAgentAudience, {
-      "Content-Type": "application/json",
-    }),
-    body: JSON.stringify({
-      session_id: req.sessionId,
-      existing_problems: req.existingProblems.map((p) => ({
-        id: p.id,
-        title: p.title,
-        theme: p.theme,
-        summary: p.summary,
-        mention_count: p.mentionCount,
-        status: p.status,
-      })),
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: await serviceHeaders(config.aiAgentAudience, {
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify({
+        session_id: req.sessionId,
+        existing_problems: req.existingProblems.map((p) => ({
+          id: p.id,
+          title: p.title,
+          theme: p.theme,
+          summary: p.summary,
+          mention_count: p.mentionCount,
+          status: p.status,
+        })),
+        // 会話全文を同送する (#183)。ai-agent はこれがあればセッション履歴を見ない。
+        messages: req.messages.map((m) => ({ role: m.role, text: m.text })),
+      }),
+    });
+  } catch (err) {
+    // ネットワーク断・コールドスタートのタイムアウト等。理由を落とさない。
+    throw new ExtractError("upstream-failed", `POST /extract に到達できませんでした: ${String(err)}`);
+  }
 
   if (!res.ok) {
-    throw new Error(`aiAgentClient: POST /extract failed — ${res.status} ${res.statusText}`);
+    // 種別を保って上げる。呼び出し側 (router) が tRPC のエラーコードに翻訳する。
+    const kind: ExtractFailureKind =
+      res.status === 404 ? "session-missing" : res.status === 502 ? "llm-parse-failed" : "upstream-failed";
+    throw new ExtractError(kind, `aiAgentClient: POST /extract failed — ${res.status} ${res.statusText}`);
   }
 
   return (await res.json()) as ExtractionResult;

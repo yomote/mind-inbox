@@ -111,8 +111,22 @@ export const ExistingProblemRefSchema = z.object({
 });
 export type ExistingProblemRef = z.infer<typeof ExistingProblemRefSchema>;
 
+/**
+ * 抽出対象の会話 1 発話 (#183)。
+ *
+ * **会話は呼び出し側が渡す**。ai-agent のセッション履歴はプロセスメモリで、
+ * scale-to-zero・スケールアウト・リビジョン差し替えのいずれでも消えるため、
+ * それに依存すると「対話はできたのに抽出だけ 404」が起きる。
+ */
+export const ConversationMessageSchema = z.object({
+  role: z.enum(["user", "assistant"]),
+  text: z.string(),
+});
+export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
+
 export const ExtractRequestSchema = z.object({
   sessionId: z.string(),
   existingProblems: z.array(ExistingProblemRefSchema),
+  messages: z.array(ConversationMessageSchema),
 });
 export type ExtractRequest = z.infer<typeof ExtractRequestSchema>;

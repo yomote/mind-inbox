@@ -12,8 +12,8 @@ import json
 import pytest
 from semantic_kernel.contents import ChatHistory
 
-from app.extractor import extract
-from app.schemas import ExistingProblemRef
+from app.extractor import ExtractionParseError, ExtractionUnavailable, extract
+from app.schemas import ConversationMessage, ExistingProblemRef
 
 _NEW_PAYLOAD = {
     "mentions": [
@@ -260,19 +260,18 @@ class TestExtractRobustness:
         assert len(result.items) == 1
         assert result.items[0].grouping.kind == "new"
 
-    async def test_l1_malformed_json_returns_empty_result(
+    async def test_l1_malformed_json_raises_parse_error(
         self, session_repo, make_client
     ):
-        # LLM が JSON でない文字列を返した時、例外を投げず空 ExtractionResult を返す契約を pin する。
-        # 無いと: parse failure 時に 500 で落ち、吐き出し直後の抽出画面が汎用エラーになる
+        # LLM の応答を解釈できなかったら**失敗として上げる** (#183)。
+        # 無いと: 空の ExtractionResult が返り、画面には「追跡する困りごとは
+        #         見つかりませんでした」と出る。壊れているのに正常終了に見えるため、
+        #         ユーザーもログも「0 件だった」と区別できない (最も気づけない壊れ方)。
         await _seed(session_repo)
         client_mock = make_client("not valid json at all")
 
-        result = await extract("s1", [], session_repo, client_mock)
-
-        assert result.items == []
-        assert result.new_problem_count == 0
-        assert result.updated_problem_count == 0
+        with pytest.raises(ExtractionParseError):
+            await extract("s1", [], session_repo, client_mock)
 
     async def test_l1_unknown_theme_falls_back_to_michubunrui(
         self, session_repo, make_client
@@ -289,14 +288,44 @@ class TestExtractRobustness:
         assert result.items[0].mention.proposed_theme == "未分類"
         assert result.items[0].grouping.problem_theme == "未分類"
 
-    async def test_l1_missing_session_raises_value_error(
+    async def test_l1_missing_session_and_no_messages_raises_unavailable(
         self, session_repo, make_client
     ):
-        # 存在しない session は ValueError (endpoint 側で 404 に mapping)。
+        # 履歴も会話も無ければ材料が無い (endpoint 側で 404 に mapping)。
         client_mock = make_client(json.dumps(_NEW_PAYLOAD))
 
-        with pytest.raises(ValueError, match="Session not found"):
+        with pytest.raises(ExtractionUnavailable):
             await extract("nonexistent", [], session_repo, client_mock)
+
+    async def test_l1_uses_given_messages_without_session_history(
+        self, session_repo, make_client
+    ):
+        # 会話が渡されていれば履歴が無くても抽出できる (#183)。
+        # 無いと: このサービスのプロセスメモリ頼みに戻り、scale-to-zero・スケールアウト・
+        #         リビジョン差し替えのいずれでも「対話はできたのに抽出だけ 404」になる。
+        client_mock = make_client(json.dumps(_NEW_PAYLOAD))
+        messages = [
+            ConversationMessage(role="assistant", text="どうしましたか"),
+            ConversationMessage(role="user", text="転職しようか迷ってて"),
+        ]
+
+        result = await extract("nonexistent", [], session_repo, client_mock, messages)
+
+        assert len(result.items) == 1
+        assert result.items[0].grouping.kind == "new"
+
+    async def test_l1_given_messages_reach_the_prompt(self, session_repo, make_client):
+        # 渡した会話が実際にプロンプトへ載ることを確認する。
+        # 無いと: 会話を受け取るのに使わない実装 (履歴を見に行ったまま) が緑で通る。
+        client_mock = make_client(json.dumps(_NEW_PAYLOAD))
+        messages = [ConversationMessage(role="user", text="眠れない日が続いている")]
+
+        await extract("s-any", [], session_repo, client_mock, messages)
+
+        # complete() は Message(role="user", contents=[prompt]) の 1 通で呼ぶ
+        sent_messages = client_mock.get_response.call_args.args[0]
+        prompt = str(sent_messages[0].contents[0])
+        assert "眠れない日が続いている" in prompt
 
     async def test_l1_empty_mentions_returns_empty_result(
         self, session_repo, make_client

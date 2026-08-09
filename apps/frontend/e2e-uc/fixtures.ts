@@ -1,4 +1,4 @@
-import { test as base, expect, type Page } from "@playwright/test";
+import { test as base, expect, type APIRequestContext, type Page } from "@playwright/test";
 
 /**
  * UC 受け入れテストの共通装備。
@@ -119,4 +119,14 @@ export async function showArchivedProblems(page: Page) {
 /** 画面に出ている失敗通知 (Snackbar / Alert)。 */
 export function errorAlert(page: Page) {
   return page.getByRole("alert");
+}
+
+/**
+ * ai-agent 側のセッション履歴だけを消す (#183)。
+ * scale-to-zero でレプリカが落ちた / スケールアウトで別レプリカに当たった状況を作る。
+ */
+export async function dropAiAgentSessions(request: APIRequestContext) {
+  const port = process.env.E2E_UC_AI_AGENT_PORT || "8099";
+  const res = await request.post(`http://127.0.0.1:${port}/__drop-sessions`);
+  if (!res.ok()) throw new Error(`__drop-sessions failed: ${res.status()}`);
 }

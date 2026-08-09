@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { initTRPC, TRPCError } from "@trpc/server";
+import { ConversationMessageSchema } from "../clients/aiAgentContracts";
 import { z } from "zod";
 import type { TrpcContext } from "./context";
 import {
   approve as approveAiAgent,
   createPlan as createPlanAiAgent,
+  ExtractError,
   extract as extractAiAgent,
   organize as organizeAiAgent,
   sendChatMessage,
@@ -393,24 +395,52 @@ const consultationRouter = router({
   // 吐き出し全文 → Mention 抽出 + 自動グルーピング（ADR 0007）。organize を置換する新導線。
   // BFF が既存 Problem 候補を渡し（ADR 0012）、結果を Problem リポジトリに反映する。
   extract: publicProcedure
-    .input(z.object({ sessionId: z.string().min(1) }))
+    .input(
+      z.object({
+        sessionId: z.string().min(1),
+        // 会話全文はクライアントが渡す (#183)。省略時は ai-agent 側の履歴に賭ける
+        // (旧クライアント互換) が、その経路は 404 になりうる。
+        messages: z.array(ConversationMessageSchema).default([]),
+      }),
+    )
     .output(ExtractionResultSchema)
     .mutation(async ({ input, ctx }) => {
-      console.log(`[consultation.extract] sessionId=${input.sessionId}`);
+      console.log(
+        `[consultation.extract] sessionId=${input.sessionId} messages=${input.messages.length}`,
+      );
       const existing = await ctx.problemRepo.list();
-      const result = await extractAiAgent({
-        sessionId: input.sessionId,
-        existingProblems: existing.map((p) => ({
-          id: p.id,
-          title: p.title,
-          theme: p.theme,
-          summary: p.summary,
-          mentionCount: p.mentionCount,
-          status: p.status,
-        })),
-      });
-      await materializeExtraction(result, ctx.problemRepo);
-      return result;
+      try {
+        const result = await extractAiAgent({
+          sessionId: input.sessionId,
+          existingProblems: existing.map((p) => ({
+            id: p.id,
+            title: p.title,
+            theme: p.theme,
+            summary: p.summary,
+            mentionCount: p.mentionCount,
+            status: p.status,
+          })),
+          messages: input.messages,
+        });
+        await materializeExtraction(result, ctx.problemRepo);
+        return result;
+      } catch (err) {
+        if (err instanceof ExtractError) {
+          // **失敗の種別をクライアントまで運ぶ** (#183)。message は機械可読な token に
+          // 留め、ユーザー向けの文面はフロント (UI 仕様の持ち場) で決める。
+          console.error(`[consultation.extract] failed kind=${err.kind}: ${err.message}`);
+          throw new TRPCError({
+            code:
+              err.kind === "session-missing"
+                ? "NOT_FOUND"
+                : err.kind === "llm-parse-failed"
+                  ? "BAD_GATEWAY"
+                  : "INTERNAL_SERVER_ERROR",
+            message: err.kind,
+          });
+        }
+        throw err;
+      }
     }),
 
   createPlan: publicProcedure

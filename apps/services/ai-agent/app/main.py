@@ -19,7 +19,7 @@ from fastapi.responses import StreamingResponse
 
 from .agents import get_chat_client
 from .config import get_settings
-from .extractor import extract
+from .extractor import ExtractionParseError, ExtractionUnavailable, extract
 from .kernel import get_kernel
 from .organizer import organize
 from .planner import generate_plan
@@ -154,10 +154,19 @@ async def extract_endpoint(
 ) -> ExtractionResult:
     try:
         return await extract(
-            req.session_id, req.existing_problems, session_repo, get_chat_client()
+            req.session_id,
+            req.existing_problems,
+            session_repo,
+            get_chat_client(),
+            req.messages,
         )
-    except ValueError as exc:
+    except ExtractionUnavailable as exc:
+        # 会話が手に入らない。呼び出し側が会話を送れば解消する種類の失敗 (#183)。
         raise HTTPException(status_code=404, detail=str(exc))
+    except ExtractionParseError as exc:
+        # 「0 件だった」と区別できるようにする。502 = 上流 (LLM) の応答が壊れている。
+        logger.error("POST /extract parse error: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc))
     except Exception as exc:
         logger.error("POST /extract error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
