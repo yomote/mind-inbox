@@ -26,7 +26,14 @@
 
 ### 1. 番号を決める
 
-`ls docs/adr/` で既存の最大番号を確認し、次の連番 (4 桁) を使う。
+**`origin/main` の最大番号 +1** を使う (4 桁):
+
+```bash
+git fetch origin main -q
+git ls-tree -r origin/main --name-only docs/adr/ | grep -oE '[0-9]{4}' | sort -n | tail -1
+```
+
+⚠️ **`ls docs/adr/` のローカル最大値を使わないこと。** 並行セッションが同じ番号を取り、過去 2 回衝突している (0015→0019 / 0026→0027)。セッション開始時のフックが「次に使える番号」を自動提示し、CI (`adr-number-guard`) が衝突を赤にする ([ADR 0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) D3)。
 
 ### 2. ファイルを作る
 
@@ -95,3 +102,4 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0025](0025-deploy-container-images-by-immutable-sha-tag.md) — コンテナ image のデプロイは :latest ではなく不変 sha タグの解決 + 稼働検証で行う (#107)
 - [0026](0026-cd-watchdog-routine.md) — CD の赤は毎時の watchdog Routine が検知し、診断と fix PR まで無人で進める — **Proposed**
 - [0027](0027-ux-improvement-loop-ab-protocol-and-mutation-boundary.md) — UX 自律改善ループ M2: 採点の無人化を先行させ、A/B は実環境の外で回し、改変対象はパスで縛る
+- [0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) — 分配は「起票パケットを Issue 本文に残す」形にし、並行の衝突は SessionStart の事前提示と CI で防ぐ
