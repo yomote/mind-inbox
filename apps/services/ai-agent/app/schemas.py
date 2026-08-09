@@ -195,6 +195,15 @@ class ExistingProblemRef(BaseModel):
     status: ProblemStatus = "open"
 
 
+class ConversationMessage(BaseModel):
+    """抽出対象の会話 1 発話 (#183)。BFF 経由でフロントの会話全文が渡ってくる。"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    role: Literal["user", "assistant"]
+    text: str
+
+
 class ExtractRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -202,3 +211,7 @@ class ExtractRequest(BaseModel):
     existing_problems: list[ExistingProblemRef] = Field(
         default_factory=list, alias="existingProblems"
     )
+    # 呼び出し側が会話を持っているなら、それを使う (#183)。
+    # このサービスのセッション履歴はプロセスメモリなので、scale-to-zero やスケールアウトで
+    # 消える / 別レプリカに当たると 404 になっていた。渡されていれば履歴に依存しない。
+    messages: list[ConversationMessage] = Field(default_factory=list)

@@ -1,7 +1,7 @@
 import type { inferRouterInputs } from "@trpc/server";
 import { TRPCClientError } from "@trpc/client";
 import * as mock from "../mockApi";
-import type { ExtractionResult, Problem, ProblemFilter, TriageInput } from "./types";
+import type { ChatMessage, ExtractionResult, Problem, ProblemFilter, TriageInput } from "./types";
 import { trpc } from "../trpc/client";
 import type { AppRouter } from "../trpc/client";
 import { useMock } from "./http";
@@ -51,9 +51,57 @@ function isNotFound(err: unknown): boolean {
   return err instanceof TRPCClientError && err.data?.code === "NOT_FOUND";
 }
 
-export async function extractMentions(sessionId: string): Promise<ExtractionResult> {
+/**
+ * 抽出の失敗理由 (#183)。BFF は機械可読な token を message に載せて返す。
+ * ユーザー向けの文面は UI 側 (extract-review.mdx の持ち場) で決める。
+ */
+export type ExtractFailureKind =
+  | "session-missing"
+  | "llm-parse-failed"
+  | "upstream-failed"
+  | "unknown";
+
+export class ExtractFailed extends Error {
+  // パラメータプロパティ短縮記法は erasableSyntaxOnly で使えないため明示代入する。
+  readonly kind: ExtractFailureKind;
+
+  constructor(kind: ExtractFailureKind) {
+    super(`extract failed: ${kind}`);
+    this.name = "ExtractFailed";
+    this.kind = kind;
+  }
+}
+
+const EXTRACT_FAILURE_KINDS: ExtractFailureKind[] = [
+  "session-missing",
+  "llm-parse-failed",
+  "upstream-failed",
+];
+
+/**
+ * 吐き出し全文を Mention[] に抽出する。
+ *
+ * **会話をこちらから渡す** (#183): ai-agent のセッション履歴はプロセスメモリなので、
+ * scale-to-zero・スケールアウト・リビジョン差し替えのいずれでも消える。それに依存すると
+ * 「対話はできたのに抽出だけ失敗する」が起きる。会話の真実は画面が持っているので送る。
+ */
+export async function extractMentions(
+  sessionId: string,
+  messages: ChatMessage[],
+): Promise<ExtractionResult> {
   if (useMock) return mock.extractMentions(sessionId);
-  return await trpc.consultation.extract.mutate({ sessionId });
+  try {
+    return await trpc.consultation.extract.mutate({
+      sessionId,
+      messages: messages.map((m) => ({ role: m.role, text: m.text })),
+    });
+  } catch (err) {
+    // 理由を失わない。呼び出し側が文面と復帰導線を出し分けられるようにする。
+    const token = err instanceof TRPCClientError ? String(err.message) : "";
+    const kind = EXTRACT_FAILURE_KINDS.find((k) => k === token) ?? "unknown";
+    console.error(`[extractMentions] failed kind=${kind}`, err);
+    throw new ExtractFailed(kind);
+  }
 }
 
 export async function loadProblems(filter?: ProblemFilter): Promise<Problem[]> {

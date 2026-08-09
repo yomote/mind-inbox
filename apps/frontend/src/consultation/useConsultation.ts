@@ -11,6 +11,7 @@
 
 import * as React from "react";
 import {
+  ExtractFailed,
   createActionPlan,
   createProblemPlan,
   extractMentions,
@@ -68,6 +69,26 @@ export type Consultation = {
   /** ログアウト時に相談の状態を捨てる。 */
   reset: () => void;
 };
+
+/**
+ * 抽出の失敗をユーザー向けの一文にする (#183)。
+ *
+ * 「失敗した」だけでは何をすればいいか分からないので、**次の動作**まで含める。
+ * 種別の判断は API 層 (ExtractFailed.kind)、文面はここ = UI の持ち場。
+ */
+function extractErrorMessage(err: unknown): string {
+  const kind = err instanceof ExtractFailed ? err.kind : "unknown";
+  switch (kind) {
+    case "session-missing":
+      return "この相談の内容を取り出せませんでした。お手数ですが、もう一度お試しください。";
+    case "llm-parse-failed":
+      return "困りごとの整理に失敗しました。相談の内容は残っています。もう一度お試しください。";
+    case "upstream-failed":
+      return "困りごとを抽出できませんでした。通信状況を確認して、もう一度お試しください。";
+    default:
+      return "困りごとを抽出できませんでした。もう一度お試しください。";
+  }
+}
 
 export type ConsultationOptions = {
   /**
@@ -184,8 +205,14 @@ export function useConsultation(
     if (!session || loadingRef.current) return;
     setBusy(true);
     try {
-      setExtraction(await extractMentions(session.id));
+      // 会話はこちらが持っているので渡す (#183)。ai-agent のプロセスメモリに賭けない。
+      setExtraction(await extractMentions(session.id, session.messages));
       transition("extractReview");
+    } catch (err) {
+      // 無音失敗の禁止 (ADR 0018)。以前はここに catch が無く、失敗すると遷移もせず
+      // スピナーが止まるだけで、押した本人には何が起きたのか一切分からなかった (#183)。
+      console.error("[extract]", err);
+      setActionError(extractErrorMessage(err));
     } finally {
       setBusy(false);
     }
