@@ -725,9 +725,11 @@ class InMemoryHistoryRepository:
 
 | 用途 | PoC | 本番候補 |
 | --- | --- | --- |
-| セッション履歴（短命） | in-memory | Azure Cache for Redis |
+| セッション履歴（短命） | in-memory | **当面 in-memory 据え置き** ([ADR 0030](../adr/0030-persistence-on-cosmos-db-single-store-behind-bff.md) D4) |
 | 整理結果・行動プラン | in-memory | Azure Cosmos DB for NoSQL |
-| ユーザー設定 | なし | Cosmos DB or Azure SQL |
+| ユーザー設定 | なし | Cosmos DB (同一アカウント) |
+
+> ⚠️ **Azure Cache for Redis は候補から外れた** — 2026-04-01 から新規顧客の作成がブロックされ、2028-09-30 に廃止。短命データの失効は Cosmos DB のネイティブ TTL で賄う ([ADR 0030](../adr/0030-persistence-on-cosmos-db-single-store-behind-bff.md))。
 
 ---
 
@@ -866,10 +868,10 @@ v1: Problem 中心モデル（ADR 0007 / requirements.md・use_cases.md・domain
  ├─ Problem の蓄積・横断閲覧・棚卸し・テーマ分類（固定7分類 + 未分類）
  └─ 永続化（下記 Phase 2 と統合）
 
-Phase 2: 永続化
- ├─ Mention / Problem → Azure Cosmos DB
- ├─ Session → Azure Cache for Redis
- └─ 意味類似グルーピング（embedding）の本実装
+Phase 2: 永続化  ← ADR 0030 で方式決定 (#165)
+ ├─ Mention / Problem / 履歴 → Azure Cosmos DB (Japan East, MI + RBAC, キー無効化)
+ ├─ Session / 承認レコード → in-memory 据え置き (ai-agent は IaC 外のため繋がない)
+ └─ 意味類似グルーピング（embedding）の本実装 → 同一 Cosmos アカウントで完結 (#83)
 
 Phase 3: 知識・ツール
  ├─ RAG（Azure AI Search + text-embedding-3-small）
