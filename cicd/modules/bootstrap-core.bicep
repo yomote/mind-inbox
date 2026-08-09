@@ -234,6 +234,45 @@ param speechAccountName string = toLower('spch-${environmentName}-${replace(repl
 @description('Speech SKU。F0 (無料枠) から開始 — 有料化 (S0) は design-gate を通す (ADR 0023)。')
 param speechSkuName string = 'F0'
 
+// -------------------- Cosmos DB params (ADR 0030 / #165) --------------------
+// FR-4「再起動・再ログインで消えない」の実体。BFF (Functions) だけが触る単一ストア。
+// 既定 false は他の enable* (enableSql / enableVoicevoxAca / enableAiAgentAca 等) と揃えたもの。
+// dev 環境は cicd/iac/main-bootstrap.parameters.json で明示的に有効化する。
+@description('Provision Cosmos DB (NoSQL) for Problem / history persistence (ADR 0030 D1)。')
+param enableCosmos bool = false
+
+@description('Cosmos DB account name (globally unique / 3-44 chars, lowercase)。')
+param cosmosAccountName string = toLower('cosmos-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}')
+
+@description('Cosmos DB の保管リージョン。ADR 0030 D6 で Japan East 固定 (NFR-1「保管リージョンの明確化」)。Functions は East Asia のままでよい。')
+param cosmosLocation string = 'japaneast'
+
+@description('無料枠 (1,000 RU/s + 25 GB / アカウント生涯) にオプトインする。**作成時のみ指定可**で、後から有効化できない。枠が既に消費済みだとデプロイ自体が失敗する = 「デプロイ成功 = 無料枠取得成功」と読める (ADR 0030 D2)。')
+param enableCosmosFreeTier bool = true
+
+@description('serverless で作る (無料枠は serverless 対象外なので enableCosmosFreeTier=false のときのフォールバック / ADR 0030 D2)。')
+param cosmosServerless bool = false
+
+@description('Cosmos DB database name。')
+param cosmosDatabaseName string = 'mindinbox'
+
+@minValue(400)
+@description('DB 共有スループット (RU/s)。**既定 400 は意図的**: 無料枠が取れれば 1,000 RU/s まで無料だが、取れなかった場合 400 RU/s でも月 ¥3,500 相当で予算 ¥3,000 (ADR 0013) を超える。上げる前にコストを確認すること。serverless では無視される。')
+param cosmosThroughput int = 400
+
+@minValue(400)
+@description('アカウント全体のスループット上限 (RU/s)。無料枠 1,000 を超えて課金が始まらないための構造的な歯止め。serverless では指定しない。')
+param cosmosTotalThroughputLimit int = 1000
+
+// コンテナ名はコンテナ宣言と BFF の app settings の両方で使う。ズレると
+// 「デプロイは通るが実行時に 404」になるので 1 箇所で持つ。
+var cosmosContainerNames = [
+  'problems'
+  'history'
+]
+var cosmosProblemsContainerName = cosmosContainerNames[0]
+var cosmosHistoryContainerName = cosmosContainerNames[1]
+
 // -------------------- AI Agent Container App params --------------------
 // NOTE: ACR は廃止（#67 / ADR 0013）。image は GitHub Actions で ghcr に事前ビルドし、
 // Container App は ghcr の public image を pull する（待機 ¥750/月 の ACR を除去）。
@@ -671,6 +710,31 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
                     value: speechLocation
                   }
                 ]
+              : [],
+            // Cosmos DB (ADR 0030)。**COSMOS_ENDPOINT の有無が BFF の分岐点** — 未設定なら
+            // in-memory リポジトリのまま動く (ローカル / テストの既定 = D7)。
+            // キー・接続文字列は渡さない (disableLocalAuth: true / D3)。エンドポイントは
+            // アカウント名から決まる固定形なので、条件リソースを参照せず組み立てる
+            // (SPEECH_RESOURCE_ID が resourceId() を使うのと同じ流儀)。
+            enableCosmos
+              ? [
+                  {
+                    name: 'COSMOS_ENDPOINT'
+                    value: 'https://${cosmosAccountName}.documents.azure.com:443/'
+                  }
+                  {
+                    name: 'COSMOS_DATABASE'
+                    value: cosmosDatabaseName
+                  }
+                  {
+                    name: 'COSMOS_PROBLEMS_CONTAINER'
+                    value: cosmosProblemsContainerName
+                  }
+                  {
+                    name: 'COSMOS_HISTORY_CONTAINER'
+                    value: cosmosHistoryContainerName
+                  }
+                ]
               : []
           )
 
@@ -856,6 +920,123 @@ resource speechRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-0
 
 // AI Agent / VOICEVOX Wrapper の Container App 本体は deploy-*.sh が作成/更新する
 // (ARM のプロビジョニングタイムアウトを避けるため)。載せる環境は上の共有 CAE (#68)。
+
+// -------------------- Cosmos DB (ADR 0030 / #165) --------------------
+// Problem / 履歴の永続化ストア。FR-4「再起動・再ログインで消えない」の実体。
+//
+// 守りの構成 (ADR 0030 D3):
+//   - disableLocalAuth: true でアカウントキーを**無効化**する。接続文字列は
+//     app settings にも Key Vault にも置かない = 「鍵が漏れる経路」が構造的に無い
+//   - data plane は Functions の System Assigned MI + 組み込みロールのみ (下の sqlRoleAssignment)
+//   - Private Endpoint は張れない (VNet が要るが Functions Y1 は VNet 統合非対応 / ADR 0017)。
+//     守りは disableLocalAuth + Entra RBAC の 1 層に依存する — これは ADR 0030 が
+//     Negative Consequence として明示的に受け入れたトレードオフ
+//
+// コスト (ADR 0013 の予算 ¥3,000/月):
+//   - enableCosmosFreeTier=true は**作成時オプトイン専用**。枠が消費済みならデプロイが失敗し、
+//     知らないうちに課金構成で作られることがない (「デプロイ成功 = 無料枠取得成功」)
+//   - totalThroughputLimit で無料枠 1,000 RU/s を超えられないようにする
+resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' = if (enableCosmos) {
+  name: cosmosAccountName
+  // 保管リージョンは Japan East 固定 (ADR 0030 D6 / NFR-1)。Functions (East Asia) との
+  // クロスリージョン往復は増えるが、呼び出しは全件一覧か id 点引きだけで回数が少ない。
+  location: cosmosLocation
+  kind: 'GlobalDocumentDB'
+  properties: union(
+    {
+      databaseAccountOfferType: 'Standard'
+      locations: [
+        {
+          locationName: cosmosLocation
+          failoverPriority: 0
+          isZoneRedundant: false
+        }
+      ]
+      // 無料枠は serverless 対象外。serverless に倒すときは必ず false になる。
+      enableFreeTier: enableCosmosFreeTier && !cosmosServerless
+      // D3: アカウントキーを殺す。これ以降、data plane は Entra トークンでしか通らない。
+      disableLocalAuth: true
+      publicNetworkAccess: 'Enabled'
+      minimalTlsVersion: 'Tls12'
+      capabilities: cosmosServerless
+        ? [
+            {
+              name: 'EnableServerless'
+            }
+          ]
+        : []
+    },
+    // serverless に totalThroughputLimit は指定できない (プロビジョニング概念が無い)。
+    cosmosServerless
+      ? {}
+      : {
+          capacity: {
+            totalThroughputLimit: cosmosTotalThroughputLimit
+          }
+        }
+  )
+}
+
+// DB は共有スループット。コンテナ 2 つで別々に RU を確保すると最小 400×2 になり
+// 無料枠でも上限に近づくため、DB レベルで 1 本にまとめる。
+resource cosmosDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-11-15' = if (enableCosmos) {
+  parent: cosmosAccount
+  name: cosmosDatabaseName
+  properties: {
+    resource: {
+      id: cosmosDatabaseName
+    }
+    options: cosmosServerless
+      ? {}
+      : {
+          throughput: cosmosThroughput
+        }
+  }
+}
+
+// パーティションキーは `/userId` (ADR 0030 D5)。クエリは「自分の全件」と「id 点引き」の
+// 2 種類しか無く、クロスパーティションクエリが 1 つも発生しない。
+// コンテナ名は上の cosmosContainerNames が唯一の定義 (app settings と共有する)。
+resource cosmosContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = [
+  for containerName in cosmosContainerNames: if (enableCosmos) {
+    parent: cosmosDatabase
+    name: containerName
+    properties: {
+      resource: {
+        id: containerName
+        partitionKey: {
+          paths: [
+            '/userId'
+          ]
+          kind: 'Hash'
+        }
+        // TTL は既定オフ (-1 でも 0 でもない = 未設定)。Problem も履歴も消してはいけない。
+        // 短命データ (会話セッション / 承認レコード) は ai-agent 側の in-memory に据え置き (D4)。
+      }
+    }
+  }
+]
+
+// Cosmos DB Built-in Data Contributor (data plane)。read/write は許すが、
+// DB / コンテナの作成・削除 (control plane) はできない。器の宣言は bicep が持つ。
+//
+// これは `Microsoft.Authorization/roleAssignments` (control plane) とは**別の仕組み**で、
+// Portal の「アクセス制御 (IAM)」には出てこない。ここを control plane の共同作成者で
+// 代用しようとしても data plane は通らない。
+var cosmosDataContributorRoleId = '00000000-0000-0000-0000-000000000002'
+var cosmosAccountResourceId = resourceId('Microsoft.DocumentDB/databaseAccounts', cosmosAccountName)
+
+resource cosmosDataRoleAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-11-15' = if (enableCosmos) {
+  parent: cosmosAccount
+  // 名前は GUID 必須。同じ (アカウント, プリンシパル, ロール) で冪等になるよう guid() で作る。
+  name: guid(cosmosAccountName, functionAppName, cosmosDataContributorRoleId)
+  properties: {
+    roleDefinitionId: '${cosmosAccountResourceId}/sqlRoleDefinitions/${cosmosDataContributorRoleId}'
+    principalId: functionApp.identity.principalId
+    // アカウント全体。コンテナ 2 つとも同じ 1 つの MI しか触らないので分ける意味が無い。
+    scope: cosmosAccountResourceId
+  }
+}
 
 // -------------------- Static Web Apps (frontend) --------------------
 var staticSiteRepoProps = (staticSiteRepositoryUrl != '')
@@ -1205,3 +1386,14 @@ output aiAgentContainerAppsEnvironmentName string = enableAiAgentAca ? container
 output voicevoxWrapperEnabled bool = enableVoicevoxWrapperAca
 output voicevoxWrapperContainerAppName string = enableVoicevoxWrapperAca ? voicevoxWrapperContainerAppName : ''
 output voicevoxWrapperContainerAppsEnvironmentName string = enableVoicevoxWrapperAca ? containerAppsEnvironmentName : ''
+
+// Cosmos DB (ADR 0030)。runbook / 検証スクリプトがアカウント名と DB 名をここから引く。
+output cosmosEnabled bool = enableCosmos
+output cosmosAccountName string = enableCosmos ? cosmosAccountName : ''
+output cosmosEndpoint string = enableCosmos ? 'https://${cosmosAccountName}.documents.azure.com:443/' : ''
+output cosmosDatabaseName string = enableCosmos ? cosmosDatabaseName : ''
+output cosmosLocation string = enableCosmos ? cosmosLocation : ''
+// デプロイが成功していれば、この値が true のとき無料枠を実際に取得できている
+// (枠が消費済みなら enableFreeTier: true の作成は失敗するため / ADR 0030 D2)。
+output cosmosFreeTierEnabled bool = enableCosmos && enableCosmosFreeTier && !cosmosServerless
+output cosmosServerless bool = enableCosmos && cosmosServerless

@@ -7,6 +7,13 @@
     "outDir": "dist",
     "rootDir": ".",
     "strict": true,
+    /* フロント (apps/frontend/tsconfig.app.json) が `include` に
+       `../bff/src/trpc/router.ts` を入れており、そこから辿れる BFF のソースは
+       フロントの `tsc -b` でも型検査される。フロント側は erasableSyntaxOnly なので、
+       ここを外すと「BFF の tsc は通るのにフロントの build だけ TS1294 で落ちる」
+       という遠くて分かりにくい壊れ方をする (PR #182 で実際に踏んだ)。
+       同じ設定をここにも置いて、BFF 単体のビルドで捕まえる。 */
+    "erasableSyntaxOnly": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
