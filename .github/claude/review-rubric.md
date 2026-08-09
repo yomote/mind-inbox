@@ -44,13 +44,14 @@ PR の diff を読み、下記 3 軸で評価し、**重要な指摘は該当行
   security-reviewer subagent (`.github/claude/security-rubric.md`, ADR 0019) に委譲する
 - **簡素化**: より少ないコードで同じ結果になる箇所 (高確度のみ)
 
-### 軸 C — PR テンプレとの整合チェック
+### 軸 C — PR 本文が判断の役に立つか
 
-PR 本文 (`.github/PULL_REQUEST_TEMPLATE.md` の構造) が実 diff と整合しているか。
+PR 本文 (`.github/PULL_REQUEST_TEMPLATE.md` の構造) が実 diff と整合し、**30 秒で読んでマージ判断ができる**か。
 
-- 「テスト設計」欄の主張と、実際に追加/変更されたテストが一致しているか
-- 「Docs 更新」欄の主張と、実際の docs 差分が一致しているか
-- チェックリストで「不要」とした項目が、diff を見る限り本当に不要か
+- `結論` (マージ可能 / 条件付き / 未判定) と `リスク` が diff の実態と合っているか。「条件付き」なら条件が書かれているか
+- `Verification` 表の PASS 主張が、実際の変更・貼られた証拠と一致しているか。**未検証を PASS と書いていないか**
+- `Known limitations` に書くべき未検証事項が Summary で隠れていないか
+- **冗長さも指摘する** — 全テストの理由の羅列、実行ログの直貼り、`<details>` に畳むべき調査経緯が本文に展開されている場合は `minor`
 - 本文が空 / テンプレ未記入なら、その旨を minor で指摘する
 
 ## Severity (共通定義: [`_common.md`](_common.md#共通-severity))
