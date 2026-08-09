@@ -1,68 +1,33 @@
 # Runbooks
 
-> 運用手順を集約する場所。「何をどの順序で実行するか」を Runbook に書く。
-> 戦略全体: [`docs/documentation/strategy.md`](../documentation/strategy.md)
+運用手順の正典。**Trigger / Prerequisites / Steps / Verification / Rollback / Common Issues** で書く ([`template.md`](./template.md))。
 
-## Runbook とは
+- **なぜそうするか**は書かない → [ADR](../adr/README.md)
+- **スクリプト個別の引数・仕様**は書かない → `cicd/scripts/*/README.md` / `cicd/iac/README.md`
+- 長い調査ログ・障害の経緯は `<details>` に畳むか [debrief](../debrief/journal.md) へ
 
-特定のオペレーション (デプロイ / ロールバック / 障害対応 / 環境クリーンアップ等) を**人が再現できる手順書**として残したもの。
+## 一覧
 
-## いつ書くか
+| Runbook                                                        | いつ使うか                                                                |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| [`local-fullstack-dev.md`](local-fullstack-dev.md)             | ローカルで VOICEVOX + BFF + frontend を起動し、声の UX を評価する         |
+| [`claude-web-azure-access.md`](claude-web-azure-access.md)     | Claude Code (web) セッションから device-code で Azure を操作する          |
+| [`azure-oidc-cd-setup.md`](azure-oidc-cd-setup.md)             | 常設 dev の CD (GitHub Actions + OIDC) を設定する / up・down する         |
+| [`ghcr-images.md`](ghcr-images.md)                             | コンテナ image をビルド / タグ差し替えでデプロイ / ロールバックする       |
+| [`entra-spa-auth-and-budget.md`](entra-spa-auth-and-budget.md) | 常設 dev の認可 (Entra SPA + Functions EasyAuth) と予算アラートを設定する |
+| [`container-apps-auth-gate.md`](container-apps-auth-gate.md)   | Container Apps を組み込み認証 + Managed Identity で閉じる                 |
+| [`cd-watchdog.md`](cd-watchdog.md)                             | CD の赤を無人診断・修正する Routine を止める / 変える                     |
+| [`refresh-infra-diagram.md`](refresh-infra-diagram.md)         | 構成図を実環境から再生成する / 週次ワークフローを止める・頻度を変える     |
+| [`claude-pr-review.md`](claude-pr-review.md)                   | PR 自動レビュー (LLM-as-a-judge) を動かす / 観点を変える / 止める         |
+| [`review-agents.md`](review-agents.md)                         | リリース PR で独立 judge (security / QA / biz-owner / release) を回す     |
+| [`ux-probe-judge.md`](ux-probe-judge.md)                       | UX プローブの記録を採点する / 採点 Routine を運用する                     |
+| [`ops-inspect.md`](ops-inspect.md)                             | サンドボックス外の事実 (Azure の実態 / egress の外) をエージェントが取る  |
+| [`github-projects-setup.md`](github-projects-setup.md)         | GitHub Projects (実行ダッシュボード) をセットアップする                   |
 
-- 新しい運用手順を導入する時
-- 既存 README に手順が散らばっていて見つけづらい時
-- インシデント対応の学びを残したい時 (incident-response.md に追記)
-
-書かなくて良いもの:
-
-- アーキテクチャ判断 (ADR の領域)
-- 一時的な調査メモ
-- スクリプトの内部実装 (`cicd/scripts/*/README.md` で十分)
-
-## 書き方
-
-### 1. ファイルを作る
-
-`docs/runbooks/{name}.md` の形式 (kebab-case)。
+## 新しく書くとき
 
 ```bash
-cp docs/runbooks/template.md docs/runbooks/my-procedure.md
+cp docs/runbooks/template.md docs/runbooks/my-procedure.md   # kebab-case
 ```
 
-### 2. 書く
-
-[`template.md`](./template.md) のセクションを埋める:
-
-- **Trigger** — いつこの Runbook を使うか (具体的な状況)
-- **Prerequisites** — 必要なアクセス / ツール / env var
-- **Steps** — 番号付きで実行可能なコマンドを書く
-- **Verification** — 成功確認方法 (チェックリスト)
-- **Rollback** — 途中失敗時の戻し方
-- **Common Issues** — 既知のハマりどころ
-
-### 3. レビュー
-
-Runbook PR は実際にその手順を**踏んだ人**が書くか、レビューに入ること。机上のものは劣化が速い。
-
-## 既存スクリプトとの関係
-
-`cicd/scripts/*/README.md` はスクリプトの実装説明として残す。Runbook は「いつ・なぜ・どう実行するか」を書き、スクリプトの README にリンクする。
-
-## 既存 Runbook
-
-- `azure-oidc-cd-setup.md` — オンデマンド CD（GitHub Actions + OIDC）の初回設定と up/down 運用
-- `claude-web-azure-access.md` — Claude Code (web) セッションから device-code で Azure を操作する
-- `local-fullstack-dev.md` — ローカルで VOICEVOX+BFF+frontend を起動し声の UX を評価する
-- `claude-pr-review.md` — Claude PR 自動レビュー (LLM-as-a-judge) を Routine で動かす / 観点変更 / 停止
-- `github-projects-setup.md` — GitHub Projects (実行ダッシュボード) のフィールド / Workflow セットアップ (ADR 0011)
-- `ghcr-images.md` — コンテナ image を ghcr で事前ビルド → タグ差し替えデプロイ (ACR 廃止, #67 / ADR 0013)
-- `entra-spa-auth-and-budget.md` — 常設 dev の認可 (Entra SPA + Functions EasyAuth) と予算アラート (#69 / ADR 0013)
-- `container-apps-auth-gate.md` — Container Apps の認証の門 (組み込み認証 + Managed Identity)。IP 許可リストが成立しない実測記録つき (#86 / ADR 0017)
-- `review-agents.md` — 独立 judge エージェント (security / QA / biz-owner / release) の運用とリリース PR ゲート (ADR 0019)
-- `ops-inspect.md` — サンドボックスの外にある事実 (Azure の実態 / egress の外のページ) をエージェントが自力で取る (ADR 0031)。**許可ネットワークドメインの写しもここ**
-- `ux-probe-judge.md` — UX 体験プローブの記録と毎朝の無人採点 (ADR 0027 / 0029)
-- `cd-watchdog.md` — CD の赤を毎時検知して診断・fix PR まで進める watchdog Routine (ADR 0026)
-
-未作成 (必要になった時に起こす。存在しない文書をここに列挙しない):
-`deploy-all.sh` / `cleanup-env.sh` / `golden-path.sh` 等のデプロイ・撤収系は
-当面 `cicd/scripts/*/README.md` とスクリプトのヘッダコメントが手順の真実。
+その手順を**実際に踏んだ人**が書くか、レビューに入ること。机上のものは劣化が速い。

@@ -12,7 +12,7 @@ Technical Story: [#165](https://github.com/yomote/mind-inbox/issues/165)
 
 Problem / Mention / 相談履歴 / 会話セッション / 承認レコードはすべて in-memory の module singleton で保持されており、プロセスが落ちれば消える (`problemRepository.ts:52` / `historyRepository.ts:26` / `repositories.py:31-57`)。Functions は Y1 (Consumption) なのでアイドルで確実にリサイクルされ、**実質的に翌日には空になる**。これは要件 **FR-4「Problem はセッション終了後も永続化され、再起動 / 再ログインで消えない」の未達**であり、同時に concept_deck が競争軸に据えた「継続的に育つ構造化体験」の芯そのものが欠けている状態である。
 
-基本設計 §10 Phase 2 は方針として「Cosmos DB / Redis」を挙げていたが、**Azure Cache for Redis は 2026-04-01 から新規顧客の作成がブロックされ、2028-09-30 に廃止される**ことが判明した。方針の再確認が必要になっている。
+基本設計 (当時) の Phase 2 は方針として「Cosmos DB / Redis」を挙げていたが、**Azure Cache for Redis は 2026-04-01 から新規顧客の作成がブロックされ、2028-09-30 に廃止される**ことが判明した。方針の再確認が必要になっている。
 
 制約は 3 つ: (1) 月次予算 ¥3,000 (ADR 0013、既に Azure OpenAI / Container Apps / Functions / SWA / Log Analytics が消費している残り枠)、(2) NFR-1「保存データの暗号化 / ユーザーによる削除権 / 保管リージョンの明確化」が**最重要**指定、(3) 次のマイルストーン (#83) でベクトル検索を使うため、そこで作り直しになる選択を避けたい。
 
@@ -37,7 +37,7 @@ Chosen option: **"Option A"**。ドキュメント本体・短命セッション
 
 ### 決定の内訳
 
-- **D1 ストアは Cosmos DB (NoSQL API) 1 本**。基本設計 §10 Phase 2 の「Cosmos DB / **Redis**」を **Cosmos 単独**に改める。短命な会話セッション・承認レコードはコンテナ単位の TTL で自動消滅させる (Cosmos の TTL は秒単位・アイテム単位で上書き可)
+- **D1 ストアは Cosmos DB (NoSQL API) 1 本**。基本設計 (当時) の Phase 2 の「Cosmos DB / **Redis**」を **Cosmos 単独**に改める。短命な会話セッション・承認レコードはコンテナ単位の TTL で自動消滅させる (Cosmos の TTL は秒単位・アイテム単位で上書き可)
 - **D2 課金モードは free tier (provisioned 1,000 RU/s) を第一候補、取れなければ serverless**。free tier は「1 サブスクリプションに 1 アカウント」「アカウント作成時のオプトイン必須・後から有効化不可」「serverless は対象外」。bicep のパラメータで切り替え可能にし、**free tier の取得に失敗したら serverless で作り直す**
 - **D3 データ面のアクセスはマネージド ID + RBAC のみ。アカウントキーは殺す** (`disableLocalAuth: true`)。Function App は既に SystemAssigned のマネージド ID を持っている (`bootstrap-core.bicep:574`)。接続文字列を app settings にも Key Vault にも置かない
 - **D4 ストアに触れるのは BFF だけ。ai-agent からは繋がない**。ai-agent / vv-wrapper の Container App は **bicep の外**にあり (`bootstrap-core.bicep:90` のコメント、`enableAiAgentAca` は既定 false でリソース宣言そのものが無い)、マネージド ID を安定して付けられない。会話セッションと承認レコードは **in-memory のまま据え置く** — FR-4 が要求しているのは Problem と履歴の永続化であり、セッションは 1 回の座りの間だけ生きればよい
@@ -89,7 +89,7 @@ Chosen option: **"Option A"**。ドキュメント本体・短命セッション
 
 ### Option D: Cosmos DB + Azure Managed Redis
 
-基本設計 §10 Phase 2 の原案に最も近い形。
+基本設計 (当時) の Phase 2 の原案に最も近い形。
 
 - Bad, because **Azure Cache for Redis は 2026-04-01 から新規顧客の作成がブロック済み**。既存顧客も 2026-10-01 で作成不可、2028-09-30 に廃止。今日 (2026-08-09) の時点で選べる可能性が低い
 - Bad, because 後継の Azure Managed Redis は最小 SKU の月額が確認できず、C0 相当の超小型 SKU を持たないため予算超過の見込み
@@ -109,6 +109,7 @@ ADR 0018 に従い、「設定したか」ではなく振る舞いで書く。
 
 - Issue: [#165](https://github.com/yomote/mind-inbox/issues/165) / 後続: [#83](https://github.com/yomote/mind-inbox/issues/83) (embedding 索引) / [#46](https://github.com/yomote/mind-inbox/issues/46) (SP ロール最小化)
 - 要件: `docs/design/requirements.md` FR-4 / NFR-1 / NFR-2
-- 基本設計: `docs/design/basic_design.md` §10 Phase 2 (本 ADR が「Redis」の部分を改める)
+- 現行の構造: [`docs/design/basic_design.md`](../design/basic_design.md) の「永続化」節 (本 ADR の決定を反映済み)
+- 出典となった旧方針: [`docs/design/archive/basic_design_poc.md`](../design/archive/basic_design_poc.md) の Phase 2 (「Cosmos DB / **Redis**」— 本 ADR が Redis の部分を改める。archive は現行方針として読まないこと)
 - 実装計画: `docs/design/implementation_plan_v2.md` §6 宿題 (Problem 永続化と M2 索引の関係)
 - 関連 ADR: [0002](0002-container-apps-not-aks.md) (scale-to-zero) / [0004](0004-mockapi-as-frontend-truth.md) (mock を残す方針) / [0007](0007-problem-centric-two-layer-domain-model.md) (Mention を Problem に内包 = 1 ドキュメントで完結) / [0013](0013-standing-low-cost-dev-env-with-auto-deploy.md) (予算 ¥3,000) / [0017](0017-container-apps-access-via-auth-gate.md) (Functions Y1 は VNet 統合非対応) / [0018](0018-runtime-verification-in-the-loop.md) (動作検証)

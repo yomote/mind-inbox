@@ -101,51 +101,32 @@
 - プロンプトの中身は Routine 側が正典 (`update_trigger` で編集する)。実行する手順は上の Steps 2〜4 と同じ
 
 2026-08-09 に登録した ([#156](https://github.com/yomote/mind-inbox/issues/156))。
-以前 **「claude-code-remote MCP サーバー全体が承認ゲートの内側にあり agent からは登録できない」**
-と記録していたが、これはセッション横断の恒久的な制約ではなく**セッションごとの権限差**だった
-— MCP が許可されたセッションからは `list_triggers` / `create_trigger` / `update_trigger` が
-そのまま通る。#90 / #92 も同じ理由で滞留していたので、同様に解ける見込み。
 
-### agent セッションでは gh が使えない — GitHub MCP で代替する
+### agent セッションでの経路 (gh は使えない)
 
-**Prerequisites の「`gh` CLI」を満たせるのは人間の手元だけ**で、Claude Code on the web の
-agent セッションでは満たせない。2026-08-09 に実測した内容:
-
-- `gh` は最初から入っていない。**apt で入れることはできる** (`apt-get install gh` → 2.45.0)
-- しかし入れても使えない。`GH_TOKEN` / `GITHUB_TOKEN` は環境変数として存在するが、
-  `api.github.com` への直接アクセスがゲートウェイで拒否される:
-
-  ```text
-  $ gh run list -R yomote/mind-inbox -w golden-path-monitor.yml
-  HTTP 403: GitHub access is not enabled for this session.
-            An org admin must connect the Claude GitHub App for this organization.
-  ```
-
-  `curl` で直に叩いても同じ 403。egress プロキシではなくゲートウェイ側の判断なので、
-  **インストールでは解けない** (`github.com` への素の HTTPS も 403 — ただし git の
-  fetch/push は別経路の credential helper を通るので普通に動く)
-
-- したがって `fetch-latest-probe.sh` / `post-judge-score.sh` は、**どちらも冒頭の
-  `command -v gh` で終了コード 1 になる**。この 2 本は**人間の手元専用**と考えること
-- **artifact のダウンロードも塞がっている。** GitHub MCP の `download_workflow_run_artifact`
-  は署名付き URL を返すが、取得先が egress ポリシーで拒否される:
-
-  ```text
-  curl: (56) CONNECT tunnel failed, response 403
-  # プロキシの記録: connect_rejected / productionresultssa16.blob.core.windows.net:443
-  ```
-
-  ホスト名の `productionresultssaNN` は可変なので、狭い許可では足りない
-
-そこで **記録は Issue コメントで運ぶ** ([ADR 0029](../adr/0029-probe-record-transport-via-issue-comment.md) / [#160](https://github.com/yomote/mind-inbox/issues/160))。agent 経路のまとめ:
+`fetch-latest-probe.sh` / `post-judge-score.sh` は **人間の手元専用**。agent セッションでは
+`gh` も artifact ダウンロードも通らないため、記録は Issue コメントで運ぶ
+([ADR 0029](../adr/0029-probe-record-transport-via-issue-comment.md) / [#160](https://github.com/yomote/mind-inbox/issues/160))。
 
 - **記録の取得** (Step 2): `issue_read` (method=`get_comments`) で記録 Issue
   [#162](https://github.com/yomote/mind-inbox/issues/162) の最新コメントを読み、本文を保存してから
   `probe-record-comment.py extract` → `inspect-probe-artifact.py`。
-  `actions_*` で artifact を取りに行かないこと (上記のとおり必ず落ちる)
+  **`actions_*` で artifact を取りに行かないこと** (必ず落ちる)
 - **検証と投稿** (Step 4): `python3 cicd/scripts/ux-probe/validate-judge-score.py <レポート>`
   を直接回し、**終了コード 0 のときだけ** `add_issue_comment` で #127 へ投稿する。
-  検証は gh に依存しないので、**「検証に落ちたら投稿しない」という不変条件は agent 経路でも保たれる** — ここを飛ばさないこと
+  検証は gh に依存しないので「検証に落ちたら投稿しない」は agent 経路でも保たれる — ここを飛ばさないこと
+
+<details>
+<summary>gh / artifact が通らないことの実測 (2026-08-09)</summary>
+
+- `gh` は apt で入れられる (2.45.0) が、`api.github.com` がゲートウェイで拒否される
+  (`HTTP 403: GitHub access is not enabled for this session.`)。`curl` で直に叩いても同じ。
+  インストールでは解けない。git の fetch/push は別経路の credential helper を通るので動く
+- GitHub MCP の `download_workflow_run_artifact` が返す署名付き URL も egress で拒否される
+  (`connect_rejected / productionresultssa16.blob.core.windows.net:443`)。ホスト名の
+  `productionresultssaNN` は可変なので狭い許可では足りない
+
+</details>
 
 ## Verification
 

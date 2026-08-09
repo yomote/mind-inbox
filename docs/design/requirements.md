@@ -1,17 +1,17 @@
 # Mind Inbox — 要件定義書（プロダクト化フェーズ / Problem 中心モデル）
 
 作成: 2026-06-21 / 対象: PoC を「継続して使える v1」にするための外部設計の起点
-関連: [`concept_deck.md`](../concept_deck.md) / [`basic_design.md`](./basic_design.md)（§4 データモデル, §10 ロードマップ）
+関連: [`concept_deck.md`](../concept_deck.md) / [`basic_design.md`](./basic_design.md)（現行の構造）/ [`archive/basic_design_poc.md`](./archive/basic_design_poc.md)（PoC 期の §4 データモデル・§10 ロードマップ）
 
-> **ステータス: DRAFT（叩き台）**
-> ユースケース詳細は `use_cases.md`、ドメインモデルは `domain_model.md` に分離する（本書はその土台）。
+> **ステータス: v1 は実装完了**（本書は v1 の要件記録）。以降の計画は [`implementation_plan_v2.md`](./implementation_plan_v2.md)。
+> ユースケース詳細は [`use_cases.md`](./use_cases.md)、ドメインモデルは [`domain_model.md`](./domain_model.md)（こちらが真実）。
 > 集約ルート Session → Problem 転換は [ADR 0007](../adr/0007-problem-centric-two-layer-domain-model.md)（Accepted）で決定済み。
 
 ---
 
 ## 1. 背景と問題意識
 
-PoC では「話す → 整理 → プラン生成」の一気通貫が疎通済み（`basic_design.md`）。
+PoC では「話す → 整理 → プラン生成」の一気通貫が疎通済み（[`archive/basic_design_poc.md`](./archive/basic_design_poc.md)）。
 しかし `concept_deck.md` §1 の核心課題 —— **「同じ悩みを何度も話している / 継続テーマが見えない」** —— を**まだ解けていない**。
 
 理由は設計の構造にある:
@@ -124,7 +124,7 @@ PoC では「話す → 整理 → プラン生成」の一気通貫が疎通済
 
 - **NFR-1 プライバシー / データ保護（最重要）**: メンタル状態に関する機微情報を扱う。保存データの暗号化、ユーザーによる削除権、保管リージョンの明確化を前提とする。
   - 注: 医療的な診断・治療ではなく自己理解支援というプロダクト位置づけ（concept_deck 冒頭注）を UI / 文言レベルでも保つ。
-- **NFR-2 永続化の信頼性**: Problem / 履歴は耐久性のあるストアに保存（basic_design §10 の Cosmos DB / Redis 方針と接続）。
+- **NFR-2 永続化の信頼性**: Problem / 履歴は耐久性のあるストアに保存（PoC 期計画の Cosmos DB / Redis 方針と接続。現行は [`implementation_plan_v2.md`](./implementation_plan_v2.md) §6）。
 - **NFR-3 音声対話のレイテンシ**: 「心理的に疲れにくい」体験（concept_deck §7）のため、吐き出し → 受け止め応答、および抽出結果提示までの体感速度を許容範囲に保つ。
   - 設計（ADR 0007）: 抽出（段1）と自動グルーピング（段2）を分離したことで、受け止め応答を待たせず段2 を非同期化できる余地がある。
 - **NFR-4 コスト**: Container Apps の scale-to-zero 方針を維持（ADR 0002）。
@@ -134,11 +134,11 @@ PoC では「話す → 整理 → プラン生成」の一気通貫が疎通済
 
 ## 8. 既存設計への影響（ADR 0007 で決定済み）
 
-| 影響                 | 内容                                                                                                               | 対応                                                                                                                    |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| **集約ルートの転換** | basic_design §4 の会話中心モデル（Session 中心 / 困りごとは `priorities: string[]`）を **Problem 中心 2層** へ覆す | ✅ [ADR 0007](../adr/0007-problem-centric-two-layer-domain-model.md)（Accepted）。basic_design §4 に supersede 注記済み |
-| **永続化方針**       | in-memory → 耐久ストア。Mention / Problem の格納先・同一性キーの設計                                               | basic_design §10 Phase 2 と統合（v1 は in-memory）                                                                      |
-| **データモデル**     | Mention / Problem / テーマ / 状態 / Session との関連                                                               | ✅ `domain_model.md` が真実。basic_design §4 は PoC 記録として残置                                                      |
+| 影響                 | 内容                                                                                                                            | 対応                                                                                                              |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| **集約ルートの転換** | PoC 期 (basic_design_poc §4) の会話中心モデル（Session 中心 / 困りごとは `priorities: string[]`）を **Problem 中心 2層** へ覆す | ✅ [ADR 0007](../adr/0007-problem-centric-two-layer-domain-model.md)（Accepted）。archive 側に supersede 注記済み |
+| **永続化方針**       | in-memory → 耐久ストア。Mention / Problem の格納先・同一性キーの設計                                                            | v2 M2 の索引設計と統合（v1 は in-memory）                                                                         |
+| **データモデル**     | Mention / Problem / テーマ / 状態 / Session との関連                                                                            | ✅ `domain_model.md` が真実。PoC 期のモデルは archive                                                             |
 
 ---
 
@@ -161,5 +161,5 @@ PoC では「話す → 整理 → プラン生成」の一気通貫が疎通済
 
 - ✅ `use_cases.md`（UC-01〜05 詳細化・SSD）
 - ✅ `domain_model.md`（2層 Mention → Problem）
-- ✅ [ADR 0007](../adr/0007-problem-centric-two-layer-domain-model.md)（Accepted）→ basic_design §4 / §10 更新済み
+- ✅ [ADR 0007](../adr/0007-problem-centric-two-layer-domain-model.md)（Accepted）→ PoC 期の §4 / §10 は archive へ退避済み
 - → 次は実装: [`archive/implementation_plan_v1.md`](./archive/implementation_plan_v1.md) Phase D（型 & モック先行）

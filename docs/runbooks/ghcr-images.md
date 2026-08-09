@@ -23,21 +23,17 @@ main マージ (apps/services/** 変更)
 - **push 認証**: workflow の `GITHUB_TOKEN`（`packages: write`）。PAT 不要。
 - **pull 認証**: image を **public** にして Container Apps から認証なしで pull（registry secret 不要 = ADR 0006 の「静的シークレット0」を維持）。
 
-## `:latest` でデプロイしてはいけない理由（#107）
+## デプロイは不変 sha タグで行う（`:latest` は使わない）
 
-`az containerapp update --image <現在と同一の文字列>` は **ARM 的にテンプレート変更なし → 新しい revision を作らない no-op** になる。ghcr 側で `latest` が指す実体が新しい image に進んでいても、Container Apps はそれを知る手段がなく**据え置きのまま**になる。
+`:latest` は「同一文字列での update = 新 revision を作らない no-op」になり、緑のまま古い image が動き続ける。判断は [ADR 0025](../adr/0025-deploy-container-images-by-immutable-sha-tag.md)。CD の実装は 2 段構え:
 
-2026-08-07 に実際にこれが起き、build-images が新 image を push した後もデプロイ 2 回を経て `ca-dev-mindbox-ai-agent` が前日の image のまま動き続けた（デプロイ自体は緑で成功と報告された）。
+1. **不変タグを解決してから差し替える** — `deploy.yml` の「Resolve IMAGE_TAG」step が直近の build-images **成功** run の head SHA から `sha-<full-sha>` を解決して渡す
+   - 同一 commit の build-images が走行中なら**完了を待つ**（待たないと一つ前の image を載せる）
+   - build-images は `apps/services/**` 変更時のみ走るので、**デプロイ対象 commit と image の commit は一致しないことがある**（「最後にビルドされた sha」が正）
+   - 成功 run が 無い場合は `:latest` にフォールバックせず **fail** する。build-images を手動 dispatch してから再デプロイする
+2. **載ったことを実測する** — `smoke-test.sh` が稼働 revision (`latestReadyRevisionName`) の image タグを `EXPECTED_IMAGE_TAG` と突合し、不一致なら NG
 
-そのため CD は次の 2 段構えで運用する:
-
-1. **不変タグを解決してから差し替える** — `deploy.yml` の「Resolve IMAGE_TAG」step が、直近の build-images **成功** run の head SHA から `sha-<full-sha>` を解決し、`IMAGE_TAG` として `provision.sh` → `deploy-*.sh` に渡す。image 文字列が毎回変わるので update は必ず新 revision を作る
-   - 同一 commit の build-images run が走行中なら**完了を待つ**（待たないと「一つ前の image」を載せてしまう）
-   - build-images は `apps/services/**` 変更時のみ走るため、**デプロイ対象 commit と image の commit は一致しないことがある**（「最後にビルドされた sha」が正）
-   - 成功 run が 1 件も無い場合は `:latest` にフォールバックせず **fail** する（ghcr に image が無い可能性が高く、no-op どころか pull 失敗になるため）。この時は build-images を手動 dispatch してから再デプロイする
-2. **載ったことを実測する** — `smoke-test.sh` が稼働 revision（`latestReadyRevisionName`）の image タグを `EXPECTED_IMAGE_TAG` と突合し、不一致なら NG（デプロイが赤くなる）。no-op への退行や revision 未昇格をここで検知する
-
-手動実行の安全網として、`deploy-*.sh` は「現在の image と同一文字列での update」を検出して WARN を出す。
+手動実行時は `deploy-*.sh` が「同一文字列での update」を検出して WARN を出す。
 
 ## package の可視性 — public であることを確認する
 
