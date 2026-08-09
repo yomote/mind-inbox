@@ -1,10 +1,10 @@
 # Mind Inbox — ドメインモデル（プロダクト化フェーズ / 2層: Mention → Problem）
 
 作成: 2026-06-21 / 対象: `Mention`（観測）と `Problem`（集約）の2層モデル
-関連: [`requirements.md`](./requirements.md) / [`use_cases.md`](./use_cases.md) / [`basic_design.md`](./basic_design.md)（§4 を覆す）
+関連: [`requirements.md`](./requirements.md) / [`use_cases.md`](./use_cases.md) / [`basic_design.md`](./basic_design.md)（現行の構造）
 
 > **ステータス: DRAFT（叩き台）**
-> この設計は basic_design §4 の**会話中心モデル（集約ルート = Session）を覆す**。確定時に ADR を起こす。
+> この設計は PoC 期の**会話中心モデル（集約ルート = Session）を覆した**（[ADR 0007](../adr/0007-problem-centric-two-layer-domain-model.md) Accepted）。
 > 着想元: PagerDuty のインシデント管理（Alert を Incident に束ね、重複を抑え、繰り返すものを重点化）。
 > 🔶 マークは最終確認待ちの判断。
 
@@ -159,7 +159,7 @@ stateDiagram-v2
 
 > **`candidate` を廃止**: A 案（自動グルーピング + 事後トリアージ）では Problem は `open` 直行で生まれる。承認待ちの中間状態は不要になり、トリアージは*非ブロッキングな事後編集*になる。
 > **`dormant` を状態にしない**: 「しばらく触れていない」は本来*時間駆動の遷移*。v1 はスケジューラ範囲外なので、`lastMentionedAt` から計算する**派生ビュー**として扱う。プロアクティブ・フェーズで正式な状態化を検討。
-> **再燃は自動**: `resolved` / `shelved` の Problem に再言及があったら `open` に戻す（UC-03 事後条件 / [ADR 0030](../adr/0030-use-case-acceptance-tests-against-real-wiring.md)）。A 案（自動で寄せて、違えば事後トリアージで直す）を状態にも適用する。手動にしていた頃は、抽出結果レビューが「🔁N回目 / 再燃」と表示するのに既定の一覧（追跡中のみ）には現れない食い違いが起きていた。
+> **再燃は自動**: `resolved` / `shelved` の Problem に再言及があったら `open` に戻す（UC-03 事後条件 / [ADR 0032](../adr/0032-use-case-acceptance-tests-against-real-wiring.md)）。A 案（自動で寄せて、違えば事後トリアージで直す）を状態にも適用する。手動にしていた頃は、抽出結果レビューが「🔁N回目 / 再燃」と表示するのに既定の一覧（追跡中のみ）には現れない食い違いが起きていた。
 
 ---
 
@@ -203,4 +203,4 @@ stateDiagram-v2
 
 1. **ADR** を起こす:（a）集約ルート Session → Problem（b）2層 Mention/Problem + 自動グルーピング方式 + テーマ体系
 2. `use_cases.md` の UC-01 / UC-03 を「抽出（段1）→ グルーピング（段2）」分離に更新
-3. `basic_design.md §4`（データモデル）/ §10（ロードマップ）を更新
+3. PoC 期の設計書を archive へ退避（完了）

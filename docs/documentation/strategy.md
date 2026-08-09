@@ -165,9 +165,9 @@ docs/
 
 ## 7. コーディングエージェント運用ガイド
 
-### 7.1 PR テンプレート / CLAUDE.md への反映 (実施済み)
+### 7.1 docs 更新を誰が要求するか
 
-Docs 更新欄は [`.github/PULL_REQUEST_TEMPLATE.md`](../../.github/PULL_REQUEST_TEMPLATE.md) が正典 (本文はここに再掲しない)。CLAUDE.md からは本戦略・ADR ディレクトリ・「OpenAPI を手書きしない」方針を参照している。
+**§5 更新タイミング**が正典。PR 本文はマージ判断の案内板なので、更新した docs を網羅列挙させない (更新しなかった理由の列挙も不要) — 実 diff との整合は PR レビュー judge の軸 A ([`review-rubric.md`](../../.github/claude/review-rubric.md)) と `pr-readiness` skill が見る。CLAUDE.md からは本戦略・ADR ディレクトリ・「OpenAPI を手書きしない」方針を参照している。
 
 ### 7.2 エージェントが間違えやすい点
 

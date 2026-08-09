@@ -31,7 +31,7 @@ Mind Inbox は **コーディングエージェント駆動の高速開発** を
 | L2 結合 | API/endpoint 単位で 正常系 + 異常系 (auth fail / 不正 input / 依存先失敗) を網羅 — **仕様 = test の主戦場** | 内部 helper の通し検証 (それは L1)               |
 | L3 E2E  | golden path 1 本                                                                                            | スクリーン単位の網羅 (UI 仕様は MDX に寄せる)    |
 
-PR テンプレ・Test Issue テンプレに「このテストが無いと何が静かに通るか」「書かなかった理由」を必須化することで、書く前にこの問いを通す運用にしている (`.github/PULL_REQUEST_TEMPLATE.md` / `.github/ISSUE_TEMPLATE/test.md`)。
+この問いは **Test Issue テンプレ** (`.github/ISSUE_TEMPLATE/test.md`) が着手前に、**テストコードのコメント**が書いた後に持つ。PR 本文には**重要な回帰テストを 1〜3 件だけ**挙げ、全数の理由を並べない (テストが増えるほど PR 本文が肥大し、結論が埋もれるため)。
 
 ### 1.3 設計原則
 
@@ -130,7 +130,7 @@ PR テンプレ・Test Issue テンプレに「このテストが無いと何が
 
 | 項目               | 内容                                                                                                                                                                                                           |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **目的**           | `docs/design/use_cases.md` の **UC-01〜05 が実配線で通ること**を機械的に保証する。「mock は緑なのに実環境で動かない」を構造的に潰す ([ADR 0030](../adr/0030-use-case-acceptance-tests-against-real-wiring.md)) |
+| **目的**           | `docs/design/use_cases.md` の **UC-01〜05 が実配線で通ること**を機械的に保証する。「mock は緑なのに実環境で動かない」を構造的に潰す ([ADR 0032](../adr/0032-use-case-acceptance-tests-against-real-wiring.md)) |
 | **対象**           | UC-01 吐き出し→抽出 / UC-02 見返す / UC-03 繰り返しに気づく / UC-04 棚卸し / UC-05 次の一歩 + **通信失敗時に UI が沈黙しないこと**                                                                             |
 | **フレームワーク** | Playwright (chromium)。`apps/frontend/e2e-uc/`                                                                                                                                                                 |
 | **起動の仕方**     | 3 プロセス: ai-agent ダブル (`e2e-uc/fake-ai-agent.mjs`) → 実 BFF (`apps/bff/scripts/local-server.mjs`) → **`VITE_USE_MOCK` を渡さない** production ビルドの `vite preview`                                    |
@@ -234,7 +234,7 @@ cd apps/bff && npm run test -- --watch
 2. npm run test:contract  ← L0
 3. npm run test:fast       ← L1 + L2 (並列)
 4. npm run test:e2e        ← L3 (mock ビルド)
-5. npm run test:e2e:uc     ← L3-real (実 BFF + ai-agent ダブル / ADR 0030)
+5. npm run test:e2e:uc     ← L3-real (実 BFF + ai-agent ダブル / ADR 0032)
 6. build summary           ← レイヤ別 pass/fail を Markdown で生成
 7. sticky PR comment       ← 同 Markdown を PR に常駐コメント (header: test-summary)
 8. fail if any layer failed
@@ -261,11 +261,13 @@ main ブランチ保護で 2〜4 を必須チェックに設定する。
 - **テスト全体を見渡して粒度を調整すること** — 渡した範囲しか見ない。粒度はレビュー時に人間が確認
 - **暗黙の契約を察すること** — L0 契約テストで明示する。コメントに頼らない
 
-### 6.2 PR セルフチェックリスト (エージェントに渡す)
+### 6.2 PR に何を書くか
 
-チェックリストの本文は [`.github/PULL_REQUEST_TEMPLATE.md`](../../.github/PULL_REQUEST_TEMPLATE.md) が正典 (ここには再掲しない — 二重管理で片方だけ古くなるため)。エージェントには「テンプレートを埋めてから push する」と指示すれば足りる。
+PR 本文の構成は [`.github/PULL_REQUEST_TEMPLATE.md`](../../.github/PULL_REQUEST_TEMPLATE.md) が正典 (ここには再掲しない)。PR 本文は**マージ判断の案内板**であり、テスト設計の保管庫ではない:
 
-テンプレートには **「テスト設計セクション」** (対象レイヤ / 追加 or 変更したテスト / あえてテストしないこと) を必須化している。これにより人間レビュアーは PR を開いた最初の画面で "agent が何を どこに 書いた/書かなかったか" を把握できる。
+- **書く**: Verification 表の結果、重要な回帰テスト 1〜3 件、未検証事項
+- **書かない**: 全テストの「無いと何が静かに通るか」(→ テストコード側)、実行コマンドの全出力 (→ `<details>` / Actions)
+- 出す前に `npm run test:fast` を緑にする。着手前の設計査収は Test Issue テンプレ (§6.3)
 
 ### 6.3 テスト追加 issue を立てるとき
 

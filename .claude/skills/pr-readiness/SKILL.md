@@ -106,18 +106,24 @@ Step 2 で立った各 trigger について、**diff に対応するテスト/do
 💡 {LLM 判断}: {一行で}
    ...
 
-PR テンプレ貼り付け用:
+PR テンプレ貼り付け用 (`.github/PULL_REQUEST_TEMPLATE.md` の該当欄だけ):
 \`\`\`markdown
-## テスト設計
-- 対象レイヤ: ...
-- 追加 or 変更したテスト: ...
-- 書かなかった理由: ...
+## Verification
 
-## Docs 更新
-- 更新したドキュメント: ...
-- 更新しなかった理由: ...
+| Check | Result |
+| --- | --- |
+| Unit / contract | ... |
+| E2E | ... |
+| Live verification | ... |
+| UI 確認 | ... |
+
+## Known limitations
+
+- ...
 \`\`\`
 ```
+
+貼り付け用は **Verification 表の結果と未検証事項だけ**にする。テストごとの理由や更新した docs の網羅列挙は PR 本文に出さない (テストコードと実 diff が持つ)。
 
 #### verbose モード (要望時)
 

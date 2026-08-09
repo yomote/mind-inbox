@@ -73,7 +73,7 @@ jobs:
         continue-on-error: true
         run: npm run test:e2e
 
-      # L3-real — mock を通らない実配線でユースケースを通す (ADR 0030)。
+      # L3-real — mock を通らない実配線でユースケースを通す (ADR 0032)。
       # ai-agent ダブル + 実 BFF (素の node 配信) を Playwright の webServer が起動する。
       - name: L3-real uc acceptance
         id: e2e_uc

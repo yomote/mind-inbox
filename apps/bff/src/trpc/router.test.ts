@@ -445,48 +445,56 @@ describe("[L2] consultation.extract", () => {
     expect(problem.lastMentionedAt).toBe("2026-02-01T00:00:00.000Z");
   });
 
-  it("reopens a resolved problem when it is mentioned again (UC-03 再燃)", async () => {
-    // 無いと: 抽出結果レビューが「🔁2回目 / 再燃」と出すのに、一覧の既定 (open のみ) には
-    //         現れないまま resolved で埋もれる。「繰り返しに気づかせる」という芯が黙って死ぬ。
-    const { caller, problemRepo } = makeCallerWithRepos();
-    await problemRepo.upsert(
-      makeProblem({ status: "resolved", resolvedAt: "2026-01-15T00:00:00.000Z" }),
-    );
+  // domain_model.md §4.2 は resolved / shelved の両方から open へ戻す。同じコードパスだが、
+  // 片方だけ書くと「もう気にしない」側だけ落ちる変更が静かに通る。
+  it.each([
+    { status: "resolved" as const, stamp: { resolvedAt: "2026-01-15T00:00:00.000Z" } },
+    { status: "shelved" as const, stamp: { shelvedAt: "2026-01-15T00:00:00.000Z" } },
+  ])(
+    "reopens a $status problem when it is mentioned again (UC-03 再燃)",
+    async ({ status, stamp }) => {
+      // 無いと: 抽出結果レビューが「🔁2回目 / 再燃」と出すのに、一覧の既定 (open のみ) には
+      //         現れないまま棚卸し済みで埋もれる。「繰り返しに気づかせる」という芯が黙って死ぬ。
+      const { caller, problemRepo } = makeCallerWithRepos();
+      await problemRepo.upsert(makeProblem({ status, ...stamp }));
 
-    vi.mocked(extractAiAgent).mockResolvedValue({
-      sessionId: "s2",
-      items: [
-        {
-          mention: makeMention({
-            id: "men-2",
-            sessionId: "s2",
-            createdAt: "2026-02-01T00:00:00.000Z",
-          }),
-          grouping: {
-            kind: "existing",
-            problemId: "prob-1",
-            problemTitle: "転職の迷い",
-            problemTheme: "仕事・キャリア",
-            isRecurrence: true,
-            mentionCount: 2,
-            reignited: true,
-            groupingConfidence: 0.9,
+      vi.mocked(extractAiAgent).mockResolvedValue({
+        sessionId: "s2",
+        items: [
+          {
+            mention: makeMention({
+              id: "men-2",
+              sessionId: "s2",
+              createdAt: "2026-02-01T00:00:00.000Z",
+            }),
+            grouping: {
+              kind: "existing",
+              problemId: "prob-1",
+              problemTitle: "転職の迷い",
+              problemTheme: "仕事・キャリア",
+              isRecurrence: true,
+              mentionCount: 2,
+              reignited: true,
+              groupingConfidence: 0.9,
+            },
           },
-        },
-      ],
-      newProblemCount: 0,
-      updatedProblemCount: 1,
-    });
+        ],
+        newProblemCount: 0,
+        updatedProblemCount: 1,
+      });
 
-    await caller.consultation.extract({ sessionId: "s2" });
+      await caller.consultation.extract({ sessionId: "s2" });
 
-    const problem = await caller.problem.get({ id: "prob-1" });
-    expect(problem.status).toBe("open");
-    expect(problem.resolvedAt).toBeNull();
-    expect(problem.mentionCount).toBe(2);
-    // 既定の一覧 (open) に戻ってくることまで見る
-    expect((await caller.problem.list({ status: "open" })).map((p) => p.id)).toContain("prob-1");
-  });
+      const problem = await caller.problem.get({ id: "prob-1" });
+      expect(problem.status).toBe("open");
+      // 棚卸しの日時も消す (再オープンなのに解決日時が残っていると履歴が嘘になる)
+      expect(problem.resolvedAt).toBeNull();
+      expect(problem.shelvedAt).toBeNull();
+      expect(problem.mentionCount).toBe(2);
+      // 既定の一覧 (open) に戻ってくることまで見る
+      expect((await caller.problem.list({ status: "open" })).map((p) => p.id)).toContain("prob-1");
+    },
+  );
 
   it("keeps mentionCount consistent with mentions even if ai-agent miscounts", async () => {
     // 無いと: ai-agent の申告値をそのまま持ち、詳細の「言及 N 回」とタイムラインの件数がズレる

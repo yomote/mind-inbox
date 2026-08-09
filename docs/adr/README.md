@@ -104,4 +104,4 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0027](0027-ux-improvement-loop-ab-protocol-and-mutation-boundary.md) — UX 自律改善ループ M2: 採点の無人化を先行させ、A/B は実環境の外で回し、改変対象はパスで縛る
 - [0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) — 分配は「起票パケットを Issue 本文に残す」形にし、並行の衝突は SessionStart の事前提示と CI で防ぐ
 - [0029](0029-probe-record-transport-via-issue-comment.md) — UX プローブ記録は artifact ではなく Issue コメントで採点セッションへ運ぶ — **Proposed**
-- [0030](0030-use-case-acceptance-tests-against-real-wiring.md) — ユースケース受け入れテストを「mock を通らない実配線」で持つ (L3-real) — **Proposed**
+- [0032](0032-use-case-acceptance-tests-against-real-wiring.md) — ユースケース受け入れテストを「mock を通らない実配線」で持つ (L3-real) — **Proposed**

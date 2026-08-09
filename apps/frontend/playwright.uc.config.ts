@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * L3-real — **ユースケース受け入れテスト** (UC-01〜UC-05 / ADR 0030)。
+ * L3-real — **ユースケース受け入れテスト** (UC-01〜UC-05 / ADR 0032)。
  *
  * mock 版 (playwright.config.ts) との決定的な違いは、**mockApi を通らないこと**。
  *

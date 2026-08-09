@@ -143,12 +143,8 @@ export function useConsultation(
    * 足すときは必ずこのラッパを通すこと。
    */
   const runAction = React.useCallback(
-    async <T>(
-      failureMessage: string,
-      action: () => Promise<T>,
-      { guardBusy = true }: { guardBusy?: boolean } = {},
-    ): Promise<ActionOutcome<T>> => {
-      if (guardBusy && loadingRef.current) return { ok: false };
+    async <T>(failureMessage: string, action: () => Promise<T>): Promise<ActionOutcome<T>> => {
+      if (loadingRef.current) return { ok: false };
       setBusy(true);
       try {
         return { ok: true, value: await action() };

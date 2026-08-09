@@ -5,14 +5,14 @@
 
 > **ステータス: 受け入れテストで検証中**
 > UC-01〜05 の基本フローと主要な代替フローは `apps/frontend/e2e-uc/uc0*.spec.ts` が
-> **実配線（mock を通さない）で自動検証**している（[ADR 0030](../adr/0030-use-case-acceptance-tests-against-real-wiring.md)）。
+> **実配線（mock を通さない）で自動検証**している（[ADR 0032](../adr/0032-use-case-acceptance-tests-against-real-wiring.md)）。
 > この doc を変えたら対応する spec も直すこと。逆に spec が落ちたら「実装が壊れた」か
 > 「この doc が古い」かのどちらかで、放置しないこと。
 > **未検証の前提**: 永続化（[#165](https://github.com/yomote/mind-inbox/issues/165)）。
 > BFF は in-memory なので、実環境では蓄積が消えて UC-02〜05 の事前条件が崩れうる。
 > 各 UC は「文章フロー ＋ システムシーケンス図（SSD）」のセット。
 > SSD は **黒箱**で描く: 参加者は `ユーザー` / `System`（中身を見せない）/ 外部サービス（`LLM`）のみ。
-> Frontend / BFF / AI Agent への内部分解は**内部設計**（`basic_design.md §5`）の役割で、ここでは扱わない。
+> Frontend / BFF / AI Agent への内部分解は**内部設計**（[`basic_design.md`](./basic_design.md)）の役割で、ここでは扱わない。
 > §9 の論点は [ADR 0007](../adr/0007-problem-centric-two-layer-domain-model.md) / [`domain_model.md`](./domain_model.md) で決定済み。用語: **Dump**（生の吐き出し）→ **Mention**（観測）→ **Problem**（集約）。
 
 ---
