@@ -167,7 +167,13 @@ jobs:
             --title "chore(docs): 構成図を実環境から再生成 (自動)" \
             --body-file /tmp/pr-body.md 2> /tmp/pr-create.err; then
             cat /tmp/pr-create.err
-            if grep -q "not permitted to create or approve pull requests" /tmp/pr-create.err; then
+            # 文言の揺れに耐えるよう、変わりにくい中核だけを大小無視で見る。
+            # `gh` はこの拒否に固有の終了コードを返さないため文字列判定しかない。
+            # 文言が変わって外れた場合は下の ::error:: 経路に落ち、**赤 + 比較 URL** になる
+            # (静かに壊れるのではなく、気づける形で劣化する)。
+            # "Resource not accessible by integration" は意図的に拾わない —
+            # それは workflow 側の permissions 不足 = こちらのバグなので赤で気づきたい。
+            if grep -qiE "not (permitted|allowed) to (create|approve)" /tmp/pr-create.err; then
               echo "::warning::差分は \`$BRANCH\` に push 済みですが、PR の自動作成がリポジトリ設定で拒否されました。手動で開いてください: $COMPARE_URL (恒久対応は Settings → Actions → General → Workflow permissions で 'Allow GitHub Actions to create and approve pull requests' を有効化 / docs/runbooks/refresh-infra-diagram.md)"
               exit 0
             fi
