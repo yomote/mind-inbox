@@ -22,6 +22,18 @@
 
 ---
 
+## 2026-08-09 — briefing (#4, マージ 4 本の解説と ADR 0026 の裁定)
+
+- **対象**: 前回 debrief (#3) 以降のマージ 4 本 — [#152](https://github.com/yomote/mind-inbox/pull/152) 保守性 Phase 3 (Layout 912→372 行 / 旧 STT 撤去) / [#153](https://github.com/yomote/mind-inbox/pull/153) 音声劣化を無言にしない / [#157](https://github.com/yomote/mind-inbox/pull/157) UX 採点の無人化 + 改変境界の CI 化 / [#161](https://github.com/yomote/mind-inbox/pull/161) 起票パケット + SessionStart 事前提示 — と、承認待ちの [ADR 0026](../adr/0026-cd-watchdog-routine.md)。資料: briefing #4 artifact (音声ナレーション 10 枚 / VOICEVOX ずんだもん 1.5 倍 — 本セッションでは `dockerd` 起動 + image pull に成功)。**PO の希望で debrief を開いたが、形式は選択肢で briefing (音声スライド) が選ばれた**
+- **決定**:
+  - **ADR 0026 (cd-watchdog) Accept** — 説明を挟まず即 Accept。ただし裁定の性格が従来と違い、**「導入するか」ではなく「すでに毎時動いているものを追認するか」**だった (Routine `trig_01NUQ9nFaFAkSY3gXtKKuVMa` は 2026-08-08 15:30Z から稼働、直近発火 2026-08-09 01:37Z)
+  - **ADR 0028 は本文を訂正** (新 ADR を立てず、Accepted のまま訂正セクションを追記)。決定 D1〜D3 は変更なし
+  - **needs-human**: #92 は「登録する / 週 2 回 (月・木 08:30 JST)」を決定、#90 は「needs-human のまま残す」
+- **学びメモ**: **今回は理解確認の材料が取れていない**。briefing 形式はクイズを強制しないうえ、PO は 3 問すべてを選択肢画面から即答し、質問も差し戻しも無かった。ADR 0026 が即決だったのは journal 既知の傾向 (「PO は**原則を曲げる判断にだけ**説明を求める」) と整合する — 0026 は ADR 0008 / 0018 の延長で、崩す原則が無い。次回に効かせるなら、**追認型の裁定 (すでに動いているものを承認する形) が増えていること自体**を論点として出すべき。「動いてから承認を取る」が常態化すると、承認が事後承諾に痩せる
+- **特記 (報告会の準備が ADR の誤りを 1 件見つけた)**: 資料作成中に Routine の実体を確認したところ、**今朝 Accept したばかりの ADR 0028 の根拠が本セッションで再現しなかった**。0028 は「読み取り専用まで全滅 → **サーバー単位の遮断** → PO の 1 クリックは**恒久的**」と推論していたが、実測は (a) `list_triggers` は成功、(b) `create_trigger` は失敗、(c) 稼働中の `cd-watchdog` / `ux-judge` は `created_via: meta_mcp` = エージェントが登録済み。**サーバー単位ではなく「セッション × ツール種別」**で、可否は不定。誤りは結論だけでなく**推論の形** (1 セッションの観測を環境全体の性質と同一視した — journal 既知の「測定器の出力を現実と同一視する」の再発、今度は**エージェント側**での再発) だった。決定 D1〜D3 が無傷なのは 0028 自身の Driver「環境の可否に設計を依存させない」が効いたため
+- **特記 (裁定どおりに実行できなかったこと)**: PO は #92 の Routine 登録を承認したが、**本セッションの `create_trigger` が `-32003` で弾かれ登録できなかった**。ADR 0028 D1 の doctrine に従い、貼るだけで登録できる**起票パケット (プロンプト全文 + cron + 通知設定) を #92 のコメントに残して needs-human に戻した**。#90 は event 起点 (`pull_request` opened/synchronize) を要求しており、MCP の `create_trigger` は cron / 一回限りしか作れないため、**permission が変わっても解けない**ことが確定した
+- **持ち越し**: #92 (パケット化済み・貼るだけ) / #90 (event 起点のため UI 必須と確定) / #160 (gh CLI 制約) / UX 改善ループ M2 本体 (#119 は観測されているだけでまだ 1 度も直っていない)
+
 ## 2026-08-09 — design-gate (#4, hub-and-spoke の前提崩壊への対策)
 
 - **対象**: [Issue #159](https://github.com/yomote/mind-inbox/issues/159) — ADR 0021 の「親が子セッションへ分配する」が実行環境で成立しないことが実測で判明。起案: [ADR 0028](../adr/0028-dispatch-packet-in-issue-and-session-start-preflight.md)

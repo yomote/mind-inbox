@@ -1,8 +1,8 @@
 # 0026. CD の赤は毎時の watchdog Routine が検知し、診断と fix PR まで無人で進める
 
-- Status: Proposed
+- Status: Accepted (briefing #4, 2026-08-09)
 - Date: 2026-08-08
-- Deciders: omoteforlab (方向は 2026-08-08 の対話で承認済み。Accept は debrief で)
+- Deciders: omoteforlab (方向は 2026-08-08 の対話で承認済み。Accept は briefing #4 で稼働中の実体を追認する形で取得)
 - Consulted: —
 - Informed: —
 

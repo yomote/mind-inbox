@@ -100,6 +100,6 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0023](0023-server-stt-azure-speech-f0.md) — 音声入力のサーバー STT に Azure Speech (F0・MI 認証) を採用し、Web Speech をフォールバックに残す
 - [0024](0024-chat-streaming-via-sse-side-channel.md) — チャット応答の逐次表示は SSE サイドチャネル (`/api/chat/stream`) で通す
 - [0025](0025-deploy-container-images-by-immutable-sha-tag.md) — コンテナ image のデプロイは :latest ではなく不変 sha タグの解決 + 稼働検証で行う (#107)
-- [0026](0026-cd-watchdog-routine.md) — CD の赤は毎時の watchdog Routine が検知し、診断と fix PR まで無人で進める — **Proposed**
+- [0026](0026-cd-watchdog-routine.md) — CD の赤は毎時の watchdog Routine が検知し、診断と fix PR まで無人で進める
 - [0027](0027-ux-improvement-loop-ab-protocol-and-mutation-boundary.md) — UX 自律改善ループ M2: 採点の無人化を先行させ、A/B は実環境の外で回し、改変対象はパスで縛る
 - [0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) — 分配は「起票パケットを Issue 本文に残す」形にし、並行の衝突は SessionStart の事前提示と CI で防ぐ
