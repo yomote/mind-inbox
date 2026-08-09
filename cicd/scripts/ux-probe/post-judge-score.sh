@@ -34,9 +34,16 @@ if ! command -v gh >/dev/null 2>&1; then
   exit 1
 fi
 
-# 検証 — ここで落ちたら投稿しない
-if ! python3 "$HERE/validate-judge-score.py" "$REPORT" > /dev/null; then
-  rc=$?
+# 検証 — ここで落ちたら投稿しない。
+# 終了コードは必ず**コマンド単体を実行した直後**に取る。`if ! cmd; then rc=$?` と書くと
+# $? は `! cmd` という条件式の評価結果 (then に入った時点で常に 0) になり、
+# 呼び出し元の無人 Routine が失敗を成功と誤認する (PR #157 レビュー指摘)。
+set +e
+python3 "$HERE/validate-judge-score.py" "$REPORT" > /dev/null
+rc=$?
+set -e
+
+if [ "$rc" -ne 0 ]; then
   log ""
   log "投稿を中止しました。レポートは $REPORT に残っています。"
   log "judge の出力が rubric (.github/claude/ux-rubric.md) に従っているか確認してください。"
