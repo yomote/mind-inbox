@@ -1,138 +1,83 @@
 // @ts-check
 /**
- * [L0] BFF zod ↔ ai-agent pydantic の I/O 契約 (フィールド集合 + 型カテゴリ) を比較する。
+ * [L0] BFF zod ↔ ai-agent pydantic の I/O 契約を **ネストまで再帰的に** 比較する。
  *
  * 無いと何が静かに通るか:
- *   片側 (BFF or ai-agent) に新フィールドを追加 / 既存フィールドを削除 / 型カテゴリを変更しても、
- *   もう片側を直し忘れた状態で merge できてしまう。本番で「BFF が send したフィールドを ai-agent が ignore」
- *   などの silent な不整合が発生する。
+ *   片側 (BFF or ai-agent) でフィールドを追加 / 削除 / 型変更 / nullable 化 / optional 化 /
+ *   enum メンバの増減をしても、もう片側を直し忘れた状態で merge できてしまう。
+ *   本番で「BFF が送ったフィールドを ai-agent が無視する」「ai-agent が返す null で BFF が落ちる」
+ *   「Theme の分類が片側だけ増えて未知値が飛ぶ」といった silent な不整合が起きる。
+ *
+ * 比較粒度 (詳細と表層差の吸収ルールは src/contract/schemaDiff.ts のヘッダに集約):
+ *   - フィールドパス集合 (`items[].mention.affect.valence` まで再帰展開)
+ *   - 型カテゴリ / nullable / 欠落可能性 (optional) / enum メンバ集合
  *
  * ここで test しないこと:
  *   - 個別フィールドの値検証 (それは L2 endpoint test の領域)
- *   - 詳細な JSON Schema 完全一致 (snake_case ↔ camelCase の差異など、表層の差は想定通り。
- *     深い型一致検証は OpenAPI 自動生成と組み合わせて別 PR で行う)
- *
- * 比較粒度:
- *   - フィールド集合 (camelCase ↔ snake_case を機械的に正規化して同一性をチェック)
- *   - 型カテゴリ (string / array<string> / boolean) — これだけでも「array → string」のような
- *     危険な変更は捕まる
+ *   - 数値の min/max・description・additionalProperties などの注釈差 (表層差として無視)
  */
 
 import { execFileSync } from "node:child_process";
+import { register } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
-import { ActionPlanSchema, OrganizedResultSchema } from "../src/trpc/domain.ts";
+// src/*.ts は拡張子なしの相対 import を使う (tsconfig は commonjs) ので、
+// ESM 解決に `.ts` を補う hook を先に登録してから動的 import する。
+register("./ts-extension-resolver.mjs", import.meta.url);
+
+const { diffSchemas } = await import("../src/contract/schemaDiff.ts");
+const { ExtractionResultSchema } = await import("../src/trpc/domain.ts");
+const {
+  ApproveRequestSchema,
+  ApproveResponseSchema,
+  ChatRequestSchema,
+  ChatResponseSchema,
+  ChatStreamDeltaSchema,
+  ChatStreamDoneSchema,
+  ChatStreamErrorSchema,
+  ExtractRequestSchema,
+  OrganizeRequestSchema,
+  OrganizeResponseSchema,
+  PlanRequestSchema,
+  PlanResponseSchema,
+} = await import("../src/clients/aiAgentContracts.ts");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "../../..");
 
-// ── BFF zod schemas ─────────────────────────────────────────────────────────
+// ── 比較対象 ────────────────────────────────────────────────────────────────
 //
-// `consultation.createPlan` の input は `{ result: OrganizedResultSchema }` で受け取り
-// router 側で `summary / emotions / priorities` を pluck して ai-agent に渡している
-// (apps/bff/src/trpc/router.ts createPlan 参照)。L0 ではその「pluck 後の payload」が
-// ai-agent の PlanRequest と一致するかを比較する。
-const CreatePlanInputPlucked = z.object({
-  summary: z.string(),
-  emotions: z.array(z.string()),
-  priorities: z.array(z.string()),
-});
-
-// `consultation.approve` の input — camelCase を ai-agent 側の snake_case (approval_request_id)
-// に合わせる対応関係は normalizeKey() で吸収する。
-const ApproveInputBff = z.object({
-  approvalRequestId: z.string(),
-  approved: z.boolean(),
-});
-
+// key は ai-agent の export 名 (cicd/scripts/testing/export-ai-agent-schemas.py の SCHEMAS) と
+// 1:1 で対応する。ai-agent のエンドポイント 7 本 (/chat /chat/stream /extract /organize /plan
+// /approve /health) のうち、BFF が型を持つ I/O をすべて載せる (/health は BFF に型が無い)。
 const BFF_SCHEMAS = {
-  // BFF schema name : zod schema (Node 側 = camelCase 想定)
-  OrganizeResponse: OrganizedResultSchema,
-  PlanRequest: CreatePlanInputPlucked,
-  PlanResponse: ActionPlanSchema,
-  ApproveRequest: ApproveInputBff,
+  ChatRequest: ChatRequestSchema,
+  ChatResponse: ChatResponseSchema,
+  ChatStreamDelta: ChatStreamDeltaSchema,
+  ChatStreamDone: ChatStreamDoneSchema,
+  ChatStreamError: ChatStreamErrorSchema,
+  OrganizeRequest: OrganizeRequestSchema,
+  OrganizeResponse: OrganizeResponseSchema,
+  // `consultation.createPlan` の input は `{ result: OrganizedResultSchema }` で受け取り
+  // router 側で summary / emotions / priorities を pluck して ai-agent に渡している
+  // (apps/bff/src/trpc/router.ts createPlan 参照)。比較するのはその「pluck 後の payload」。
+  PlanRequest: PlanRequestSchema,
+  PlanResponse: PlanResponseSchema,
+  ApproveRequest: ApproveRequestSchema,
+  ApproveResponse: ApproveResponseSchema,
+  ExtractRequest: ExtractRequestSchema,
+  ExtractionResult: ExtractionResultSchema,
 };
-
-// ── helpers ─────────────────────────────────────────────────────────────────
-
-/** camelCase → snake_case (機械的) */
-function normalizeKey(key) {
-  return key.replace(/([A-Z])/g, "_$1").toLowerCase();
-}
-
-/**
- * JSON Schema の properties から { fieldName(snake_case): typeCategory } を抽出。
- * typeCategory は粒度を粗く保つ ("array<string>" / "string" / "boolean" / "object" / "unknown")。
- */
-function extractFieldTypes(jsonSchema) {
-  const properties = jsonSchema?.properties ?? {};
-  /** @type {Record<string, string>} */
-  const out = {};
-  for (const [rawName, def] of Object.entries(properties)) {
-    const name = normalizeKey(rawName);
-    out[name] = categorizeType(def);
-  }
-  return out;
-}
-
-function categorizeType(def) {
-  if (!def || typeof def !== "object") return "unknown";
-  // anyOf (Optional[T]) を Optional 内側だけ取り出す
-  if (Array.isArray(def.anyOf)) {
-    const nonNull = def.anyOf.filter((d) => d?.type !== "null");
-    if (nonNull.length === 1) return categorizeType(nonNull[0]);
-  }
-  if (def.type === "array") {
-    const inner = def.items ? categorizeType(def.items) : "unknown";
-    return `array<${inner}>`;
-  }
-  if (typeof def.type === "string") return def.type;
-  return "unknown";
-}
-
-function diff(bffTypes, agentTypes) {
-  const allKeys = new Set([
-    ...Object.keys(bffTypes),
-    ...Object.keys(agentTypes),
-  ]);
-  const issues = [];
-  for (const key of allKeys) {
-    if (!(key in bffTypes)) {
-      issues.push(`  + ai-agent only: ${key} (${agentTypes[key]})`);
-      continue;
-    }
-    if (!(key in agentTypes)) {
-      issues.push(`  + BFF only: ${key} (${bffTypes[key]})`);
-      continue;
-    }
-    if (bffTypes[key] !== agentTypes[key]) {
-      issues.push(
-        `  ~ type mismatch: ${key} — BFF: ${bffTypes[key]} / ai-agent: ${agentTypes[key]}`,
-      );
-    }
-  }
-  return issues;
-}
 
 // ── ai-agent schema fetch ───────────────────────────────────────────────────
 
 function fetchAiAgentSchemas() {
-  const script = resolve(
-    REPO_ROOT,
-    "cicd/scripts/testing/export-ai-agent-schemas.py",
-  );
+  const script = resolve(REPO_ROOT, "cicd/scripts/testing/export-ai-agent-schemas.py");
   const out = execFileSync(
     "uv",
-    [
-      "run",
-      "--directory",
-      "apps/services/ai-agent",
-      "python",
-      script,
-    ],
+    ["run", "--directory", "apps/services/ai-agent", "python", script],
     { cwd: REPO_ROOT, encoding: "utf-8", stdio: ["ignore", "pipe", "inherit"] },
   );
   return JSON.parse(out);
@@ -146,7 +91,7 @@ function out(line) {
 }
 
 function main() {
-  out("[L0 contract] BFF zod ↔ ai-agent pydantic 比較を開始");
+  out("[L0 contract] BFF zod ↔ ai-agent pydantic 比較を開始 (ネスト再帰 / required / enum)");
 
   const agentSchemas = fetchAiAgentSchemas();
 
@@ -158,19 +103,24 @@ function main() {
       totalIssues++;
       continue;
     }
-    const bffJson = zodToJsonSchema(zodSchema, name);
-    // zodToJsonSchema は { definitions: { [name]: schema } } を返す
-    const bffSchema = bffJson?.definitions?.[name] ?? bffJson;
-    const bffTypes = extractFieldTypes(bffSchema);
-    const agentTypes = extractFieldTypes(agent);
-    const issues = diff(bffTypes, agentTypes);
+    // $refStrategy: "none" で内部 $ref を展開しておく (pydantic 側の $defs は比較側が解決する)
+    const bffSchema = zodToJsonSchema(zodSchema, { $refStrategy: "none" });
+    const { issues, fieldCount } = diffSchemas(bffSchema, agent);
 
     if (issues.length === 0) {
-      out(`  ✓ ${name}: フィールド集合 ${Object.keys(bffTypes).length} 件 一致`);
+      out(`  ✓ ${name}: フィールドパス ${fieldCount} 件 一致`);
     } else {
       console.error(`  ✗ ${name}: 不整合 ${issues.length} 件`);
       for (const i of issues) console.error(i);
       totalIssues += issues.length;
+    }
+  }
+
+  // ai-agent 側にだけ増えた schema (BFF が追随していない) も検出する
+  for (const name of Object.keys(agentSchemas)) {
+    if (!(name in BFF_SCHEMAS)) {
+      console.error(`  ✗ ${name}: ai-agent 側にしか schema が無い (BFF の zod が未追随)`);
+      totalIssues++;
     }
   }
 

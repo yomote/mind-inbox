@@ -1,64 +1,33 @@
 import { randomUUID } from "node:crypto";
 import { config } from "../config";
 import { serviceHeaders } from "./serviceToken";
-import type { ExtractionResult, ProblemStatus, Theme } from "../trpc/domain";
+import type { ExtractionResult } from "../trpc/domain";
+import type {
+  ApproveRequest,
+  ApproveResponse,
+  ChatRequest,
+  ChatResponse,
+  ExtractRequest,
+  OrganizeRequest,
+  OrganizeResponse,
+  PlanRequest,
+  PlanResponse,
+} from "./aiAgentContracts";
 
-export type ChatRequest = {
-  sessionId: string;
-  message: string;
-};
-
-export type ChatResponse = {
-  reply: string;
-  requiresApproval: boolean;
-  approvalRequestId: string | null;
-  citations: string[];
-};
-
-export type OrganizeRequest = {
-  sessionId: string;
-};
-
-export type OrganizeResponse = {
-  summary: string;
-  emotions: string[];
-  priorities: string[];
-};
-
-export type PlanRequest = {
-  summary: string;
-  emotions: string[];
-  priorities: string[];
-};
-
-export type PlanResponse = {
-  title: string;
-  steps: string[];
-};
-
-export type ApproveRequest = {
-  approvalRequestId: string;
-  approved: boolean;
-};
-
-export type ApproveResponse = {
-  reply: string;
-};
-
-/** グルーピングの突き合わせ候補（BFF の Problem リポジトリから渡す / ADR 0012） */
-export type ExistingProblemRef = {
-  id: string;
-  title: string;
-  theme: Theme;
-  summary: string;
-  mentionCount: number;
-  status: ProblemStatus;
-};
-
-export type ExtractRequest = {
-  sessionId: string;
-  existingProblems: ExistingProblemRef[];
-};
+// I/O 契約の真実は `aiAgentContracts.ts` の zod (L0 契約テストが機械比較する)。
+// 従来この場所に素の TS type があったので、既存 import を壊さないよう型名を re-export する。
+export type {
+  ApproveRequest,
+  ApproveResponse,
+  ChatRequest,
+  ChatResponse,
+  ExistingProblemRef,
+  ExtractRequest,
+  OrganizeRequest,
+  OrganizeResponse,
+  PlanRequest,
+  PlanResponse,
+} from "./aiAgentContracts";
 
 /**
  * ai-agent サービスへの HTTP クライアント。
