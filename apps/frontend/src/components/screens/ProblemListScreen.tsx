@@ -2,6 +2,7 @@ import * as React from "react";
 import {
   Box,
   Button,
+  ButtonBase,
   Chip,
   FormControlLabel,
   MenuItem,
@@ -110,10 +111,22 @@ export function ProblemListScreen({
           <Typography color="text.secondary">該当する困りごとはありません。</Typography>
         ) : (
           visible.map((p) => (
+            // カードは「押せるもの」なので button にする (#98)。
+            // Paper + onClick だとキーボードで到達も実行もできず、支援技術からは
+            // ただの箱に見える。aria-label に状態と回数まで載せるのは、読み上げでも
+            // 「解決済みか / 何回話したか」が分かるようにするため。
             <Paper
               key={p.id}
+              component={ButtonBase}
               variant="outlined"
-              sx={{ p: 2, borderRadius: 2, cursor: "pointer" }}
+              aria-label={`${p.title}（${STATUS_LABEL[p.status]}・言及 ${p.mentionCount} 回）`}
+              sx={{
+                p: 2,
+                borderRadius: 2,
+                width: "100%",
+                display: "block",
+                textAlign: "left",
+              }}
               onClick={() => onOpen(p.id)}
             >
               <Stack spacing={1}>

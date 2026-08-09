@@ -9,7 +9,6 @@
  *   - Speech SDK がトークンを受理するか (実 Azure でしか検証できない — PR の動作検証欄参照)
  */
 
-import type { HttpRequest } from "@azure/functions";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockConfig = {
@@ -35,7 +34,7 @@ import { appRouter } from "./router";
 
 function makeCaller() {
   const ctx: TrpcContext = {
-    req: {} as HttpRequest,
+    req: new Request("http://localhost/api/trpc"),
     historyRepo: new InMemoryHistoryRepository(),
     problemRepo: new InMemoryProblemRepository(),
   };

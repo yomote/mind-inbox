@@ -1,6 +1,6 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from "@azure/functions";
-import { z } from "zod";
-import { openChatStream } from "../chat/chatStream";
+import { handleChatStream } from "../http/handlers";
+import { contextLogger, toFetchRequest, toHttpResponseInit } from "../http/azureAdapter";
 
 /**
  * POST /api/chat/stream — チャット応答の SSE ストリーミング (#120 / ADR 0024)。
@@ -15,43 +15,12 @@ import { openChatStream } from "../chat/chatStream";
  */
 app.setup({ enableHttpStream: true });
 
-const ChatStreamRequestSchema = z.object({
-  sessionId: z.string().min(1),
-  message: z.string().min(1),
-});
-
 async function chatStreamHandler(
   req: HttpRequest,
   context: InvocationContext,
 ): Promise<HttpResponseInit> {
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return { status: 400, body: "Invalid JSON body" };
-  }
-
-  const parsed = ChatStreamRequestSchema.safeParse(body);
-  if (!parsed.success) {
-    return { status: 400, body: `Invalid request: ${parsed.error.message}` };
-  }
-
-  context.log(`[chatStream] sessionId=${parsed.data.sessionId}`);
-
-  try {
-    const stream = await openChatStream(parsed.data);
-    return {
-      status: 200,
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-      },
-      body: stream,
-    };
-  } catch (err) {
-    context.error(`[chatStream] failed: ${(err as Error).message}`);
-    return { status: 502, body: "chat stream failed" };
-  }
+  const response = await handleChatStream(await toFetchRequest(req), contextLogger(context));
+  return await toHttpResponseInit(response);
 }
 
 app.http("chatStream", {

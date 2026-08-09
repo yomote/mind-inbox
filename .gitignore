@@ -31,6 +31,10 @@ artifacts/
 apps/frontend/playwright-report/
 apps/frontend/test-results/
 
+# Playwright (L3-real / UC 受け入れ) の生成物 — ADR 0030
+apps/frontend/test-results-uc/
+apps/frontend/dist-e2e-uc/
+
 # Playwright (L4 live) + UX プローブの生成物 — 記録は workflow artifact が真実 (#123 M0)
 apps/frontend/test-results-live/
 apps/frontend/probe-results/
