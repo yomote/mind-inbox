@@ -3,6 +3,10 @@
 このスクリプトは、Azure Resource Graph の結果から
 「RG → VNet → Subnet」クラスタ付きのトポロジ図を生成します。
 
+> **通常は手で回す必要はありません。** [`refresh-infra-diagram`](../../../.github/workflows/refresh-infra-diagram.yml)
+> が毎週月曜 05:00 JST に CI 上で実行し、差分があれば PR を開きます（手動実行は Actions から dispatch）。
+> ここに書いてあるのはローカルで回したいときの手順です。
+
 - Azure公式アイコン対応
 - 関係線（Private Link / Linked Backend など）の色分け
 - コードベース由来の論理依存関係を補完（OpenAI / VOICEVOX 連携など）

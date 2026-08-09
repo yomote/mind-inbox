@@ -1,15 +1,13 @@
 # Resource Roles
 
-> **生成物** — `cicd/scripts/viz-structure/viz-structure.sh` が実環境 (Azure Resource Graph) から出力する。**手書きで直さない**。
-> **⚠️ このスナップショットは古い。** 現行の真実は `cicd/iac/` の Bicep:
+> **生成物** — `viz-structure.sh` が実環境 (Azure Resource Graph) から出力する。**手書きで直さない**。
+> 毎週月曜 05:00 JST に [`refresh-infra-diagram`](../../../.github/workflows/refresh-infra-diagram.yml) が再生成し、差分があれば PR を開く (手動実行は Actions から dispatch)。
+>
+> **⚠️ 下の表は初回の自動再生成が走るまで古い。** 現行の真実は `cicd/iac/` の Bicep:
 >
 > - **ACR (`crdevmindbox`) は廃止済み** — image は ghcr ([ADR 0013](../../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md))
 > - **SQL 一式 (`sql-*` / `sqldb-*` / `kv-*-sql2` / `pe-sql-*` / `privatelink.database.windows.net`) は既定で作られない** — `enableSql=true` の時のみ (既定 false)
 > - **Azure Speech (STT) が載っていない** — 取得後に追加された ([ADR 0023](../../adr/0023-server-stt-azure-speech-f0.md))
->
-> ```bash
-> cicd/scripts/viz-structure/viz-structure.sh --subs "<sub>" --rgs "rg-dev-mind-inbox"
-> ```
 
 | Name                                                        | Type                                                  | RG                | Role                                          | Note                                                                                                       |
 | ----------------------------------------------------------- | ----------------------------------------------------- | ----------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
