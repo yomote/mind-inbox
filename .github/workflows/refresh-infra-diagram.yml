@@ -1,0 +1,161 @@
+# 構成図 (docs/cicd/iac/infra_arch.svg / infra_arch_resource_roles.md) を実環境から再生成する。
+#
+# なぜ自動化するか: これらは viz-structure.sh の生成物だが、実行に Azure アクセスが要るため
+# 「誰も手元で回さない → 静かに陳腐化する」状態だった (2026-08 時点で ACR 廃止・SQL 既定オフ・
+# Speech 追加が未反映)。Azure 認証は deploy.yml と同じ OIDC で Actions から取れるので、
+# ローカル実行を前提にする理由が無い。
+#
+# 反映方法: 差分があるときだけ PR を開く (main へ直 push しない)。
+#   「いつの間にかインフラが変わっていた」が、レビュー可能な差分として人の目に入る。
+#
+# 運用手順 (止め方 / 頻度変更 / トラブルシュート): docs/runbooks/refresh-infra-diagram.md
+
+name: refresh-infra-diagram
+
+on:
+  schedule:
+    - cron: "0 20 * * 0" # 日 20:00 UTC = 毎週月曜 05:00 JST
+  workflow_dispatch:
+
+permissions:
+  id-token: write # OIDC トークン取得に必須
+  contents: write # 生成物を載せたブランチを push する
+  pull-requests: write # 差分があるとき PR を開く
+
+concurrency:
+  group: refresh-infra-diagram
+  cancel-in-progress: false
+
+env:
+  RGS: rg-dev-mind-inbox
+  BRANCH: chore/refresh-infra-diagram
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # OIDC 未設定 (repo Variables 未登録) の間は、誤実行を赤くせず skip (deploy.yml と同じ)。
+      - name: Guard — OIDC 設定済みか
+        id: guard
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          if [ -n "$AZURE_CLIENT_ID" ] && [ -n "$AZURE_TENANT_ID" ] && [ -n "$AZURE_SUBSCRIPTION_ID" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::OIDC 未設定 (AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID のいずれか空)。docs/runbooks/azure-oidc-cd-setup.md で3変数すべてを Variables に登録してください。今回はスキップします。"
+          fi
+
+      # viz-structure.sh が要求する 4 つのうち graphviz だけ runner に無い (az / jq / python3 は同梱)。
+      - name: graphviz を入れる
+        if: steps.guard.outputs.run == 'true'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq graphviz
+
+      - name: Azure login (OIDC, no stored secret)
+        if: steps.guard.outputs.run == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # `az graph` は拡張。未導入だと viz-structure.sh がクエリ段で落ちる。
+      - name: resource-graph 拡張を入れる
+        if: steps.guard.outputs.run == 'true'
+        run: az extension add --name resource-graph --only-show-errors
+
+      # 公式アイコンは .gitignore 済み (ローカル取得前提)。取れなくても図は出る (WARN のみ) ので、
+      # 外部ダウンロードの失敗でワークフロー全体を赤くしない。
+      - name: Azure 公式アイコンを取得 (任意)
+        if: steps.guard.outputs.run == 'true'
+        continue-on-error: true
+        run: cicd/scripts/viz-structure/download-azure-icons.sh
+
+      - name: 構成図を再生成
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          cicd/scripts/viz-structure/viz-structure.sh \
+            --subs "${{ vars.AZURE_SUBSCRIPTION_ID }}" \
+            --rgs "$RGS"
+
+      # 未追跡ファイルも拾うため --porcelain (git diff だけだと新規生成物を見落とす)。
+      - name: 差分を判定
+        if: steps.guard.outputs.run == 'true'
+        id: diff
+        run: |
+          if [ -z "$(git status --porcelain -- docs/cicd/iac/)" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::構成図に差分なし。インフラは docs と一致しています。"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git status --porcelain -- docs/cicd/iac/
+          fi
+
+      - name: 差分があれば PR を開く
+        if: steps.guard.outputs.run == 'true' && steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # 同名ブランチは毎回作り直す。載せるのは常に「今の実環境」だけでよく、
+          # 履歴は PR のコミット一覧に残る。
+          git checkout -B "$BRANCH"
+          git add docs/cicd/iac/
+          git commit -m "chore(docs): 構成図を実環境から再生成 (自動)"
+          git push -f origin "$BRANCH"
+
+          # 既に開いている PR があれば、上の push で反映済み。二重に立てない。
+          if [ -n "$(gh pr list -R "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json number -q '.[].number')" ]; then
+            echo "::notice::既存 PR に反映しました。"
+            exit 0
+          fi
+
+          cat > /tmp/pr-body.md <<BODY
+          ## Summary
+
+          - **目的**: \`docs/cicd/iac/\` の構成図と実環境のズレを解消する
+          - **変更**: refresh-infra-diagram が Azure Resource Graph から再生成した生成物
+          - **影響**: docs のみ。アプリ・IaC の変更なし
+          - **リスク**: なし
+          - **結論**: **マージ可能** — ただし**差分の中身は確認すること**。想定外のリソース増減が写っている場合、それは図の問題ではなく**インフラ側の変化**
+
+          ## Changes
+
+          - \`docs/cicd/iac/infra_arch.svg\`
+          - \`docs/cicd/iac/infra_arch_resource_roles.md\`
+
+          ## Verification
+
+          | Check | Result |
+          | --- | --- |
+          | Unit / contract | 対象外 |
+          | E2E | 対象外 |
+          | Live verification | PASS — 実 Azure (Resource Graph) から取得 |
+          | UI 確認 | 対象外 |
+
+          ## Review focus
+
+          - 差分に**知らないリソースの増減**が無いか。あればインフラ側を調べる
+
+          ## Links
+
+          - Actions: $RUN_URL
+
+          ---
+
+          _Generated by [Claude Code](https://claude.ai/code)_
+          BODY
+
+          gh pr create -R "$GITHUB_REPOSITORY" \
+            --head "$BRANCH" --base main \
+            --title "chore(docs): 構成図を実環境から再生成 (自動)" \
+            --body-file /tmp/pr-body.md

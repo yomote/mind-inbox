@@ -18,20 +18,16 @@ PR の diff を読み、下記 3 軸で評価し、**重要な指摘は該当行
 
 ### 軸 A — リポジトリ戦略 doc 準拠
 
-真実の所在を尊重しているか。乖離があれば指摘する。
+真実の所在を尊重しているか。**基準は戦略 doc が正典** — [`docs/testing/strategy.md`](../../docs/testing/strategy.md) の §2 階層表 / §4.1 必須レイヤと、[`docs/documentation/strategy.md`](../../docs/documentation/strategy.md) の §2 真実の所在マトリクス / §5 更新タイミングを**その場で読んで**照合する (ここに再掲しない — 二重管理で片方が古くなる)。
 
-- **テスト階層** (`docs/testing/strategy.md`):
-  - 新機能なら L2 (tRPC mutation / FastAPI endpoint の結合) が最低 1 本あるか
-  - バグ修正なら再現テストが 1 本あるか
-  - テスト名に `[L0]`/`[L1]`/`[L2]`/`[L3]` プレフィックスが付いているか
-  - 「無いと何が静かに通るか」を 1 文で説明できない冗長な L1 を増やしていないか
-- **ドキュメント真実** (`docs/documentation/strategy.md`):
-  - OpenAPI (`docs/api/*.yaml`) を手書きしていないか (実装→再生成のはず)
-  - UI 変更時に MDX 仕様 (`docs/frontend/ui_specs/*.mdx`) を先に / 併せて更新しているか
-  - 運用手順の変更が README に散らばらず Runbook (`docs/runbooks/`) に入っているか
-- **アーキテクチャ判断**: 構成/技術選択に関わる変更なら ADR (`docs/adr/`) が先に書かれているか。
-  既存 ADR (0001〜0005) を覆す変更なら、その ADR を読んだ形跡・supersede 記述があるか。
-- **CLAUDE.md の規約**: BFF は chat passthrough ではない、stub fallback 維持、命名規約などに反していないか。
+diff を見て確認するのはこの 4 点:
+
+1. **テスト** — 新機能に L2 / バグ修正に再現テストがあるか。テスト名にレイヤ プレフィックスが付いているか
+2. **生成物** — OpenAPI (`docs/api/*.yaml`) を手書きしていないか
+3. **真実の更新順** — UI 変更で MDX 仕様 (`docs/frontend/ui_specs/`) が先か併せてか。運用手順が Runbook に入っているか
+4. **ADR** — 構成/技術選択に関わる変更なら ADR が先に書かれているか。既存 ADR を覆すなら supersede 記述があるか
+
+CLAUDE.md の不変条件 (BFF は chat passthrough ではない / stub fallback 維持 / 命名規約) に反していないかも見る。
 
 ### 軸 B — 一般的なバグ / 設計レビュー
 
@@ -44,13 +40,14 @@ PR の diff を読み、下記 3 軸で評価し、**重要な指摘は該当行
   security-reviewer subagent (`.github/claude/security-rubric.md`, ADR 0019) に委譲する
 - **簡素化**: より少ないコードで同じ結果になる箇所 (高確度のみ)
 
-### 軸 C — PR テンプレとの整合チェック
+### 軸 C — PR 本文が判断の役に立つか
 
-PR 本文 (`.github/PULL_REQUEST_TEMPLATE.md` の構造) が実 diff と整合しているか。
+PR 本文 (`.github/PULL_REQUEST_TEMPLATE.md` の構造) が実 diff と整合し、**30 秒で読んでマージ判断ができる**か。
 
-- 「テスト設計」欄の主張と、実際に追加/変更されたテストが一致しているか
-- 「Docs 更新」欄の主張と、実際の docs 差分が一致しているか
-- チェックリストで「不要」とした項目が、diff を見る限り本当に不要か
+- `結論` (マージ可能 / 条件付き / 未判定) と `リスク` が diff の実態と合っているか。「条件付き」なら条件が書かれているか
+- `Verification` 表の PASS 主張が、実際の変更・貼られた証拠と一致しているか。**未検証を PASS と書いていないか**
+- `Known limitations` に書くべき未検証事項が Summary で隠れていないか
+- **冗長さも指摘する** — 全テストの理由の羅列、実行ログの直貼り、`<details>` に畳むべき調査経緯が本文に展開されている場合は `minor`
 - 本文が空 / テンプレ未記入なら、その旨を minor で指摘する
 
 ## Severity (共通定義: [`_common.md`](_common.md#共通-severity))

@@ -8,13 +8,6 @@ Claude Code on the web の開発セッション内から、実 Azure リソー�
 > 無人・自動の運用保守エージェント (GitHub Actions + OIDC) は今回見送り。
 > 判断は ADR [0006](../adr/0006-azure-access-via-device-code.md)、見送った設計の記録は PR #29 (クローズ済) を参照。
 
-## なぜこの方式か
-
-- セッション内では Claude 自身が動いている = 頭脳は既に居るため、CI に別エージェントを立てる必要がない
-  → `ANTHROPIC_API_KEY` も GitHub Actions も不要
-- 認証は **device-code ログイン**: 対話型・静的シークレットなし・トークンはセッション限り (コンテナ破棄で消える)
-- `az` は**自分の Azure 権限**でログインするので、専用サービスプリンシパルやロール設計が不要
-
 ## Prerequisites
 
 - Claude Code on the web の**環境を編集できる**こと (Network access / Setup script を変更する)
