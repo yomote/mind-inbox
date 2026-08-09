@@ -24,8 +24,10 @@ import { fakeEntraLogin, LIVE_APP_URL, LIVE_BFF_URL, liveEnvMissing } from "./en
 test.skip(liveEnvMissing, "LIVE_* env が未設定 (実環境向けのみ実行)");
 
 // 4 往復 × (実 AI + コールドスタート) を許容する。config の既定 240s では足りない。
-// 待受予算 (下の per-hop timeout の合計): 到達+opener 120s + turn1 (210+30+120)s
-// + turn2〜4 (120+30+60)s×3 = 1,110s < 1,500s (余白は描画・fill 等の雑費分)
+// 待受予算 (下の per-hop timeout の合計): 到達+opener 120s
+// + turn1 (stream 210 + settle 60 + visible 30 + tts 120)s
+// + turn2〜4 (stream 120 + settle 60 + visible 30 + tts 60)s×3 = 1,350s < 1,500s
+// (SSE 移行で「応答が出そろうまで待つ」settle 分が増えたので予算に加算 — レビュー指摘)
 test.setTimeout(1_500_000);
 
 /** シナリオ変更時は id を上げる (時系列比較の断絶点を明示するため)。 */
@@ -45,6 +47,9 @@ const SCENARIO = {
 // PO が決める — それまでの仮置き。env で上書き可能
 const WARN_REPLY_VISIBLE_MS = Number(process.env.UX_PROBE_WARN_REPLY_MS ?? 10_000);
 const WARN_TTS_SYNTH_MS = Number(process.env.UX_PROBE_WARN_TTS_MS ?? 8_000);
+
+/** ストリーム開始後、応答が出そろうまでの待受上限 (下の待受予算に組み込み済み)。 */
+const SETTLE_TIMEOUT_MS = 60_000;
 
 /**
  * warn の分類 (レビュー指摘 — U6 の機械判定に速度と無関係な障害を混ぜないため):
@@ -153,40 +158,62 @@ async function waitForTtsOf(
   return undefined;
 }
 
+/** ストリーミング中バブルの末尾に描画される点滅キャレット (SessionMessages.tsx)。 */
+const STREAMING_CARET = "▍";
+
+/** 直近のガイド発話の表示テキストと、まだストリーミング中か (= キャレットが出ているか)。 */
+async function lastAssistantBubble(page: Page): Promise<{ text: string; streaming: boolean }> {
+  const bubble = page.locator(".MuiPaper-root").filter({ hasText: "ガイド" }).last();
+  const raw = ((await bubble.textContent().catch(() => "")) ?? "").toString();
+  return {
+    // ラベル "ガイド" とキャレットは表示上の飾りなので応答文から除く。
+    // キャレットを残すと judge の採点入力が汚れ、後段の getByText(excerpt) も
+    // 確定後の Paper (キャレットなし) と一致しなくなる。
+    text: raw.replace(/^\s*ガイド\s*/, "").split(STREAMING_CARET).join("").trim(),
+    streaming: raw.includes(STREAMING_CARET),
+  };
+}
+
 /**
- * 直近のガイド発話を画面から読み、**伸びが止まる**まで待って確定テキストを返す。
+ * 応答が出そろうまで待ち、確定テキストと**確定時刻**を返す。
  *
- * SSE 移行 (#132 / ADR 0024) で応答は逐次描画されるようになり、1 回の HTTP 応答
- * から全文を取ることができなくなった。プローブの目的は「ユーザーが実際に見た応答」
- * を記録することなので、DOM を真実として扱う。
+ * SSE 移行 (#132 / ADR 0024) で応答は逐次描画されるようになり、1 回の HTTP 応答から
+ * 全文を取れなくなった。プローブの目的は「ユーザーが実際に見た応答」を残すことなので
+ * DOM を真実として扱う。
+ *
+ * 確定の判定は **キャレットが消えたこと** (= ストリーミング用 Paper が確定メッセージに
+ * 置き換わったこと)。delta 停止〜done の間はテキストが動かないため、「伸びが止まった」
+ * だけを根拠にするとストリーミング途中で確定と誤判定する (レビュー指摘)。
+ * キャレットが消えないまま固まった場合の保険として、無変化が続いたら打ち切る。
+ *
+ * previousText: 前ターンの応答。**同じものを掴まない**ための比較対象。
  */
 async function readSettledAssistantText(
   page: Page,
+  previousText: string,
   timeoutMs: number,
 ): Promise<{ text: string; settledAt: number }> {
-  const bubble = page.locator(".MuiPaper-root").filter({ hasText: "ガイド" }).last();
   const deadline = Date.now() + timeoutMs;
-  let previous = "";
-  let stableSince = 0;
+  let lastSeen = "";
+  let stalledSince = 0;
 
   while (Date.now() < deadline) {
-    const current = ((await bubble.textContent().catch(() => "")) ?? "")
-      .replace(/^\s*ガイド\s*/, "")
-      .trim();
+    const { text, streaming } = await lastAssistantBubble(page);
+    const isNewReply = text !== "" && text !== previousText;
 
-    if (current !== "" && current === previous) {
-      // 1 秒変化しなければ確定とみなす (トークン間隔より十分長い)。
-      // settledAt は「伸びが止まった時刻」— 安定判定の待ち 1 秒を体感レイテンシに
-      // 混ぜないため、返す時刻は now ではなく stableSince を使う。
-      if (stableSince === 0) stableSince = Date.now();
-      else if (Date.now() - stableSince >= 1_000) return { text: current, settledAt: stableSince };
+    if (isNewReply && !streaming) return { text, settledAt: Date.now() };
+
+    if (isNewReply && text === lastSeen) {
+      // キャレットが出たまま止まっている。3 秒動かなければ打ち切る (保険)
+      if (stalledSince === 0) stalledSince = Date.now();
+      else if (Date.now() - stalledSince >= 3_000) return { text, settledAt: stalledSince };
     } else {
-      stableSince = 0;
-      previous = current;
+      stalledSince = 0;
+      lastSeen = text;
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  return { text: previous, settledAt: Date.now() };
+  return { text: lastSeen, settledAt: Date.now() };
 }
 
 test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間レイテンシを記録する", async ({
@@ -284,6 +311,9 @@ test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間�
       { timeout: trpcTimeoutMs },
     );
 
+    // 前ターンの応答。これと同じものを「今回の応答」と誤認しないための基準。
+    const previousReply = (await lastAssistantBubble(page)).text;
+
     await composer.fill(userText);
     const sentAt = Date.now();
     await page.getByRole("button", { name: "送信" }).click();
@@ -294,7 +324,7 @@ test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間�
 
     // ストリームは逐次描画されるので、応答文は **画面から** 読む (ユーザーが見た物が真実)。
     // 伸びが止まったら確定とみなす。JSON から取れた頃の実装とはここが変わっている。
-    const settled = await readSettledAssistantText(page, trpcTimeoutMs);
+    const settled = await readSettledAssistantText(page, previousReply, SETTLE_TIMEOUT_MS);
     const assistantText = settled.text;
 
     // 対話が壊れているケースだけ fail (品質・レイテンシの評価は judge / warn の仕事)
