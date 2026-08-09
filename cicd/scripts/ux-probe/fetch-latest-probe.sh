@@ -2,6 +2,11 @@
 # 直近の golden-path-monitor 実行から UX プローブ記録 (会話 JSON) を取り出す。
 # runbook `docs/runbooks/ux-probe-judge.md` Step 2 の自動化 (ADR 0027 D1 / #154)。
 #
+# **これは人間が手元で回すための経路** (gh CLI が要る)。agent セッションには GitHub の
+# 直接 API の経路が無く gh が使えないため、agent は artifact を GitHub MCP で取得し、
+# 取得後の判断は `inspect-probe-artifact.py` を直接呼ぶ (#160 選択肢 B)。
+# どちらの経路も「どの JSON を採点するか / 採点する材料があるか」の判断は同じ部品を通る。
+#
 # 標準出力に**記録 JSON のパスだけ**を出す (採点セッションがそのまま judge に渡せるように)。
 # 診断メッセージはすべて stderr へ — 混ぜると呼び出し側が壊れる (PR #88 で踏んだ実例)。
 #
@@ -19,11 +24,16 @@ set -euo pipefail
 REPO="${REPO:-yomote/mind-inbox}"
 WORKFLOW="${WORKFLOW:-golden-path-monitor.yml}"
 OUT_DIR="${1:-/tmp/ux-probe}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 log() { echo "$@" >&2; }
 
 if ! command -v gh >/dev/null 2>&1; then
-  log "gh CLI が見つかりません。runbook の Prerequisites を参照してください。"
+  log "gh CLI が見つかりません。"
+  log "  → agent セッションでは gh は使えません (設計上の制約 / #160)。"
+  log "     artifact を GitHub MCP で取得し、展開先を渡して"
+  log "     'cicd/scripts/ux-probe/inspect-probe-artifact.py <ディレクトリ>' を呼んでください。"
+  log "  → 手元で回す場合は runbook の Prerequisites を参照してください。"
   exit 1
 fi
 
@@ -45,28 +55,19 @@ if ! gh run download "$RUN_ID" -R "$REPO" -n "ux-probe-$RUN_ID" -D "$OUT_DIR" 2>
   exit 3
 fi
 
-# 同 run に複数あれば最新のものを採る
-PROBE_JSON="$(find "$OUT_DIR" -name '*.json' -type f | sort | tail -1)"
-if [ -z "$PROBE_JSON" ]; then
-  log "artifact は取得できましたが JSON がありません: $OUT_DIR"
-  exit 3
-fi
+# どの JSON を採点するか / 採点する材料があるかの判断は共有部品に委譲する。
+# agent 経路 (GitHub MCP で取得) もこの同じスクリプトを呼ぶので、判断が 2 箇所に分裂しない。
+#
+# 終了コードは必ず**コマンド単体を実行した直後**に取る。`if ! cmd; then rc=$?` と書くと
+# $? は `! cmd` という条件式の評価結果 (then に入った時点で常に 0) になり、
+# 呼び出し元の無人 Routine が失敗を成功と誤認する (PR #157 レビュー指摘)。
+set +e
+PROBE_JSON="$(python3 "$HERE/inspect-probe-artifact.py" "$OUT_DIR")"
+rc=$?
+set -e
 
-# 完了往復数を診断として出す。turns が計画未満でも採点は可能なので落とさない
-# (runbook「記録はあるが turns が 4 件未満」— 壊れる直前までは残っている)。
-N_TURNS="$(python3 -c "
-import json, sys
-rec = json.load(open('$PROBE_JSON'))
-sc = rec.get('scenario', {})
-n = len(rec.get('turns', []))
-print(f\"scenario={sc.get('id','?')} turns={n}/{sc.get('plannedTurns','?')} probeId={rec.get('probeId','?')}\", file=sys.stderr)
-print(n)
-")"
-log "記録: $PROBE_JSON"
-
-if [ "$N_TURNS" -eq 0 ]; then
-  log "turns が 0 件です — 採点する材料がありません。"
-  exit 4
+if [ "$rc" -ne 0 ]; then
+  exit "$rc"
 fi
 
 echo "$PROBE_JSON"

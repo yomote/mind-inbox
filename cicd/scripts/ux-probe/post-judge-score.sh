@@ -30,7 +30,12 @@ if [ -z "$REPORT" ] || [ ! -f "$REPORT" ]; then
 fi
 
 if ! command -v gh >/dev/null 2>&1; then
-  log "gh CLI が見つかりません。runbook の Prerequisites を参照してください。"
+  log "gh CLI が見つかりません。"
+  log "  → agent セッションでは gh は使えません (設計上の制約 / #160)。"
+  log "     検証だけを 'python3 cicd/scripts/ux-probe/validate-judge-score.py <レポート>' で回し、"
+  log "     **終了コード 0 のときだけ** GitHub MCP で Issue #$SCOREBOARD_ISSUE へ投稿してください。"
+  log "     検証を飛ばして投稿しないこと (壊れた 1 件が時系列トレンドを狂わせる)。"
+  log "  → 手元で回す場合は runbook の Prerequisites を参照してください。"
   exit 1
 fi
 
