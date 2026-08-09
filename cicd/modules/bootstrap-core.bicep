@@ -234,6 +234,34 @@ param speechAccountName string = toLower('spch-${environmentName}-${replace(repl
 @description('Speech SKU。F0 (無料枠) から開始 — 有料化 (S0) は design-gate を通す (ADR 0023)。')
 param speechSkuName string = 'F0'
 
+// -------------------- Cosmos DB params (ADR 0030 / #165) --------------------
+// FR-4「再起動・再ログインで消えない」の実体。BFF (Functions) だけが触る単一ストア。
+@description('Provision Cosmos DB (NoSQL) for Problem / history persistence (ADR 0030 D1)。')
+param enableCosmos bool = true
+
+@description('Cosmos DB account name (globally unique / 3-44 chars, lowercase)。')
+param cosmosAccountName string = toLower('cosmos-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}')
+
+@description('Cosmos DB の保管リージョン。ADR 0030 D6 で Japan East 固定 (NFR-1「保管リージョンの明確化」)。Functions は East Asia のままでよい。')
+param cosmosLocation string = 'japaneast'
+
+@description('無料枠 (1,000 RU/s + 25 GB / アカウント生涯) にオプトインする。**作成時のみ指定可**で、後から有効化できない。枠が既に消費済みだとデプロイ自体が失敗する = 「デプロイ成功 = 無料枠取得成功」と読める (ADR 0030 D2)。')
+param enableCosmosFreeTier bool = true
+
+@description('serverless で作る (無料枠は serverless 対象外なので enableCosmosFreeTier=false のときのフォールバック / ADR 0030 D2)。')
+param cosmosServerless bool = false
+
+@description('Cosmos DB database name。')
+param cosmosDatabaseName string = 'mindinbox'
+
+@minValue(400)
+@description('DB 共有スループット (RU/s)。**既定 400 は意図的**: 無料枠が取れれば 1,000 RU/s まで無料だが、取れなかった場合 400 RU/s でも月 ¥3,500 相当で予算 ¥3,000 (ADR 0013) を超える。上げる前にコストを確認すること。serverless では無視される。')
+param cosmosThroughput int = 400
+
+@minValue(400)
+@description('アカウント全体のスループット上限 (RU/s)。無料枠 1,000 を超えて課金が始まらないための構造的な歯止め。serverless では指定しない。')
+param cosmosTotalThroughputLimit int = 1000
+
 // -------------------- AI Agent Container App params --------------------
 // NOTE: ACR は廃止（#67 / ADR 0013）。image は GitHub Actions で ghcr に事前ビルドし、
 // Container App は ghcr の public image を pull する（待機 ¥750/月 の ACR を除去）。
