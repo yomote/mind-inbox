@@ -48,7 +48,10 @@ const SCENARIO = {
 const WARN_REPLY_VISIBLE_MS = Number(process.env.UX_PROBE_WARN_REPLY_MS ?? 10_000);
 const WARN_TTS_SYNTH_MS = Number(process.env.UX_PROBE_WARN_TTS_MS ?? 8_000);
 
-/** ストリーム開始後、応答が出そろうまでの待受上限 (下の待受予算に組み込み済み)。 */
+/**
+ * ストリーム開始後、応答が出そろう (キャレットが消える) まで待つ上限。
+ * 超えた場合は途中経過を warning つきで記録する。下の待受予算に組み込み済み。
+ */
 const SETTLE_TIMEOUT_MS = 60_000;
 
 /**
@@ -184,7 +187,9 @@ async function lastAssistantBubble(page: Page): Promise<{ text: string; streamin
  * 確定の判定は **キャレットが消えたこと** (= ストリーミング用 Paper が確定メッセージに
  * 置き換わったこと)。delta 停止〜done の間はテキストが動かないため、「伸びが止まった」
  * だけを根拠にするとストリーミング途中で確定と誤判定する (レビュー指摘)。
- * キャレットが消えないまま固まった場合の保険として、無変化が続いたら打ち切る。
+ * キャレットが消えないまま固まった場合は打ち切るが、そのときは settled=false を返す。
+ * 途中経過を「確定した応答」として黙って記録すると、judge の採点入力が静かに劣化する
+ * (このプローブが守ろうとしているもの自体が壊れる)。呼び出し側が warning に残す。
  *
  * previousText: 前ターンの応答。**同じものを掴まない**ための比較対象。
  */
@@ -192,7 +197,7 @@ async function readSettledAssistantText(
   page: Page,
   previousText: string,
   timeoutMs: number,
-): Promise<{ text: string; settledAt: number }> {
+): Promise<{ text: string; settledAt: number; settled: boolean }> {
   const deadline = Date.now() + timeoutMs;
   let lastSeen = "";
   let stalledSince = 0;
@@ -201,19 +206,22 @@ async function readSettledAssistantText(
     const { text, streaming } = await lastAssistantBubble(page);
     const isNewReply = text !== "" && text !== previousText;
 
-    if (isNewReply && !streaming) return { text, settledAt: Date.now() };
+    if (isNewReply && !streaming) return { text, settledAt: Date.now(), settled: true };
 
     if (isNewReply && text === lastSeen) {
-      // キャレットが出たまま止まっている。3 秒動かなければ打ち切る (保険)
+      // キャレットが出たまま止まっている。LLM のポーズと区別できないので確定とはみなさず、
+      // 十分長く (10 秒) 動かなければ「途中経過のまま」として返す
       if (stalledSince === 0) stalledSince = Date.now();
-      else if (Date.now() - stalledSince >= 3_000) return { text, settledAt: stalledSince };
+      else if (Date.now() - stalledSince >= 10_000) {
+        return { text, settledAt: stalledSince, settled: false };
+      }
     } else {
       stalledSince = 0;
       lastSeen = text;
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  return { text: lastSeen, settledAt: Date.now() };
+  return { text: lastSeen, settledAt: Date.now(), settled: false };
 }
 
 test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間レイテンシを記録する", async ({
@@ -346,6 +354,14 @@ test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間�
     const tts = await waitForTtsOf(ttsRecords, assistantText, ttsTimeoutMs);
 
     const warnings: ProbeWarning[] = [];
+    if (!settled.settled) {
+      // 確定を観測できないまま記録している = 応答文が途中の可能性がある。
+      // 黙って不完全なデータを judge に渡さない (無音失敗の禁止)
+      warnings.push({
+        category: "functional",
+        message: `応答の確定 (ストリーミング完了) を観測できず、途中経過を記録している可能性がある`,
+      });
+    }
     const sendToReplyVisibleMs = visibleAt - sentAt;
     if (sendToReplyVisibleMs > WARN_REPLY_VISIBLE_MS) {
       warnings.push({
