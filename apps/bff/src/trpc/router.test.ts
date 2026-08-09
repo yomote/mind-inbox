@@ -11,7 +11,6 @@
  *   - historyRepository の永続化保証 (本番は Cosmos DB に置き換わる)
  */
 
-import type { HttpRequest } from "@azure/functions";
 import { TRPCError } from "@trpc/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -46,7 +45,7 @@ function makeCaller() {
 function makeCallerWithRepos() {
   const problemRepo = new InMemoryProblemRepository();
   const ctx: TrpcContext = {
-    req: {} as HttpRequest,
+    req: new Request("http://localhost/api/trpc"),
     historyRepo: new InMemoryHistoryRepository(),
     problemRepo,
   };
@@ -444,6 +443,81 @@ describe("[L2] consultation.extract", () => {
     expect(problem.mentions).toHaveLength(2);
     expect(problem.mentionCount).toBe(2);
     expect(problem.lastMentionedAt).toBe("2026-02-01T00:00:00.000Z");
+  });
+
+  it("reopens a resolved problem when it is mentioned again (UC-03 再燃)", async () => {
+    // 無いと: 抽出結果レビューが「🔁2回目 / 再燃」と出すのに、一覧の既定 (open のみ) には
+    //         現れないまま resolved で埋もれる。「繰り返しに気づかせる」という芯が黙って死ぬ。
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(
+      makeProblem({ status: "resolved", resolvedAt: "2026-01-15T00:00:00.000Z" }),
+    );
+
+    vi.mocked(extractAiAgent).mockResolvedValue({
+      sessionId: "s2",
+      items: [
+        {
+          mention: makeMention({
+            id: "men-2",
+            sessionId: "s2",
+            createdAt: "2026-02-01T00:00:00.000Z",
+          }),
+          grouping: {
+            kind: "existing",
+            problemId: "prob-1",
+            problemTitle: "転職の迷い",
+            problemTheme: "仕事・キャリア",
+            isRecurrence: true,
+            mentionCount: 2,
+            reignited: true,
+            groupingConfidence: 0.9,
+          },
+        },
+      ],
+      newProblemCount: 0,
+      updatedProblemCount: 1,
+    });
+
+    await caller.consultation.extract({ sessionId: "s2" });
+
+    const problem = await caller.problem.get({ id: "prob-1" });
+    expect(problem.status).toBe("open");
+    expect(problem.resolvedAt).toBeNull();
+    expect(problem.mentionCount).toBe(2);
+    // 既定の一覧 (open) に戻ってくることまで見る
+    expect((await caller.problem.list({ status: "open" })).map((p) => p.id)).toContain("prob-1");
+  });
+
+  it("keeps mentionCount consistent with mentions even if ai-agent miscounts", async () => {
+    // 無いと: ai-agent の申告値をそのまま持ち、詳細の「言及 N 回」とタイムラインの件数がズレる
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem());
+
+    vi.mocked(extractAiAgent).mockResolvedValue({
+      sessionId: "s2",
+      items: [
+        {
+          mention: makeMention({ id: "men-2", createdAt: "2026-02-01T00:00:00.000Z" }),
+          grouping: {
+            kind: "existing",
+            problemId: "prob-1",
+            problemTitle: "転職の迷い",
+            problemTheme: "仕事・キャリア",
+            isRecurrence: true,
+            mentionCount: 99, // ai-agent の誤カウント
+            reignited: false,
+            groupingConfidence: 0.9,
+          },
+        },
+      ],
+      newProblemCount: 0,
+      updatedProblemCount: 1,
+    });
+
+    await caller.consultation.extract({ sessionId: "s2" });
+
+    const problem = await caller.problem.get({ id: "prob-1" });
+    expect(problem.mentionCount).toBe(problem.mentions.length);
   });
 
   it("creates a consistent new problem when an 'existing' grouping references an unknown id", async () => {

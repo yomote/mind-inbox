@@ -26,6 +26,8 @@ vi.mock("../api", () => ({
 
 import {
   createActionPlan,
+  createProblemPlan,
+  extractMentions,
   loadHistories,
   loadProblem,
   loadProblems,
@@ -219,6 +221,157 @@ describe("[L1] useConsultation — 困りごとのトリアージ", () => {
     });
 
     expect(transition).not.toHaveBeenCalledWith("problemDetail");
+  });
+});
+
+describe("[L1] useConsultation — 無音失敗の禁止 (ADR 0018)", () => {
+  /**
+   * 無いと静かに通るもの: **「ボタンを押しても何も起きない」実環境の症状** (2026-08-09)。
+   *
+   * 元の実装は startConsultation だけが catch していて、抽出・一覧・送信・トリアージは
+   * 例外がそのまま unhandled rejection になっていた。画面は描画され続けるので mock E2E も
+   * 単体テストも緑のまま、実環境でだけ「反応がない UI」になる。
+   * ここでは全ハンドラについて「失敗したら必ず言葉が出る / 遷移しない」を固定する。
+   */
+  const failure = new Error("network");
+
+  /** ハンドラごとの [名前, 落とす api, 実行, 起きてはいけない遷移先]。 */
+  const cases: Array<{
+    name: string;
+    arrange: () => void;
+    act: (c: ReturnType<typeof setup>["result"]["current"]) => Promise<void>;
+    forbiddenRoute?: string;
+  }> = [
+    {
+      name: "困りごとを抽出",
+      arrange: () => vi.mocked(extractMentions).mockRejectedValue(failure),
+      act: (c) => c.extract(),
+      forbiddenRoute: "extractReview",
+    },
+    {
+      name: "整理結果",
+      arrange: () => vi.mocked(organizeResult).mockRejectedValue(failure),
+      act: (c) => c.organize(),
+      forbiddenRoute: "result",
+    },
+    {
+      name: "困りごと一覧を開く",
+      arrange: () => vi.mocked(loadProblems).mockRejectedValue(failure),
+      act: (c) => c.openProblemList(),
+      forbiddenRoute: "problemList",
+    },
+    {
+      name: "困りごとを開く",
+      arrange: () => vi.mocked(loadProblem).mockRejectedValue(failure),
+      act: (c) => c.openProblem("p1"),
+      forbiddenRoute: "problemDetail",
+    },
+    {
+      name: "トリアージ",
+      arrange: () => vi.mocked(triageProblem).mockRejectedValue(failure),
+      act: (c) => c.triage({ action: "resolve", problemId: "p1" }),
+    },
+    {
+      name: "抽出結果の却下",
+      arrange: () => vi.mocked(triageProblem).mockRejectedValue(failure),
+      act: (c) => c.dismissExtracted("p1"),
+    },
+    {
+      name: "困りごとから次の一歩",
+      arrange: () => vi.mocked(createProblemPlan).mockRejectedValue(failure),
+      act: (c) => c.createPlanForProblem("p1"),
+    },
+  ];
+
+  it.each(cases)(
+    "$name が失敗したらエラーを表示し、遷移しない",
+    async ({ arrange, act: run, forbiddenRoute }) => {
+      vi.mocked(startNewConsultation).mockResolvedValue(session());
+      arrange();
+      const { result, transition } = setup();
+      await act(async () => {
+        await result.current.startConsultation();
+      });
+
+      await act(async () => {
+        await run(result.current);
+      });
+
+      expect(result.current.actionError).not.toBeNull();
+      if (forbiddenRoute) expect(transition).not.toHaveBeenCalledWith(forbiddenRoute);
+      // 失敗しても操作不能にならない (loading が立ちっぱなしだと以降すべて無反応になる)
+      expect(result.current.loading).toBe(false);
+    },
+  );
+
+  it("送信に失敗したら下書きを戻し、宙に浮いた発話を残さない", async () => {
+    // 無いと: 自分の発話だけが画面に残って返事が来ず、入力し直しも強いられる
+    vi.mocked(startNewConsultation).mockResolvedValue(session());
+    vi.mocked(sendMessage).mockRejectedValue(failure);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.startConsultation();
+    });
+
+    act(() => result.current.setDraftMessage("眠れない日が続いている"));
+    await act(async () => {
+      await result.current.sendDraftMessage();
+    });
+
+    expect(result.current.actionError).not.toBeNull();
+    expect(result.current.draftMessage).toBe("眠れない日が続いている");
+    expect(result.current.session?.messages.map((m) => m.role)).toEqual(["assistant"]);
+  });
+
+  it("保存に失敗したら履歴に載せず、履歴画面へ飛ばさない", async () => {
+    // 無いと: 保存できていないのに履歴画面へ遷移し、あるはずの記録が無い
+    vi.mocked(startNewConsultation).mockResolvedValue(session());
+    vi.mocked(organizeResult).mockResolvedValue({
+      summary: "疲労",
+      emotions: ["不安"],
+      priorities: ["休む"],
+    });
+    vi.mocked(createActionPlan).mockResolvedValue({ title: "48h", steps: ["休む"] });
+    vi.mocked(saveHistory).mockRejectedValue(failure);
+    const { result, transition } = setup();
+    await act(async () => {
+      await result.current.startConsultation();
+    });
+    await act(async () => {
+      await result.current.organize();
+    });
+    await act(async () => {
+      await result.current.createPlan();
+    });
+
+    await act(async () => {
+      await result.current.saveAndGoHistory();
+    });
+
+    expect(result.current.actionError).not.toBeNull();
+    expect(result.current.histories).toEqual([]);
+    expect(transition).not.toHaveBeenCalledWith("history");
+  });
+
+  it("開いた Problem が消えていたら、その旨を出す", async () => {
+    // 無いと: 一覧のカードを押しても無反応 (古い一覧を掴んだときの実挙動)
+    vi.mocked(loadProblem).mockResolvedValue(null);
+    const { result, transition } = setup();
+
+    await act(async () => {
+      await result.current.openProblem("gone");
+    });
+
+    expect(result.current.actionError).not.toBeNull();
+    expect(transition).not.toHaveBeenCalledWith("problemDetail");
+  });
+
+  it("履歴の初期読み込みが失敗してもエラーを出す", async () => {
+    // 無いと: 履歴が「まだありません」と嘘をつく (読み込み失敗と空を区別できない)
+    vi.mocked(loadHistories).mockRejectedValue(failure);
+    const { result } = setup();
+
+    await waitFor(() => expect(result.current.actionError).not.toBeNull());
   });
 });
 
