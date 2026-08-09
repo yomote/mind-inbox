@@ -57,7 +57,7 @@ Chosen option: **"Option A"**。ドキュメント本体・短命セッション
 - **会話セッションは引き続き揮発する**。ai-agent が scale-to-zero で落ちれば中断復帰 (`paused` 画面) は壊れる。現状と同じ挙動であり劣化はしないが、この ADR では解決しない
 - Cosmos のパブリックエンドポイントは残る。Private Endpoint は VNet を要し、Functions Y1 は VNet 統合非対応 (ADR 0017 で確認済みの制約) — 守りは `disableLocalAuth` + Entra RBAC の 1 層に依存する
 - **デプロイ用 OIDC SP がサブスクリプション Contributor のままなので、そこからデータ面の RBAC を自分に割り当てられる**。#46 (SP ロールの最小化) が未着手であることの影響がデータにも及ぶ
-- 価格情報の一次ソース (Microsoft Learn / Azure 料金ページ) は本リポジトリの実行環境から 403 で取得できず、**月額はすべて二次情報の概算**。free tier の枠が公表どおりかは Portal での実確認が要る
+- 価格情報の一次ソース (Microsoft Learn / Azure 料金ページ) は本リポジトリの実行環境から 403 で取得できず、**月額はすべて二次情報の概算**。free tier の枠が公表どおりかは実際に作成するまで確定しない (下記の実測を参照)
 - East Asia ↔ Japan East のクロスリージョン往復が増える (D6 のトレードオフ)
 
 ## Pros and Cons of the Options
@@ -94,6 +94,20 @@ Chosen option: **"Option A"**。ドキュメント本体・短命セッション
 - Bad, because **Azure Cache for Redis は 2026-04-01 から新規顧客の作成がブロック済み**。既存顧客も 2026-10-01 で作成不可、2028-09-30 に廃止。今日 (2026-08-09) の時点で選べる可能性が低い
 - Bad, because 後継の Azure Managed Redis は最小 SKU の月額が確認できず、C0 相当の超小型 SKU を持たないため予算超過の見込み
 - Bad, because Cosmos の TTL で短命データが賄える以上、**サービスを 1 つ増やす理由が無い**
+
+## 実測 (2026-08-09、D2 の前提確認)
+
+[ADR 0031](0031-agent-reaches-outside-via-github-actions.md) の `ops-inspect` ワークフロー ([run 31295125083](https://github.com/yomote/mind-inbox/actions/runs/31295125083)) を `check=cosmos-free-tier` で実行し、実サブスクリプションを読んだ結果:
+
+```text
+既存の Cosmos アカウント数: 0
+うち free tier を使用中:    0
+→ free tier はまだ消費されていない
+```
+
+**D2 の第一候補 (free tier + provisioned) が取れる見込み。** serverless へのフォールバックは、現時点では発動しない。
+
+ただしこれは**「1 サブスクリプションに 1 アカウント」の枠が空いているか**の判定であり、**無料枠の RU/s と GB が公表値どおりか (1,000 RU/s + 25 GB) は含まない**。実額は `az cosmosdb create` の結果か Portal 表示で確認し、公表値と違えば本 ADR に追記すること。
 
 ## 動作検証 (実装後に何を叩けば「効いている」と言えるか)
 
