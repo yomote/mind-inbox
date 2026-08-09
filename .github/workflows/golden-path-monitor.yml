@@ -164,7 +164,17 @@ jobs:
             exit 0
           fi
 
+          # 投稿も同じく warning に丸める。`run:` は既定で `bash -eo pipefail` なので、
+          # ここを裸で呼ぶとレート制限や一時的な 5xx で run 全体が failure になり、
+          # ゴールデンパスの死活監視としては偽陽性になる (ADR 0026 の watchdog にも波及する)。
+          set +e
           gh issue comment "$PROBE_RECORD_ISSUE" -R "$GITHUB_REPOSITORY" -F /tmp/probe-comment.md
+          rc=$?
+          set -e
+
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::記録の投稿に失敗しました (exit $rc) — artifact から調査してください"
+          fi
 
       # 落ちたときの一次情報 (trace / screenshot)。緑のときは不要
       - name: E2E レポートを artifact として保存 (失敗時のみ)

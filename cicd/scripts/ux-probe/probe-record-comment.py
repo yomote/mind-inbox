@@ -49,6 +49,21 @@ def log(message: str) -> None:
     print(message, file=sys.stderr)
 
 
+def _fence_safe(payload: str) -> str:
+    """JSON 中のバッククォートを `\\u0060` に置き換え、フェンスが早期終了しないようにする。
+
+    `record` には実 AI の自由文がそのまま入るため、応答が Markdown のコード例を含むと
+    ``` がフェンス内に現れ、そこで切れた壊れた JSON が投稿される。読み取り側では
+    `json.loads` が失敗して「記録ブロックが無い」(exit 2) に見えるため、**記録があったのに
+    材料なしとして静かに握り潰される** — 採点が止まった理由も追えなくなる。
+
+    JSON の構造文字にバッククォートは含まれないので、出力中のバッククォートは必ず文字列
+    リテラルの内側にある。したがって一律置換で安全で、`json.loads` が元の文字に戻すため
+    往復も厳密に保たれる (base64 と違って人がコメントを読んで調査できる形も維持できる)。
+    """
+    return payload.replace("`", "\\u0060")
+
+
 def _load_json(path: Path) -> object | None:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -93,7 +108,7 @@ def format_comment(probe_json: Path, run_id: str, run_url: str) -> int:
             "(このスレッドに人間が返信しないでください / ADR 0029)。",
             "",
             "```json",
-            json.dumps(envelope, ensure_ascii=False),
+            _fence_safe(json.dumps(envelope, ensure_ascii=False)),
             "```",
         ]
     )

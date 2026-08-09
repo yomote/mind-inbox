@@ -156,6 +156,35 @@ def test_他の_JSON_ブロックが混ざっていても_ux_probe_record_を選
     assert restored == original
 
 
+def test_応答文にコードフェンスが含まれても往復する(tmp_path: Path) -> None:
+    # 実 AI の応答が Markdown のコード例を含むと ``` がフェンス内に現れ、そこで切れた
+    # 壊れた JSON が投稿される。読み取り側では「記録ブロックが無い」に見えるため、
+    # 記録があったのに材料なしとして静かに握り潰される (PR #163 レビュー指摘)
+    original = _record(n_turns=1)
+    original["turns"][0]["assistant"] = (
+        "たとえばこう書けます:\n```python\nprint('hi')\n```\nどうでしょう `code` も含みます"
+    )
+    src = _write_record(tmp_path, original)
+
+    formatted = _run(["format", str(src)], {"GITHUB_RUN_ID": "555"})
+    assert formatted.returncode == 0
+
+    # フェンスの中にバッククォートが 1 つも残っていないこと (早期終了の芽を断つ)
+    block = formatted.stdout.split("```json")[1].rsplit("```", 1)[0]
+    assert "`" not in block
+
+    comment = tmp_path / "comment.md"
+    comment.write_text(formatted.stdout, encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    extracted = _run(["extract", str(comment), str(out_dir)])
+    assert extracted.returncode == 0
+
+    restored = json.loads((out_dir / "probe.json").read_text(encoding="utf-8"))
+    assert restored == original
+    assert "```python" in restored["turns"][0]["assistant"]
+
+
 def test_引数が足りなければ_exit1(tmp_path: Path) -> None:
     assert _run(["format"]).returncode == 1
     assert _run(["extract", str(tmp_path)]).returncode == 1
