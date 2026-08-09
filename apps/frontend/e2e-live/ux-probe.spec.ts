@@ -24,8 +24,10 @@ import { fakeEntraLogin, LIVE_APP_URL, LIVE_BFF_URL, liveEnvMissing } from "./en
 test.skip(liveEnvMissing, "LIVE_* env が未設定 (実環境向けのみ実行)");
 
 // 4 往復 × (実 AI + コールドスタート) を許容する。config の既定 240s では足りない。
-// 待受予算 (下の per-hop timeout の合計): 到達+opener 120s + turn1 (210+30+120)s
-// + turn2〜4 (120+30+60)s×3 = 1,110s < 1,500s (余白は描画・fill 等の雑費分)
+// 待受予算 (下の per-hop timeout の合計): 到達+opener 120s
+// + turn1 (stream 210 + settle 60 + visible 30 + tts 120)s
+// + turn2〜4 (stream 120 + settle 60 + visible 30 + tts 60)s×3 = 1,350s < 1,500s
+// (SSE 移行で「応答が出そろうまで待つ」settle 分が増えたので予算に加算 — レビュー指摘)
 test.setTimeout(1_500_000);
 
 /** シナリオ変更時は id を上げる (時系列比較の断絶点を明示するため)。 */
@@ -45,6 +47,12 @@ const SCENARIO = {
 // PO が決める — それまでの仮置き。env で上書き可能
 const WARN_REPLY_VISIBLE_MS = Number(process.env.UX_PROBE_WARN_REPLY_MS ?? 10_000);
 const WARN_TTS_SYNTH_MS = Number(process.env.UX_PROBE_WARN_TTS_MS ?? 8_000);
+
+/**
+ * ストリーム開始後、応答が出そろう (キャレットが消える) まで待つ上限。
+ * 超えた場合は途中経過を warning つきで記録する。下の待受予算に組み込み済み。
+ */
+const SETTLE_TIMEOUT_MS = 60_000;
 
 /**
  * warn の分類 (レビュー指摘 — U6 の機械判定に速度と無関係な障害を混ぜないため):
@@ -153,12 +161,67 @@ async function waitForTtsOf(
   return undefined;
 }
 
-/** tRPC 応答 (httpBatchLink の配列 / 単体の両形) から reply を取り出す。 */
-function extractReply(json: unknown): string {
-  const item = (Array.isArray(json) ? json[0] : json) as
-    | { result?: { data?: { reply?: string } } }
-    | undefined;
-  return item?.result?.data?.reply ?? "";
+/** ストリーミング中バブルの末尾に描画される点滅キャレット (SessionMessages.tsx)。 */
+const STREAMING_CARET = "▍";
+
+/** 直近のガイド発話の表示テキストと、まだストリーミング中か (= キャレットが出ているか)。 */
+async function lastAssistantBubble(page: Page): Promise<{ text: string; streaming: boolean }> {
+  const bubble = page.locator(".MuiPaper-root").filter({ hasText: "ガイド" }).last();
+  const raw = ((await bubble.textContent().catch(() => "")) ?? "").toString();
+  return {
+    // ラベル "ガイド" とキャレットは表示上の飾りなので応答文から除く。
+    // キャレットを残すと judge の採点入力が汚れ、後段の getByText(excerpt) も
+    // 確定後の Paper (キャレットなし) と一致しなくなる。
+    text: raw.replace(/^\s*ガイド\s*/, "").split(STREAMING_CARET).join("").trim(),
+    streaming: raw.includes(STREAMING_CARET),
+  };
+}
+
+/**
+ * 応答が出そろうまで待ち、確定テキストと**確定時刻**を返す。
+ *
+ * SSE 移行 (#132 / ADR 0024) で応答は逐次描画されるようになり、1 回の HTTP 応答から
+ * 全文を取れなくなった。プローブの目的は「ユーザーが実際に見た応答」を残すことなので
+ * DOM を真実として扱う。
+ *
+ * 確定の判定は **キャレットが消えたこと** (= ストリーミング用 Paper が確定メッセージに
+ * 置き換わったこと)。delta 停止〜done の間はテキストが動かないため、「伸びが止まった」
+ * だけを根拠にするとストリーミング途中で確定と誤判定する (レビュー指摘)。
+ * キャレットが消えないまま固まった場合は打ち切るが、そのときは settled=false を返す。
+ * 途中経過を「確定した応答」として黙って記録すると、judge の採点入力が静かに劣化する
+ * (このプローブが守ろうとしているもの自体が壊れる)。呼び出し側が warning に残す。
+ *
+ * previousText: 前ターンの応答。**同じものを掴まない**ための比較対象。
+ */
+async function readSettledAssistantText(
+  page: Page,
+  previousText: string,
+  timeoutMs: number,
+): Promise<{ text: string; settledAt: number; settled: boolean }> {
+  const deadline = Date.now() + timeoutMs;
+  let lastSeen = "";
+  let stalledSince = 0;
+
+  while (Date.now() < deadline) {
+    const { text, streaming } = await lastAssistantBubble(page);
+    const isNewReply = text !== "" && text !== previousText;
+
+    if (isNewReply && !streaming) return { text, settledAt: Date.now(), settled: true };
+
+    if (isNewReply && text === lastSeen) {
+      // キャレットが出たまま止まっている。LLM のポーズと区別できないので確定とはみなさず、
+      // 十分長く (10 秒) 動かなければ「途中経過のまま」として返す
+      if (stalledSince === 0) stalledSince = Date.now();
+      else if (Date.now() - stalledSince >= 10_000) {
+        return { text, settledAt: stalledSince, settled: false };
+      }
+    } else {
+      stalledSince = 0;
+      lastSeen = text;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return { text: lastSeen, settledAt: Date.now(), settled: false };
 }
 
 test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間レイテンシを記録する", async ({
@@ -248,12 +311,16 @@ test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間�
     const trpcTimeoutMs = i === 0 ? 210_000 : 120_000;
     const ttsTimeoutMs = i === 0 ? 120_000 : 60_000;
 
+    // #132 (ADR 0024) で応答は SSE サイドチャネルに移り、UI から
+    // `/api/trpc/consultation.sendMessage` は呼ばれなくなった。ここで待つのは
+    // ストリームの応答ヘッダ = **最初のバイトが返るまで**の時間 (体感の初動)。
     const trpcPromise = page.waitForResponse(
-      (res) =>
-        res.url().includes("/api/trpc/consultation.sendMessage") &&
-        res.request().method() === "POST",
+      (res) => res.url().includes("/api/chat/stream") && res.request().method() === "POST",
       { timeout: trpcTimeoutMs },
     );
+
+    // 前ターンの応答。これと同じものを「今回の応答」と誤認しないための基準。
+    const previousReply = (await lastAssistantBubble(page)).text;
 
     await composer.fill(userText);
     const sentAt = Date.now();
@@ -261,8 +328,12 @@ test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間�
 
     const trpcRes = await trpcPromise;
     const trpcAt = Date.now();
-    expect(trpcRes.status(), `turn ${i + 1}: sendMessage status`).toBe(200);
-    const assistantText = extractReply(await trpcRes.json());
+    expect(trpcRes.status(), `turn ${i + 1}: chat/stream status`).toBe(200);
+
+    // ストリームは逐次描画されるので、応答文は **画面から** 読む (ユーザーが見た物が真実)。
+    // 伸びが止まったら確定とみなす。JSON から取れた頃の実装とはここが変わっている。
+    const settled = await readSettledAssistantText(page, previousReply, SETTLE_TIMEOUT_MS);
+    const assistantText = settled.text;
 
     // 対話が壊れているケースだけ fail (品質・レイテンシの評価は judge / warn の仕事)
     expect(assistantText, `turn ${i + 1}: 実 AI の応答が空`).not.toBe("");
@@ -275,13 +346,22 @@ test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間�
     const excerpt =
       assistantText.split("\n")[0].trim().slice(0, 40) || assistantText.trim().slice(0, 40);
     await expect(page.getByText(excerpt).last()).toBeVisible({ timeout: 30_000 });
-    const visibleAt = Date.now();
+    // 応答が出そろった時刻 (安定判定の待ち時間は含めない)
+    const visibleAt = settled.settledAt;
 
     // TTS は応答描画後に非同期で走る (Layout が応答全文を text にして呼ぶ)。
     // 欠落・失敗は warn (200 + audio/wav の保証は consultation-scenario / golden-path hop5 が担当)
     const tts = await waitForTtsOf(ttsRecords, assistantText, ttsTimeoutMs);
 
     const warnings: ProbeWarning[] = [];
+    if (!settled.settled) {
+      // 確定を観測できないまま記録している = 応答文が途中の可能性がある。
+      // 黙って不完全なデータを judge に渡さない (無音失敗の禁止)
+      warnings.push({
+        category: "functional",
+        message: `応答の確定 (ストリーミング完了) を観測できず、途中経過を記録している可能性がある`,
+      });
+    }
     const sendToReplyVisibleMs = visibleAt - sentAt;
     if (sendToReplyVisibleMs > WARN_REPLY_VISIBLE_MS) {
       warnings.push({
