@@ -21,6 +21,7 @@
 | [`claude-pr-review.md`](claude-pr-review.md)                   | PR 自動レビュー (LLM-as-a-judge) を動かす / 観点を変える / 止める         |
 | [`review-agents.md`](review-agents.md)                         | リリース PR で独立 judge (security / QA / biz-owner / release) を回す     |
 | [`ux-probe-judge.md`](ux-probe-judge.md)                       | UX プローブの記録を採点する / 採点 Routine を運用する                     |
+| [`ops-inspect.md`](ops-inspect.md)                             | サンドボックス外の事実 (Azure の実態 / egress の外) をエージェントが取る  |
 | [`github-projects-setup.md`](github-projects-setup.md)         | GitHub Projects (実行ダッシュボード) をセットアップする                   |
 
 ## 新しく書くとき

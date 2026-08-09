@@ -1,0 +1,259 @@
+# サンドボックスの外にある「事実」をエージェントが自力で取るための read-only ワークフロー。
+# 判断の根拠: ADR 0031 (docs/adr/0031-agent-reaches-outside-via-github-actions.md)
+#
+# なぜ必要か:
+#   エージェントのセッションは (1) egress ポリシーで一部ドメインに届かず
+#   (2) Azure のトークンを持てない (ADR 0006)。runner は両方の制約が無く、
+#   エージェントは GitHub MCP で起動 (actions_run_trigger) と結果取得
+#   (get_job_logs) ができる。
+#
+# 使い方 (エージェント):
+#   actions_run_trigger { method: run_workflow, workflow_id: "ops-inspect.yml",
+#                         ref: "main", inputs: { check: "cosmos-free-tier" } }
+#   → actions_list (list_workflow_jobs) で job_id を取り、get_job_logs で読む
+#   運用手順は docs/runbooks/ops-inspect.md
+#
+# 🔒 セキュリティ上の約束 (ADR 0031 D2 — 妥協しないこと):
+#   - **自由入力のコマンドを受け取らない**。操作は choice の固定値だけ。
+#     デプロイ用 SP はサブスクリプション Contributor のままなので (#46)、
+#     任意コマンドを受ける口を作ると、この迂回路自体がリポジトリで最も強い
+#     書き込み経路になる。
+#   - **入力をシェルに展開しない**。`run:` の中に ${{ inputs.* }} を直接書かず、
+#     必ず env: 経由で渡して "$VAR" として引用符付きで参照する
+#     (${{ }} は run の実行前にテキスト置換されるため、直接書くと注入口になる)。
+#   - **書き込み操作をしない**。az は show/list のみ、curl は GET のみ。
+#   - **取得できなかったことを「異常なし」と書かない** (inspect-env.sh と同じ規律)。
+#     失敗は `(未検証: 理由)` として出す。
+
+name: ops-inspect
+
+on:
+  workflow_dispatch:
+    inputs:
+      check:
+        description: "何を調べるか"
+        required: true
+        type: choice
+        options:
+          - azure-resources
+          - cosmos-free-tier
+          - cost-summary
+          - fetch-doc
+      url:
+        description: "fetch-doc のときだけ使う取得先 URL (https のみ)"
+        required: false
+        type: string
+        default: ""
+      environment:
+        description: "対象環境 (azure-resources のリソースグループ解決に使う)"
+        required: false
+        type: choice
+        options:
+          - dev
+          - stg
+          - prod
+        default: dev
+
+# 最小権限。issues / pull-requests は付けない (このワークフローは書き込まない)。
+permissions:
+  contents: read
+  id-token: write # OIDC トークン取得に必須
+
+jobs:
+  inspect:
+    name: inspect (${{ inputs.check }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Azure を触る check だけ OIDC が要る。fetch-doc は不要。
+      - name: Guard — OIDC 設定済みか
+        id: guard
+        env:
+          CHECK: ${{ inputs.check }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          if [ "$CHECK" = "fetch-doc" ]; then
+            echo "needs_azure=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "needs_azure=true" >> "$GITHUB_OUTPUT"
+          # deploy.yml と同じ規律: 3 変数すべて揃って初めて true。partial を後段へ持ち越さない。
+          if [ -n "$AZURE_CLIENT_ID" ] && [ -n "$AZURE_TENANT_ID" ] && [ -n "$AZURE_SUBSCRIPTION_ID" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::OIDC 未設定 (AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID のいずれか空)。docs/runbooks/azure-oidc-cd-setup.md を参照。"
+          fi
+
+      - name: Azure login (OIDC, no stored secret)
+        if: steps.guard.outputs.needs_azure == 'true' && steps.guard.outputs.run == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Inspect
+        id: inspect
+        env:
+          # ⚠️ 入力はここで env に閉じ込める。run: の中に ${{ inputs.* }} を書かない。
+          CHECK: ${{ inputs.check }}
+          URL_INPUT: ${{ inputs.url }}
+          ENV_NAME: ${{ inputs.environment }}
+          AZURE_READY: ${{ steps.guard.outputs.run }}
+          AZURE_EXTENSION_USE_DYNAMIC_INSTALL: yes_without_prompt
+        run: |
+          set -uo pipefail   # -e は付けない。取得失敗を「未検証」として出したいため。
+
+          OUT=/tmp/ops-inspect.md
+          STATUS="ok"
+          NOTE=""
+          : > "$OUT"
+
+          fail() {  # fail "<理由>"
+            STATUS="unverified"
+            NOTE="$1"
+            printf '\n> ⚠️ **(未検証: %s)**\n' "$1" >> "$OUT"
+          }
+
+          case "$CHECK" in
+            azure-resources)
+              echo "## Azure リソース一覧 (env: $ENV_NAME)" >> "$OUT"
+              if [ "$AZURE_READY" != "true" ]; then
+                fail "OIDC 未設定のため Azure に接続していない"
+              else
+                RG="rg-${ENV_NAME}-mind-inbox"
+                echo "" >> "$OUT"
+                echo "リソースグループ: \`$RG\`" >> "$OUT"
+                echo '```' >> "$OUT"
+                if ! az resource list --resource-group "$RG" \
+                      --query "sort_by([].{name:name,type:type,location:location}, &type)" \
+                      -o table >> "$OUT" 2>/tmp/err.txt; then
+                  cat /tmp/err.txt >> "$OUT"
+                  echo '```' >> "$OUT"
+                  fail "az resource list が失敗した ($RG が存在しない可能性)"
+                else
+                  echo '```' >> "$OUT"
+                  # inspect-env.sh は「人が読む詳細ダンプ」。あれば併せて流す (ADR 0018 ①)。
+                  if [ -x cicd/scripts/smoke-test/inspect-env.sh ]; then
+                    echo "" >> "$OUT"
+                    echo "<details><summary>inspect-env.sh の詳細ダンプ</summary>" >> "$OUT"
+                    echo "" >> "$OUT"
+                    RG="$RG" DEPLOYMENT=main-bootstrap \
+                      cicd/scripts/smoke-test/inspect-env.sh >> "$OUT" 2>&1 \
+                      || echo "(inspect-env.sh は失敗しました。上の一覧のみ有効です)" >> "$OUT"
+                    echo "" >> "$OUT"
+                    echo "</details>" >> "$OUT"
+                  fi
+                fi
+              fi
+              ;;
+
+            cosmos-free-tier)
+              # ADR 0030 D2 の宿題: free tier は「1 サブスクリプションに 1 アカウント」
+              # かつ「アカウント作成時のオプトイン必須」。既存アカウントの有無で判定する。
+              echo "## Cosmos DB の free tier がこのサブスクリプションで使えるか" >> "$OUT"
+              if [ "$AZURE_READY" != "true" ]; then
+                fail "OIDC 未設定のため Azure に接続していない"
+              else
+                LIST=$(az cosmosdb list \
+                        --query "[].{name:name,rg:resourceGroup,location:location,freeTier:enableFreeTier}" \
+                        -o json 2>/tmp/err.txt)
+                if [ $? -ne 0 ]; then
+                  echo '```' >> "$OUT"; cat /tmp/err.txt >> "$OUT"; echo '```' >> "$OUT"
+                  fail "az cosmosdb list が失敗した"
+                else
+                  COUNT=$(echo "$LIST" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+                  USED=$(echo "$LIST" | python3 -c 'import json,sys; print(sum(1 for a in json.load(sys.stdin) if a.get("freeTier")))')
+                  echo "" >> "$OUT"
+                  echo "- 既存の Cosmos アカウント数: **$COUNT**" >> "$OUT"
+                  echo "- うち free tier を使用中: **$USED**" >> "$OUT"
+                  echo "" >> "$OUT"
+                  if [ "$USED" -eq 0 ]; then
+                    echo "→ ✅ **free tier はまだ消費されていない。新規アカウント作成時にオプトインすれば取得できる見込み。**" >> "$OUT"
+                  else
+                    echo "→ ❌ **free tier は既に別アカウントが消費している。ADR 0030 D2 のフォールバック (serverless) を採る。**" >> "$OUT"
+                  fi
+                  echo "" >> "$OUT"
+                  echo '```json' >> "$OUT"; echo "$LIST" >> "$OUT"; echo '```' >> "$OUT"
+                  echo "" >> "$OUT"
+                  echo "> 注: これは「枠が空いているか」の判定であり、**無料枠の RU/s と GB の実額は含まない**。" >> "$OUT"
+                  echo "> 実額はアカウント作成時の Portal 表示か \`az cosmosdb create\` の結果で確認すること。" >> "$OUT"
+                fi
+              fi
+              ;;
+
+            cost-summary)
+              echo "## 当月の実コスト (予算 ¥3,000 に対して)" >> "$OUT"
+              if [ "$AZURE_READY" != "true" ]; then
+                fail "OIDC 未設定のため Azure に接続していない"
+              else
+                START=$(date -u +%Y-%m-01)
+                END=$(date -u +%Y-%m-%d)
+                echo "" >> "$OUT"
+                echo "期間: $START 〜 $END (UTC)" >> "$OUT"
+                echo '```' >> "$OUT"
+                if ! az consumption usage list --start-date "$START" --end-date "$END" \
+                      --query "[].{name:instanceName,cost:pretaxCost,currency:currency}" \
+                      -o table >> "$OUT" 2>/tmp/err.txt; then
+                  cat /tmp/err.txt >> "$OUT"
+                  echo '```' >> "$OUT"
+                  fail "az consumption usage list が失敗した (SP に課金データの参照権が無い可能性)"
+                else
+                  echo '```' >> "$OUT"
+                fi
+              fi
+              ;;
+
+            fetch-doc)
+              echo "## 取得したページ" >> "$OUT"
+              # URL は env 経由でのみ参照する。シェル展開に載せない。
+              case "$URL_INPUT" in
+                https://*) : ;;
+                *) fail "url が https:// で始まっていない (受け取った値は出力しない)"; URL_INPUT="" ;;
+              esac
+              if [ -n "$URL_INPUT" ]; then
+                echo "" >> "$OUT"
+                echo "URL: \`$URL_INPUT\`" >> "$OUT"
+                echo "" >> "$OUT"
+                echo '```' >> "$OUT"
+                if ! curl -sSL --max-time 30 --max-filesize 5000000 \
+                      -H 'User-Agent: mind-inbox-ops-inspect' \
+                      --url "$URL_INPUT" \
+                      | python3 -c 'import sys,re,html; t=sys.stdin.read(); t=re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>"," ",t); t=re.sub(r"(?s)<[^>]+>"," ",t); t=html.unescape(t); t=re.sub(r"[ \t]+"," ",t); t=re.sub(r"\n\s*\n+","\n\n",t); print(t[:60000])' \
+                      >> "$OUT" 2>/tmp/err.txt; then
+                  cat /tmp/err.txt >> "$OUT"
+                  echo '```' >> "$OUT"
+                  fail "取得または整形に失敗した"
+                else
+                  echo '```' >> "$OUT"
+                fi
+              fi
+              ;;
+
+            *)
+              # choice 以外は届かない想定だが、届いたら明示的に落とす (黙って通さない)。
+              echo "::error::未知の check: 固定の選択肢以外は受け付けない (ADR 0031 D2)"
+              exit 2
+              ;;
+          esac
+
+          # --- 出力 ---------------------------------------------------------
+          cat "$OUT" >> "$GITHUB_STEP_SUMMARY"
+          cat "$OUT"   # get_job_logs で読めるよう、ログにも同じ内容を出す
+
+          # 機械可読ブロック (ADR 0029 と同じ流儀。1 run = 1 ブロック)
+          python3 - "$CHECK" "$STATUS" "$NOTE" <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json, sys
+          check, status, note = sys.argv[1], sys.argv[2], sys.argv[3]
+          print("```json")
+          print(json.dumps({"kind": "ops-inspect-result", "check": check,
+                            "status": status, "note": note}, ensure_ascii=False))
+          print("```")
+          PY

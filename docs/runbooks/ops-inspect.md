@@ -1,0 +1,56 @@
+# Runbook: ops-inspect — サンドボックスの外を見る
+
+エージェントのセッションから届かない「事実」を、GitHub Actions の runner を踏み台にして取るための手順。判断の根拠は [ADR 0031](../adr/0031-agent-reaches-outside-via-github-actions.md)。
+
+## いつ使うか
+
+| 知りたいこと | `check` | 備考 |
+| --- | --- | --- |
+| Azure に今どのリソースがあるか | `azure-resources` | `inspect-env.sh` の詳細ダンプも併せて出る |
+| Cosmos DB の free tier がこのサブスクリプションで空いているか | `cosmos-free-tier` | [ADR 0030](../adr/0030-persistence-on-cosmos-db-single-store-behind-bff.md) D2 の判断材料 |
+| 当月いくら使っているか (予算 ¥3,000 に対して) | `cost-summary` | SP に課金データの参照権が無いと `(未検証)` になる |
+| egress の外にあるページの本文 | `fetch-doc` + `url` | `https://` のみ。HTML をテキスト化して 60,000 文字まで |
+
+## エージェントからの使い方
+
+```
+actions_run_trigger {
+  method: "run_workflow", workflow_id: "ops-inspect.yml",
+  ref: "main", inputs: { check: "cosmos-free-tier" }
+}
+```
+
+1. 起動したら `actions_list` (`list_workflow_runs` → `list_workflow_jobs`) で `job_id` を取る
+2. `get_job_logs` で `return_content: true` にして読む
+3. 出力の末尾に `kind: "ops-inspect-result"` の JSON ブロックが 1 つある。`status` が `unverified` のときは **取得できていない** — `note` に理由が入る
+
+> ⚠️ **`ref` は `main` を指定すること。** `workflow_dispatch` は**既定ブランチに存在するワークフローしか起動できない**。作業ブランチに置いただけでは起動できず、main にマージされて初めて使える。
+
+## 人間からの使い方
+
+GitHub の Actions タブ → `ops-inspect` → **Run workflow** → `check` を選んで実行。結果は job summary に出る。
+
+## 触るときの約束 (ADR 0031 D2)
+
+このワークフローを拡張するとき、**次の 2 つは絶対に破らないこと**。
+
+1. **自由入力のコマンドを受け取らない。** 操作は `type: choice` の固定値だけ。デプロイ用 SP は**サブスクリプション Contributor のまま**なので ([#46](https://github.com/yomote/mind-inbox/issues/46))、任意コマンドを受ける口を作ると、この便利屋がリポジトリで最も強い書き込み経路になる
+2. **入力をシェルに展開しない。** `run:` の中に `${{ inputs.* }}` を直接書かず、必ず `env:` 経由で渡して `"$VAR"` として引用符付きで参照する (`${{ }}` は run の実行前にテキスト置換されるため、直接書くと注入口になる)
+
+調べたい項目が増えたら、**使い捨てワークフローを作らずにこのファイルへ `check` を足す** (ADR 0031 D4)。
+
+## 現在許可されているネットワークドメイン (環境設定の写し)
+
+環境設定は claude.ai 側にあり**リポジトリ管理外**なので、ここは写しであって真実ではない。乖離しうる。実体は claude.ai/code の環境ダイアログ → **Network access**。
+
+- **レベル**: `Custom` (+ 「Also include default list of common package managers」を有効)
+- **追加した許可**: `learn.microsoft.com` / `azure.microsoft.com` / `prices.azure.com` / `*.blob.core.windows.net`
+- **理由と経緯**: [#168](https://github.com/yomote/mind-inbox/issues/168) (2026-08-09 適用)。ADR 0030 の設計時に Azure の料金・仕様の一次情報へ到達できず、月額の判断材料が二次情報の概算になったため
+
+変更したらこの節を更新する。
+
+## 関連
+
+- [ADR 0031](../adr/0031-agent-reaches-outside-via-github-actions.md) (この仕組みの判断) / [ADR 0018](../adr/0018-runtime-verification-in-the-loop.md) (実態の読み取り) / [ADR 0006](../adr/0006-azure-access-via-device-code.md) (Azure 対話ログインの制約)
+- `cicd/scripts/smoke-test/inspect-env.sh` — `azure-resources` が内部で流す詳細ダンプ
+- 対: `smoke-test.sh` (合否を出して CD を止める) / `inspect-env.sh` (人が読む。判定しない) / **`ops-inspect` (エージェントが読む。判定しない)**

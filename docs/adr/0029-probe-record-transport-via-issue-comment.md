@@ -1,8 +1,8 @@
 # 0029. UX プローブ記録は artifact ではなく Issue コメントで採点セッションへ運ぶ
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-09
-- Deciders: omoteforlab (運搬方法は 2026-08-09 の対話で選択肢形式により選択。Accept は debrief で)
+- Deciders: omoteforlab (運搬方法は 2026-08-09 の対話で選択肢形式により選択。同日の報告会 #4 で Accept)
 - Consulted: —
 - Informed: —
 
