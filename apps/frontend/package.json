@@ -13,7 +13,8 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:report": "playwright show-report",
-    "test:e2e:live": "playwright test -c playwright.live.config.ts"
+    "test:e2e:live": "playwright test -c playwright.live.config.ts",
+    "test:e2e:uc": "playwright test -c playwright.uc.config.ts"
   },
   "dependencies": {
     "@azure/msal-browser": "^5.18.0",

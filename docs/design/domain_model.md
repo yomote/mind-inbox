@@ -140,8 +140,8 @@ stateDiagram-v2
   open --> open: 再出現（新 Mention が付く / UC-03）
   open --> resolved: 解決（UC-04）
   open --> shelved: もう気にしない（UC-04）
-  resolved --> open: 再燃（UC-03 / 手動）
-  shelved --> open: 掘り起こし（手動）
+  resolved --> open: 再燃（UC-03 / 再言及で自動）
+  shelved --> open: 掘り起こし（UC-03 で自動 / 手動）
 
   note right of open
     自動グルーピングで open 直行（承認ゲートなし）。
@@ -159,6 +159,7 @@ stateDiagram-v2
 
 > **`candidate` を廃止**: A 案（自動グルーピング + 事後トリアージ）では Problem は `open` 直行で生まれる。承認待ちの中間状態は不要になり、トリアージは*非ブロッキングな事後編集*になる。
 > **`dormant` を状態にしない**: 「しばらく触れていない」は本来*時間駆動の遷移*。v1 はスケジューラ範囲外なので、`lastMentionedAt` から計算する**派生ビュー**として扱う。プロアクティブ・フェーズで正式な状態化を検討。
+> **再燃は自動**: `resolved` / `shelved` の Problem に再言及があったら `open` に戻す（UC-03 事後条件 / [ADR 0032](../adr/0032-use-case-acceptance-tests-against-real-wiring.md)）。A 案（自動で寄せて、違えば事後トリアージで直す）を状態にも適用する。手動にしていた頃は、抽出結果レビューが「🔁N回目 / 再燃」と表示するのに既定の一覧（追跡中のみ）には現れない食い違いが起きていた。
 
 ---
 

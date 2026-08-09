@@ -3,7 +3,13 @@
 作成: 2026-06-21 / 対象: `requirements.md` の UC-01〜05 を外部設計レベルで詳細化
 関連: [`requirements.md`](./requirements.md) / [`domain_model.md`](./domain_model.md) / [`concept_deck.md`](../concept_deck.md)
 
-> **ステータス: DRAFT（叩き台）**
+> **ステータス: 受け入れテストで検証中**
+> UC-01〜05 の基本フローと主要な代替フローは `apps/frontend/e2e-uc/uc0*.spec.ts` が
+> **実配線（mock を通さない）で自動検証**している（[ADR 0032](../adr/0032-use-case-acceptance-tests-against-real-wiring.md)）。
+> この doc を変えたら対応する spec も直すこと。逆に spec が落ちたら「実装が壊れた」か
+> 「この doc が古い」かのどちらかで、放置しないこと。
+> **未検証の前提**: 永続化（[#165](https://github.com/yomote/mind-inbox/issues/165)）。
+> BFF は in-memory なので、実環境では蓄積が消えて UC-02〜05 の事前条件が崩れうる。
 > 各 UC は「文章フロー ＋ システムシーケンス図（SSD）」のセット。
 > SSD は **黒箱**で描く: 参加者は `ユーザー` / `System`（中身を見せない）/ 外部サービス（`LLM`）のみ。
 > Frontend / BFF / AI Agent への内部分解は**内部設計**（[`basic_design.md`](./basic_design.md)）の役割で、ここでは扱わない。
@@ -79,7 +85,7 @@ sequenceDiagram
 2. System が Problem 群を取得・絞り込む
 3. System が一覧を表示する（状態・最終言及日・再出現回数つき）
 4. ユーザーが Problem を選ぶ
-5. System が詳細（起源セッション、再出現履歴、紐づく Plan）を表示する
+5. System が詳細（言及の履歴 = 日時 + 元発話の引用 + そのときの感情、紐づく Plan）を表示する
 
 **代替・例外フロー**
 
@@ -95,7 +101,7 @@ sequenceDiagram
   S->>S: Problem を取得・絞り込み
   S-->>U: 一覧表示（状態・最終言及・再出現回数）
   U->>S: Problem を選択
-  S-->>U: 詳細（起源セッション・再出現履歴・Plan）
+  S-->>U: 詳細（言及の履歴・感情の推移・Plan）
 ```
 
 ---
@@ -107,14 +113,14 @@ sequenceDiagram
 | 目的       | 「同じ悩みを何度も話している」を可視化する（concept_deck §1 の直接解決）     |
 | 主アクター | ユーザー                                                                     |
 | 事前条件   | 照合対象となる過去 Problem が存在する                                        |
-| 事後条件   | 既存 Problem が再点火（`dormant`/`resolved` → `open`）し、再出現が記録される |
+| 事後条件   | 既存 Problem が再点火（`resolved`/`shelved` → `open`）し、再出現が記録される |
 
 > UC-01 の段2（グルーピング）の中で自動的に起きる拡張。独立画面ではなく**気づきの提示**が本体。確認ダイアログではなく、自動で寄せて気づきを返し、違えば事後トリアージで直す。
 
 **基本フロー**
 
 1. （UC-01 段2 の中で）System が新規 Mention を既存 Problem に意味類似で自動グルーピングする
-2. 対象が `dormant` / `resolved` / `shelved` だった場合は再点火する（→ `open`）
+2. 対象が `resolved` / `shelved` だった場合は再点火する（→ `open`）。誤検知はユーザーが事後トリアージで戻す
 3. System が再出現を記録する（`mentionCount` ++ / `lastMentionedAt` 更新）
 4. System が気づきを提示する（例: 「『○○』は今月 3 回目」「解決済みの『○○』が再燃」）
 
@@ -148,7 +154,7 @@ sequenceDiagram
 | ---------- | -------------------------------------------------- |
 | 目的       | 片付いた / もう気にしない Problem を一覧から退ける |
 | 主アクター | ユーザー                                           |
-| 事前条件   | 対象 Problem が `open`（または `dormant`）         |
+| 事前条件   | 対象 Problem が `open`                             |
 | 事後条件   | Problem が `resolved` または `shelved` に遷移する  |
 
 **基本フロー**

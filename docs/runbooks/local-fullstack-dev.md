@@ -52,6 +52,20 @@ GitHub Pages のモック（フロントのみ）では **声の UX が評価で
    npm run dev    # build:watch + func start（:7071）
    ```
 
+   > **`func` を入れたくない / 声を評価しない場合**は、Azure Functions Core Tools を使わずに
+   > 素の node で同じ BFF を配信できる（[ADR 0032](../adr/0032-use-case-acceptance-tests-against-real-wiring.md)）。
+   > 本番の Functions と**同じ `src/http/handlers.ts`** を呼ぶので応答は一致する。
+   >
+   > ```bash
+   > cd apps/bff
+   > npm install && npm run build          # dist を読むので build が要る
+   > VOICEVOX_BASE_URL=http://localhost:8001 node scripts/local-server.mjs   # :7071
+   > ```
+   >
+   > 差分は 2 点だけ: **ホットリロードが無い**（`npm run build` を都度叩く）ことと、
+   > フロントが別ポートに居るため **CORS を開けている**こと。声の UX を通しで見るなら
+   > `npm run dev`（`func start`）のままが楽。
+
 4. **フロントエンド**（Vite, :5173 — 実 BFF を叩く）
 
    ```bash

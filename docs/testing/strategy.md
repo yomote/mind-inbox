@@ -64,7 +64,8 @@ Mind Inbox は **コーディングエージェント駆動の高速開発** を
 │ L0 契約 │ 言語間スキーマ整合    │ tRPC zod ↔ pydantic schema     │
 │ L1 単体 │ 純粋ロジック          │ deriveTitle / organize JSON 解析│
 │ L2 結合 │ Router/API 全体動作  │ createCaller / FastAPI ASGI     │
-│ L3 E2E  │ UI 描画 + 主要フロー  │ Playwright (1 シナリオ)         │
+│ L3 E2E  │ UI 描画 + 主要フロー  │ Playwright / mock ビルド        │
+│ L3-real │ ユースケース受け入れ  │ Playwright / 実 BFF + AI ダブル │
 │ L4 smoke│ 実 Azure 環境疎通    │ cicd/scripts/smoke-test/...     │
 └────────────────────────────────────────────────────────────────┘
 ```
@@ -125,6 +126,44 @@ Mind Inbox は **コーディングエージェント駆動の高速開発** を
 
 **ローカル検証は実環境検証の代わりにならない** ([ADR 0018](../adr/0018-runtime-verification-in-the-loop.md))。認証・CORS・クラウド固有の挙動は L4 smoke と PR の「動作検証」欄で担保する。別レイヤとして扱うこと。
 
+### L3-real ユースケース受け入れ (UC Acceptance)
+
+| 項目               | 内容                                                                                                                                                                                                                                |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **目的**           | `docs/design/use_cases.md` の **UC-01〜05 が実配線で通ること**を機械的に保証する。「mock は緑なのに実環境で動かない」を構造的に潰す ([ADR 0032](../adr/0032-use-case-acceptance-tests-against-real-wiring.md))                      |
+| **対象**           | UC-01 吐き出し→抽出 / UC-02 見返す / UC-03 繰り返しに気づく / UC-04 棚卸し / UC-05 次の一歩 + **通信失敗時に UI が沈黙しないこと**                                                                                                  |
+| **フレームワーク** | Playwright (chromium)。`apps/frontend/e2e-uc/`                                                                                                                                                                                      |
+| **起動の仕方**     | 3 プロセス: ai-agent ダブル (`e2e-uc/fake-ai-agent.mjs`) → 実 BFF (`apps/bff/scripts/local-server.mjs`) → **`VITE_USE_MOCK` を渡さない** production ビルドの `vite preview`                                                         |
+| **書き方の指針**   | 1 spec = 1 UC。テスト名とコメントで `use_cases.md` の基本フロー / 代替フローの番号に対応づける。spec ごとに題材トピックを分ける (Problem リポジトリがプロセス共有のため)                                                            |
+| **非ゴール**       | 実 LLM のグルーピング精度 (語彙一致のダブル) / 実 VOICEVOX の音声 / Entra の実ログイン / **永続化** (BFF は in-memory / #165)                                                                                                       |
+| **実行コマンド**   | `pnpm --dir apps/frontend test:e2e:uc`                                                                                                                                                                                              |
+| **所有者**         | **`use_cases.md` の変更者**。UC を足す / 変える人が対応する spec も直す (doc と spec は 1:1)。**受け入れ観点の追加は L3 と同じく qa-reviewer** ([ADR 0019](../adr/0019-independent-judge-agents-security-qa-release.md))。§3.1 参照 |
+
+#### 3.1 なぜ L3-real だけ「実装者が書いてよい」のか
+
+L3 (mock) は **実装者は増やさない / 受け入れシナリオの追加は qa-reviewer が導出**という所有だが、
+L3-real はそこを一部ずらしている。理由は**守る対象が違う**から:
+
+- **L3-real が固定するのは `use_cases.md` そのもの** — 「何が良い体験か」を新しく判断していない。
+  doc に書いてある基本フロー / 代替フローを機械可読にしているだけなので、doc と spec の
+  **乖離を防ぐ責任は doc を変える人**にある。ここを judge に外注すると doc 変更と spec 変更が
+  別 PR に割れ、乖離そのものが生まれる
+- **「受け入れ基準を新しく作る」作業は依然 qa-reviewer の所有** — 「この UC は本当にこう
+  あるべきか」「体験として十分か」の判断は実装者のコンテキストで決めない (ADR 0019 の趣旨)
+
+つまり分界は「**doc の写経 = 実装者 / 基準の創出 = qa-reviewer**」。
+
+> ⚠️ **この分界は [ADR 0032](../adr/0032-use-case-acceptance-tests-against-real-wiring.md) の Proposed 論点であり、まだ PO の Accept を受けていない。**
+> 初版 25 本は実環境の無音失敗を止める緊急対応として実装者が単独で書いた。
+> debrief で Accept する際に、この所有の置き方も併せて裁定すること (PR #170 のレビュー指摘)。
+
+**L3 mock との分担**: mock は「バンドル・認証ゲート・UI 仕様どおり描けているか」、
+L3-real は「ユースケースが成立するか」。同じことを両方で書かない。
+
+**差し替えるのは LLM の判断だけ**。フロントの api 層 (`src/api/*.ts` の real 分岐) →
+tRPC → BFF の router → Problem リポジトリはすべて本物が動く。ここが mock E2E との
+決定的な違いで、2026-08-09 の「ボタンを押しても何も起きない」はこの経路にしか無かった。
+
 ### L4 smoke (実環境疎通)
 
 | 項目               | 内容                                                               |
@@ -166,7 +205,11 @@ Mind Inbox は **コーディングエージェント駆動の高速開発** を
   ├─ Router/API レベル? ── Yes → L2 で再現
   │       │
   │       No
-  └─ UI 描画 / 遷移? ───── Yes → L3 で再現 (既存シナリオを拡張)
+  ├─ UI 描画 / 遷移? ───── Yes → L3 (mock) で再現 (既存シナリオを拡張)
+  │       │
+  │       No
+  └─ ユースケースが通らない / 実配線が切れている?
+                         Yes → L3-real で再現 (該当 UC の spec に足す)
 ```
 
 ### 4.3 リファクタリング時
@@ -179,13 +222,13 @@ Mind Inbox は **コーディングエージェント駆動の高速開発** を
 
 ## 5. 実行タイミング (いつ走らせるか)
 
-| タイミング                   | 走るレイヤ          | 想定時間 | 失敗時の挙動             |
-| ---------------------------- | ------------------- | -------- | ------------------------ |
-| **エディタ保存中 (watch)**   | L1 (該当ファイル分) | < 2s     | エディタ内で表示         |
-| **コミット前 (任意)**        | L1 + L2             | < 30s    | 開発者の手で実行         |
-| **PR push (CI)**             | L0 + L1 + L2 + L3   | < 3min   | マージブロック           |
-| **main マージ後 (CI)**       | L4 smoke (dev 環境) | 数分     | 通知のみ (rollback 検討) |
-| **デプロイ後 (手動 / 週次)** | L4 smoke (各環境)   | 数分     | 環境ごとに判断           |
+| タイミング                   | 走るレイヤ                  | 想定時間 | 失敗時の挙動             |
+| ---------------------------- | --------------------------- | -------- | ------------------------ |
+| **エディタ保存中 (watch)**   | L1 (該当ファイル分)         | < 2s     | エディタ内で表示         |
+| **コミット前 (任意)**        | L1 + L2                     | < 30s    | 開発者の手で実行         |
+| **PR push (CI)**             | L0 + L1 + L2 + L3 + L3-real | < 5min   | マージブロック           |
+| **main マージ後 (CI)**       | L4 smoke (dev 環境)         | 数分     | 通知のみ (rollback 検討) |
+| **デプロイ後 (手動 / 週次)** | L4 smoke (各環境)           | 数分     | 環境ごとに判断           |
 
 ### 5.1 ローカル開発中
 
@@ -209,10 +252,11 @@ cd apps/bff && npm run test -- --watch
 1. install (node + python, キャッシュあり)
 2. npm run test:contract  ← L0
 3. npm run test:fast       ← L1 + L2 (並列)
-4. npm run test:e2e        ← L3
-5. build summary           ← レイヤ別 pass/fail を Markdown で生成
-6. sticky PR comment       ← 同 Markdown を PR に常駐コメント (header: test-summary)
-7. fail if any layer failed
+4. npm run test:e2e        ← L3 (mock ビルド)
+5. npm run test:e2e:uc     ← L3-real (実 BFF + ai-agent ダブル / ADR 0032)
+6. build summary           ← レイヤ別 pass/fail を Markdown で生成
+7. sticky PR comment       ← 同 Markdown を PR に常駐コメント (header: test-summary)
+8. fail if any layer failed
 ```
 
 各レイヤは `continue-on-error: true` で実行し、最後にまとめて結果を集計してから fail させる。これにより「L0 が落ちたから L2 の状況が見えない」を防ぐ。

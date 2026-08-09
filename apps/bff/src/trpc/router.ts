@@ -76,7 +76,13 @@ const EMPTY_START_OPENER = "今日はどんなことが気になっています�
 /**
  * ai-agent の抽出結果を Problem リポジトリに反映する。
  * new は新規 Problem を起こし、existing は既存に Mention を追記して mentionCount / lastMentionedAt を更新。
- * 状態遷移（reignited の reopen 等）は自動では行わず、事後トリアージに委ねる（ADR 0007）。
+ *
+ * 棚卸し済み（resolved / shelved）の Problem に再言及があったら **`open` に戻す**
+ * （UC-03 の事後条件）。ADR 0007 の方針は「自動で寄せて気づきを返し、違えば事後トリアージで直す」で、
+ * 状態も同じ扱いにする。ここを手動にしていた頃は、抽出結果レビューが「🔁2回目 / 再燃」と
+ * 表示するのに一覧の既定（open のみ）には出てこない、という食い違いが起きていた
+ * （＝「また話しているのに気づかせてくれない」= プロダクトの芯が通らない）。
+ * 誤検知なら詳細画面から「解決した」で戻せる。
  */
 async function materializeExtraction(
   result: ExtractionResult,
@@ -86,11 +92,17 @@ async function materializeExtraction(
     if (grouping.kind === "existing") {
       const existing = await repo.get(grouping.problemId);
       if (existing) {
+        const mentions = [...existing.mentions, mention];
         await repo.upsert({
           ...existing,
-          mentions: [...existing.mentions, mention],
-          mentionCount: grouping.mentionCount,
+          mentions,
+          // 言及回数は mentions から導出する。ai-agent の申告値をそのまま持つと、
+          // 候補集合のズレや再送で実体（mentions.length）と食い違う。
+          mentionCount: mentions.length,
           lastMentionedAt: mention.createdAt,
+          ...(existing.status === "open"
+            ? {}
+            : { status: "open" as const, resolvedAt: null, shelvedAt: null }),
         });
         continue;
       }

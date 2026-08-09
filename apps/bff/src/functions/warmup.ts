@@ -1,5 +1,6 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from "@azure/functions";
-import { warmupDownstreams } from "../warmup/warmupService";
+import { handleWarmup } from "../http/handlers";
+import { contextLogger, toHttpResponseInit } from "../http/azureAdapter";
 
 /**
  * GET /api/warmup — scale-to-zero の下流 (ai-agent / vv-wrap) を温める (#120)。
@@ -12,12 +13,7 @@ async function warmupHandler(
   _req: HttpRequest,
   context: InvocationContext,
 ): Promise<HttpResponseInit> {
-  const result = await warmupDownstreams();
-  context.log(
-    `[warmup] aiAgent=${result.aiAgent.status}(${result.aiAgent.ms}ms) ` +
-      `voicevox=${result.voicevox.status}(${result.voicevox.ms}ms)`,
-  );
-  return { status: 200, jsonBody: result };
+  return await toHttpResponseInit(await handleWarmup(contextLogger(context)));
 }
 
 app.http("warmup", {
