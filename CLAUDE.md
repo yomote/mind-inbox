@@ -2,9 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Overview
-
-**Mind Inbox** は、AIとの対話をエフェメラルなチャット体験ではなく、累積的な自己理解アーティファクトへ変換するアプリ。コアコンセプト: "モヤモヤを話す → AIが構造化する → 自己理解の地図として育つ"
+**このファイルはエージェント向けの作業規約**。プロダクトの説明・構成・起動手順は [README.md](README.md) が入口 (ここには再掲しない)。
 
 ## Working in this repo
 
@@ -59,6 +57,14 @@ PR を作成したら放置せず、**merge / close されるまで追従する*
 
 ## Commands
 
+### リポジトリ全体 (まずこれ)
+
+```bash
+npm run test:fast   # bff / frontend / ai-agent / scripts を並列
+npm run lint        # eslint + ruff + markdownlint
+npm test            # test:contract → test:fast → test:e2e
+```
+
 ### BFF (Azure Functions + tRPC)
 
 ```bash
@@ -69,21 +75,21 @@ npm run build     # tsc compile only
 npm run lint      # ESLint
 ```
 
-### Frontend (React + Vite)
+### Frontend (React + Vite) — **pnpm** (npm ではない / `pnpm-lock.yaml`)
 
 ```bash
-cd apps/frontend
-npm install
-npm run dev       # vite dev server
-npm run build     # tsc + vite build
-npm run lint      # ESLint
+pnpm --dir apps/frontend install
+VITE_USE_MOCK=true pnpm --dir apps/frontend dev   # BFF も認証も不要のモック
+pnpm --dir apps/frontend test                     # vitest
+pnpm --dir apps/frontend test:e2e                 # Playwright (L3 / mock)
+pnpm --dir apps/frontend build                    # tsc -b && vite build
 ```
 
-### AI Agent (Python FastAPI + Semantic Kernel)
+### AI Agent (Python FastAPI + Semantic Kernel → MAF へ移行中 / [ADR 0016](docs/adr/0016-ai-agent-orchestration-on-maf.md))
 
 ```bash
 cd apps/services/ai-agent
-pip install -e .
+pip install -e .              # または uv (uv.lock が正典)
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -103,54 +109,24 @@ cicd/scripts/local-voicevox/start-voicevox.sh  # Docker-based VOICEVOX for devel
 
 ## Architecture
 
-### Monorepo Structure
+**構成と責務の正典は [`docs/design/basic_design.md`](docs/design/basic_design.md)** (ここには再掲しない)。作業中に踏み外しやすい不変条件だけ:
 
-```
-apps/
-  bff/          # Azure Functions v4 + tRPC — BFF layer
-  frontend/     # React 19 + Vite + MUI — SPA
-  services/
-    ai-agent/   # FastAPI + Semantic Kernel — Azure OpenAI integration
-    voicevox/   # FastAPI — VOICEVOX TTS wrapper
-cicd/
-  iac/          # Bicep IaC (2-layer: bootstrap → config)
-  modules/      # Bicep modules
-  scripts/      # Deploy, smoke-test, local dev scripts
-docs/           # Concept deck, infra diagrams, UI specs (MDX)
-```
-
-### Request Flow
-
-```
-Browser → SWA (Static Web App)
-       → Azure Functions BFF (/api/trpc/{path})
-       → AI Agent service (Container App)
-       → Azure OpenAI (GPT-4o)
-       → VOICEVOX Wrapper (Container App) [optional audio]
-       → VOICEVOX Engine (Container App)
-```
-
-### BFF: tRPC Router
-
-- Single HTTP entry point: `apps/bff/src/functions/trpc.ts` → `/api/trpc/{path}`
-- Router (`apps/bff/src/trpc/router.ts`) exposes `health` and `chat` subrouters
-- `chat.sendMessage` mutation: `{ sessionId, message, withAudio? }` → `{ reply, requiresApproval, citations, audioUrl? }`
-- AI Agent / VOICEVOX clients fall back to stubs when env vars are unset (safe for local dev without services running)
-
-### Frontend Mock System
-
-- `apps/frontend/src/mockApi.ts` provides full mock data for all screens
-- UI specs live in `docs/frontend/ui_specs/` as MDX interactive previews
-- Screens: onboarding, home, session, result, actionPlan, history, settings, paused, crisisSupport
+- **BFF は chat の素通しではない** — アーティファクト生成を組み立てる。副作用ツールは `requiresApproval` で人間に返す
+- **stub fallback を壊さない** — `AI_AGENT_BASE_URL` / `VOICEVOX_BASE_URL` 未設定でも BFF は動く (ローカルで外部サービス無しに触れる特性)
+- **`mockApi.ts` は mock 兼テスト fixture** — テストごとに別 mock を増やさない ([ADR 0004](docs/adr/0004-mockapi-as-frontend-truth.md))
+- **UI 仕様は MDX が真実** — 乖離したら実装を直す ([ADR 0005](docs/adr/0005-mdx-ui-spec-as-truth.md))
+- **型は tRPC の zod / pydantic が真実** — OpenAPI は生成物なので手書きしない
 
 ### Environment Variables (BFF)
 
-| Variable            | Purpose              | Fallback       |
-| ------------------- | -------------------- | -------------- |
-| `AI_AGENT_BASE_URL` | AI Agent service URL | Stub responses |
-| `VOICEVOX_BASE_URL` | VOICEVOX Wrapper URL | Stub audio URL |
+| Variable                                  | Purpose                            | 未設定時                                      |
+| ----------------------------------------- | ---------------------------------- | --------------------------------------------- |
+| `AI_AGENT_BASE_URL`                       | AI Agent service URL               | stub 応答                                     |
+| `VOICEVOX_BASE_URL`                       | VOICEVOX Wrapper URL               | `/api/tts` が 204 → ブラウザ読み上げへ        |
+| `AI_AGENT_AUDIENCE` / `VOICEVOX_AUDIENCE` | Container Apps 認証の門 (ADR 0017) | Authorization を付けない (門の無いローカル用) |
+| `SPEECH_RESOURCE_ID` / `SPEECH_REGION`    | Azure Speech STT (ADR 0023)        | `speech.issueToken` が `available:false`      |
 
-See `apps/bff/local.settings.json.example` for local dev template.
+**正典は [`apps/bff/local.settings.json.example`](apps/bff/local.settings.json.example)** — 増やしたらそちらを先に更新する。
 
 ## Azure Infrastructure
 
@@ -175,11 +151,12 @@ cicd/scripts/deploy/deploy-voicevox-wrapper.sh # ghcr の事前ビルド image �
 cicd/scripts/smoke-test/smoke-test.sh          # Post-deploy verification
 ```
 
-## Key Design Decisions
+### コストと公開面で覆さない前提
 
-- **BFF is NOT a chat passthrough** — it orchestrates artifact generation; `requiresApproval` flag enables human-in-the-loop tool approval flow in the AI Agent
-- **tRPC** provides end-to-end type safety between frontend and BFF without code generation
-- **SWA linked backend** uses Standard SKU to proxy API calls to Azure Functions with built-in auth
-- **Container Apps** (not AKS) for services — serverless containers with scale-to-zero for cost control
-- **コンテナ image は ghcr に事前ビルド** — GitHub Actions (`build-images.yml`) が main マージ時に build/push し、デプロイはタグ差し替えのみ。ACR は廃止 ([ADR 0013](docs/adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) / [Runbook](docs/runbooks/ghcr-images.md))
-- **Private endpoints** for SQL — network-isolated, accessed only from within VNet (SQL は `enableSql=true` の時のみ。既定は未プロビジョニング)
+判断の理由は各 ADR。ここは「知らずに壊しやすい」ものだけ:
+
+- **SWA は Free、フロントは Functions を直叩き** (linked backend は使わない)。認可は Functions EasyAuth の 401 が担う ([ADR 0013](docs/adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) / [Runbook](docs/runbooks/entra-spa-auth-and-budget.md))
+- **image は ghcr に事前ビルド、デプロイは不変 sha タグの差し替え**。ACR は廃止、`:latest` は使わない ([ADR 0013](docs/adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) / [ADR 0025](docs/adr/0025-deploy-container-images-by-immutable-sha-tag.md) / [Runbook](docs/runbooks/ghcr-images.md))
+- **Container Apps は scale-to-zero** (AKS ではない / [ADR 0002](docs/adr/0002-container-apps-not-aks.md))
+- **SQL は既定で作らない** (`enableSql=false`)。有効化すると VNet + Private Endpoint 一式が付き待機課金が乗る
+- **Container Apps は組み込み認証で閉じる** — IP 許可リストに戻さない ([ADR 0017](docs/adr/0017-container-apps-access-via-auth-gate.md))
