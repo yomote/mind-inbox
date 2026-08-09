@@ -12,11 +12,11 @@ Technical Story: 2026-08-09、ADR 0030 (永続化) の設計中に Azure の料�
 
 エージェントのセッションはサンドボックスの中で動いており、外の世界に届かない経路が 3 種類ある。これまでその場しのぎで個別に迂回してきたが、**同じ壁に 4 回ぶつかって 4 回別々の回避策を作っている**ため、パターンとして固定する。
 
-| 壁 | 実測 | これまでの回避 |
-| --- | --- | --- |
-| **egress ポリシー** — 環境の Network access が `Trusted` で、許可リスト外は CONNECT が 403 | `learn.microsoft.com` / `azure.microsoft.com` / `prices.azure.com` がプロキシログに `connect_rejected` として記録。`*.blob.core.windows.net` も同様 | bicep CLI が取れない → `iac-validate.yml` を作って runner でビルド (#—) / artifact が落とせない → Issue コメント運搬へ ([ADR 0029](0029-probe-record-transport-via-issue-comment.md)) |
-| **Azure のトークンが無い** — 対話ログインは device code が要り、無人セッションでは不可 ([ADR 0006](0006-azure-access-via-device-code.md))。ただし `management.azure.com` 自体は到達可能 (400 応答を確認) | 「Portal で確認してください」という人手宿題が発生し続けている | `inspect-env.sh` を書いたが、実行は人間 ([ADR 0018](0018-runtime-verification-in-the-loop.md) ①) |
-| **MCP の承認ゲート** — `claude-code-remote` は読み取り専用の `list_environments` すら `-32003 requires approval` | 子セッション起動・Routine 登録が不可 | 起票パケット + user の 1 クリック ([ADR 0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) D1) |
+| 壁                                                                                                                                                                                                       | 実測                                                                                                                                                | これまでの回避                                                                                                                                                                        |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **egress ポリシー** — 環境の Network access が `Trusted` で、許可リスト外は CONNECT が 403                                                                                                               | `learn.microsoft.com` / `azure.microsoft.com` / `prices.azure.com` がプロキシログに `connect_rejected` として記録。`*.blob.core.windows.net` も同様 | bicep CLI が取れない → `iac-validate.yml` を作って runner でビルド (#—) / artifact が落とせない → Issue コメント運搬へ ([ADR 0029](0029-probe-record-transport-via-issue-comment.md)) |
+| **Azure のトークンが無い** — 対話ログインは device code が要り、無人セッションでは不可 ([ADR 0006](0006-azure-access-via-device-code.md))。ただし `management.azure.com` 自体は到達可能 (400 応答を確認) | 「Portal で確認してください」という人手宿題が発生し続けている                                                                                       | `inspect-env.sh` を書いたが、実行は人間 ([ADR 0018](0018-runtime-verification-in-the-loop.md) ①)                                                                                      |
+| **MCP の承認ゲート** — `claude-code-remote` は読み取り専用の `list_environments` すら `-32003 requires approval`                                                                                         | 子セッション起動・Routine 登録が不可                                                                                                                | 起票パケット + user の 1 クリック ([ADR 0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) D1)                                                                       |
 
 一方で GitHub Actions の runner は **egress 制限を受けず**、**OIDC で Azure に入れ** (`deploy.yml` / `golden-path-monitor.yml` で実績あり)、しかも**エージェントは GitHub MCP でワークフローを起動でき (`actions_run_trigger`)、ログを読める (`get_job_logs`)**。つまり「エージェントの手足」として既に使える状態にある。
 
@@ -67,13 +67,48 @@ Chosen option: **"Option C"**。runner は egress 制限を受けず OIDC で Az
 - **MCP の承認ゲート (子セッション起動 / Routine 登録) はこの ADR では解決しない**。ADR 0028 D1 のまま。D6 が救うのは「セッション内のチェックイン」だけで、**セッションを跨ぐ定期実行は依然として人手登録**
 - **D6 のチェックインはセッションと運命を共にする**。セッションが終われば消えるので、「PR を最後まで見届ける」の保証にはならない (見届ける主体が消えるという意味では整合しているが、取りこぼしはありうる)
 
-## 補足: なぜ承認を「記憶」させられないのか (2026-08-09 の観測)
+## 補足: なぜ承認を「記憶」させられないのか (2026-08-09 に根本原因を特定)
 
-MCP サーバーの識別子が**セッションごとに変わる UUID** で現れることを、同一セッション内で観測した — 会話の途中で Gmail のツール群が `mcp__Gmail__*` から `mcp__09495523-9ab7-4fc9-8d56-ac6bddc39b49__*` に切り替わり、claude-code-remote は `mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__*` として現れた。
+> ⚠️ **本節は 2026-08-09 に全面的に書き直した。** 当初は「MCP サーバー名がセッションごとに変わる UUID なので `permissions.allow` が照合できない」と結論していたが、**これは誤りだった** — Gmail コネクタも UUID 名 (`mcp__09495523-…`) で現れるが、承認なしで正常に呼べることを実測で確認したため。以下が実測とドキュメントで裏を取った本当の原因。
 
-`permissions.allow` の規則はツール名で照合するため、**サーバー名が変わる相手を静的な規則で先に許可することが原理的にできない**。[ADR 0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) が「`.claude/settings.json` に `permissions.allow` を書いても `-32003` が消えなかった」と記録した現象は、これで説明がつく (当時は「プラットフォーム側のゲート」とだけ結論していた)。
+### 原因: `anthropic/requiresUserInteraction` 注釈
 
-したがって **repo 側の設定でこの確認を消すことはできない**。D6 のように「そもそも MCP を経由しない手段に置き換える」のが唯一の回避策になる。
+MCP サーバーは、ツールの `tools/list` 応答に `_meta["anthropic/requiresUserInteraction"] = true` を付けることで、**そのツールを「毎回、人間の承認を必須」にできる** ([Claude Code docs / MCP](https://code.claude.com/docs/en/mcp))。この注釈が付いたツールは:
+
+- `acceptEdits` / `auto` / `bypassPermissions` のどのモードでも**毎回プロンプトが出る**
+- **「次回から確認しない」の選択肢が出ない**
+- **`permissions.allow` の許可規則が効かない**
+- `dontAsk` モード (プロンプトを出さないモード) では**拒否される**
+
+`claude-code-remote` の `create_session` / `set_session_title` / `list_triggers` / `send_later` 等の挙動は、この仕様と完全に一致する。
+
+### なぜクラウドセッションでは「聞かれもせず」拒否されるのか
+
+同じドキュメントにこう書かれている — Remote Control のような**ワンタップ承認ができる面では、この注釈付きツールに限りワンタップが差し止められ、完全なプロンプト (ターミナルのダイアログ) でしか答えられない**。
+
+**Claude Code on the web のセッションにはターミナルのダイアログが無い。** したがって承認要求が人間に到達できず、`-32003 MCP tool call requires approval` として即座に拒否される。設定では変えられない。
+
+### 「前はできたはず」は正しい
+
+この注釈が効くのは **Claude Code v2.1.199 以降**で、それ以前のバージョンは**注釈を無視して通常の権限フローを適用していた**。つまり以前は許可規則で通せた。本セッションの実測値は `2.1.226`。**PO の「前はできたはずなのに劣化した」という認識は正確**で、劣化ではなく仕様変更である。
+
+### 実測の記録 (2026-08-09)
+
+| 試したこと                                                                                       | 結果                                                      |
+| ------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| `list_triggers` / `set_session_title` / `create_session` (claude-code-remote)                    | すべて `-32003 requires approval`                         |
+| `~/.claude/launcher-settings.json` の `permissions.allow` にサーバー名とツール名を追加して再試行 | **変化なし** (仕様どおり許可規則が効かない)               |
+| **Gmail コネクタ (同じく UUID 名) の `list_labels`**                                             | **正常応答** — UUID 名や MCP 一般の問題ではないことが確定 |
+| `mcp__github__*` (安定名)                                                                        | 正常応答                                                  |
+| Claude Code のバージョン                                                                         | `2.1.226` (注釈が効く 2.1.199 以降)                       |
+
+**未確認の 1 点**: 当該ツールに実際に `_meta` 注釈が付いているかはサーバー側の応答なので直接は読めていない。上記 5 つの観測すべてと文書化された仕様が一致することからの強い推定。
+
+### したがって取れる手
+
+1. **MCP を経由しない手段に置き換える** (D6 の `CronCreate` がこれ)
+2. **ターミナルで承認する** — `claude --teleport <session-id>` でこのセッションを手元の端末に引き込めば、プロンプトが描画できるようになる
+3. **user が web UI で操作する** (Routine 登録・セッション作成・セッション名変更)
 
 ## Pros and Cons of the Options
 
