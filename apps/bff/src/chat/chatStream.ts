@@ -22,7 +22,12 @@ export function encodeSseEvent(payload: unknown): Uint8Array {
   return encoder.encode(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
-/** ai-agent の ChatResponse を done イベントの wire 形 (snake_case) に写す。 */
+/**
+ * ai-agent の ChatResponse を done イベントの wire 形 (snake_case) に写す。
+ * フィールド集合の真実は pydantic の ChatStreamDone / ChatResponse で、
+ * BFF 側の鏡 (`clients/aiAgentContracts.ts` の ChatStreamDoneSchema) を L0 契約テストが
+ * 突き合わせている。stub もフォールバックもここを通す (手書きコピーを 1 箇所に閉じる)。
+ */
 function toDoneEvent(res: ChatResponse): unknown {
   return {
     type: "done",
@@ -64,15 +69,14 @@ function stubStream(req: ChatRequest): ReadableStream<Uint8Array> {
         await new Promise((resolve) => setTimeout(resolve, 30));
       }
       controller.enqueue(
-        encodeSseEvent({
-          type: "done",
-          response: {
+        encodeSseEvent(
+          toDoneEvent({
             reply,
-            requires_approval: false,
-            approval_request_id: null,
+            requiresApproval: false,
+            approvalRequestId: null,
             citations: [],
-          },
-        }),
+          }),
+        ),
       );
       controller.close();
     },
