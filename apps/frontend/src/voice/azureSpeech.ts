@@ -103,7 +103,7 @@ type SpeechSdk = typeof import("microsoft-cognitiveservices-speech-sdk");
 export type AzurePreparation =
   | { kind: "ready"; sdk: SpeechSdk; authToken: string; region: string; expiresAt: number }
   /** 想定内: BFF が available:false (未プロビジョニング / ローカル)。 */
-  | { kind: "unavailable" }
+  | { kind: "unavailable"; expiresAt: number }
   /** 予期しない失敗: トークン取得エラー / SDK ロード失敗。 */
   | { kind: "failed"; reason: string };
 
@@ -113,15 +113,27 @@ const TOKEN_LIFETIME_MS = 8 * 60_000;
 let preparation: AzurePreparation | null = null;
 let preparing: Promise<AzurePreparation> | null = null;
 
+/**
+ * このキャッシュをそのまま使い回してよいか。
+ *
+ * **`failed` はキャッシュしない**のが要点 (PR #190 レビュー指摘)。`preparation` は
+ * モジュールスコープの単一キャッシュなので、一過性のネットワーク瞬断でトークン取得が
+ * 一度こけただけで、そのページセッションのあいだずっと高精度認識が復帰しなくなる。
+ * `unavailable` (未プロビジョニング) は環境の事実なので使い回すが、セッション中に
+ * プロビジョニングされた場合に拾えるよう ready と同じ間隔で聞き直す。
+ */
 function isFresh(p: AzurePreparation | null): boolean {
-  return p !== null && (p.kind !== "ready" || p.expiresAt > Date.now());
+  if (p === null) return false;
+  if (p.kind === "failed") return false;
+  return p.expiresAt > Date.now();
 }
 
 /**
  * トークンと SDK を先に取得しておく。**セッション画面を開いた時点で呼ぶ**ことで、
  * マイクボタンのタップを同期処理だけで済ませられるようにする。
  *
- * 同時呼び出しは 1 本にまとめ、成功した準備は失効まで使い回す。
+ * 同時呼び出しは 1 本にまとめ、成功した準備は失効まで使い回す。予期しない失敗は
+ * 使い回さない (次の呼び出しで必ず取り直す) — `isFresh` 参照。
  */
 export async function prepareAzureRecognition(): Promise<AzurePreparation> {
   if (isFresh(preparation)) return preparation as AzurePreparation;
@@ -130,7 +142,9 @@ export async function prepareAzureRecognition(): Promise<AzurePreparation> {
   preparing = (async (): Promise<AzurePreparation> => {
     try {
       const token = await trpc.speech.issueToken.query();
-      if (!token.available) return { kind: "unavailable" };
+      if (!token.available) {
+        return { kind: "unavailable", expiresAt: Date.now() + TOKEN_LIFETIME_MS };
+      }
 
       const sdk = await import("microsoft-cognitiveservices-speech-sdk");
       return {

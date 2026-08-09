@@ -19,6 +19,45 @@ import { acquireAudioElement, unlockAudioElement } from "./unlockedAudio";
 /** 1 文ぶんの再生がどう決着したか (#185 の逐次再生キューが次の一手を決めるのに使う)。 */
 type PlaybackOutcome = "ended" | "blocked" | "error" | "stopped";
 
+/**
+ * 同時に投げる合成リクエストの上限 (PR #190 レビュー指摘)。
+ *
+ * 長い応答をそのまま並行に出すと文の数だけ同時接続が開き、BFF の process 内キャッシュが
+ * ミスしたときに VOICEVOX へ一斉に流れ込む。再生は順番待ちなので、先頭数文が焼けていれば
+ * 音は途切れない — 先頭を最速で出す目的は上限を設けても損なわれない。
+ */
+const SYNTH_CONCURRENCY = 3;
+
+/**
+ * 順序を保ったまま並行数を制限して map する。**結果の Promise 配列を即座に返す**ので、
+ * 呼び出し側は先頭から順に await して、焼けた文から再生できる。
+ */
+function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R>[] {
+  const settlers: Array<{ resolve: (r: R) => void; reject: (e: unknown) => void }> = [];
+  const results = items.map(
+    (_, i) =>
+      new Promise<R>((resolve, reject) => {
+        settlers[i] = { resolve, reject };
+      }),
+  );
+
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      try {
+        settlers[i].resolve(await fn(items[i]));
+      } catch (err) {
+        settlers[i].reject(err);
+      }
+    }
+  };
+  for (let w = 0; w < Math.min(limit, items.length); w += 1) void worker();
+
+  return results;
+}
+
 /** VOICEVOX 未設定時に BFF が返す 204 を「合成できなかった」として扱うための番兵。 */
 const TTS_STUB = "TTS_STUB";
 
@@ -312,7 +351,7 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
       // ② 全文をまとめて合成に出し、**1 文目が焼けた時点で鳴らし始める**。
       //    以前は全文を結合してから返る 1 リクエストだったので、最初の音が出るまで
       //    「最後の 1 文の合成完了」を待っていた (PO 報告の約 10 秒 / #185)。
-      const pending = sentences.map((sentence) => synthesizeCached(sentence));
+      const pending = mapWithLimit(sentences, SYNTH_CONCURRENCY, synthesizeCached);
       // 打ち切られたキューが unhandled rejection にならないようにする。
       pending.forEach((p) => void p.catch(() => {}));
 
