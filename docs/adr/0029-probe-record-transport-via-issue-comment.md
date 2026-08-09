@@ -1,4 +1,4 @@
-# 0028. UX プローブ記録は artifact ではなく Issue コメントで採点セッションへ運ぶ
+# 0029. UX プローブ記録は artifact ではなく Issue コメントで採点セッションへ運ぶ
 
 - Status: Proposed
 - Date: 2026-08-09

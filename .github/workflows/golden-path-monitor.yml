@@ -18,7 +18,7 @@ on:
 permissions:
   id-token: write # OIDC トークン取得に必須
   contents: read
-  issues: write # プローブ記録を蓄積 Issue #162 へ投稿する (ADR 0028)
+  issues: write # プローブ記録を蓄積 Issue #162 へ投稿する (ADR 0029)
 
 env:
   RG: rg-dev-mind-inbox
@@ -122,7 +122,7 @@ jobs:
           print(f"summary written for {files[-1]}")
           EOF
 
-      # 記録 JSON は artifact と Issue コメントの両方に残す (ADR 0028 / #160)。
+      # 記録 JSON は artifact と Issue コメントの両方に残す (ADR 0029 / #160)。
       # artifact = 障害調査用の一次情報 (人間が gh で取る)。
       # Issue コメント = 毎朝の採点 Routine の入力 (agent が MCP で読む)。
       # agent セッションからは artifact をダウンロードできない (ダウンロード先の

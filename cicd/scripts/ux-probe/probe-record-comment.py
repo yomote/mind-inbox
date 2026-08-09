@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """UX プローブ記録を Issue コメントとして運ぶ (format) / 取り出す (extract)。
 
-記録の運搬に artifact を使わない理由は ADR 0028 (#160): agent セッションからは
+記録の運搬に artifact を使わない理由は ADR 0029 (#160): agent セッションからは
 artifact のダウンロード先 (`*.blob.core.windows.net`) が egress ポリシーで拒否され、
 `gh` 経由の直接 API も塞がっているため、**artifact は両方の経路から取得できない**。
 Issue コメントなら GitHub MCP でそのまま読めるので、採点ループが agent だけで完結する。
@@ -90,7 +90,7 @@ def format_comment(probe_json: Path, run_id: str, run_url: str) -> int:
             f"完了 {len(turns)}/{scenario.get('plannedTurns', '?')} 往復",
             "",
             "毎朝の UX 採点 Routine がこのブロックを読みます "
-            "(このスレッドに人間が返信しないでください / ADR 0028)。",
+            "(このスレッドに人間が返信しないでください / ADR 0029)。",
             "",
             "```json",
             json.dumps(envelope, ensure_ascii=False),

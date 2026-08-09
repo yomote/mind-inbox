@@ -21,7 +21,7 @@
 | レイテンシ閾値超過 (#120)                     | 同 run の warning annotation + step summary                                                                               | run と同じ |
 | judge 採点 (`ux-judge-score`)                 | **スコアボード Issue [#127](https://github.com/yomote/mind-inbox/issues/127) のコメント** (1 採点 = 1 コメント)           | 永続       |
 
-記録を artifact と Issue コメントの両方に置いている理由は [ADR 0028](../adr/0028-probe-record-transport-via-issue-comment.md) — **agent セッションからは artifact をダウンロードできない** (取得先の `*.blob.core.windows.net` が egress ポリシーで拒否される / [#160](https://github.com/yomote/mind-inbox/issues/160))。採点が読む「正」はコメント側で、artifact は人間が掘るための一次情報。
+記録を artifact と Issue コメントの両方に置いている理由は [ADR 0029](../adr/0029-probe-record-transport-via-issue-comment.md) — **agent セッションからは artifact をダウンロードできない** (取得先の `*.blob.core.windows.net` が egress ポリシーで拒否される / [#160](https://github.com/yomote/mind-inbox/issues/160))。採点が読む「正」はコメント側で、artifact は人間が掘るための一次情報。
 
 リポジトリへの commit 蓄積は不採用 (monitor に `contents: write` を渡す必要 + 毎朝のノイズ commit を避けた)。
 
@@ -36,7 +36,7 @@
    gh run watch "$(gh run list -w golden-path-monitor.yml -L 1 --json databaseId -q '.[0].databaseId')"
    ```
 
-2. 記録 JSON を取得する。**経路は 2 つあり、どちらも同じ判断部品を通る** (ADR 0028):
+2. 記録 JSON を取得する。**経路は 2 つあり、どちらも同じ判断部品を通る** (ADR 0029):
 
    **agent (毎朝の Routine — 既定):** 記録 Issue [#162](https://github.com/yomote/mind-inbox/issues/162) の
    最新コメントを GitHub MCP (`issue_read` method=`get_comments`) で読み、本文をファイルに保存してから:
@@ -137,7 +137,7 @@ agent セッションでは満たせない。2026-08-09 に実測した内容:
 
   ホスト名の `productionresultssaNN` は可変なので、狭い許可では足りない
 
-そこで **記録は Issue コメントで運ぶ** ([ADR 0028](../adr/0028-probe-record-transport-via-issue-comment.md) / [#160](https://github.com/yomote/mind-inbox/issues/160))。agent 経路のまとめ:
+そこで **記録は Issue コメントで運ぶ** ([ADR 0029](../adr/0029-probe-record-transport-via-issue-comment.md) / [#160](https://github.com/yomote/mind-inbox/issues/160))。agent 経路のまとめ:
 
 - **記録の取得** (Step 2): `issue_read` (method=`get_comments`) で記録 Issue
   [#162](https://github.com/yomote/mind-inbox/issues/162) の最新コメントを読み、本文を保存してから
