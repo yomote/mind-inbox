@@ -13,7 +13,8 @@
 ## Prerequisites
 
 - リポジトリ Variables に `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` ([`azure-oidc-cd-setup.md`](azure-oidc-cd-setup.md))。**未設定なら赤くせず skip する**
-- CD 用 identity が対象 RG を Resource Graph で読めること (Reader 相当)
+- CD 用 identity が対象 RG を Resource Graph で読めること (Reader 相当) — 2026-08-09 の初回実行で充足を実測済み
+- **PR の自動作成には** Settings → Actions → General → Workflow permissions → **「Allow GitHub Actions to create and approve pull requests」** が必要。off でもブランチ push までは動き、比較 URL を警告で出して正常終了する (下記)
 
 ## Steps
 
@@ -40,13 +41,14 @@ cicd/scripts/viz-structure/viz-structure.sh --subs "<sub>" --rgs "rg-dev-mind-in
 
 ## Common Issues
 
-| 症状                                   | 原因 / 対処                                                                                                                              |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| skip される (warning)                  | OIDC の 3 変数が未登録。[`azure-oidc-cd-setup.md`](azure-oidc-cd-setup.md)                                                               |
-| `AADSTS700213` で Azure login が落ちる | ブランチ ref から dispatch した。federated credential は main 用なので、**main の workflow として実行する**                              |
-| `az graph` が権限エラー                | CD identity に対象 RG の読み取り権限が無い。Reader 以上を付与する                                                                        |
-| 図にアイコンが出ない                   | 公式アイコンの取得に失敗 (`continue-on-error`)。図自体は出るので実害なし。恒久的に出ないなら `download-azure-icons.sh` の ZIP URL を確認 |
-| 毎週 PR が開くが中身が同じに見える     | `generatedAt` 等のタイムスタンプ差分。うるさければ cron を伸ばす                                                                         |
+| 症状                                   | 原因 / 対処                                                                                                                                                                                                                                                                                |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| skip される (warning)                  | OIDC の 3 変数が未登録。[`azure-oidc-cd-setup.md`](azure-oidc-cd-setup.md)                                                                                                                                                                                                                 |
+| PR が開かず「push 済み」の警告で終わる | `GitHub Actions is not permitted to create or approve pull requests`。Settings → Actions → General → Workflow permissions で「Allow GitHub Actions to create and approve pull requests」を有効化する。**有効化するまでは警告の比較 URL から手動で PR を開く** (差分はブランチに残っている) |
+| `AADSTS700213` で Azure login が落ちる | ブランチ ref から dispatch した。federated credential は main 用なので、**main の workflow として実行する**                                                                                                                                                                                |
+| `az graph` が権限エラー                | CD identity に対象 RG の読み取り権限が無い。Reader 以上を付与する                                                                                                                                                                                                                          |
+| 図にアイコンが出ない                   | 公式アイコンの取得に失敗 (`continue-on-error`)。図自体は出るので実害なし。恒久的に出ないなら `download-azure-icons.sh` の ZIP URL を確認                                                                                                                                                   |
+| 毎週 PR が開くが中身が同じに見える     | `generatedAt` 等のタイムスタンプ差分。うるさければ cron を伸ばす                                                                                                                                                                                                                           |
 
 ## Related
 

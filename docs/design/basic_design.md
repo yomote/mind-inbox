@@ -64,10 +64,19 @@ BFF ↔ AI Agent のスキーマ対称性は L0 契約テスト (`apps/bff/scrip
 
 ## 永続化
 
-**現在は in-memory** (`apps/services/ai-agent/app/repositories.py` の `InMemory*Repository`)。
-Repository の Protocol は切ってあるので差し替え可能。耐久ストアの選定は v2 M2 の索引設計と一緒に判断する ([`implementation_plan_v2.md`](./implementation_plan_v2.md) §6)。
+**現在は in-memory** (`apps/bff/src/repositories/*.ts` と `apps/services/ai-agent/app/repositories.py` の `InMemory*`)。Repository の interface / Protocol は切ってあるので差し替え可能。
 
-**プロセスが落ちるとセッションと承認待ちは消える。** これは既知の制約であり、仕様ではない。
+**プロセスが落ちると困りごと・履歴・セッション・承認待ちがすべて消える。** これは既知の制約であり、仕様ではない (要件 FR-4 未達)。Functions は Y1 (Consumption) なのでアイドルで確実にリサイクルされる。
+
+耐久ストアの方式は **[ADR 0030](../adr/0030-persistence-on-cosmos-db-single-store-behind-bff.md) で決定済み** (#165):
+
+| 対象 | 行き先 |
+| --- | --- |
+| 困りごと (Problem / Mention) / 相談履歴 | **Cosmos DB (NoSQL, Japan East)**。マネージド ID + RBAC のみ、アカウントキーは無効化 |
+| 会話セッション / 承認レコード | **in-memory 据え置き** — ai-agent は bicep 外で MI を安定して付けられず、機微データへの扉も増えるため繋がない |
+| 将来の embedding 索引 (#83) | **同じ Cosmos アカウント**でベクトル検索まで完結させる (v2 計画 §6 の宿題への回答) |
+
+> ⚠️ Azure Cache for Redis は候補から外れた — 2026-04-01 から新規顧客の作成がブロックされ、2028-09-30 に廃止。短命データの失効は Cosmos のネイティブ TTL で賄う。
 
 ## 音声
 

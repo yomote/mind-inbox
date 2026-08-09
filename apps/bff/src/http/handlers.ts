@@ -59,7 +59,10 @@ export async function handleChatStream(
   request: Request,
   logger: HandlerLogger = consoleLogger,
 ): Promise<Response> {
-  const parsed = ChatStreamRequestSchema.safeParse(await readJson(request));
+  const body = await readJson(request);
+  if (!body.ok) return INVALID_JSON();
+
+  const parsed = ChatStreamRequestSchema.safeParse(body.value);
   if (!parsed.success) {
     return new Response(`Invalid request: ${parsed.error.message}`, { status: 400 });
   }
@@ -89,7 +92,10 @@ export async function handleTts(
   request: Request,
   logger: HandlerLogger = consoleLogger,
 ): Promise<Response> {
-  const parsed = TtsRequestSchema.safeParse(await readJson(request));
+  const body = await readJson(request);
+  if (!body.ok) return INVALID_JSON();
+
+  const parsed = TtsRequestSchema.safeParse(body.value);
   if (!parsed.success) {
     return new Response(`Invalid request: ${parsed.error.message}`, { status: 400 });
   }
@@ -130,11 +136,20 @@ export async function handleWarmup(logger: HandlerLogger = consoleLogger): Promi
   return Response.json(result, { status: 200 });
 }
 
-/** 本文が空 / 壊れた JSON でも投げない (呼び出し側の zod が 400 を出す)。 */
-async function readJson(request: Request): Promise<unknown> {
+/**
+ * 本文の JSON パース。**パース失敗とスキーマ違反を区別する**。
+ *
+ * 両方を zod の汎用エラーに潰すと「body が壊れている」と「フィールドが足りない」が
+ * 同じメッセージになり、切り分けの手掛かりが消える。
+ */
+type JsonBody = { ok: true; value: unknown } | { ok: false };
+
+async function readJson(request: Request): Promise<JsonBody> {
   try {
-    return await request.json();
+    return { ok: true, value: await request.json() };
   } catch {
-    return undefined;
+    return { ok: false };
   }
 }
+
+const INVALID_JSON = () => new Response("Invalid JSON body", { status: 400 });

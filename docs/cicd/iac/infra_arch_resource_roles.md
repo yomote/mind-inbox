@@ -1,36 +1,17 @@
 # Resource Roles
 
-> **生成物** — `viz-structure.sh` が実環境 (Azure Resource Graph) から出力する。**手書きで直さない**。
-> 毎週月曜 05:00 JST に [`refresh-infra-diagram`](../../../.github/workflows/refresh-infra-diagram.yml) が再生成し、差分があれば PR を開く (手動実行は Actions から dispatch)。
->
-> **⚠️ 下の表は初回の自動再生成が走るまで古い。** 現行の真実は `cicd/iac/` の Bicep:
->
-> - **ACR (`crdevmindbox`) は廃止済み** — image は ghcr ([ADR 0013](../../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md))
-> - **SQL 一式 (`sql-*` / `sqldb-*` / `kv-*-sql2` / `pe-sql-*` / `privatelink.database.windows.net`) は既定で作られない** — `enableSql=true` の時のみ (既定 false)
-> - **Azure Speech (STT) が載っていない** — 取得後に追加された ([ADR 0023](../../adr/0023-server-stt-azure-speech-f0.md))
-
-| Name                                                        | Type                                                  | RG                | Role                                          | Note                                                                                                       |
-| ----------------------------------------------------------- | ----------------------------------------------------- | ----------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| ca-dev-mindbox-ai-agent                                     | microsoft.app/containerapps                           | rg-dev-mind-inbox | AI Agent service                              | FastAPI + Semantic Kernel; orchestrates Azure OpenAI calls and human-in-the-loop tool approval             |
-| ca-dev-mindbox-voicevox                                     | microsoft.app/containerapps                           | rg-dev-mind-inbox | VOICEVOX TTS engine                           | Speech synthesis runtime (open-source VOICEVOX engine)                                                     |
-| ca-dev-mindbox-vv-wrap                                      | microsoft.app/containerapps                           | rg-dev-mind-inbox | VOICEVOX wrapper API                          | FastAPI; bridges BFF and the VOICEVOX engine, handles audio post-processing                                |
-| cae-dev-mindbox-ai                                          | microsoft.app/managedenvironments                     | rg-dev-mind-inbox | Container app env (AI Agent)                  | Hosts AI Agent Container App                                                                               |
-| cae-dev-mindbox-voicevox                                    | microsoft.app/managedenvironments                     | rg-dev-mind-inbox | Container app env (VOICEVOX engine)           | Hosts VOICEVOX engine Container App                                                                        |
-| cae-dev-mindbox-vv-wrap                                     | microsoft.app/managedenvironments                     | rg-dev-mind-inbox | Container app env (VOICEVOX wrap)             | Hosts VOICEVOX wrapper Container App                                                                       |
-| oai-dev-mindbox                                             | microsoft.cognitiveservices/accounts                  | rg-dev-mind-inbox | Azure OpenAI account                          | GPT-4o for AI Agent inference                                                                              |
-| crdevmindbox                                                | microsoft.containerregistry/registries                | rg-dev-mind-inbox | Container image registry                      | Stores AI Agent / VOICEVOX wrapper images for Container Apps                                               |
-| kv-dev-mindbox-sql2                                         | microsoft.keyvault/vaults                             | rg-dev-mind-inbox | Secrets management (SQL creds)                | Stores SQL admin password and other deployment secrets                                                     |
-| pe-sql-dev-mindbox.nic.b6722dba-fbf0-4f3c-9b1c-ee9a1b7ab323 | microsoft.network/networkinterfaces                   | rg-dev-mind-inbox | Private endpoint NIC (SQL)                    | Auto-created NIC for SQL private endpoint                                                                  |
-| privatelink.database.windows.net                            | microsoft.network/privatednszones                     | rg-dev-mind-inbox | Private DNS zone (SQL)                        | Resolves SQL private endpoint FQDN inside the VNet                                                         |
-| vnet-dev-mindbox-link                                       | microsoft.network/privatednszones/virtualnetworklinks | rg-dev-mind-inbox | DNS-to-VNet link                              | Binds private DNS zone to VNet                                                                             |
-| pe-sql-dev-mindbox                                          | microsoft.network/privateendpoints                    | rg-dev-mind-inbox | Private endpoint to SQL                       | Network-isolated SQL access from within VNet                                                               |
-| vnet-dev-mindbox                                            | microsoft.network/virtualnetworks                     | rg-dev-mind-inbox | Network boundary                              | Private address space and subnet isolation                                                                 |
-| law-dev-mindbox-ops                                         | microsoft.operationalinsights/workspaces              | rg-dev-mind-inbox | Central Log Analytics workspace               | Aggregates logs/metrics from BFF, Container Apps, and platform                                             |
-| ds-entra-swa-hcrfx6c6jf43i                                  | microsoft.resources/deploymentscripts                 | rg-dev-mind-inbox | Bicep deployment script (transient)           | Generated by IaC for one-shot tasks (e.g., Entra ID auth setup); safe to ignore in arch view               |
-| sql-dev-mindbox                                             | microsoft.sql/servers                                 | rg-dev-mind-inbox | Relational DB server (provisioned, not wired) | SQL infra is fully set up (server + DB + private endpoint + DNS) but no application code references it yet |
-| master                                                      | microsoft.sql/servers/databases                       | rg-dev-mind-inbox | (SQL system DB)                               | Default master DB; not used by the application                                                             |
-| sqldb-dev-mindbox                                           | microsoft.sql/servers/databases                       | rg-dev-mind-inbox | Application database (provisioned, not wired) | Provisioned for future session/artifact persistence; BFF and AI Agent currently do not reference it        |
-| stdevmindboxfunc                                            | microsoft.storage/storageaccounts                     | rg-dev-mind-inbox | Function runtime storage                      | Required by Azure Functions for state/queues/triggers                                                      |
-| asp-dev-mindbox-func                                        | microsoft.web/serverfarms                             | rg-dev-mind-inbox | Function App Service plan                     | Compute capacity for the BFF Function App                                                                  |
-| func-dev-mindbox                                            | microsoft.web/sites                                   | rg-dev-mind-inbox | BFF (Azure Functions + tRPC)                  | Single tRPC entrypoint; orchestrates AI Agent / VOICEVOX wrapper, NOT a chat passthrough                   |
-| swa-dev-mindbox                                             | microsoft.web/staticsites                             | rg-dev-mind-inbox | Frontend SPA (React + Vite + MUI)             | SWA Standard SKU; linked-backend proxies /api/\* to BFF, built-in Entra auth                               |
+| Name | Type | RG | Role | Note |
+|---|---|---|---|---|
+| ca-dev-mindbox-ai-agent | microsoft.app/containerapps | rg-dev-mind-inbox | AI Agent service | FastAPI + Semantic Kernel; orchestrates Azure OpenAI calls and human-in-the-loop tool approval |
+| ca-dev-mindbox-voicevox | microsoft.app/containerapps | rg-dev-mind-inbox | VOICEVOX TTS engine | Speech synthesis runtime (open-source VOICEVOX engine) |
+| ca-dev-mindbox-vv-wrap | microsoft.app/containerapps | rg-dev-mind-inbox | VOICEVOX wrapper API | FastAPI; bridges BFF and the VOICEVOX engine, handles audio post-processing |
+| cae-dev-mindbox | microsoft.app/managedenvironments | rg-dev-mind-inbox | Container app environment | Shared runtime/network for Container Apps |
+| oai-dev-mindbox | microsoft.cognitiveservices/accounts | rg-dev-mind-inbox | Azure OpenAI account | GPT-4o for AI Agent inference |
+| spch-dev-mindbox | microsoft.cognitiveservices/accounts | rg-dev-mind-inbox | LLM endpoint | Azure OpenAI account for model inference |
+| probe-golden-path2 | microsoft.containerinstance/containergroups | rg-dev-mind-inbox | General Azure resource | Role not yet classified |
+| vnet-dev-mindbox | microsoft.network/virtualnetworks | rg-dev-mind-inbox | Network boundary | Private address space and subnet isolation |
+| law-dev-mindbox-ops | microsoft.operationalinsights/workspaces | rg-dev-mind-inbox | Central Log Analytics workspace | Aggregates logs/metrics from BFF, Container Apps, and platform |
+| stdevmindboxfunc | microsoft.storage/storageaccounts | rg-dev-mind-inbox | Function runtime storage | Required by Azure Functions for state/queues/triggers |
+| asp-dev-mindbox-func | microsoft.web/serverfarms | rg-dev-mind-inbox | Function App Service plan | Compute capacity for the BFF Function App |
+| func-dev-mindbox | microsoft.web/sites | rg-dev-mind-inbox | BFF (Azure Functions + tRPC) | Single tRPC entrypoint; orchestrates AI Agent / VOICEVOX wrapper, NOT a chat passthrough |
+| swa-dev-mindbox | microsoft.web/staticsites | rg-dev-mind-inbox | Frontend SPA (React + Vite + MUI) | SWA Standard SKU; linked-backend proxies /api/* to BFF, built-in Entra auth |
