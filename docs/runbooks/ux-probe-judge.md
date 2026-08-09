@@ -8,7 +8,7 @@
 
 ## Prerequisites
 
-- `gh` CLI (repo read + issues write)
+- `gh` CLI (repo read + issues write) — **無い環境では GitHub MCP で代替する** (下記「gh が無い環境でのフォールバック」)
 - 採点は Claude セッションから subagent `ux-reviewer` を起動できること
 - 背景理解: [ADR 0022](../adr/0022-autonomous-ux-improvement-loop.md) / rubric は `.github/claude/ux-rubric.md` (**真実**)
 
@@ -80,38 +80,39 @@
 
    (集計が育ったら M3 で可視化を整える — 現状は目視で足りる件数)
 
-### Routine の登録 (人間の 1 クリック宿題)
+### Routine (登録済み)
 
-Routine の登録は Web UI 操作が必要で **agent からは実行できない** — claude-code-remote MCP
-サーバー全体が承認ゲートの内側にあり、`create_trigger` / `create_session` はもちろん
-読み取り専用の `list_environments` すら `-32003 requires approval` で弾かれる
-(2026-08-08 に実測)。#90 / #92 / #156 が滞留しているのはすべてこの 1 つの原因による。
-登録の宿題は [#156](https://github.com/yomote/mind-inbox/issues/156)。
+- 名前: `ux-judge — 毎朝の UX 採点 (ADR 0027 D1)` / ID `trig_01B2tk2Z8kRrsnHAwSgRJQcX`
+- スケジュール: 毎朝 08:00 JST — cron (UTC) `0 23 * * *` (golden-path-monitor の 07:00 JST 実行が終わってから)
+- セッション種別: 毎回新規セッション (fresh session per fire)
+- プロンプトの中身は Routine 側が正典 (`update_trigger` で編集する)。実行する手順は上の Steps 2〜4 と同じ
 
-登録する Routine のプロンプト (そのまま貼れる形):
+2026-08-09 に登録した ([#156](https://github.com/yomote/mind-inbox/issues/156))。
+以前 **「claude-code-remote MCP サーバー全体が承認ゲートの内側にあり agent からは登録できない」**
+と記録していたが、これはセッション横断の恒久的な制約ではなく**セッションごとの権限差**だった
+— MCP が許可されたセッションからは `list_triggers` / `create_trigger` / `update_trigger` が
+そのまま通る。#90 / #92 も同じ理由で滞留していたので、同様に解ける見込み。
 
-> Mind Inbox (yomote/mind-inbox) の UX 採点セッションです。`docs/runbooks/ux-probe-judge.md`
-> の Steps 2〜4 を実行してください。
->
-> 1. `cicd/scripts/ux-probe/fetch-latest-probe.sh` で直近の記録 JSON を取得する。
->    終了コード 3 (artifact 無し) / 4 (turns 0 件) の場合は、その旨だけを報告して終了する
->    (採点する材料がないので Issue には何も投稿しない)。
-> 2. subagent `ux-reviewer` を**新品コンテキスト**で起動し、そのパスを採点させる。
->    レポートを `/tmp/ux-judge-report.md` に保存する。
-> 3. `cicd/scripts/ux-probe/post-judge-score.sh /tmp/ux-judge-report.md` で検証・投稿する。
->    検証に落ちたら投稿せず、失敗理由を Issue #127 にではなく**あなたの応答として**残す。
->
-> rubric (`.github/claude/ux-rubric.md`) は読むだけで、**改定しないこと** (PO の専権)。
-> プロダクトコードは一切変更しないこと。
+### gh が無い環境でのフォールバック
 
-スケジュール: 毎朝 08:00 JST (golden-path-monitor の 07:00 JST 実行が終わってから)。
-cron (UTC) では `0 23 * * *`。
+Claude Code on the web の実行環境には **`gh` CLI が無く**、`GITHUB_TOKEN` での
+`api.github.com` 直叩きも 403 になる (2026-08-09 実測)。上の 2 本のスクリプトはどちらも
+冒頭で `command -v gh` を見て終了コード 1 で落ちるため、その環境では GitHub MCP で代替する
+(Routine のプロンプトにも同じ手順が入っている):
+
+- **記録 JSON の取得** (Step 2 の代替):
+  1. `actions_list` (method=`list_workflow_runs`, resource_id=`golden-path-monitor.yml`, per_page=1) → 最新 run ID
+  2. `actions_list` (method=`list_workflow_run_artifacts`, resource_id=`<run id>`) → `ux-probe-<run id>` の artifact ID。無ければ終了コード 3 と同じ扱い (無投稿で終了)
+  3. `actions_get` (method=`download_workflow_run_artifact`, resource_id=`<artifact id>`) の URL を curl + unzip
+- **検証と投稿** (Step 4 の代替): `python3 cicd/scripts/ux-probe/validate-judge-score.py <レポート>`
+  を直接回し、**終了コード 0 のときだけ** `add_issue_comment` で #127 へ投稿する。
+  検証は gh に依存しないので、**「検証に落ちたら投稿しない」という不変条件はフォールバック側でも保たれる** — ここを飛ばさないこと
 
 ## Verification
 
 - [ ] golden-path-monitor の run に artifact `ux-probe-<run_id>` があり、JSON の `turns` が 4 件ある
 - [ ] レイテンシ閾値超過があれば run の Annotations に warning が出ている
-- [ ] **人手を介さず** Issue #127 に採点コメントが増えている (verdict + JSON ブロック) — Routine 登録後の翌朝に確認する
+- [ ] **人手を介さず** Issue #127 に採点コメントが増えている (verdict + JSON ブロック) — Routine 初回発火は 2026-08-10 08:00 JST。**未検証**なので翌朝に確認する
 - [ ] 上の Steps 5 の jq が、増えたコメントを 1 行として抽出できる (蓄積が機械可読なままか)
 
 ## Rollback
