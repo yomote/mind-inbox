@@ -18,6 +18,7 @@ on:
 permissions:
   id-token: write # OIDC トークン取得に必須
   contents: read
+  issues: write # プローブ記録を蓄積 Issue #162 へ投稿する (ADR 0028)
 
 env:
   RG: rg-dev-mind-inbox
@@ -121,10 +122,13 @@ jobs:
           print(f"summary written for {files[-1]}")
           EOF
 
-      # 記録 JSON の保存先は workflow artifact (リポジトリへの commit は monitor に
-      # contents:write を与える必要があり不採用 — 判断は PR #123 M0 を参照)。
-      # artifact の保持期限 (90 日) を超える時系列は UX judge の採点サマリを
-      # スコアボード Issue に残すことで担保する (runbook: ux-probe-judge.md)
+      # 記録 JSON は artifact と Issue コメントの両方に残す (ADR 0028 / #160)。
+      # artifact = 障害調査用の一次情報 (人間が gh で取る)。
+      # Issue コメント = 毎朝の採点 Routine の入力 (agent が MCP で読む)。
+      # agent セッションからは artifact をダウンロードできない (ダウンロード先の
+      # *.blob.core.windows.net が egress ポリシーで拒否される) ため、artifact だけでは
+      # 採点ループが起動しない。リポジトリへの commit は monitor に contents:write を
+      # 与える必要があり引き続き不採用 (判断は PR #123 M0 を参照)。
       - name: UX プローブ記録を artifact として保存
         if: always() && steps.guard.outputs.run == 'true'
         uses: actions/upload-artifact@v4
@@ -133,6 +137,34 @@ jobs:
           path: apps/frontend/probe-results/
           if-no-files-found: ignore
           retention-days: 90
+
+      # 投稿に失敗しても monitor 自体は赤くしない (この workflow の役目はゴールデンパスの
+      # 死活であって記録の運搬ではない)。代わりに warning annotation を残し、翌朝の採点
+      # Routine が「材料なし」を報告することで二重に気づけるようにする。
+      - name: UX プローブ記録を蓄積 Issue へ投稿 (採点 Routine の入力)
+        if: always() && steps.guard.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROBE_RECORD_ISSUE: "162"
+        run: |
+          PROBE_JSON="$(ls -1 apps/frontend/probe-results/*.json 2>/dev/null | sort | tail -1 || true)"
+          if [ -z "$PROBE_JSON" ]; then
+            echo "::notice::UX プローブ記録なし — 蓄積 Issue への投稿をスキップ"
+            exit 0
+          fi
+
+          # 終了コードは必ずコマンド単体の直後に取る (PR #157 レビュー指摘と同じ理由)
+          set +e
+          python3 cicd/scripts/ux-probe/probe-record-comment.py format "$PROBE_JSON" > /tmp/probe-comment.md
+          rc=$?
+          set -e
+
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::プローブ記録をコメント化できませんでした (exit $rc) — artifact から調査してください"
+            exit 0
+          fi
+
+          gh issue comment "$PROBE_RECORD_ISSUE" -R "$GITHUB_REPOSITORY" -F /tmp/probe-comment.md
 
       # 落ちたときの一次情報 (trace / screenshot)。緑のときは不要
       - name: E2E レポートを artifact として保存 (失敗時のみ)

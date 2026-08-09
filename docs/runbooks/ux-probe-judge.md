@@ -14,11 +14,14 @@
 
 ## データの流れ (どこに何が残るか)
 
-| データ                                                    | 置き場                                                                                                          | 保持       |
-| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ---------- |
-| 会話全文 + 区間レイテンシ (JSON, `ux-probe-conversation`) | golden-path-monitor の artifact `ux-probe-<run_id>`                                                             | 90 日      |
-| レイテンシ閾値超過 (#120)                                 | 同 run の warning annotation + step summary                                                                     | run と同じ |
-| judge 採点 (`ux-judge-score`)                             | **スコアボード Issue [#127](https://github.com/yomote/mind-inbox/issues/127) のコメント** (1 採点 = 1 コメント) | 永続       |
+| データ                                        | 置き場                                                                                                                    | 保持       |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| 会話全文 + 区間レイテンシ (`ux-probe-record`) | **記録 Issue [#162](https://github.com/yomote/mind-inbox/issues/162) のコメント** (1 run = 1 コメント) — **採点が読む先** | 永続       |
+| 同上 (障害調査用の一次情報)                   | golden-path-monitor の artifact `ux-probe-<run_id>` — 人間が `gh` で取る                                                  | 90 日      |
+| レイテンシ閾値超過 (#120)                     | 同 run の warning annotation + step summary                                                                               | run と同じ |
+| judge 採点 (`ux-judge-score`)                 | **スコアボード Issue [#127](https://github.com/yomote/mind-inbox/issues/127) のコメント** (1 採点 = 1 コメント)           | 永続       |
+
+記録を artifact と Issue コメントの両方に置いている理由は [ADR 0028](../adr/0028-probe-record-transport-via-issue-comment.md) — **agent セッションからは artifact をダウンロードできない** (取得先の `*.blob.core.windows.net` が egress ポリシーで拒否される / [#160](https://github.com/yomote/mind-inbox/issues/160))。採点が読む「正」はコメント側で、artifact は人間が掘るための一次情報。
 
 リポジトリへの commit 蓄積は不採用 (monitor に `contents: write` を渡す必要 + 毎朝のノイズ commit を避けた)。
 
@@ -33,16 +36,26 @@
    gh run watch "$(gh run list -w golden-path-monitor.yml -L 1 --json databaseId -q '.[0].databaseId')"
    ```
 
-2. 記録 JSON を取得する:
+2. 記録 JSON を取得する。**経路は 2 つあり、どちらも同じ判断部品を通る** (ADR 0028):
+
+   **agent (毎朝の Routine — 既定):** 記録 Issue [#162](https://github.com/yomote/mind-inbox/issues/162) の
+   最新コメントを GitHub MCP (`issue_read` method=`get_comments`) で読み、本文をファイルに保存してから:
+
+   ```bash
+   OUT="$(cicd/scripts/ux-probe/probe-record-comment.py extract /tmp/comment.md /tmp/ux-probe)"
+   PROBE_JSON="$(cicd/scripts/ux-probe/inspect-probe-artifact.py "$OUT")"
+   ```
+
+   **人間 (手元 / 個別に採点したいとき):** `gh` があるので artifact から直接取れる:
 
    ```bash
    PROBE_JSON="$(cicd/scripts/ux-probe/fetch-latest-probe.sh)"
-   echo "$PROBE_JSON"
    ```
 
-   標準出力は**パスだけ**。診断は stderr に出る (混ぜると呼び出し側が壊れる)。
-   終了コード: `3` = artifact 無し (プローブ手前で fail / 全体スキップ) / `4` = turns 0 件。
-   どちらも「採点する材料がない」ので、その朝は採点をスキップして終わる (Common Issues 参照)。
+   どちらも標準出力は**パスだけ**。診断は stderr に出る (混ぜると呼び出し側が壊れる)。
+   終了コード: `3` = 記録が無い (プローブ手前で fail / 全体スキップ) / `4` = turns 0 件 /
+   `1` = 記録が壊れている。`3` と `4` は「採点する材料がない」ので、その朝は採点をスキップして
+   終わる (Common Issues 参照)。`extract` は `2` = コメントに記録ブロックが無い。
 
 3. UX judge で採点する — **新品コンテキストの subagent** として起動する
    (実装セッション内で直接採点しない — 前提の混入を防ぐのが独立 judge の価値, ADR 0019/0022):
@@ -112,23 +125,32 @@ agent セッションでは満たせない。2026-08-09 に実測した内容:
   **インストールでは解けない** (`github.com` への素の HTTPS も 403 — ただし git の
   fetch/push は別経路の credential helper を通るので普通に動く)
 
-- したがって `fetch-latest-probe.sh` / `post-judge-score.sh` は、**どちらも意図した実行環境
-  (無人 Routine) では冒頭の `command -v gh` で終了コード 1 になり、そのままでは機能しない**
+- したがって `fetch-latest-probe.sh` / `post-judge-score.sh` は、**どちらも冒頭の
+  `command -v gh` で終了コード 1 になる**。この 2 本は**人間の手元専用**と考えること
+- **artifact のダウンロードも塞がっている。** GitHub MCP の `download_workflow_run_artifact`
+  は署名付き URL を返すが、取得先が egress ポリシーで拒否される:
 
-恒久対策は未決 ([#160](https://github.com/yomote/mind-inbox/issues/160))。それまでは
-GitHub MCP で代替する (Routine のプロンプトにも同じ手順が入っている):
+  ```text
+  curl: (56) CONNECT tunnel failed, response 403
+  # プロキシの記録: connect_rejected / productionresultssa16.blob.core.windows.net:443
+  ```
 
-- **記録 JSON の取得** (Step 2 の代替):
-  1. `actions_list` (method=`list_workflow_runs`, resource_id=`golden-path-monitor.yml`, per_page=1) → 最新 run ID
-  2. `actions_list` (method=`list_workflow_run_artifacts`, resource_id=`<run id>`) → `ux-probe-<run id>` の artifact ID。無ければ終了コード 3 と同じ扱い (無投稿で終了)
-  3. `actions_get` (method=`download_workflow_run_artifact`, resource_id=`<artifact id>`) の URL を curl + unzip
-- **検証と投稿** (Step 4 の代替): `python3 cicd/scripts/ux-probe/validate-judge-score.py <レポート>`
+  ホスト名の `productionresultssaNN` は可変なので、狭い許可では足りない
+
+そこで **記録は Issue コメントで運ぶ** ([ADR 0028](../adr/0028-probe-record-transport-via-issue-comment.md) / [#160](https://github.com/yomote/mind-inbox/issues/160))。agent 経路のまとめ:
+
+- **記録の取得** (Step 2): `issue_read` (method=`get_comments`) で記録 Issue
+  [#162](https://github.com/yomote/mind-inbox/issues/162) の最新コメントを読み、本文を保存してから
+  `probe-record-comment.py extract` → `inspect-probe-artifact.py`。
+  `actions_*` で artifact を取りに行かないこと (上記のとおり必ず落ちる)
+- **検証と投稿** (Step 4): `python3 cicd/scripts/ux-probe/validate-judge-score.py <レポート>`
   を直接回し、**終了コード 0 のときだけ** `add_issue_comment` で #127 へ投稿する。
-  検証は gh に依存しないので、**「検証に落ちたら投稿しない」という不変条件はフォールバック側でも保たれる** — ここを飛ばさないこと
+  検証は gh に依存しないので、**「検証に落ちたら投稿しない」という不変条件は agent 経路でも保たれる** — ここを飛ばさないこと
 
 ## Verification
 
 - [ ] golden-path-monitor の run に artifact `ux-probe-<run_id>` があり、JSON の `turns` が 4 件ある
+- [ ] **人手を介さず** 記録 Issue #162 に `ux-probe-record` のコメントが 1 件増えている — 投稿ステップの初回は次の monitor 実行 (07:00 JST)。**未検証**
 - [ ] レイテンシ閾値超過があれば run の Annotations に warning が出ている
 - [ ] **人手を介さず** Issue #127 に採点コメントが増えている (verdict + JSON ブロック) — Routine 初回発火は 2026-08-10 08:00 JST。**未検証**なので翌朝に確認する
 - [ ] 上の Steps 5 の jq が、増えたコメントを 1 行として抽出できる (蓄積が機械可読なままか)
