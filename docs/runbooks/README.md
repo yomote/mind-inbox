@@ -16,6 +16,7 @@
 | [`ghcr-images.md`](ghcr-images.md)                             | コンテナ image をビルド / タグ差し替えでデプロイ / ロールバックする       |
 | [`entra-spa-auth-and-budget.md`](entra-spa-auth-and-budget.md) | 常設 dev の認可 (Entra SPA + Functions EasyAuth) と予算アラートを設定する |
 | [`container-apps-auth-gate.md`](container-apps-auth-gate.md)   | Container Apps を組み込み認証 + Managed Identity で閉じる                 |
+| [`cosmos-persistence.md`](cosmos-persistence.md)               | 永続化 (Cosmos DB) を確認・切り戻す / ユーザーのデータを全部消す          |
 | [`cd-watchdog.md`](cd-watchdog.md)                             | CD の赤を無人診断・修正する Routine を止める / 変える                     |
 | [`refresh-infra-diagram.md`](refresh-infra-diagram.md)         | 構成図を実環境から再生成する / 週次ワークフローを止める・頻度を変える     |
 | [`claude-pr-review.md`](claude-pr-review.md)                   | PR 自動レビュー (LLM-as-a-judge) を動かす / 観点を変える / 止める         |
