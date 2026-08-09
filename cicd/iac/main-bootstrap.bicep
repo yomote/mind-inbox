@@ -114,8 +114,9 @@ param enableAiAgentAca bool = false
 param enableVoicevoxWrapperAca bool = false
 
 // -------------------- Cosmos DB (ADR 0030 / #165) --------------------
-@description('Provision Cosmos DB (NoSQL) — Problem / 履歴の永続化ストア (ADR 0030)。既定 true。')
-param enableCosmos bool = true
+// 既定 false は他の enable* と揃えたもの。dev 環境は main-bootstrap.parameters.json で有効化する。
+@description('Provision Cosmos DB (NoSQL) — Problem / 履歴の永続化ストア (ADR 0030)。既定 false / dev は parameters.json で true。')
+param enableCosmos bool = false
 
 @description('Cosmos DB の保管リージョン。ADR 0030 D6 で Japan East 固定 (NFR-1「保管リージョンの明確化」)。')
 param cosmosLocation string = 'japaneast'

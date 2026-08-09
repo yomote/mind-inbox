@@ -31,10 +31,18 @@ function toDomain(doc: unknown): Problem {
 }
 
 export class CosmosProblemRepository implements ProblemRepository {
-  constructor(
-    private readonly container: Container,
-    private readonly userId: string,
-  ) {}
+  // NOTE: パラメータプロパティ (`constructor(private readonly x: T)`) は使わない。
+  // フロントの `trpc/client.ts` が BFF のソースを type-only import しているため、
+  // このファイルは `erasableSyntaxOnly: true` のフロント側 `tsc -b` でも型検査される。
+  // パラメータプロパティは型を消すだけでは JS にならないので TS1294 で落ちる
+  // (BFF 単体の tsc は通るのにフロントのビルドだけ赤くなる、という見つけにくい形)。
+  private readonly container: Container;
+  private readonly userId: string;
+
+  constructor(container: Container, userId: string) {
+    this.container = container;
+    this.userId = userId;
+  }
 
   async list(filter?: ProblemFilter): Promise<Problem[]> {
     // 並び順は SQL 側で明示する (挿入順に依存しない)。

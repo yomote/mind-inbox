@@ -15,10 +15,15 @@ import type { HistoryRepository } from "./historyRepository";
 type HistoryDocument = HistoryItem & { userId: string };
 
 export class CosmosHistoryRepository implements HistoryRepository {
-  constructor(
-    private readonly container: Container,
-    private readonly userId: string,
-  ) {}
+  // パラメータプロパティを使わない理由は cosmosProblemRepository.ts の同じ位置を参照
+  // (フロントの erasableSyntaxOnly で TS1294 になる)。
+  private readonly container: Container;
+  private readonly userId: string;
+
+  constructor(container: Container, userId: string) {
+    this.container = container;
+    this.userId = userId;
+  }
 
   async list(): Promise<HistoryItem[]> {
     const { resources } = await this.container.items

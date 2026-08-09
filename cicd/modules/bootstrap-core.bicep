@@ -236,8 +236,10 @@ param speechSkuName string = 'F0'
 
 // -------------------- Cosmos DB params (ADR 0030 / #165) --------------------
 // FR-4「再起動・再ログインで消えない」の実体。BFF (Functions) だけが触る単一ストア。
+// 既定 false は他の enable* (enableSql / enableVoicevoxAca / enableAiAgentAca 等) と揃えたもの。
+// dev 環境は cicd/iac/main-bootstrap.parameters.json で明示的に有効化する。
 @description('Provision Cosmos DB (NoSQL) for Problem / history persistence (ADR 0030 D1)。')
-param enableCosmos bool = true
+param enableCosmos bool = false
 
 @description('Cosmos DB account name (globally unique / 3-44 chars, lowercase)。')
 param cosmosAccountName string = toLower('cosmos-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}')
