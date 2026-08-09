@@ -22,6 +22,11 @@
  *   - `Optional[T]` (anyOf + null) ↔ `z.nullable()` (`type: ["T","null"]`)
  *     … どちらも「T かつ nullable」に潰す
  *   - `const` (単一 Literal) ↔ `enum` … どちらも 1 要素の enum 集合として扱う
+ *   - `allOf` 1 要素ラップ (`{"allOf":[{"$ref":...}], "default":...}`)
+ *     … pydantic が「`$ref` を持つフィールドに default / default_factory が付いた」ときに出す形。
+ *       中身 1 つ + 注釈 (`default` / `title` / `description` など) だけなら中身に解決する。
+ *       このとき **`default` は中身側へ引き継ぐ** (落とすと optional 判定が反転する)。
+ *       実体のある schema が 2 つ以上ある「本物の交差型」は畳まない (スコープ外 = "unknown")
  *
  * 「optional」の定義について:
  *   JSON Schema の `required` は「送り手が省略できるか」しか表さない。pydantic は
@@ -63,14 +68,66 @@ function isObject(value: unknown): value is JsonSchemaNode {
 }
 
 /**
- * `#/$defs/Foo` `#/definitions/Foo/properties/bar` のような同一ドキュメント内 JSON Pointer を解決する。
+ * `allOf` ラッパの兄弟として許す注釈キーワード。
+ * これ以外 (`properties` / `type` / `required` など) が並んでいたら「ただのラッパ」ではないので畳まない。
+ */
+const ANNOTATION_KEYWORDS = new Set([
+  "default",
+  "title",
+  "description",
+  "examples",
+  "deprecated",
+  "readOnly",
+  "writeOnly",
+  "$comment",
+]);
+
+/**
+ * `{"allOf":[{...}], "default":..., "title":...}` を中身 1 枚に畳む (畳めなければ node をそのまま返す)。
+ * pydantic が `$ref` フィールドに default / default_factory を付けたときに出す表層差の吸収。
+ * 兄弟の注釈 (とくに `default`) は中身へ引き継ぐ — 落とすと「default 無し = optional」に転んで
+ * 逆向きの false positive になる。
+ * `allOf` に実体が 2 つ以上ある「本物の交差型」は今回のスコープ外なので畳まない。
+ */
+export function unwrapAllOf(node: JsonSchemaNode): JsonSchemaNode {
+  const allOf = node["allOf"];
+  if (!Array.isArray(allOf) || allOf.length !== 1) return node;
+  const inner = allOf[0];
+  if (!isObject(inner)) return node;
+  const siblings = Object.keys(node).filter((key) => key !== "allOf");
+  if (!siblings.every((key) => ANNOTATION_KEYWORDS.has(key))) return node;
+
+  const merged: JsonSchemaNode = { ...inner };
+  for (const key of siblings) merged[key] = node[key];
+  return merged;
+}
+
+/**
+ * `#/$defs/Foo` `#/definitions/Foo/properties/bar` のような同一ドキュメント内 JSON Pointer と、
+ * `allOf` 1 要素ラップを解決して「実体の schema」まで辿る。
  * 外部参照 (`http://...`) は解決できないのでそのまま返す (型カテゴリ "unknown" に落ちる)。
+ *
+ * 途中で見つけた `default` は戻り値に残す。`$ref` の解決先 (`$defs` の共有定義) は default を
+ * 持たないので、引き継がないとフィールド側に書かれた default が消えてしまう。
  */
 export function resolveRef(node: JsonSchemaNode, root: JsonSchemaNode): JsonSchemaNode {
   let current = node;
+  let hasDefault = "default" in node;
+  let defaultValue = node["default"];
+
   for (let hops = 0; hops < MAX_DEPTH; hops++) {
+    const unwrapped = unwrapAllOf(current);
+    if (unwrapped !== current) {
+      current = unwrapped;
+      if ("default" in current) {
+        hasDefault = true;
+        defaultValue = current["default"];
+      }
+      continue;
+    }
+
     const ref = current["$ref"];
-    if (typeof ref !== "string" || !ref.startsWith("#")) return current;
+    if (typeof ref !== "string" || !ref.startsWith("#")) break;
     const segments = ref
       .slice(1)
       .split("/")
@@ -78,13 +135,22 @@ export function resolveRef(node: JsonSchemaNode, root: JsonSchemaNode): JsonSche
       .map((s) => s.replace(/~1/g, "/").replace(/~0/g, "~"));
     let target: unknown = root;
     for (const segment of segments) {
-      if (!isObject(target)) return current;
+      if (!isObject(target)) return withDefault(current, hasDefault, defaultValue);
       target = target[segment];
     }
-    if (!isObject(target)) return current;
+    if (!isObject(target)) return withDefault(current, hasDefault, defaultValue);
     current = target;
+    if ("default" in current) {
+      hasDefault = true;
+      defaultValue = current["default"];
+    }
   }
-  return current;
+  return withDefault(current, hasDefault, defaultValue);
+}
+
+function withDefault(node: JsonSchemaNode, hasDefault: boolean, value: unknown): JsonSchemaNode {
+  if (!hasDefault || "default" in node) return node;
+  return { ...node, default: value };
 }
 
 /**
@@ -138,6 +204,9 @@ export function categorizeType(node: JsonSchemaNode): string {
   }
   if (isObject(node["properties"])) return "object";
   if (node["enum"] !== undefined || node["const"] !== undefined) return "string";
+  // allOf 1 要素ラップ (中身がインライン schema の場合)。$ref 入りは resolveRef が先に畳んでいる。
+  const unwrapped = unwrapAllOf(node);
+  if (unwrapped !== node) return categorizeType(unwrapped);
   return "unknown";
 }
 

@@ -100,6 +100,56 @@ const pydanticStyle: JsonSchemaNode = {
   required: ["session_id", "new_problem_count"],
 };
 
+/**
+ * pydantic が「`$ref` を持つフィールドに default / default_factory が付いた」ときに出す形。
+ * `$ref` の兄弟にキーワードを置けない世代の pydantic は `allOf` 1 要素で包み、`default` を横に並べる。
+ */
+const pydanticAllOfStyle: JsonSchemaNode = {
+  $defs: {
+    Affect: {
+      title: "Affect",
+      type: "object",
+      properties: {
+        label: { title: "Label", type: "string" },
+        valence: { title: "Valence", type: "string", enum: ["negative", "neutral", "positive"] },
+        intensity: { title: "Intensity", type: "number", minimum: 0, maximum: 1 },
+      },
+      required: ["label", "valence", "intensity"],
+    },
+  },
+  title: "MentionDraft",
+  type: "object",
+  properties: {
+    dumpId: { title: "Dumpid", type: "string" },
+    affect: {
+      allOf: [{ $ref: "#/$defs/Affect" }],
+      default: { label: "flat", valence: "neutral", intensity: 0 },
+    },
+  },
+  required: ["dumpId"],
+};
+
+/** 同じ契約の BFF (zod) 側。`.default()` は required から外れて `default` が付き、中身はインライン */
+const zodDefaultStyle: JsonSchemaNode = {
+  type: "object",
+  properties: {
+    dumpId: { type: "string" },
+    affect: {
+      type: "object",
+      properties: {
+        label: { type: "string" },
+        valence: { type: "string", enum: ["negative", "neutral", "positive"] },
+        intensity: { type: "number", minimum: 0, maximum: 1 },
+      },
+      required: ["label", "valence", "intensity"],
+      additionalProperties: false,
+      default: { label: "flat", valence: "neutral", intensity: 0 },
+    },
+  },
+  required: ["dumpId"],
+  additionalProperties: false,
+};
+
 /** deep clone してから 1 箇所だけ書き換えるヘルパ (壊し方を 1 行で読めるようにする) */
 function mutate(base: JsonSchemaNode, apply: (draft: never) => void): JsonSchemaNode {
   const clone = structuredClone(base);
@@ -170,6 +220,49 @@ describe("[L0] diffSchemas — 表層差は吸収する (false positive を出�
   it("default を持つフィールドは required でなくても optional 扱いしない", () => {
     // pydanticStyle.items は required に無いが default: [] を持つ (= 欠落しない)
     expect(flattenSchema(pydanticStyle)["items"]?.optional).toBe(false);
+  });
+});
+
+describe("[L0] allOf 1 要素ラップ (pydantic の `$ref` + default) を吸収する", () => {
+  // 無いと何が静かに通るか: ラッパを解決できないと、そのフィールドは型カテゴリ "unknown" で
+  // 止まり、$defs の中身 (label / valence / intensity) が丸ごと比較対象から消える。
+  // = Affect の中で本物の drift が起きても契約テストが検出しなくなる。
+  it("ラッパの中身を $defs まで辿って展開する (unknown に落とさない)", () => {
+    const map = flattenSchema(pydanticAllOfStyle);
+    expect(map["affect"]?.type).toBe("object");
+    expect(Object.keys(map).sort()).toEqual([
+      "affect",
+      "affect.intensity",
+      "affect.label",
+      "affect.valence",
+      "dump_id",
+    ]);
+    expect(map["affect.valence"]?.enumValues).toEqual(["negative", "neutral", "positive"]);
+  });
+
+  // 無いと何が静かに通るか: 畳むときに兄弟の `default` を捨てると「required でなく default も無い」
+  // = optional と判定され、default で必ず埋まるフィールドが毎回 required mismatch で赤くなる
+  // (吸収したつもりが逆向きの false positive になる)。
+  it("ラッパの兄弟にある default を中身へ引き継ぐので optional 扱いしない", () => {
+    expect(flattenSchema(pydanticAllOfStyle)["affect"]?.optional).toBe(false);
+  });
+
+  // 無いと何が静かに通るか: 同じ契約を書いた zod (インライン + default) と pydantic (allOf ラップ) が
+  // 表現差だけで赤くなる。恒常的に赤い契約テストは無視され、本物の drift も一緒に素通りする。
+  it("zod のインライン + default 形と突き合わせて差分ゼロになる", () => {
+    expect(diffSchemas(zodDefaultStyle, pydanticAllOfStyle).issues).toEqual([]);
+  });
+
+  // 無いと何が静かに通るか: 畳む条件が緩むと、実体が 2 つある本物の交差型で片方だけを見て
+  // 「一致」と判定してしまう。畳まない (= "unknown" のまま素直に食い違いを出す) 側に倒す。
+  it("実体が 2 つ以上ある allOf (本物の交差型) は畳まない", () => {
+    const intersection = mutate(pydanticAllOfStyle, (d: JsonSchemaNode) => {
+      // @ts-expect-error テスト用に既知の形へ踏み込む
+      d.$defs.Trace = { type: "object", properties: { traceId: { type: "string" } } };
+      // @ts-expect-error テスト用に既知の形へ踏み込む
+      d.properties.affect.allOf.push({ $ref: "#/$defs/Trace" });
+    });
+    expect(flattenSchema(intersection)["affect"]?.type).toBe("unknown");
   });
 });
 
