@@ -13,15 +13,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../api/http", () => ({
   ttsFetch: vi.fn(),
+  ttsPlanFetch: vi.fn(),
 }));
 
-import { ttsFetch } from "../api/http";
+import { ttsFetch, ttsPlanFetch } from "../api/http";
 import { useTextToSpeech } from "./useTextToSpeech";
 import { resetUnlockedAudioForTest } from "./unlockedAudio";
 
 /** speechSynthesis (ブラウザ内蔵読み上げ) は jsdom に無いので最小の偽物を置く。 */
 function stubSpeechSynthesis() {
-  const speak = vi.fn((utterance: { onend?: () => void }) => {
+  const speak = vi.fn((utterance: { text: string; onend?: () => void }) => {
     utterance.onend?.();
   });
   vi.stubGlobal("speechSynthesis", { speak, cancel: vi.fn(), getVoices: () => [] });
@@ -54,6 +55,10 @@ const wavResponse = () =>
 
 const stubResponse = () => ({ status: 204, ok: true }) as unknown as Response;
 
+/** `/api/tts plan=true` の戻り (#185)。BFF が割った読み上げ単位の文を返す。 */
+const planResponse = (sentences: string[]) =>
+  ({ status: 200, ok: true, json: async () => ({ sentences }) }) as unknown as Response;
+
 let playSpy: ReturnType<typeof vi.spyOn>;
 let revokeSpy: ReturnType<typeof vi.fn<(url: string) => void>>;
 
@@ -61,7 +66,16 @@ beforeEach(() => {
   vi.clearAllMocks();
   // 解錠済み要素はモジュールに残るので、テスト間で持ち越さない
   resetUnlockedAudioForTest();
-  playSpy = vi.spyOn(window.HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+  // 逐次再生 (#185) は 1 文の再生完了を待って次へ進むので、jsdom でも「鳴り終わった」
+  // ことにしないとキューが進まない。再生成功 = 直後に ended、として扱う。
+  playSpy = vi
+    .spyOn(window.HTMLMediaElement.prototype, "play")
+    .mockImplementation(function (this: HTMLMediaElement) {
+      queueMicrotask(() => this.onended?.(new Event("ended")));
+      return Promise.resolve();
+    });
+  // 既定は「BFF が 1 文として割った」= 従来と同じ全文 1 本の合成。
+  vi.mocked(ttsPlanFetch).mockImplementation(async (text: string) => planResponse([text]));
   revokeSpy = vi.fn<(url: string) => void>();
   URL.createObjectURL = vi.fn(() => "blob:audio");
   URL.revokeObjectURL = revokeSpy;
@@ -313,5 +327,95 @@ describe("[L1] useTextToSpeech — 劣化の可視化と再生解錠 (#150)", ()
     });
 
     expect(playSpy.mock.calls.length).toBeGreaterThan(callsBefore);
+  });
+});
+
+describe("[L1] useTextToSpeech — 逐次再生と待ち時間の可視化 (#185)", () => {
+  it("BFF が割った文を順に合成し、1 文目から再生する", async () => {
+    // 無いと: 全文を 1 本に結合してから返す旧経路に静かに戻り、最初の音が出るまで
+    //         「最後の 1 文の合成完了」を待つ状態に退行する (PO 報告の約 10 秒)。
+    //         音は鳴るのでテストもユーザーも「動いている」としか見えない。
+    stubSpeechSynthesis();
+    vi.mocked(ttsPlanFetch).mockResolvedValue(planResponse(["一文目です。", "二文目です。"]));
+    vi.mocked(ttsFetch).mockResolvedValue(wavResponse());
+
+    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    await act(async () => {
+      await result.current.speak("一文目です。二文目です。");
+    });
+
+    // 全文一括ではなく文ごとに合成しているか (= 1 文目を待つだけで鳴らし始められるか)
+    expect(vi.mocked(ttsFetch).mock.calls.map(([text]) => text)).toEqual([
+      "一文目です。",
+      "二文目です。",
+    ]);
+    expect(playSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("合成中と再生中を別の状態として出し、終わったら idle に戻る", async () => {
+    // 無いと: 合成にかかる数秒〜十数秒のあいだ画面が何も変わらず、「待てば鳴るのか
+    //         もう終わったのか」が判別できない状態に戻る (#185 の報告そのもの)。
+    stubSpeechSynthesis();
+    let releaseSynthesis: (() => void) | null = null;
+    vi.mocked(ttsFetch).mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        releaseSynthesis = resolve;
+      });
+      return wavResponse();
+    });
+
+    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    let speaking: Promise<void> | null = null;
+    await act(async () => {
+      speaking = result.current.speak("読み上げます");
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(result.current.status).toBe("synthesizing"));
+    expect(result.current.speaking).toBe(true);
+
+    await act(async () => {
+      releaseSynthesis?.();
+      await speaking;
+    });
+
+    expect(result.current.status).toBe("idle");
+    expect(result.current.speaking).toBe(false);
+  });
+
+  it("VOICEVOX 未構成 (plan が 204) は合成を試さずブラウザ読み上げに落ちる", async () => {
+    // 無いと: 未結線の環境で「鳴らない合成」を毎回叩きにいき、その往復ぶん無言で待たされる
+    const speak = stubSpeechSynthesis();
+    vi.mocked(ttsPlanFetch).mockResolvedValue(stubResponse());
+
+    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    await act(async () => {
+      await result.current.speak("こんにちは");
+    });
+
+    expect(ttsFetch).not.toHaveBeenCalled();
+    expect(speak).toHaveBeenCalledTimes(1);
+    expect(result.current.error).toContain("ブラウザの読み上げ");
+  });
+
+  it("途中の文の合成に失敗したら、残りをブラウザ読み上げで継ぐ", async () => {
+    // 無いと: 2 文目以降が落ちたときに**そこで無言になる**。ずんだもんが黙ったのか
+    //         話し終わったのかユーザーには区別がつかない (無音失敗 / ADR 0018)。
+    const speak = stubSpeechSynthesis();
+    vi.mocked(ttsPlanFetch).mockResolvedValue(planResponse(["一文目です。", "二文目です。"]));
+    vi.mocked(ttsFetch)
+      .mockResolvedValueOnce(wavResponse())
+      .mockResolvedValue({ status: 502, ok: false } as unknown as Response);
+
+    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    await act(async () => {
+      await result.current.speak("一文目です。二文目です。");
+    });
+
+    expect(playSpy).toHaveBeenCalledTimes(1);
+    expect(speak).toHaveBeenCalledTimes(1);
+    // 読み上げ直したのは失敗した 2 文目以降だけ
+    expect(vi.mocked(speak).mock.calls[0][0].text).toBe("二文目です。");
+    expect(result.current.error).toContain("合成できませんでした");
   });
 });

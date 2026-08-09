@@ -13,8 +13,50 @@
  */
 
 import * as React from "react";
-import { ttsFetch } from "../api/http";
+import { ttsFetch, ttsPlanFetch } from "../api/http";
 import { acquireAudioElement, unlockAudioElement } from "./unlockedAudio";
+
+/** 1 文ぶんの再生がどう決着したか (#185 の逐次再生キューが次の一手を決めるのに使う)。 */
+type PlaybackOutcome = "ended" | "blocked" | "error" | "stopped";
+
+/**
+ * 同時に投げる合成リクエストの上限 (PR #190 レビュー指摘)。
+ *
+ * 長い応答をそのまま並行に出すと文の数だけ同時接続が開き、BFF の process 内キャッシュが
+ * ミスしたときに VOICEVOX へ一斉に流れ込む。再生は順番待ちなので、先頭数文が焼けていれば
+ * 音は途切れない — 先頭を最速で出す目的は上限を設けても損なわれない。
+ */
+const SYNTH_CONCURRENCY = 3;
+
+/**
+ * 順序を保ったまま並行数を制限して map する。**結果の Promise 配列を即座に返す**ので、
+ * 呼び出し側は先頭から順に await して、焼けた文から再生できる。
+ */
+function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R>[] {
+  const settlers: Array<{ resolve: (r: R) => void; reject: (e: unknown) => void }> = [];
+  const results = items.map(
+    (_, i) =>
+      new Promise<R>((resolve, reject) => {
+        settlers[i] = { resolve, reject };
+      }),
+  );
+
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      try {
+        settlers[i].resolve(await fn(items[i]));
+      } catch (err) {
+        settlers[i].reject(err);
+      }
+    }
+  };
+  for (let w = 0; w < Math.min(limit, items.length); w += 1) void worker();
+
+  return results;
+}
 
 /** VOICEVOX 未設定時に BFF が返す 204 を「合成できなかった」として扱うための番兵。 */
 const TTS_STUB = "TTS_STUB";
@@ -42,9 +84,20 @@ export type TextToSpeechOptions = {
  */
 export type VoiceOutputMode = "idle" | "voicevox" | "browser-fallback";
 
+/**
+ * 読み上げの進行状態 (#185)。
+ *
+ * **合成中と再生中を分けるのが要点**。以前は両方 `speaking` 一本で、合成にかかる数秒〜
+ * 十数秒のあいだ画面が何も変わらず、「待てば鳴るのか、もう終わったのか」が判別できなかった
+ * (PO 報告 2026-08-09)。無音失敗の禁止 (ADR 0018) は「待たせていること」にも効く。
+ */
+export type TtsStatus = "idle" | "synthesizing" | "playing";
+
 export type TextToSpeech = {
-  /** 再生中か (VOICEVOX 再生 / ブラウザ読み上げの両方)。 */
+  /** 合成中か再生中 (= 何か進行中)。個別の区別は `status`。 */
   speaking: boolean;
+  /** 合成中 / 再生中 / 停止中。UI はこれを出して待ち時間を可視化する。 */
+  status: TtsStatus;
   /** 読み上げが有効か。false の間は speak / speakOnce が何もしない。 */
   enabled: boolean;
   error: string | null;
@@ -65,7 +118,8 @@ export type TextToSpeech = {
 };
 
 export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): TextToSpeech {
-  const [speaking, setSpeaking] = React.useState(false);
+  const [status, setStatus] = React.useState<TtsStatus>("idle");
+  const speaking = status !== "idle";
   const [enabled, setEnabled] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [outputMode, setOutputMode] = React.useState<VoiceOutputMode>("idle");
@@ -81,8 +135,14 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
   React.useEffect(() => {
     enabledRef.current = enabled;
   }, [enabled]);
+  // 逐次再生の世代番号 (#185)。stop / 次の speak でインクリメントし、進行中のキュー
+  // (合成待ちの文が残っている) を「もう自分の番ではない」と判定させて打ち切る。
+  const playbackGenRef = React.useRef(0);
+  // 再生中の 1 文を stop() 側から決着させるためのハンドル (playBlob が差し込む)。
+  const activePlaybackSettleRef = React.useRef<((outcome: PlaybackOutcome) => void) | null>(null);
 
   const stop = React.useCallback(() => {
+    playbackGenRef.current += 1;
     if (activeAudioRef.current) {
       activeAudioRef.current.pause();
       activeAudioRef.current.currentTime = 0;
@@ -98,7 +158,11 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
       window.speechSynthesis.cancel();
     }
 
-    setSpeaking(false);
+    // 音を止めたあとにキューを決着させる (先に決着させると onended 相当の後片付けで
+    // activeAudioRef が null になり、上の pause に届かず鳴りっぱなしになる)。
+    activePlaybackSettleRef.current?.("stopped");
+
+    setStatus("idle");
   }, []);
 
   const synthesizeWithVoicevox = React.useCallback(
@@ -131,7 +195,7 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
    */
   const speakWithBrowser = React.useCallback((text: string, degradedReason?: string) => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      setSpeaking(false);
+      setStatus("idle");
       setOutputMode("idle");
       setError(degradedReason ?? "このブラウザは音声読み上げに対応していません。");
       return;
@@ -149,9 +213,9 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
       .find((v) => v.lang?.toLowerCase().startsWith("ja"));
     if (jaVoice) utterance.voice = jaVoice;
     utterance.rate = 1;
-    setSpeaking(true);
-    utterance.onend = () => setSpeaking(false);
-    utterance.onerror = () => setSpeaking(false);
+    setStatus("playing");
+    utterance.onend = () => setStatus("idle");
+    utterance.onerror = () => setStatus("idle");
     window.speechSynthesis.speak(utterance);
   }, []);
 
@@ -174,12 +238,81 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
     }
   }, []);
 
+  /** 合成 1 文ぶん。フロント側キャッシュ (同じ文の読み直しで往復しない) を通す。 */
+  const synthesizeCached = React.useCallback(
+    async (text: string): Promise<Blob> => {
+      const cacheKey = `${speaker}:${text}`;
+      const cache = voiceCacheRef.current;
+      const cached = cache.get(cacheKey);
+      if (cached) return cached;
+
+      const blob = await synthesizeWithVoicevox(text);
+      cache.set(cacheKey, blob);
+      if (cache.size > VOICE_CACHE_MAX) {
+        const oldest = cache.keys().next().value;
+        if (oldest) cache.delete(oldest);
+      }
+      return blob;
+    },
+    [speaker, synthesizeWithVoicevox],
+  );
+
+  /**
+   * WAV を 1 本鳴らし、鳴り終わる (or 中断される) まで待つ。
+   *
+   * ジェスチャ内で解錠した要素を使い回す。都度 new Audio すると解錠が引き継がれず、
+   * 合成待ちを挟むぶん自動再生ポリシーに弾かれやすい (#150)。
+   */
+  const playBlob = React.useCallback((blob: Blob): Promise<PlaybackOutcome> => {
+    return new Promise<PlaybackOutcome>((resolve) => {
+      const objectUrl = URL.createObjectURL(blob);
+      activeAudioUrlRef.current = objectUrl;
+
+      const audio = acquireAudioElement(objectUrl);
+      activeAudioRef.current = audio;
+
+      // stop() からも決着させられるようにしておく。無いと停止時にキューが
+      // await したまま解決せず、次の読み上げまでハンドラが残り続ける。
+      let settled = false;
+      const settle = (outcome: PlaybackOutcome) => {
+        if (settled) return;
+        settled = true;
+        audio.onended = null;
+        audio.onerror = null;
+        if (activePlaybackSettleRef.current === settle) {
+          activePlaybackSettleRef.current = null;
+        }
+        if (activeAudioUrlRef.current === objectUrl) {
+          URL.revokeObjectURL(objectUrl);
+          activeAudioUrlRef.current = null;
+        }
+        if (activeAudioRef.current === audio) activeAudioRef.current = null;
+        resolve(outcome);
+      };
+      activePlaybackSettleRef.current = settle;
+
+      audio.onended = () => settle("ended");
+      audio.onerror = () => settle("error");
+
+      void audio.play().then(
+        () => setOutputMode("voicevox"),
+        () => {
+          // ブラウザに自動再生を止められた。無言のままブラウザ読み上げに置き換えると
+          // 「ずんだもんが黙った」ようにしか見えない (#150 の実事象)。
+          settle("blocked");
+        },
+      );
+    });
+  }, []);
+
   const speak = React.useCallback(
     async (text: string) => {
       if (!enabledRef.current || !text.trim()) return;
 
       setError(null);
       stop();
+      const gen = (playbackGenRef.current += 1);
+      const isStale = () => playbackGenRef.current !== gen;
 
       // standalone (mock デモ) は BFF/VOICEVOX が無いので、ネットワークを叩かず
       // ブラウザ内蔵 TTS で直接読み上げる (/api/tts の 404 待ちで詰まらせない)。
@@ -188,64 +321,74 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
         return;
       }
 
-      setSpeaking(true);
+      setStatus("synthesizing");
 
-      // ① 合成 (VOICEVOX)。「音が届いていない」であり、再生の失敗とは別物として扱う。
-      let audioBlob: Blob;
+      // ① 読み上げ単位の文を BFF に割ってもらう (#185)。分割の真実は BFF 側 (ADR 0024)
+      //    なので、ここでは返ってきた文字列をそのまま投げ返すだけで自前では切らない。
+      //    取れなくても致命ではない — 従来どおり全文 1 本で合成する。
+      let sentences: string[] = [text];
       try {
-        const cacheKey = `${speaker}:${text}`;
-        const cache = voiceCacheRef.current;
-        const cached = cache.get(cacheKey);
-        audioBlob = cached ?? (await synthesizeWithVoicevox(text));
-
-        if (!cached) {
-          cache.set(cacheKey, audioBlob);
-          if (cache.size > VOICE_CACHE_MAX) {
-            const oldest = cache.keys().next().value;
-            if (oldest) cache.delete(oldest);
+        const res = await ttsPlanFetch(text, speaker);
+        if (res.status === 204) {
+          // VOICEVOX 未構成。合成しても無駄なのでここでフォールバックする。
+          speakWithBrowser(text, MSG_SYNTH_STUB);
+          return;
+        }
+        if (res.ok) {
+          const body = (await res.json()) as { sentences?: unknown };
+          if (Array.isArray(body.sentences)) {
+            const usable = body.sentences.filter(
+              (s): s is string => typeof s === "string" && s.trim().length > 0,
+            );
+            if (usable.length > 0) sentences = usable;
           }
         }
       } catch (err) {
-        const stub = err instanceof Error && err.message === TTS_STUB;
-        speakWithBrowser(text, stub ? MSG_SYNTH_STUB : MSG_SYNTH_FAILED);
-        return;
+        console.warn("[tts] 文分割を取得できませんでした — 全文一括で合成します", err);
       }
+      if (isStale()) return;
 
-      // ② 再生。ジェスチャ内で解錠した要素を使い回す。都度 new Audio すると解錠が
-      // 引き継がれず、合成待ち (数秒) を挟むぶん自動再生ポリシーに弾かれやすい。
-      // 厳しさはブラウザ差があり desktop Chromium では再現しないが、解錠の穴自体は
-      // 実在するため塞ぐ (#150 の原因は未確定 — 確定は再発時の表示を待つ)。
-      const objectUrl = URL.createObjectURL(audioBlob);
-      activeAudioUrlRef.current = objectUrl;
+      // ② 全文をまとめて合成に出し、**1 文目が焼けた時点で鳴らし始める**。
+      //    以前は全文を結合してから返る 1 リクエストだったので、最初の音が出るまで
+      //    「最後の 1 文の合成完了」を待っていた (PO 報告の約 10 秒 / #185)。
+      const pending = mapWithLimit(sentences, SYNTH_CONCURRENCY, synthesizeCached);
+      // 打ち切られたキューが unhandled rejection にならないようにする。
+      pending.forEach((p) => void p.catch(() => {}));
 
-      const audio = acquireAudioElement(objectUrl);
-      activeAudioRef.current = audio;
-      audio.onended = () => {
-        setSpeaking(false);
-        if (activeAudioUrlRef.current) {
-          URL.revokeObjectURL(activeAudioUrlRef.current);
-          activeAudioUrlRef.current = null;
+      for (let i = 0; i < pending.length; i += 1) {
+        let audioBlob: Blob;
+        try {
+          audioBlob = await pending[i];
+        } catch (err) {
+          if (isStale()) return;
+          const stub = err instanceof Error && err.message === TTS_STUB;
+          // 途中まで鳴らしていたら残りをブラウザ読み上げで継ぐ。無言で切らない。
+          speakWithBrowser(sentences.slice(i).join(""), stub ? MSG_SYNTH_STUB : MSG_SYNTH_FAILED);
+          return;
         }
-        activeAudioRef.current = null;
-      };
-      audio.onerror = () => {
-        setSpeaking(false);
-        setOutputMode("idle");
-        setError("音声の再生に失敗しました。");
-      };
+        if (isStale()) return;
 
-      try {
-        await audio.play();
-        setOutputMode("voicevox");
-      } catch {
-        // ブラウザに自動再生を止められた。ここで無言のままブラウザ読み上げに
-        // 置き換えると「ずんだもんが黙った」ようにしか見えない (#150 の実事象)。
-        // 次のタップで解錠をやり直せるよう、解錠済みフラグを戻す。
-        audioUnlockedRef.current = false;
-        speakWithBrowser(text, MSG_PLAYBACK_BLOCKED);
+        setStatus("playing");
+        const outcome = await playBlob(audioBlob);
+        if (isStale() || outcome === "stopped") return;
+
+        if (outcome === "blocked") {
+          // 次のタップで解錠をやり直せるよう、解錠済みフラグを戻す。
+          audioUnlockedRef.current = false;
+          speakWithBrowser(sentences.slice(i).join(""), MSG_PLAYBACK_BLOCKED);
+          return;
+        }
+        if (outcome === "error") {
+          setStatus("idle");
+          setOutputMode("idle");
+          setError("音声の再生に失敗しました。");
+          return;
+        }
       }
+
+      setStatus("idle");
     },
-    [speakWithBrowser, standalone, stop, synthesizeWithVoicevox, speaker],
+    [playBlob, speakWithBrowser, standalone, stop, synthesizeCached, speaker],
   );
 
   const speakOnce = React.useCallback(
@@ -282,6 +425,7 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
 
   return {
     speaking,
+    status,
     enabled,
     error,
     outputMode,

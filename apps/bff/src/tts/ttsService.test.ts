@@ -10,11 +10,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../clients/voicevoxClient", () => ({
   synthesize: vi.fn(),
+  isConfigured: vi.fn(() => true),
 }));
 
-import { synthesize } from "../clients/voicevoxClient";
+import { isConfigured, synthesize } from "../clients/voicevoxClient";
 import { parseWav } from "../audio/wav";
-import { prefetchTts, resetTtsCache, synthesizeTts } from "./ttsService";
+import { planTts, prefetchTts, resetTtsCache, synthesizeTts } from "./ttsService";
 
 /** テスト用の固定 fmt を持つ 16bit PCM WAV。data に marker を埋めて識別する。 */
 function makeWav(marker: number): ArrayBuffer {
@@ -133,5 +134,34 @@ describe("[L2] synthesizeTts", () => {
     await synthesizeTts({ text: "短い一文です。", speakerId: 3 });
     expect(synthesize).toHaveBeenCalledTimes(1);
     expect(vi.mocked(synthesize).mock.calls[0][0].text).toBe("短い一文です。");
+  });
+});
+
+describe("[L2] planTts (#185)", () => {
+  it("合成せずに読み上げ単位の文だけを返す", async () => {
+    // 無いと: フロントが「1 文目が焼けた時点で鳴らし始める」ための材料を失い、
+    //         全文を結合してから返す旧経路 (= 最後の 1 文の合成完了まで無音) に戻る。
+    vi.mocked(synthesize).mockResolvedValue(makeWav(1));
+
+    const plan = planTts({ text: TWO_SENTENCES, speakerId: 3 });
+
+    expect(plan).toEqual({
+      status: "ok",
+      sentences: ["一つ目の文はこれです。", "二つ目の文はこちらです。"],
+    });
+    // 分割を聞かれただけで合成まで走ると、プリフェッチと二重に VOICEVOX を叩く
+    expect(synthesize).not.toHaveBeenCalled();
+  });
+
+  it("結合すると元のテキストに戻る (読み上げが欠けない)", () => {
+    // 無いと: 分割で文字が落ちても「それらしく喋る」ので気づけない
+    const plan = planTts({ text: TWO_SENTENCES });
+    expect(plan.status === "ok" && plan.sentences.join("")).toBe(TWO_SENTENCES);
+  });
+
+  it("VOICEVOX 未構成なら stub を返す (フロントは合成を試さない)", () => {
+    // 無いと: 未結線の環境で鳴らない合成を毎回叩き、その往復ぶん無言で待たされる
+    vi.mocked(isConfigured).mockReturnValueOnce(false);
+    expect(planTts({ text: TWO_SENTENCES })).toEqual({ status: "stub" });
   });
 });

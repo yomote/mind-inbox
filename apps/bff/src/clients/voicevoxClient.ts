@@ -6,6 +6,11 @@ export type SynthesizeRequest = {
   speakerId?: number;
 };
 
+/** VOICEVOX が結線されているか。合成せずに stub 判定だけしたい呼び出し元が使う。 */
+export function isConfigured(): boolean {
+  return Boolean(config.voicevoxBaseUrl);
+}
+
 /**
  * voicevox-wrapper への HTTP クライアント。
  *

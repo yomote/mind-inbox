@@ -11,7 +11,7 @@
  * ヒットしないことがあるが、その場合は合成し直すだけで壊れない (ベストエフォート)。
  */
 
-import { synthesize } from "../clients/voicevoxClient";
+import { isConfigured, synthesize } from "../clients/voicevoxClient";
 import { splitTtsSentences } from "../audio/sentences";
 import { concatWavs } from "../audio/wav";
 
@@ -123,6 +123,29 @@ export async function prefetchTts(req: TtsSynthesisRequest): Promise<TtsPrefetch
     return { status: "stub", sentences: completed.length };
   }
   return { status: "cached", sentences: completed.length };
+}
+
+export type TtsPlan =
+  /** VOICEVOX 未構成。呼び出し元はブラウザ読み上げへ落とす。 */
+  | { status: "stub" }
+  /** 読み上げ単位に割った文の並び。結合すると元テキストに戻る。 */
+  | { status: "ok"; sentences: string[] };
+
+/**
+ * テキストを読み上げ単位の文に割って**返すだけ**で、合成はしない (#185)。
+ *
+ * ねらい (time-to-first-audio): `synthesizeTts` は全文を結合してから返すため、
+ * フロントが最初の音を出せるのは**最後の 1 文が合成し終わってから**だった。
+ * フロントがこの並びを受け取って 1 文ずつ `/api/tts` を叩けば、1 文目が合成でき次第
+ * 再生を始められる (待ち時間が「全文」から「1 文目」に落ちる)。
+ *
+ * **分割の責務は BFF に置いたまま** (ADR 0024)。フロントは返ってきた文字列をそのまま
+ * 投げ返すだけで、自前では切らない — 両側に分割を持つと片方だけ再デプロイした瞬間に
+ * キャッシュキーがズレて先行合成 (prefetchTts) が静かに無効化される。
+ */
+export function planTts(req: TtsSynthesisRequest): TtsPlan {
+  if (!isConfigured()) return { status: "stub" };
+  return { status: "ok", sentences: splitTtsSentences(req.text) };
 }
 
 /**

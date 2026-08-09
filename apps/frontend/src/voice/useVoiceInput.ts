@@ -11,15 +11,32 @@
  */
 
 import * as React from "react";
-import { tryStartAzureRecognition, type RunningRecognition } from "./azureSpeech";
+import {
+  peekAzurePreparation,
+  prepareAzureRecognition,
+  startPreparedAzureRecognition,
+  tryStartAzureRecognition,
+  type RecognitionHandlers,
+  type RunningRecognition,
+} from "./azureSpeech";
 import { TranscriptStitcher } from "./stitcher";
 
 export type VoiceEngineKind = "azure" | "browser";
+
+/**
+ * 音声入力の進行状態 (#186)。
+ *
+ * `preparing` を分けているのは、押してからマイクが開くまでの区間に喋られた内容が
+ * 落ちるため。「押した = もう聞いている」ではないことを画面に出す必要がある。
+ */
+export type VoiceInputPhase = "idle" | "preparing" | "listening";
 
 export type VoiceInput = {
   /** このブラウザ・環境で音声入力が使えるか (false ならボタンを disabled にする)。 */
   supported: boolean;
   listening: boolean;
+  /** 停止中 / マイク準備中 / 聞いている。 */
+  phase: VoiceInputPhase;
   /** 認識中のエンジン (listening 中のみ non-null)。 */
   engine: VoiceEngineKind | null;
   /**
@@ -50,6 +67,8 @@ function speechRecognitionCtor(): SpeechRecognitionConstructor | undefined {
  */
 export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
   const [listening, setListening] = React.useState(false);
+  const [phase, setPhase] = React.useState<VoiceInputPhase>("idle");
+  const [azureReady, setAzureReady] = React.useState(false);
   const [engine, setEngine] = React.useState<VoiceEngineKind | null>(null);
   const [degraded, setDegraded] = React.useState(false);
   const [interimTranscript, setInterimTranscript] = React.useState("");
@@ -71,16 +90,34 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
   const azureRef = React.useRef<RunningRecognition | null>(null);
   const startedAtRef = React.useRef<number | null>(null);
 
+  // 縫い合わせ器は 1 つを hook の寿命ぶん使い回す。**生成は render 外 (mount effect)**
+  // で行う — render 中に ref を触る形にすると、認識イベント用の口 (appendRef) を
+  // コンストラクタに渡すことになり react-hooks/refs に弾かれる。
   const stitcherRef = React.useRef<TranscriptStitcher | null>(null);
-  if (!stitcherRef.current) {
-    stitcherRef.current = new TranscriptStitcher({
+  React.useEffect(() => {
+    stitcherRef.current ??= new TranscriptStitcher({
       onCommit: (text) => appendRef.current(text),
       onInterim: (text) => setInterimTranscript(text),
     });
-  }
-  const stitcher = stitcherRef.current;
+  }, []);
 
-  const supported = Boolean(speechRecognitionCtor()) || !useMock;
+  // 「BFF があるなら使えるはず」ではなく**実際に開始できるエンジンがあるか**で決める。
+  // 旧判定 (`|| !useMock`) は Web Speech 非対応ブラウザでもボタンを有効にしてしまい、
+  // 押して初めて「対応していません」と出る作りだった (#186)。
+  const supported = Boolean(speechRecognitionCtor()) || azureReady;
+
+  // タップより前にトークンと SDK を用意しておく (#186)。これが済んでいると
+  // start() が同期で完結し、iOS Safari でもマイクがジェスチャ内で開く。
+  React.useEffect(() => {
+    if (useMock) return;
+    let active = true;
+    void prepareAzureRecognition().then((p) => {
+      if (active) setAzureReady(p.kind === "ready");
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // 録音状態の可視化: listening 中は経過秒を刻む。
   React.useEffect(() => {
@@ -118,16 +155,18 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
     sessionSeqRef.current += 1;
     stopEngines();
     // ユーザー停止時点の未確定 interim も捨てない (冪等なので onend との重複は無害)。
-    stitcher.flush();
+    stitcherRef.current?.flush();
     setListening(false);
+    setPhase("idle");
     setEngine(null);
-  }, [stitcher, stopEngines]);
+  }, [stopEngines]);
 
   const startBrowserEngine = React.useCallback(() => {
     const ctor = speechRecognitionCtor();
     if (!ctor) {
       shouldListenRef.current = false;
       setListening(false);
+      setPhase("idle");
       setEngine(null);
       setError("このブラウザは音声入力に対応していません。");
       return;
@@ -157,9 +196,9 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
           }
         }
         if (finalText.trim()) {
-          stitcher.handleFinal(finalText);
+          stitcherRef.current?.handleFinal(finalText);
         }
-        stitcher.handleInterim(interimText);
+        stitcherRef.current?.handleInterim(interimText);
       };
 
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
@@ -179,7 +218,7 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
       recognition.onend = () => {
         browserRunningRef.current = false;
         // 再開境界の縫い合わせ: final 化されなかった interim をここで確定させる (#121)。
-        stitcher.flush();
+        stitcherRef.current?.flush();
         // 継続意図があるのに止まった (無音タイムアウト等) → 自動再開。
         // sync 再開は InvalidStateError を起こしやすいので次 tick で。
         if (shouldListenRef.current) {
@@ -194,6 +233,7 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
           return;
         }
         setListening(false);
+        setPhase("idle");
         setEngine(null);
       };
 
@@ -208,7 +248,39 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
       }
     }
     setEngine("browser");
-  }, [stitcher]);
+    setPhase("listening");
+  }, []);
+
+  /** Azure 認識のイベント配線。同期経路 / 非同期経路のどちらからも同じものを使う。 */
+  const azureHandlers = React.useMemo<RecognitionHandlers>(
+    () => ({
+      onFinal: (text) => stitcherRef.current?.handleFinal(text),
+      onInterim: (text) => stitcherRef.current?.handleInterim(text),
+      onFatal: (message) => {
+        // Azure が途中で継続不能になったら (ネットワーク断・無料枠停止 等)、
+        // 発話を失わないよう Web Speech に切り替えて続行を試みる。
+        // これも「予期しない失敗」なので劣化として記録・表示する。
+        console.error(`[voice] Azure Speech の認識が中断されました: ${message}`);
+        if (azureRef.current) {
+          azureRef.current.stop();
+          azureRef.current = null;
+        }
+        stitcherRef.current?.flush();
+        if (shouldListenRef.current && speechRecognitionCtor()) {
+          setDegraded(true);
+          startBrowserEngine();
+        } else if (shouldListenRef.current) {
+          shouldListenRef.current = false;
+          setListening(false);
+          setPhase("idle");
+          setEngine(null);
+          setError(message);
+        }
+      },
+    }),
+    [startBrowserEngine],
+  );
+
 
   const start = React.useCallback(() => {
     if (shouldListenRef.current) return;
@@ -219,6 +291,7 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
     startedAtRef.current = Date.now();
     setElapsedSec(0);
     setListening(true);
+    setPhase("preparing");
 
     // mock デモは BFF が無いのでトークン照会せず Web Speech へ直行。
     if (useMock) {
@@ -226,31 +299,44 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
       return;
     }
 
+    // --- 同期経路 (#186) -----------------------------------------------------
+    // ここから下で await を挟むとユーザージェスチャが切れる。iOS Safari は
+    // ジェスチャ外の getUserMedia / AudioContext を許可済みでも実質無効にするため、
+    // **準備済みのものだけを使って同期でマイクを開く**のがこの分岐の目的。
+
+    const prepared = peekAzurePreparation();
+    if (prepared?.kind === "ready") {
+      try {
+        azureRef.current = startPreparedAzureRecognition(prepared, azureHandlers);
+        setEngine("azure");
+        setPhase("listening");
+        return;
+      } catch (err) {
+        // 準備は済んでいたのに開始できなかった = 予期しない失敗。劣化として見せる。
+        console.error(
+          `[voice] 準備済み Azure Speech の開始に失敗しました: ${(err as Error).message}`,
+        );
+        setDegraded(true);
+      }
+    } else if (prepared?.kind === "failed") {
+      setDegraded(true);
+    }
+
+    // Azure が準備できていない / 使えない → その場でブラウザ認識を同期開始する。
+    // 「待たせて何も起きない」より「今すぐ拾い始める」を優先する。
+    if (speechRecognitionCtor()) {
+      startBrowserEngine();
+      // 次のタップで高精度認識に乗れるよう、裏で準備を進めておく
+      // (この認識セッションの途中でエンジンを差し替えると発話を取りこぼす)。
+      void prepareAzureRecognition().then((p) => setAzureReady(p.kind === "ready"));
+      return;
+    }
+
+    // --- 非同期経路 ----------------------------------------------------------
+    // ブラウザ認識が無く Azure しか道が無い環境。ジェスチャは失うが、
+    // 何も開始しないよりは接続を試みる (デスクトップ系はジェスチャ要件が緩い)。
     void (async () => {
-      const outcome = await tryStartAzureRecognition({
-        onFinal: (text) => stitcher.handleFinal(text),
-        onInterim: (text) => stitcher.handleInterim(text),
-        onFatal: (message) => {
-          // Azure が途中で継続不能になったら (ネットワーク断・無料枠停止 等)、
-          // 発話を失わないよう Web Speech に切り替えて続行を試みる。
-          // これも「予期しない失敗」なので劣化として記録・表示する。
-          console.error(`[voice] Azure Speech の認識が中断されました: ${message}`);
-          if (azureRef.current) {
-            azureRef.current.stop();
-            azureRef.current = null;
-          }
-          stitcher.flush();
-          if (shouldListenRef.current && speechRecognitionCtor()) {
-            setDegraded(true);
-            startBrowserEngine();
-          } else if (shouldListenRef.current) {
-            shouldListenRef.current = false;
-            setListening(false);
-            setEngine(null);
-            setError(message);
-          }
-        },
-      });
+      const outcome = await tryStartAzureRecognition(azureHandlers);
 
       // stop() 済み / 別世代なら破棄。
       if (!shouldListenRef.current || sessionSeqRef.current !== seq) {
@@ -261,6 +347,7 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
       if (outcome.kind === "started") {
         azureRef.current = outcome.recognition;
         setEngine("azure");
+        setPhase("listening");
         return;
       }
 
@@ -270,7 +357,7 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
       if (outcome.kind === "failed") setDegraded(true);
       startBrowserEngine();
     })();
-  }, [startBrowserEngine, stitcher]);
+  }, [azureHandlers, startBrowserEngine]);
 
   const toggle = React.useCallback(() => {
     if (shouldListenRef.current) {
@@ -292,6 +379,7 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
   return {
     supported,
     listening,
+    phase,
     engine,
     degraded,
     interimTranscript,
