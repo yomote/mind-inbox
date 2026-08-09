@@ -105,3 +105,4 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) — 分配は「起票パケットを Issue 本文に残す」形にし、並行の衝突は SessionStart の事前提示と CI で防ぐ
 - [0029](0029-probe-record-transport-via-issue-comment.md) — UX プローブ記録は artifact ではなく Issue コメントで採点セッションへ運ぶ
 - [0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md) — 永続化は Cosmos DB 1 本に寄せ、BFF の内側だけに置く (Redis は廃止予定のため不採用)
+- [0031](0031-agent-reaches-outside-via-github-actions.md) — サンドボックスの外にある事実は GitHub Actions 経由で取る (その場しのぎの回避策を作らない) — **Proposed**
