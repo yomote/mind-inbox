@@ -8,7 +8,7 @@
 | cae-dev-mindbox | microsoft.app/managedenvironments | rg-dev-mind-inbox | Container app environment | Shared runtime/network for Container Apps |
 | oai-dev-mindbox | microsoft.cognitiveservices/accounts | rg-dev-mind-inbox | Azure OpenAI account | GPT-4o for AI Agent inference |
 | spch-dev-mindbox | microsoft.cognitiveservices/accounts | rg-dev-mind-inbox | LLM endpoint | Azure OpenAI account for model inference |
-| probe-golden-path2 | microsoft.containerinstance/containergroups | rg-dev-mind-inbox | General Azure resource | Role not yet classified |
+| cosmos-dev-mindbox | microsoft.documentdb/databaseaccounts | rg-dev-mind-inbox | General Azure resource | Role not yet classified |
 | vnet-dev-mindbox | microsoft.network/virtualnetworks | rg-dev-mind-inbox | Network boundary | Private address space and subnet isolation |
 | law-dev-mindbox-ops | microsoft.operationalinsights/workspaces | rg-dev-mind-inbox | Central Log Analytics workspace | Aggregates logs/metrics from BFF, Container Apps, and platform |
 | stdevmindboxfunc | microsoft.storage/storageaccounts | rg-dev-mind-inbox | Function runtime storage | Required by Azure Functions for state/queues/triggers |
