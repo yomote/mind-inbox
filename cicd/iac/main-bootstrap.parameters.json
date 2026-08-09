@@ -47,6 +47,15 @@
     "containerAppsLocation": {
       "value": "japaneast"
     },
+    "enableCosmos": {
+      "value": true
+    },
+    "cosmosLocation": {
+      "value": "japaneast"
+    },
+    "enableCosmosFreeTier": {
+      "value": true
+    },
     "budgetStartDate": {
       "value": "2026-08-01"
     },

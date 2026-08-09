@@ -64,11 +64,11 @@ BFF ↔ AI Agent のスキーマ対称性は L0 契約テスト (`apps/bff/scrip
 
 ## 永続化
 
-**現在は in-memory** (`apps/bff/src/repositories/*.ts` と `apps/services/ai-agent/app/repositories.py` の `InMemory*`)。Repository の interface / Protocol は切ってあるので差し替え可能。
+困りごと (Problem) と相談履歴は **Cosmos DB (NoSQL)** に載る (#165 / [ADR 0030](../adr/0030-persistence-on-cosmos-db-single-store-behind-bff.md))。BFF は `COSMOS_ENDPOINT` の有無で実装を選び、**未設定ならローカル / テストの既定である in-memory 実装で動く** (`apps/bff/src/repositories/repositoryFactory.ts`) — 外部依存ゼロでローカルを触れる特性は維持する。
 
-**プロセスが落ちると困りごと・履歴・セッション・承認待ちがすべて消える。** これは既知の制約であり、仕様ではない (要件 FR-4 未達)。Functions は Y1 (Consumption) なのでアイドルで確実にリサイクルされる。
+会話セッションと承認レコード (`apps/services/ai-agent/app/repositories.py`) は **in-memory 据え置き**なので、ai-agent が scale-to-zero で落ちれば中断復帰は壊れる。これは ADR 0030 が明示的に受け入れた制約。
 
-耐久ストアの方式は **[ADR 0030](../adr/0030-persistence-on-cosmos-db-single-store-behind-bff.md) で決定済み** (#165):
+行き先の内訳:
 
 | 対象 | 行き先 |
 | --- | --- |
@@ -77,6 +77,8 @@ BFF ↔ AI Agent のスキーマ対称性は L0 契約テスト (`apps/bff/scrip
 | 将来の embedding 索引 (#83) | **同じ Cosmos アカウント**でベクトル検索まで完結させる (v2 計画 §6 の宿題への回答) |
 
 > ⚠️ Azure Cache for Redis は候補から外れた — 2026-04-01 から新規顧客の作成がブロックされ、2028-09-30 に廃止。短命データの失効は Cosmos のネイティブ TTL で賄う。
+
+パーティションキーは `/userId` (EasyAuth の oid、ローカルは `local`)。**単一ユーザー・シングルライター前提**で etag による楽観ロックは持たない — 同一ユーザーの同時書き込みが前提になったら作り直す必要がある。運用手順は [Runbook](../runbooks/cosmos-persistence.md)。
 
 ## 音声
 

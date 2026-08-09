@@ -6,8 +6,9 @@ import type { Problem, ProblemStatus, Theme } from "../trpc/domain";
  * ADR 0007 の集約ルート = Problem。Mention は Problem に内包される（独立集約にしない）ため、
  * Mention 専用リポジトリは設けず Problem 経由でアクセスする。
  *
- * historyRepository と同じ in-memory パターン（interface + InMemory 実装 + module singleton）。
- * TODO(PoC): 本番は Cosmos DB に置き換える。再起動で消える。
+ * historyRepository と同じパターン（interface + InMemory 実装 + module singleton）。
+ * 本番の永続化は `CosmosProblemRepository`（ADR 0030）。実装の選択は
+ * `repositoryFactory.ts` が `COSMOS_ENDPOINT` の有無で行う。
  */
 
 export type ProblemFilter = {
@@ -24,6 +25,10 @@ export interface ProblemRepository {
   remove(id: string): Promise<void>;
 }
 
+/**
+ * ローカル開発とテストの既定 (ADR 0030 D7)。**残す実装であって PoC の残骸ではない。**
+ * プロセスが落ちれば消える — ローカルではそれでよい。
+ */
 export class InMemoryProblemRepository implements ProblemRepository {
   private store = new Map<string, Problem>();
 
