@@ -38,6 +38,21 @@ export async function ttsFetch(text: string, speaker: number): Promise<Response>
 }
 
 /**
+ * 読み上げ単位の文分割だけを BFF に問い合わせる (BFF /api/tts plan=true / #185)。
+ * 音声は返らない。200 = `{ sentences: string[] }` / 204 = VOICEVOX 未構成 (stub)。
+ */
+export async function ttsPlanFetch(text: string, speaker: number): Promise<Response> {
+  return fetch(`${bffBaseUrl()}/api/tts`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await bffAuthHeaders()),
+    },
+    body: JSON.stringify({ text, speaker, plan: true }),
+  });
+}
+
+/**
  * TTS 文単位プリフェッチ (BFF /api/tts prefetch=true / #120)。
  * ストリーミング中に確定した文を BFF 側で先行合成・キャッシュさせる。音声は返らない (202/204)。
  */

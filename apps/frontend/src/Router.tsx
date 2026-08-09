@@ -11,6 +11,7 @@ import type {
   Problem,
   TriageInput,
 } from "./api";
+import type { TtsStatus } from "./voice/useTextToSpeech";
 import { SessionScreen } from "./components/session/SessionScreen";
 import { OnboardingScreen } from "./components/screens/OnboardingScreen";
 import { HomeScreen } from "./components/screens/HomeScreen";
@@ -53,6 +54,7 @@ type AppRouterProps = {
   session: ConsultationSession | null;
   draftMessage: string;
   speaking: boolean;
+  ttsStatus?: TtsStatus;
   ttsEnabled: boolean;
   voiceError: string | null;
   result: OrganizedResult | null;
@@ -122,6 +124,7 @@ export function AppRouter({
   session,
   draftMessage,
   speaking,
+  ttsStatus,
   ttsEnabled,
   voiceError,
   result,
@@ -211,6 +214,7 @@ export function AppRouter({
                 draftMessage={draftMessage}
                 loading={loading}
                 speaking={speaking}
+                ttsStatus={ttsStatus}
                 ttsEnabled={ttsEnabled}
                 voiceError={voiceError}
                 onDraftMessageChange={setDraftMessage}

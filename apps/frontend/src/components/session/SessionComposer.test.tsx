@@ -25,6 +25,7 @@ afterEach(cleanup);
 const voiceState = {
   supported: true,
   listening: false,
+  phase: "idle" as "idle" | "preparing" | "listening",
   engine: null as "azure" | "browser" | null,
   degraded: false,
   interimTranscript: "",
@@ -110,5 +111,65 @@ describe("[L1] SessionComposer", () => {
     renderComposer({ value: "" });
     expect(screen.queryByText("このブラウザは音声入力に対応していません。")).not.toBeNull();
     expect(isDisabled(screen.getByRole("button", { name: /音声入力開始/ }))).toBe(true);
+  });
+});
+
+describe("[L1] SessionComposer — 音声入力の即時性 (#186)", () => {
+  it("マイクを押したら入力欄にフォーカスが移る", async () => {
+    // 無いと: 押した後にユーザーが入力欄をクリックし直さないと手直し・送信できない。
+    //         「押したのに入力欄が反応しない」という PO 報告そのものに戻る。
+    renderComposer({ value: "" });
+
+    await userEvent.click(screen.getByRole("button", { name: /音声入力開始/ }));
+
+    expect(document.activeElement).toBe(screen.getByPlaceholderText("ここに入力 / 話して入力"));
+    expect(voiceState.toggle).toHaveBeenCalledTimes(1);
+  });
+
+  it("認識途中のテキストは入力欄の中に出る", () => {
+    // 無いと: 喋っている最中は入力欄が空のままに見え、「入っていない」と受け取られる
+    //         (旧実装は入力欄の外の小さなキャプションに出していた)。
+    Object.assign(voiceState, {
+      listening: true,
+      phase: "listening",
+      interimTranscript: "さいきん ねむれなくて",
+    });
+    renderComposer({ value: "仕事のことなんだけど" });
+
+    const field = screen.getByPlaceholderText("ここに入力 / 話して入力") as HTMLTextAreaElement;
+    expect(field.value).toBe("仕事のことなんだけど\nさいきん ねむれなくて");
+  });
+
+  it("マイク準備中と、聞いている状態を別々に出す", () => {
+    // 無いと: 押してからマイクが開くまでの区間 (iOS では特に長い) が「聞いている」と
+    //         同じ見た目になり、その間に喋った内容が黙って落ちる。
+    Object.assign(voiceState, { listening: true, phase: "preparing" });
+    renderComposer({ value: "" });
+    expect(screen.queryByText("マイクを準備中…")).not.toBeNull();
+    expect(screen.queryByText(/聞いています/)).toBeNull();
+
+    cleanup();
+    Object.assign(voiceState, { listening: true, phase: "listening", elapsedSec: 65 });
+    renderComposer({ value: "" });
+    expect(screen.queryByText("聞いています 1:05")).not.toBeNull();
+    expect(screen.queryByText("マイクを準備中…")).toBeNull();
+  });
+});
+
+describe("[L1] SessionComposer — 読み上げの待ち時間 (#185)", () => {
+  it("合成中は「準備中」、再生中は「読み上げ中」を出す", () => {
+    // 無いと: 合成にかかる数秒〜十数秒のあいだ画面が何も変わらず、待てば鳴るのか
+    //         もう終わったのかが判別できない状態に戻る。
+    renderComposer({ value: "", speaking: true, ttsStatus: "synthesizing" });
+    expect(screen.getByTestId("tts-status").textContent).toContain("ずんだもんが準備中");
+
+    cleanup();
+    renderComposer({ value: "", speaking: true, ttsStatus: "playing" });
+    expect(screen.getByTestId("tts-status").textContent).toContain("読み上げ中");
+  });
+
+  it("読み上げていないときは状態表示を出さない", () => {
+    renderComposer({ value: "", speaking: false, ttsStatus: "idle" });
+    expect(screen.queryByTestId("tts-status")).toBeNull();
   });
 });

@@ -326,6 +326,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
                 session={consultation.session}
                 draftMessage={consultation.draftMessage}
                 speaking={tts.speaking}
+                ttsStatus={tts.status}
                 ttsEnabled={tts.enabled}
                 voiceError={tts.error}
                 result={consultation.result}

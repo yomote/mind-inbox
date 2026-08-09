@@ -1,6 +1,6 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from "@azure/functions";
 import { z } from "zod";
-import { prefetchTts, synthesizeTts } from "../tts/ttsService";
+import { planTts, prefetchTts, synthesizeTts } from "../tts/ttsService";
 
 /**
  * POST /api/tts — テキスト → audio/wav バイナリ。
@@ -18,6 +18,8 @@ const TtsRequestSchema = z.object({
   text: z.string().min(1),
   speaker: z.number().int().nonnegative().optional(),
   prefetch: z.boolean().optional(),
+  /** #185: 合成せず読み上げ単位の文の並びだけ返す (フロントの逐次再生用)。 */
+  plan: z.boolean().optional(),
 });
 
 async function ttsHandler(req: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
@@ -36,12 +38,21 @@ async function ttsHandler(req: HttpRequest, context: InvocationContext): Promise
     };
   }
 
-  const { text, speaker, prefetch } = parsed.data;
+  const { text, speaker, prefetch, plan } = parsed.data;
   context.log(
-    `[tts] text(len)=${text.length} speaker=${speaker ?? 3} prefetch=${Boolean(prefetch)}`,
+    `[tts] text(len)=${text.length} speaker=${speaker ?? 3} prefetch=${Boolean(prefetch)} plan=${Boolean(plan)}`,
   );
 
   try {
+    if (plan) {
+      // 文分割の真実は BFF が単独で持つ (ADR 0024)。フロントはこの並びをそのまま
+      // 1 文ずつ投げ返して逐次再生する (#185)。
+      const result = planTts({ text, speakerId: speaker });
+      if (result.status === "stub") return { status: 204 };
+      context.log(`[tts] plan sentences=${result.sentences.length}`);
+      return { status: 200, jsonBody: { sentences: result.sentences } };
+    }
+
     if (prefetch) {
       // text は「ストリーミングで今までに届いた途中経過」。どこが文の切れ目かの判断は
       // BFF 側 (prefetchTts) が単独で持つ — フロントに分割ロジックを置かない (ADR 0024)。

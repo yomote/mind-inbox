@@ -90,6 +90,137 @@ export type AzureStartOutcome =
   /** 予期しない失敗: トークン取得エラー・SDK 初期化・マイク取得・接続失敗。 */
   | { kind: "failed"; reason: string };
 
+// ---- 事前準備 (#186) --------------------------------------------------------
+// iOS Safari はマイク (getUserMedia / AudioContext) の open が**ユーザージェスチャの
+// 同期処理の中**で起きないと、許可済みでも音を拾わない。従来はタップ後に
+// 「トークン取得 → SDK の動的 import → マイク取得」と await を重ねていたため、
+// 実際に開く頃にはジェスチャが切れており、押しても無反応に見えていた。
+//
+// 対策: トークンと SDK を**タップより前に**用意しておき、押下時は同期で開始する。
+
+type SpeechSdk = typeof import("microsoft-cognitiveservices-speech-sdk");
+
+export type AzurePreparation =
+  | { kind: "ready"; sdk: SpeechSdk; authToken: string; region: string; expiresAt: number }
+  /** 想定内: BFF が available:false (未プロビジョニング / ローカル)。 */
+  | { kind: "unavailable" }
+  /** 予期しない失敗: トークン取得エラー / SDK ロード失敗。 */
+  | { kind: "failed"; reason: string };
+
+/** Azure の認可トークンは 10 分で失効する。手前で切って取り直す。 */
+const TOKEN_LIFETIME_MS = 8 * 60_000;
+
+let preparation: AzurePreparation | null = null;
+let preparing: Promise<AzurePreparation> | null = null;
+
+function isFresh(p: AzurePreparation | null): boolean {
+  return p !== null && (p.kind !== "ready" || p.expiresAt > Date.now());
+}
+
+/**
+ * トークンと SDK を先に取得しておく。**セッション画面を開いた時点で呼ぶ**ことで、
+ * マイクボタンのタップを同期処理だけで済ませられるようにする。
+ *
+ * 同時呼び出しは 1 本にまとめ、成功した準備は失効まで使い回す。
+ */
+export async function prepareAzureRecognition(): Promise<AzurePreparation> {
+  if (isFresh(preparation)) return preparation as AzurePreparation;
+  if (preparing) return preparing;
+
+  preparing = (async (): Promise<AzurePreparation> => {
+    try {
+      const token = await trpc.speech.issueToken.query();
+      if (!token.available) return { kind: "unavailable" };
+
+      const sdk = await import("microsoft-cognitiveservices-speech-sdk");
+      return {
+        kind: "ready",
+        sdk,
+        authToken: token.authToken,
+        region: token.region,
+        expiresAt: Date.now() + TOKEN_LIFETIME_MS,
+      };
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      // 静かな品質劣化にしない (BFF 側の「握り潰さない」意図をフロントでも保つ)。
+      console.error(`[voice] Azure Speech の事前準備に失敗しました: ${reason}`);
+      return { kind: "failed", reason };
+    }
+  })();
+
+  try {
+    preparation = await preparing;
+    return preparation;
+  } finally {
+    preparing = null;
+  }
+}
+
+/** 準備状態を **await せずに** 見る。タップ時の分岐に使う (await した時点で負け)。 */
+export function peekAzurePreparation(): AzurePreparation | null {
+  return isFresh(preparation) ? preparation : null;
+}
+
+/**
+ * 準備済みのトークン + SDK で連続認識を**同期的に**開始する。
+ *
+ * `startContinuousRecognitionAsync` の完了は待たない — 待つとその時点で
+ * ジェスチャが切れ、iOS でマイクが開かない。開始失敗は onFatal で拾う。
+ *
+ * @throws 準備が無効 / SDK の構築に失敗した場合。
+ */
+export function startPreparedAzureRecognition(
+  prepared: AzurePreparation,
+  handlers: RecognitionHandlers,
+  lang = "ja-JP",
+): RunningRecognition {
+  if (prepared.kind !== "ready") {
+    throw new Error("Azure Speech の準備ができていません");
+  }
+
+  const { sdk } = prepared;
+  const speechConfig = sdk.SpeechConfig.fromAuthorizationToken(
+    prepared.authToken,
+    prepared.region,
+  );
+  speechConfig.speechRecognitionLanguage = lang;
+
+  const audioConfig = sdk.AudioConfig.fromDefaultMicrophoneInput();
+  const recognizer = new sdk.SpeechRecognizer(speechConfig, audioConfig);
+
+  recognizer.recognizing = (_sender, event) => handlers.onInterim(event.result.text ?? "");
+  recognizer.recognized = (_sender, event) => {
+    if (event.result.reason === sdk.ResultReason.RecognizedSpeech) {
+      handlers.onFinal(event.result.text ?? "");
+    }
+  };
+  recognizer.canceled = (_sender, event) => {
+    if (event.reason === sdk.CancellationReason.Error) {
+      handlers.onFatal(event.errorDetails || "音声認識サービスとの接続が中断されました。");
+    }
+  };
+
+  recognizer.startContinuousRecognitionAsync(
+    () => {},
+    (err) => handlers.onFatal(err || "Azure Speech の認識開始に失敗しました"),
+  );
+
+  return {
+    stop: () => {
+      recognizer.stopContinuousRecognitionAsync(
+        () => recognizer.close(),
+        () => recognizer.close(),
+      );
+    },
+  };
+}
+
+/** テスト用: モジュールに残った準備状態を捨てる。 */
+export function resetAzurePreparationForTest(): void {
+  preparation = null;
+  preparing = null;
+}
+
 /**
  * `startAzureRecognition` を outcome 型に包む。
  *
