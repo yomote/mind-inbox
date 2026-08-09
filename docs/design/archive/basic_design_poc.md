@@ -379,7 +379,7 @@ class PlanResponse(BaseModel):
 
 ## 4. データモデル
 
-> **v1 で集約ルートを転換**: 困りごとを Session 中心から **Problem 中心の 2層モデル（Mention → Problem）** に変更する（[ADR 0007](../adr/0007-problem-centric-two-layer-domain-model.md) / [`domain_model.md`](./domain_model.md)）。v1 のドメインモデルの真実は `domain_model.md`。以下の型は **PoC 実装の記録**であり、`OrganizedResult.priorities` 等は v1 で Mention / Problem に置き換わる。
+> **v1 で集約ルートを転換**: 困りごとを Session 中心から **Problem 中心の 2層モデル（Mention → Problem）** に変更する（[ADR 0007](../../adr/0007-problem-centric-two-layer-domain-model.md) / [`domain_model.md`](../domain_model.md)）。v1 のドメインモデルの真実は `domain_model.md`。以下の型は **PoC 実装の記録**であり、`OrganizedResult.priorities` 等は v1 で Mention / Problem に置き換わる。
 
 ```typescript
 type ChatRole = "user" | "assistant";
@@ -654,7 +654,7 @@ uvicorn app.main:app --reload --port 8001
 
 当初の `workflow.py` は "inbox 管理用汎用 AI" 向けのプロンプトだったため、「モヤモヤの言語化を助ける対話 AI」へ改修した (共感優先 / 3 文以内 / 問いかけを 1 つ含める)。
 
-**文面はここに転記しない** — 真実は `apps/services/ai-agent/app/prompts/chat.py`。自律改善ループ (ADR 0022 / [ADR 0027](../adr/0027-ux-improvement-loop-ab-protocol-and-mutation-boundary.md)) がこのファイルを自動で書き換えるため、doc 側にコピーを置くと**改定のたびに静かに陳腐化する**。
+**文面はここに転記しない** — 真実は `apps/services/ai-agent/app/prompts/chat.py`。自律改善ループ (ADR 0022 / [ADR 0027](../../adr/0027-ux-improvement-loop-ab-protocol-and-mutation-boundary.md)) がこのファイルを自動で書き換えるため、doc 側にコピーを置くと**改定のたびに静かに陳腐化する**。
 
 ### 7.3 `organizer.py` 設計方針
 
@@ -853,14 +853,14 @@ Wrapper の URL 管理は BFF に一元化される。
 
 ### 10.1 既知の PoC 制約
 
-| 制約                                                    | 影響                         | TODO                                                                                              |
-| ------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------- |
-| AI Agent セッションが in-memory                         | 再起動でセッションが消える   | `InMemorySessionRepository` → Redis                                                               |
-| 履歴が in-memory                                        | ページリロードで消える       | `history.save` → Cosmos DB                                                                        |
-| RAG がスタブ                                            | 知識ベースを使えない         | Azure AI Search + Embedding                                                                       |
-| ツールがスタブ                                          | 副作用操作が実行されない     | 実ツール実装 + 承認フロー UI                                                                      |
-| セッションタイトルが concern 文字列そのまま             | 長文がタイトルになる         | AI による短縮タイトル生成                                                                         |
-| 困りごとが Session 内に閉じる（`priorities: string[]`） | 継続テーマ・再出現が見えない | Problem 中心 2層モデルへ転換（[ADR 0007](../adr/0007-problem-centric-two-layer-domain-model.md)） |
+| 制約                                                    | 影響                         | TODO                                                                                                 |
+| ------------------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------- |
+| AI Agent セッションが in-memory                         | 再起動でセッションが消える   | `InMemorySessionRepository` → Redis                                                                  |
+| 履歴が in-memory                                        | ページリロードで消える       | `history.save` → Cosmos DB                                                                           |
+| RAG がスタブ                                            | 知識ベースを使えない         | Azure AI Search + Embedding                                                                          |
+| ツールがスタブ                                          | 副作用操作が実行されない     | 実ツール実装 + 承認フロー UI                                                                         |
+| セッションタイトルが concern 文字列そのまま             | 長文がタイトルになる         | AI による短縮タイトル生成                                                                            |
+| 困りごとが Session 内に閉じる（`priorities: string[]`） | 継続テーマ・再出現が見えない | Problem 中心 2層モデルへ転換（[ADR 0007](../../adr/0007-problem-centric-two-layer-domain-model.md)） |
 
 ### 10.2 拡張ロードマップ
 

@@ -1,7 +1,7 @@
 # Mind Inbox — v1 実装方針計画（Problem 中心 2層モデル）
 
-作成: 2026-06-22 / 対象: [ADR 0007](../adr/0007-problem-centric-two-layer-domain-model.md) の 2層モデル（Mention → Problem）を実装に落とすロードマップ
-関連: [`requirements.md`](./requirements.md) / [`use_cases.md`](./use_cases.md) / [`domain_model.md`](./domain_model.md) / PoC: [`implementation_plan.md`](./implementation_plan.md)
+作成: 2026-06-22 / 対象: [ADR 0007](../../adr/0007-problem-centric-two-layer-domain-model.md) の 2層モデル（Mention → Problem）を実装に落とすロードマップ
+関連: [`requirements.md`](../requirements.md) / [`use_cases.md`](../use_cases.md) / [`domain_model.md`](../domain_model.md) / PoC: [`implementation_plan.md`](./README.md)
 
 ---
 
@@ -23,8 +23,8 @@ PoC は **Session 中心**（`OrganizedResult.priorities: string[]` / `HistoryIt
 
 ### 0.2 実装原則（PoC 計画を踏襲）
 
-- **mock 先行で新体験を可視化** — フロントの `mockApi.ts` に Mention/Problem を入れ、新画面を mock で動かしてから BFF を繋ぐ（[ADR 0004](../adr/0004-mockapi-as-frontend-truth.md)）。
-- **UI は MDX が真実** — 新画面は `docs/frontend/ui_specs/*.mdx` を先に書く（[ADR 0005](../adr/0005-mdx-ui-spec-as-truth.md)）。
+- **mock 先行で新体験を可視化** — フロントの `mockApi.ts` に Mention/Problem を入れ、新画面を mock で動かしてから BFF を繋ぐ（[ADR 0004](../../adr/0004-mockapi-as-frontend-truth.md)）。
+- **UI は MDX が真実** — 新画面は `docs/frontend/ui_specs/*.mdx` を先に書く（[ADR 0005](../../adr/0005-mdx-ui-spec-as-truth.md)）。
 - **既存 PoC を壊さない併存移行** — `consultation.*`（吐き出し対話）は残し、その出力を Mention 抽出に接続する。`history.*` は Problem 一覧に置き換わるが段階的に。
 - **stub fallback 維持** — `AI_AGENT_BASE_URL` 未設定でも BFF が動く特性を保ち、各段を単独 smoke test。
 - **グルーピングは v1 簡易 → Phase 2 で embedding** — v1 はルールベース/スタブのグルーピングで **2層構造とトリアージ UX を確立**し、類似精度は Phase 2 に回す。
@@ -33,7 +33,7 @@ PoC は **Session 中心**（`OrganizedResult.priorities: string[]` / `HistoryIt
 
 - 永続化（Cosmos DB / Redis）— Phase 2（v1 は in-memory）
 - embedding 意味類似の本実装 — Phase 2
-- プロアクティブ（定期再グルーピング / ウォッチ / アナウンス）— Phase 4（[`requirements.md §2.2`](./requirements.md)）
+- プロアクティブ（定期再グルーピング / ウォッチ / アナウンス）— Phase 4（[`requirements.md §2.2`](../requirements.md)）
 
 ---
 
@@ -151,7 +151,7 @@ Phase C: 結線・後片付け
 ### 決定済み（外部設計の続きで確定）
 
 - **Dump の境界**（①）— **1 consultation セッション = 1 Dump**。抽出トリガは `organize` の瞬間（セッション終了）。`consultation.organize` を `consultation.extract({sessionId}) → {mentions, affectedProblems}` に置換。入力はセッション全文、Mention はユーザー発話に帰属。**v1 は organize 時にまとめてコミット**（ライブ暫定表示は Phase D の UX 探索に留める）。
-  - **ADR 要否**: `organize → extract` 置換は [ADR 0007](../adr/0007-problem-centric-two-layer-domain-model.md)（集約ルート転換）の**実装詳細であり、新規 ADR は不要**。API は BFF ↔ フロントの内部 tRPC 契約（外部公開 API ではない）で、0007 が定めた「Session を Mention を生むイベントに格下げ」の直接的帰結。
+  - **ADR 要否**: `organize → extract` 置換は [ADR 0007](../../adr/0007-problem-centric-two-layer-domain-model.md)（集約ルート転換）の**実装詳細であり、新規 ADR は不要**。API は BFF ↔ フロントの内部 tRPC 契約（外部公開 API ではない）で、0007 が定めた「Session を Mention を生むイベントに格下げ」の直接的帰結。
   - **設計根拠（補足）**: `consultation.extract` はクライアント提供の `dumpText` を受け取らず、`sessionId` からサーバ側でセッション全文を取得する（セッションは既にサーバ側に保持されており、クライアントが本文を再送する必要がないため）。
 - **新画面の UX**（②）— 画面: 抽出結果レビュー / 困りごと一覧 / 困りごと詳細。
   - 一覧: デフォルト**直近言及順** + 再出現を視覚で常時強調（`🔁N回`バッジ、再燃ハイライト）+「よく出る順」トグル。合成スコアは Phase 2。
