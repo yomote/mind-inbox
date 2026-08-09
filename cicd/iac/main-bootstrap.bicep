@@ -113,7 +113,24 @@ param enableAiAgentAca bool = false
 @description('Enable VOICEVOX Wrapper on Azure Container Apps.')
 param enableVoicevoxWrapperAca bool = false
 
-@description('Provision the Azure SQL stack. Default false: v1 は in-memory のみで SQL 未使用 (ADR 0013)。永続化 (Phase 2: Redis + Cosmos) が要るとき true。')
+// -------------------- Cosmos DB (ADR 0030 / #165) --------------------
+@description('Provision Cosmos DB (NoSQL) — Problem / 履歴の永続化ストア (ADR 0030)。既定 true。')
+param enableCosmos bool = true
+
+@description('Cosmos DB の保管リージョン。ADR 0030 D6 で Japan East 固定 (NFR-1「保管リージョンの明確化」)。')
+param cosmosLocation string = 'japaneast'
+
+@description('無料枠 (1,000 RU/s + 25 GB) にオプトインする。**作成時のみ有効**・後から変更不可。枠が消費済みならデプロイが失敗する (= 課金構成で黙って作られない)。')
+param enableCosmosFreeTier bool = true
+
+@description('serverless で作る (ADR 0030 D2 のフォールバック)。無料枠は serverless 対象外。')
+param cosmosServerless bool = false
+
+@minValue(400)
+@description('DB 共有スループット (RU/s)。既定 400 は予算 ¥3,000 (ADR 0013) を踏まえた値 — 上げる前にコストを確認すること。')
+param cosmosThroughput int = 400
+
+@description('Provision the Azure SQL stack. Default false: v1 は in-memory のみで SQL 未使用 (ADR 0013)。永続化は Cosmos DB (ADR 0030) が担うため、SQL は引き続き不要。')
 param enableSql bool = false
 
 @description('Set to true if a soft-deleted Key Vault with the same name already exists.')
@@ -157,6 +174,11 @@ module infra '../modules/bootstrap-core.bicep' = {
     speechLocation: speechLocation
     enableAiAgentAca: enableAiAgentAca
     enableVoicevoxWrapperAca: enableVoicevoxWrapperAca
+    enableCosmos: enableCosmos
+    cosmosLocation: cosmosLocation
+    enableCosmosFreeTier: enableCosmosFreeTier
+    cosmosServerless: cosmosServerless
+    cosmosThroughput: cosmosThroughput
     enableSql: enableSql
     recoverSqlAdminKeyVault: recoverSqlAdminKeyVault
     sqlAdminKeyVaultName: sqlAdminKeyVaultName
@@ -195,3 +217,10 @@ output aiAgentContainerAppsEnvironmentName string = infra.outputs.aiAgentContain
 output voicevoxWrapperEnabled bool = infra.outputs.voicevoxWrapperEnabled
 output voicevoxWrapperContainerAppName string = infra.outputs.voicevoxWrapperContainerAppName
 output voicevoxWrapperContainerAppsEnvironmentName string = infra.outputs.voicevoxWrapperContainerAppsEnvironmentName
+output cosmosEnabled bool = infra.outputs.cosmosEnabled
+output cosmosAccountName string = infra.outputs.cosmosAccountName
+output cosmosEndpoint string = infra.outputs.cosmosEndpoint
+output cosmosDatabaseName string = infra.outputs.cosmosDatabaseName
+output cosmosLocation string = infra.outputs.cosmosLocation
+output cosmosFreeTierEnabled bool = infra.outputs.cosmosFreeTierEnabled
+output cosmosServerless bool = infra.outputs.cosmosServerless

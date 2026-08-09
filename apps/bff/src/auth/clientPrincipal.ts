@@ -16,6 +16,16 @@
  * ヘッダが無い / 壊れている場合は `"local"` に落とす。ローカル開発 (EasyAuth なし) と
  * 認証前の疎通確認をそのまま通すため。**今は単一ユーザーなので実運用でも値は 1 種類**だが、
  * 後から `userId` を足すと repository とテスト seed が全部動くので先に切ってある。
+ *
+ * ## このヘッダをどこまで信じてよいか
+ *
+ * `x-ms-client-principal` は **Functions の EasyAuth が付ける**。EasyAuth が有効な環境
+ * (`applyFunctionAuthLockdown: true`) では、クライアントが自分で付けてきた同名ヘッダは
+ * プラットフォームが上書きするので、詐称してよそのパーティションを読むことはできない。
+ *
+ * 裏を返すと、**EasyAuth を切った環境ではこの値は信用できない**。その構成では誰でも
+ * `local` として同じデータに触れるのと同じことなので、認証の門を外す判断
+ * (ADR 0013 / ADR 0017) を覆すときはここも一緒に見直すこと。
  */
 import type { HttpRequest } from "@azure/functions";
 
