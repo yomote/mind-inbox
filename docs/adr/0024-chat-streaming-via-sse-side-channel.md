@@ -1,8 +1,8 @@
 # 0024. チャット応答の逐次表示は SSE サイドチャネル (`/api/chat/stream`) で通す
 
-- Status: Proposed
+- Status: Accepted (briefing #3, 2026-08-08)
 - Date: 2026-08-08
-- Deciders: (エージェント起案 — debrief で Accept/Reject)
+- Deciders: omoteforlab
 - Consulted: —
 - Informed: —
 

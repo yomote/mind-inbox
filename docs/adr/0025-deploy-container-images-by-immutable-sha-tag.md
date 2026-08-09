@@ -1,8 +1,8 @@
 # 0025. コンテナ image のデプロイは :latest ではなく不変 sha タグの解決 + 稼働検証で行う
 
-- Status: Proposed
+- Status: Accepted (briefing #3, 2026-08-08)
 - Date: 2026-08-08
-- Deciders: yomote (承認待ち), Claude (起案)
+- Deciders: omoteforlab
 
 Technical Story: <https://github.com/yomote/mind-inbox/issues/107> / PR #131
 
