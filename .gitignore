@@ -1,5 +1,8 @@
-# Local-only Azure icon assets (official icons downloaded per developer machine)
-cicd/scripts/viz-structure/icons/
+# Azure アイコンは commit する (icons/ は ignore しない)。
+# 配布元 CDN (arch-center.azureedge.net) が廃止され per-machine ダウンロードが
+# 成立しなくなったため、図の再現性を優先してリポジトリに置く。
+cicd/scripts/viz-structure/icons/.cache/
+cicd/scripts/viz-structure/icons/raw/
 cicd/scripts/viz-structure/artifacts/
 
 # Bicep compile outputs (generated ARM templates)

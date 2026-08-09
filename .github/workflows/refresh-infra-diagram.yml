@@ -70,12 +70,15 @@ jobs:
         if: steps.guard.outputs.run == 'true'
         run: az extension add --name resource-graph --only-show-errors
 
-      # 公式アイコンは .gitignore 済み (ローカル取得前提)。取れなくても図は出る (WARN のみ) ので、
-      # 外部ダウンロードの失敗でワークフロー全体を赤くしない。
-      - name: Azure 公式アイコンを取得 (任意)
+      # アイコンは repo に commit してある (配布元 CDN 廃止のため。詳細は icons/README.md)。
+      # ダウンロードはしない — 取得の成否ではなく「図にアイコンが入るか」だけが問題なので、
+      # 材料が揃っているかをここで確かめる。
+      - name: アイコンが揃っているか
         if: steps.guard.outputs.run == 'true'
-        continue-on-error: true
-        run: cicd/scripts/viz-structure/download-azure-icons.sh
+        run: |
+          COUNT=$(find cicd/scripts/viz-structure/icons -maxdepth 1 -name '*.png' | wc -l)
+          echo "アイコン: ${COUNT} 個"
+          [ "$COUNT" -gt 0 ] || { echo "::error::アイコンが 1 個も無い。アイコン無しの図で既存の図を上書きしない"; exit 1; }
 
       - name: 構成図を再生成
         if: steps.guard.outputs.run == 'true'
@@ -83,6 +86,21 @@ jobs:
           cicd/scripts/viz-structure/viz-structure.sh \
             --subs "${{ vars.AZURE_SUBSCRIPTION_ID }}" \
             --rgs "$RGS"
+
+      # 「取得できたか」ではなく「**図にアイコンが入ったか**」で判定する。
+      # 2026-08-09: 取得ステップを continue-on-error にしていたため、CDN 廃止で
+      # アイコンが 0 個になったことに誰も気づかず、19 個入りの図を 0 個の図で
+      # 上書きした。自動更新が成果物を劣化させることを禁止する。
+      - name: 図にアイコンが入っているか
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          EMBEDDED=$(grep -c 'data:image/png;base64' docs/cicd/iac/infra_arch.svg || true)
+          echo "図に埋め込まれたアイコン: ${EMBEDDED} 個"
+          if [ "$EMBEDDED" -eq 0 ]; then
+            git checkout -- docs/cicd/iac/ || true
+            echo "::error::再生成した図にアイコンが 1 つも入っていない。**既存の図は変更せず中止する** (人間の可読性が落ちるため)。icons/ と graphviz の IMG 解決を確認すること"
+            exit 1
+          fi
 
       # 未追跡ファイルも拾うため --porcelain (git diff だけだと新規生成物を見落とす)。
       - name: 差分を判定
