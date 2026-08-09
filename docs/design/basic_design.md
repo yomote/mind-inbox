@@ -641,7 +641,7 @@ uvicorn app.main:app --reload --port 8001
 
 当初の `workflow.py` は "inbox 管理用汎用 AI" 向けのプロンプトだったため、「モヤモヤの言語化を助ける対話 AI」へ改修した (共感優先 / 3 文以内 / 問いかけを 1 つ含める)。
 
-**文面はここに転記しない** — 真実は `apps/services/ai-agent/app/prompts/chat.py`。自律改善ループ (ADR 0022 / [ADR 0026](../adr/0026-ux-improvement-loop-ab-protocol-and-mutation-boundary.md)) がこのファイルを自動で書き換えるため、doc 側にコピーを置くと**改定のたびに静かに陳腐化する**。
+**文面はここに転記しない** — 真実は `apps/services/ai-agent/app/prompts/chat.py`。自律改善ループ (ADR 0022 / [ADR 0027](../adr/0027-ux-improvement-loop-ab-protocol-and-mutation-boundary.md)) がこのファイルを自動で書き換えるため、doc 側にコピーを置くと**改定のたびに静かに陳腐化する**。
 
 ### 7.3 `organizer.py` 設計方針
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 直近の golden-path-monitor 実行から UX プローブ記録 (会話 JSON) を取り出す。
-# runbook `docs/runbooks/ux-probe-judge.md` Step 2 の自動化 (ADR 0026 D1 / #154)。
+# runbook `docs/runbooks/ux-probe-judge.md` Step 2 の自動化 (ADR 0027 D1 / #154)。
 #
 # 標準出力に**記録 JSON のパスだけ**を出す (採点セッションがそのまま judge に渡せるように)。
 # 診断メッセージはすべて stderr へ — 混ぜると呼び出し側が壊れる (PR #88 で踏んだ実例)。

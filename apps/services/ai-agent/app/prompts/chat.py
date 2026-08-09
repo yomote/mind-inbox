@@ -1,10 +1,10 @@
 """対話 (/chat) のシステムプロンプト。
 
-**このファイルは自律改善ループ (ADR 0022 / ADR 0026) の改変対象**である。
+**このファイルは自律改善ループ (ADR 0022 / ADR 0027) の改変対象**である。
 `.github/workflows/auto-improve-guard.yml` が、`ux-auto-improve` ラベルの PR に対して
 「ここ以外を触っていないこと」を CI で検査する。
 
-`workflow.py` から分離してある理由 (ADR 0026 D2):
+`workflow.py` から分離してある理由 (ADR 0027 D2):
 
 1. `workflow.py` は v2 M1-3 (#81) で MAF Workflow へ丸ごと置換される予定であり、
    毎朝の自動改善 PR と移行作業が同じファイルで衝突する

@@ -28,15 +28,11 @@ export function SessionSpecPreview() {
       session={previewSession}
       draftMessage={draftMessage}
       loading={false}
-      sttSupported
-      listening={false}
-      interimTranscript=""
       speaking={false}
       ttsEnabled
       voiceError={null}
       onDraftMessageChange={setDraftMessage}
       onSendMessage={() => {}}
-      onToggleListening={() => {}}
       onToggleTtsEnabled={() => {}}
       onStopSpeaking={() => {}}
       onCrisisSupport={() => {}}

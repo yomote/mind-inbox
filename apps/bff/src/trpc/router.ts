@@ -68,7 +68,7 @@ function deriveTitle(concern: string): string {
 }
 
 // 空入力で開始した場合の AI からの初手 (home.mdx: テーマ入力なしで直接対話開始 /
-// dialogue session.mdx「開始直後の挙動」)。受け止めトーンを崩さないこと。
+// dialogue-session.mdx「開始直後の挙動」)。受け止めトーンを崩さないこと。
 const EMPTY_START_OPENER = "今日はどんなことが気になっていますか?思いつくままで大丈夫です。";
 
 /**
@@ -297,7 +297,7 @@ const consultationRouter = router({
 
       // 空 concern で開始するのが既定 (home.mdx: テーマ入力画面なしで直接対話開始)。
       // テーマ未入力の開始は AI を呼ばず、AI からの問いかけ (受け止めトーン,
-      // dialogue session.mdx §3.1) だけ返す
+      // dialogue-session.mdx §3.1) だけ返す
       // (空メッセージを ai-agent に流すと 422 になるため入口で分岐する)。
       const concern = input.concern.trim();
       if (concern.length === 0) {

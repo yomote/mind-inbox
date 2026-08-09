@@ -1,4 +1,4 @@
-# 自動改善 PR の改変範囲ガード (ADR 0026 D2 / epic #123 M2)
+# 自動改善 PR の改変範囲ガード (ADR 0027 D2 / epic #123 M2)
 #
 # 自律改善ループ (ADR 0022) が作る PR は、対話プロンプトだけを書き換えてよい。
 # 起票プロンプトに「ここ以外触るな」と書くのは必要だが十分ではない — 子セッションが
@@ -38,7 +38,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # 許可パス (前方一致)。ここを増やすときは ADR 0026 D2 の見直しとセット。
+          # 許可パス (前方一致)。ここを増やすときは ADR 0027 D2 の見直しとセット。
           # プロンプト置き場は「文字列だけが入っている」前提 — ロジックを置くと、
           # この許可がコードの自動改変を許すことになる (app/prompts/__init__.py の doctrine)。
           ALLOWED_PREFIXES=(
@@ -79,7 +79,7 @@ jobs:
           done <<< "$CHANGED"
 
           {
-            echo "## auto-improve-guard (ADR 0026 D2)"
+            echo "## auto-improve-guard (ADR 0027 D2)"
             echo
             echo "許可パス:"
             for prefix in "${ALLOWED_PREFIXES[@]}"; do echo "- \`${prefix}\`"; done
@@ -89,7 +89,7 @@ jobs:
           if [ -n "$VIOLATIONS" ]; then
             echo "$VIOLATIONS" | while IFS= read -r f; do
               [ -z "$f" ] && continue
-              echo "::error file=${f},title=許可パス外の変更::自動改善 PR は対話プロンプトのみ変更できます (ADR 0026 D2)"
+              echo "::error file=${f},title=許可パス外の変更::自動改善 PR は対話プロンプトのみ変更できます (ADR 0027 D2)"
             done
             {
               echo "🔴 **許可パス外の変更があります**"
@@ -99,7 +99,7 @@ jobs:
               echo '```'
               echo
               echo "自動改善 PR (\`ux-auto-improve\`) が変更してよいのは対話プロンプトだけです。"
-              echo "範囲を広げる必要がある場合は ADR 0026 D2 の見直し (design-gate) が先です。"
+              echo "範囲を広げる必要がある場合は ADR 0027 D2 の見直し (design-gate) が先です。"
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi

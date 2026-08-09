@@ -31,10 +31,10 @@ Mind Inbox はすでに **「真実は 1 か所」ドクトリン**が効いて�
 
 Chosen option: **"Option A"**。GitHub Projects (v2) を **実行状態のダッシュボード**として 1 枚だけ立て、設計の「なぜ / 何を」は従来どおり docs (ADR / design / implementation_plan) に置く。責務は既存の「ADR=判断 / Runbook=手順」分割と同じ発想で切る:
 
-| 問い | 真実の所在 | 性質 |
-| --- | --- | --- |
-| なぜ / 何を (why / what) | docs (ADR / design / implementation_plan) | 不変・累積 |
-| いつ / 誰が / 今どこ (when / who / state) | GitHub Issues + Projects | 揮発・ライブ |
+| 問い                                      | 真実の所在                                | 性質         |
+| ----------------------------------------- | ----------------------------------------- | ------------ |
+| なぜ / 何を (why / what)                  | docs (ADR / design / implementation_plan) | 不変・累積   |
+| いつ / 誰が / 今どこ (when / who / state) | GitHub Issues + Projects                  | 揮発・ライブ |
 
 **Projects には設計内容を書かない** — board のアイテムは「doc へのポインタ + 状態」だけを持つ。フィールドは最小構成 (`Status` / `Phase` / `Area`)、`Phase` フィールドが `implementation_plan_v1` の Phase と 1:1 で対応する唯一の接続点。状態遷移は Built-in Workflows で自動化し (PR open→In review / merged→Done / issue closed→Done)、Epic 進捗は手書きチェックリストをやめて **sub-issue の自動ロールアップ**に移す。
 
@@ -94,6 +94,6 @@ Epic Issue 本文に `- [ ]` を並べ、手で更新する。
 ## Links
 
 - Runbook: [`docs/runbooks/github-projects-setup.md`](../runbooks/github-projects-setup.md)
-- ロードマップ: [`docs/design/implementation_plan_v1.md`](../design/implementation_plan_v1.md)
+- ロードマップ: [`docs/design/archive/implementation_plan_v1.md`](../design/archive/implementation_plan_v1.md) (archive — v1 完了済み)
 - 関連 ADR: [0008](0008-pr-review-via-cloud-routine.md) (PR レビュー Routine — 同じくプロセス系の判断)
 - GitHub Projects: <https://docs.github.com/en/issues/planning-and-tracking-with-projects>

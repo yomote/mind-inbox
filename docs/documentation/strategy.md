@@ -54,15 +54,16 @@
 
 ```
 docs/
-  concept_deck.md       # コンセプト (現状維持)
-  design/               # 基本設計・実装計画 (現状維持)
+  concept_deck.md       # コンセプト
+  design/               # 要件・ユースケース・ドメインモデル・現行の実装計画
+    archive/            # 役目を終えた計画書 (現行方針をここから読まない)
   api/                  # 生成 OpenAPI を commit (手書き禁止)
     README.md
     bff-trpc.yaml       # CI 生成 (FastAPI 2 サービス分は未整備 — #9)
   frontend/
-    ui_specs/           # MDX UI 仕様 (現状維持、真実)
-    ui_design.md        # (現状維持)
-  adr/                  # ★ 新設 — 意思決定記録
+    ui_specs/           # MDX UI 仕様 (真実)
+    ui_design.md
+  adr/                  # 意思決定記録
     README.md
     template.md
     NNNN-*.md           # 4 桁連番
@@ -70,10 +71,13 @@ docs/
     README.md
     template.md
     {name}.md           # 1 手順 = 1 ファイル
+  debrief/              # design-gate / debrief / briefing の累積ログ
+    journal.md
+    archive/            # 一過性のセッション記録
   documentation/        # この戦略
     strategy.md
   testing/
-    strategy.md         # 既存
+    strategy.md
 ```
 
 ---
@@ -161,26 +165,11 @@ docs/
 
 ## 7. コーディングエージェント運用ガイド
 
-### 7.1 PR テンプレート
+### 7.1 PR テンプレート / CLAUDE.md への反映 (実施済み)
 
-`.github/pull_request_template.md` に Docs 更新欄を追加 (#13 で実施):
+Docs 更新欄は [`.github/PULL_REQUEST_TEMPLATE.md`](../../.github/PULL_REQUEST_TEMPLATE.md) が正典 (本文はここに再掲しない)。CLAUDE.md からは本戦略・ADR ディレクトリ・「OpenAPI を手書きしない」方針を参照している。
 
-```markdown
-## Docs 更新
-
-- [ ] UI 仕様 (MDX) を更新した / 不要
-- [ ] OpenAPI が再生成済み (CI 緑) / 不要
-- [ ] アーキテクチャ判断は ADR に書いた / 不要
-- [ ] 運用手順の変更は Runbook に反映した / 不要
-```
-
-### 7.2 CLAUDE.md への反映 (#13 で実施)
-
-- 「ドキュメント更新が必要な時の判断は `docs/documentation/strategy.md` を参照」
-- 「アーキテクチャに関わる判断をするなら ADR を先に書く」
-- 「OpenAPI を手書きしない (再生成する)」
-
-### 7.3 エージェントが間違えやすい点
+### 7.2 エージェントが間違えやすい点
 
 - **OpenAPI を手書きしようとする** → 生成物なので触らない。Router/FastAPI を直す
 - **ADR と Runbook を混ぜる** → 「なぜそうしたか」は ADR、「どうやるか」は Runbook
@@ -189,55 +178,11 @@ docs/
 
 ---
 
-## 8. 関連 issue / マイルストーン
+## 8. FAQ — マトリクスで決まらない判断
 
-- マイルストーン: [v0.1 docs-as-code](https://github.com/yomote/mind-inbox/milestone/2)
-- 親 epic: [#14 documentation as code 整備](https://github.com/yomote/mind-inbox/issues/14)
+「どの領域を、どこに書くか」と「乖離したときにどちらを直すか」は **§2 真実の所在マトリクス** と同 § の「乖離した時のルール」が正典 (ここには再掲しない)。エージェントが実際に踏みやすい間違いは **§7.2 エージェントが間違えやすい点**。
 
-| トピック                | Issue                                                 |
-| ----------------------- | ----------------------------------------------------- |
-| BFF tRPC → OpenAPI      | [#8](https://github.com/yomote/mind-inbox/issues/8)   |
-| FastAPI → OpenAPI       | [#9](https://github.com/yomote/mind-inbox/issues/9)   |
-| MDX 仕様の保護          | [#10](https://github.com/yomote/mind-inbox/issues/10) |
-| ADR 初期セット          | [#11](https://github.com/yomote/mind-inbox/issues/11) |
-| Runbook 集約            | [#12](https://github.com/yomote/mind-inbox/issues/12) |
-| PR template + CLAUDE.md | [#13](https://github.com/yomote/mind-inbox/issues/13) |
+マトリクスに載っていない判断だけを置く:
 
----
-
-## 9. FAQ — このドキュメントはどこに書くべき?
-
-```
-書こうとしている内容は何か?
-  │
-  ├─ 画面の挙動 / フロー
-  │       → docs/frontend/ui_specs/*.mdx
-  │
-  ├─ API の I/O
-  │       → 該当する router / FastAPI コードの schema を更新
-  │       → CI が OpenAPI を再生成
-  │
-  ├─ なぜそういう構成 / 技術選択をしたか
-  │       → docs/adr/NNNN-{slug}.md
-  │
-  ├─ どうやって運用するか (デプロイ / 障害対応)
-  │       → docs/runbooks/{name}.md
-  │
-  ├─ アプリのコンセプト / 価値提案
-  │       → docs/concept_deck.md (現状維持)
-  │
-  ├─ 全体設計 / 実装計画
-  │       → docs/design/ (現状維持)
-  │
-  └─ テスト方針
-          → docs/testing/strategy.md (現状維持)
-```
-
-### よくある判断
-
-- **「README に書こうかと思った」** → README は最小限。本体は ADR / Runbook / 戦略ドキュメントのいずれかに
-- **「OpenAPI を手で直したい」** → router/FastAPI を直す。OpenAPI は派生
-- **「ADR を書き換えたい」** → 不可。新規 ADR で supersede
-- **「Runbook が長くなった」** → 1 手順 = 1 ファイルに分割
-- **「MDX と実装が違う」** → 実装を直す (MDX が真実)
-- **「FastAPI と OpenAPI が違う」** → OpenAPI を再生成する (実装が真実)
+- **「Runbook が長くなった」** → 1 手順 = 1 ファイルに分割 (§4.5 Runbook)
+- **「役目を終えた計画書をどうするか」** → 削除ではなく `docs/{design,debrief}/archive/` へ退避し、archive の README に「何だったか / なぜ archive したか」を 1 行書く。現行 docs から archive へのリンクはラベルに (archive) を付ける

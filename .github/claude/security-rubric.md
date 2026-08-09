@@ -3,6 +3,7 @@
 > **セキュリティ審査役の審査基準** (rubric-as-truth, [ADR 0019](../../docs/adr/0019-independent-judge-agents-security-qa-release.md))。
 > subagent `.claude/agents/security-reviewer.md` / PR レビュー Routine / release-gate から参照される。
 > 観点を変えたい時はここを直す。
+> **共通規約: [`_common.md`](_common.md) を必ず併せて読む** (共通 Severity / 共通の出力ルール)。
 
 ## 役割
 
@@ -20,13 +21,13 @@ LLM の目視だけに頼らない。**環境で使えるスキャナは全部�
 
 ### 静的スキャン (SAST / SCA / secrets)
 
-| 対象 | ツール (利用可能なものを使う) | 見るもの |
-| --- | --- | --- |
-| npm 依存 (bff / frontend) | `npm audit --json` / `osv-scanner` (lockfile があるディレクトリで) | 既知 CVE。**到達可能性を判定**してから severity を付ける |
-| Python 依存 (ai-agent / voicevox) | `pip-audit` / `osv-scanner` / 無ければ `pip list` + アドバイザリ照合 | 同上 |
-| 秘密情報 | `gitleaks detect` / `trufflehog` / 無ければ git grep パターン (`AKIA`, `-----BEGIN`, `client_secret` 等) | コミット済み秘密 (S1) |
-| コードパターン (SAST) | `semgrep --config auto` / Python は `bandit` | injection / SSRF / 危険 API 系の機械検出 (S2) |
-| コンテナ / IaC | `trivy fs` / `trivy config` / `checkov` (Dockerfile・Bicep・workflow に差分がある時) | ベースイメージ CVE・設定ミス (S6) |
+| 対象                              | ツール (利用可能なものを使う)                                                                            | 見るもの                                                 |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| npm 依存 (bff / frontend)         | `npm audit --json` / `osv-scanner` (lockfile があるディレクトリで)                                       | 既知 CVE。**到達可能性を判定**してから severity を付ける |
+| Python 依存 (ai-agent / voicevox) | `pip-audit` / `osv-scanner` / 無ければ `pip list` + アドバイザリ照合                                     | 同上                                                     |
+| 秘密情報                          | `gitleaks detect` / `trufflehog` / 無ければ git grep パターン (`AKIA`, `-----BEGIN`, `client_secret` 等) | コミット済み秘密 (S1)                                    |
+| コードパターン (SAST)             | `semgrep --config auto` / Python は `bandit`                                                             | injection / SSRF / 危険 API 系の機械検出 (S2)            |
+| コンテナ / IaC                    | `trivy fs` / `trivy config` / `checkov` (Dockerfile・Bicep・workflow に差分がある時)                     | ベースイメージ CVE・設定ミス (S6)                        |
 
 ### 動的チェック (アプリが起動できる場合)
 
@@ -92,24 +93,21 @@ release-gate 時など、stub モードでローカル起動できるなら静�
 - 新規依存の追加: 既知の悪評・タイポスクワット風の名前・不要に広い権限 (postinstall スクリプト等)
 - lockfile の大量差分に紛れた意図しない依存の混入
 
-## Severity
+## Severity (共通定義: [`_common.md`](_common.md#共通-severity))
 
-| ラベル | 意味 | 例 |
-| --- | --- | --- |
-| `blocker` | マージ / リリース不可 | 秘密情報コミット、認可バイパス、PII のログ流出、human-in-the-loop の無断撤去 |
-| `major` | リリース前に修正推奨 | 入力検証の欠如 (悪用経路が書ける)、CORS を認可扱い、action の無 pin |
-| `minor` | 追跡 issue で可 | 上限なし文字列、防御の冗長化提案 |
-| `info` | 現状問題ないが記録 | 攻撃面が増えたが緩和策済み、将来のスキャン導入提案 |
+| ラベル                            | このレビューでの例                                                           |
+| --------------------------------- | ---------------------------------------------------------------------------- |
+| `blocker`                         | 秘密情報コミット、認可バイパス、PII のログ流出、human-in-the-loop の無断撤去 |
+| `major`                           | 入力検証の欠如 (悪用経路が書ける)、CORS を認可扱い、action の無 pin          |
+| `minor`                           | 上限なし文字列、防御の冗長化提案                                             |
+| `info` (固有: 現状問題ないが記録) | 攻撃面が増えたが緩和策済み、将来のスキャン導入提案                           |
 
-## 出力ルール
+## 出力ルール (共通ルール: [`_common.md`](_common.md#共通の出力ルール))
 
-1. **言語**: 日本語。
-2. 出力は 1 本のレポート:
+1. レポート構成:
    - 1 行 verdict: `✅ セキュリティ上の blocker なし` / `🔒 要修正 (blocker あり)` / `⚠️ major あり (判断は人間)`
    - **スキャン実行状況**: `| ツール | 実行 (✅/UNKNOWN) | 生の検出数 | 判定後に残った数 |`
    - findings テーブル: `| Severity | 箇所 (file:line) | 指摘 | 悪用経路 (1 文) | 出所 (ツール名 or 目視) |`
-   - **悪用経路を 1 文で書けない指摘は info に落とすか捨てる** (憶測での blocker 化は禁止)
-3. **diff 中心 + 攻撃面追跡**: 変更行から到達できる攻撃面はファイル境界を越えて追う。無関係な全体監査はしない (それは別途の定期監査の仕事)。
-4. **CI と重複しない**: lint / 型エラー / テスト失敗は指摘しない。
-5. **コードは変更しない**: 審査のみ。修正の push はしない。
-6. PR レビュー judge (review-rubric.md) の軸 B と重複したら、セキュリティ観点はこちらが正。
+2. **悪用経路を 1 文で書けない指摘は info に落とすか捨てる** (共通 4 のセキュリティ版。憶測での blocker 化は禁止)。
+3. **攻撃面はファイル境界を越えて追う** — 共通 6 (diff 中心) の明示的な例外。ただし無関係な全体監査はしない。
+4. `review-rubric.md` の軸 B と重複したら、セキュリティ観点はこちらが正 (共通 8 の優先順位)。

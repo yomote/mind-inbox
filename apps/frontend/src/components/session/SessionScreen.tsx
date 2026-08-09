@@ -9,12 +9,7 @@ type SessionScreenProps = {
   draftMessage: string;
   loading: boolean;
   // STT (音声入力) は SessionComposer が useVoiceInput で自律的に扱う (#121 / ADR 0023)。
-  // 以下 4 つは呼び出し側 (Layout 経由の旧配線) がまだ渡してくるため型には残すが未使用。
-  // 旧配線の撤去は #112/#120 (Layout 作業中) との競合を避けてフォローアップで行う。
-  sttSupported?: boolean;
-  listening?: boolean;
-  interimTranscript?: string;
-  onToggleListening?: () => void;
+  // 旧配線 (sttSupported / listening / interimTranscript / onToggleListening) は #133 で撤去済み。
   speaking: boolean;
   ttsEnabled: boolean;
   voiceError: string | null;

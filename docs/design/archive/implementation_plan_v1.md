@@ -11,15 +11,15 @@
 
 PoC は **Session 中心**（`OrganizedResult.priorities: string[]` / `HistoryItem`）。v1 は **Problem 中心 2層**（Mention → Problem）。
 
-| レイヤ | PoC 現状 | v1 要件 | ギャップ |
-| --- | --- | --- | --- |
-| ドメイン型 | ChatMessage / ConsultationSession / OrganizedResult / HistoryItem | + **Mention** / **Problem** / Theme | 新規 |
-| AI Agent | `/chat` `/organize` `/plan` `/approve` | + `/extract`（Dump→Mention[]）+ グルーピング + テーマ分類 | 新規エンドポイント |
-| グルーピング | なし | 意味類似で既存 Problem に寄せる（v1 は簡易、embedding は Phase 2） | 新規（v1 簡易） |
-| BFF ルーター | `consultation.*` / `history.*` | + `problem.*` / `mention.*`（list/get/create/triage/plan） | 新規 |
-| BFF リポジトリ | History（in-memory） | + Mention / Problem リポジトリ（in-memory） | 新規 |
-| Frontend 画面 | onboarding/home/session/result/actionPlan/history/settings | + 困りごと一覧 / 詳細 / トリアージ | 新規（UI 設計要） |
-| Frontend mock | mockApi（Session/History） | + Mention/Problem mock | 追加 |
+| レイヤ         | PoC 現状                                                          | v1 要件                                                            | ギャップ           |
+| -------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------ |
+| ドメイン型     | ChatMessage / ConsultationSession / OrganizedResult / HistoryItem | + **Mention** / **Problem** / Theme                                | 新規               |
+| AI Agent       | `/chat` `/organize` `/plan` `/approve`                            | + `/extract`（Dump→Mention[]）+ グルーピング + テーマ分類          | 新規エンドポイント |
+| グルーピング   | なし                                                              | 意味類似で既存 Problem に寄せる（v1 は簡易、embedding は Phase 2） | 新規（v1 簡易）    |
+| BFF ルーター   | `consultation.*` / `history.*`                                    | + `problem.*` / `mention.*`（list/get/create/triage/plan）         | 新規               |
+| BFF リポジトリ | History（in-memory）                                              | + Mention / Problem リポジトリ（in-memory）                        | 新規               |
+| Frontend 画面  | onboarding/home/session/result/actionPlan/history/settings        | + 困りごと一覧 / 詳細 / トリアージ                                 | 新規（UI 設計要）  |
+| Frontend mock  | mockApi（Session/History）                                        | + Mention/Problem mock                                             | 追加               |
 
 ### 0.2 実装原則（PoC 計画を踏襲）
 

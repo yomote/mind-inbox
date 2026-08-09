@@ -76,4 +76,13 @@ test("[L4] 相談 → 実AIの返事 → 実VOICEVOXの音声 まで デプロ�
   const tts = await ttsResponse;
   expect(tts.status(), "tts status").toBe(200);
   expect(tts.headers()["content-type"] ?? "", "tts content-type").toContain("audio/wav");
+
+  // ここまでは「WAV が返った」だけで、**実際にずんだもんの声で鳴ったか**は別問題。
+  // 2026-08-08 の実障害は 200 + audio/wav のまま、無言でブラウザ読み上げ (別の声)
+  // に置き換わっていた (#150)。アプリが公開する実際の出力経路を検証して、
+  // この「静かな置換」を検知する。
+  await expect(
+    page.locator("[data-voice-output]"),
+    "実際の音声出力経路 (browser-fallback = ずんだもん以外の声に落ちている)",
+  ).toHaveAttribute("data-voice-output", "voicevox", { timeout: 30_000 });
 });

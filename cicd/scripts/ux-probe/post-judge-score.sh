@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # UX judge の採点レポートを検証し、スコアボード Issue へ 1 採点 = 1 コメントで投稿する。
-# runbook `docs/runbooks/ux-probe-judge.md` Step 4 の自動化 (ADR 0026 D1 / #154)。
+# runbook `docs/runbooks/ux-probe-judge.md` Step 4 の自動化 (ADR 0027 D1 / #154)。
 #
 # **検証に落ちたら投稿しない。** 蓄積は時系列データなので、壊れた 1 件が混ざると
 # トレンド判断がそのぶん狂う。人が転記していたときは目視が検証だったため、

@@ -14,15 +14,7 @@ PR 自動レビューを有効化したい / 止めたい / 観点を変えた�
 
 ## なぜ Routine か (方式の選択)
 
-| 方式 | 課金 | プラン | 採否 |
-| --- | --- | --- | --- |
-| **Routine (これ)** | サブスク枠・追加課金なし | Pro / Max〜 | ✅ 採用 |
-| Code Review (`/en/code-review`) | 1レビュー $15〜25 の従量 | Team / Enterprise 限定 | ✕ プラン外・高額 |
-| GitHub Actions + `ANTHROPIC_API_KEY` | API 従量課金 | 不問 | ✕ 追加課金が避けられない |
-
-Routine はサブスク枠で走り、日次実行上限を超えても**課金されず拒否される**(usage credits 未使用時)。
-"$5 が溶ける" 事故が起きない。詳細は [ADR 0008](../adr/0008-pr-review-via-cloud-routine.md) /
-<https://code.claude.com/docs/en/routines>。
+方式比較 (Routine / 管理版 Code Review / Actions + `ANTHROPIC_API_KEY` / CodeRabbit) と採否の理由は [ADR 0008](../adr/0008-pr-review-via-cloud-routine.md) が正典 (ここには再掲しない)。運用上の要点だけ: Routine は**サブスク枠で走り、日次実行上限を超えても課金されず拒否される** — 「$5 が溶ける」事故が起きない。仕様: <https://code.claude.com/docs/en/routines>
 
 ## Prerequisites
 
@@ -81,13 +73,8 @@ PR 作成 (opened)
    → 全スレッド解決 → あなたが merge ボタンを押す
 ```
 
-- **自動 Resolve** は rubric の「再レビュー時の挙動（収束 + 自動 Resolve）」が担保する。
-  Routine セッションは管理 GitHub 接続経由で resolve / merge ツールを**PAT なしで**持つ
-  (実測確認済み)。ただし **merge は使わせない**方針 (rubric / プロンプトで明示)。
-- **強制力**: ブランチ保護「会話の解決を必須」により、judge の指摘スレッドが未解決のままだと
-  マージできない。人間の規律に頼らず「対応するまでマージ不可」を仕組みで担保する。
-- **merge は人間**: 自動 Resolve はモデル判断であり決定論ではないため、最終的なマージ判断は
-  人が行う (歯止めを残す)。
+- **自動 Resolve の挙動仕様**は [`review-rubric.md`](../../.github/claude/review-rubric.md) の「再レビュー時の挙動 (収束 + 自動 Resolve)」が正典 (ここには再掲しない)。Routine セッションは管理 GitHub 接続経由で resolve / merge ツールを **PAT なしで**持つ (実測確認済み) が、**merge は使わせない**。
+- **強制力と「merge は人間」の設計理由**は [ADR 0008](../adr/0008-pr-review-via-cloud-routine.md)。運用としては、ブランチ保護「会話の解決を必須」により未解決スレッドが残るとマージできない。
 
 ## Verification
 
