@@ -153,12 +153,40 @@ async function waitForTtsOf(
   return undefined;
 }
 
-/** tRPC 応答 (httpBatchLink の配列 / 単体の両形) から reply を取り出す。 */
-function extractReply(json: unknown): string {
-  const item = (Array.isArray(json) ? json[0] : json) as
-    | { result?: { data?: { reply?: string } } }
-    | undefined;
-  return item?.result?.data?.reply ?? "";
+/**
+ * 直近のガイド発話を画面から読み、**伸びが止まる**まで待って確定テキストを返す。
+ *
+ * SSE 移行 (#132 / ADR 0024) で応答は逐次描画されるようになり、1 回の HTTP 応答
+ * から全文を取ることができなくなった。プローブの目的は「ユーザーが実際に見た応答」
+ * を記録することなので、DOM を真実として扱う。
+ */
+async function readSettledAssistantText(
+  page: Page,
+  timeoutMs: number,
+): Promise<{ text: string; settledAt: number }> {
+  const bubble = page.locator(".MuiPaper-root").filter({ hasText: "ガイド" }).last();
+  const deadline = Date.now() + timeoutMs;
+  let previous = "";
+  let stableSince = 0;
+
+  while (Date.now() < deadline) {
+    const current = ((await bubble.textContent().catch(() => "")) ?? "")
+      .replace(/^\s*ガイド\s*/, "")
+      .trim();
+
+    if (current !== "" && current === previous) {
+      // 1 秒変化しなければ確定とみなす (トークン間隔より十分長い)。
+      // settledAt は「伸びが止まった時刻」— 安定判定の待ち 1 秒を体感レイテンシに
+      // 混ぜないため、返す時刻は now ではなく stableSince を使う。
+      if (stableSince === 0) stableSince = Date.now();
+      else if (Date.now() - stableSince >= 1_000) return { text: current, settledAt: stableSince };
+    } else {
+      stableSince = 0;
+      previous = current;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return { text: previous, settledAt: Date.now() };
 }
 
 test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間レイテンシを記録する", async ({
@@ -248,10 +276,11 @@ test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間�
     const trpcTimeoutMs = i === 0 ? 210_000 : 120_000;
     const ttsTimeoutMs = i === 0 ? 120_000 : 60_000;
 
+    // #132 (ADR 0024) で応答は SSE サイドチャネルに移り、UI から
+    // `/api/trpc/consultation.sendMessage` は呼ばれなくなった。ここで待つのは
+    // ストリームの応答ヘッダ = **最初のバイトが返るまで**の時間 (体感の初動)。
     const trpcPromise = page.waitForResponse(
-      (res) =>
-        res.url().includes("/api/trpc/consultation.sendMessage") &&
-        res.request().method() === "POST",
+      (res) => res.url().includes("/api/chat/stream") && res.request().method() === "POST",
       { timeout: trpcTimeoutMs },
     );
 
@@ -261,8 +290,12 @@ test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間�
 
     const trpcRes = await trpcPromise;
     const trpcAt = Date.now();
-    expect(trpcRes.status(), `turn ${i + 1}: sendMessage status`).toBe(200);
-    const assistantText = extractReply(await trpcRes.json());
+    expect(trpcRes.status(), `turn ${i + 1}: chat/stream status`).toBe(200);
+
+    // ストリームは逐次描画されるので、応答文は **画面から** 読む (ユーザーが見た物が真実)。
+    // 伸びが止まったら確定とみなす。JSON から取れた頃の実装とはここが変わっている。
+    const settled = await readSettledAssistantText(page, trpcTimeoutMs);
+    const assistantText = settled.text;
 
     // 対話が壊れているケースだけ fail (品質・レイテンシの評価は judge / warn の仕事)
     expect(assistantText, `turn ${i + 1}: 実 AI の応答が空`).not.toBe("");
@@ -275,7 +308,8 @@ test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間�
     const excerpt =
       assistantText.split("\n")[0].trim().slice(0, 40) || assistantText.trim().slice(0, 40);
     await expect(page.getByText(excerpt).last()).toBeVisible({ timeout: 30_000 });
-    const visibleAt = Date.now();
+    // 応答が出そろった時刻 (安定判定の待ち時間は含めない)
+    const visibleAt = settled.settledAt;
 
     // TTS は応答描画後に非同期で走る (Layout が応答全文を text にして呼ぶ)。
     // 欠落・失敗は warn (200 + audio/wav の保証は consultation-scenario / golden-path hop5 が担当)

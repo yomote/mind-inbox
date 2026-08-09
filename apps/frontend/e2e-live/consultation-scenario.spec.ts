@@ -46,8 +46,14 @@ test("[L4] 相談 → 実AIの返事 → 実VOICEVOXの音声 まで デプロ�
 
   // 発話 → 実 AI の返事。TTS (実 VOICEVOX) は返事の描画後に非同期で走るため、
   // 先にレスポンス待ちを仕掛けてから送信する
+  // #132 以降、ストリーミング中に **プリフェッチ** (`prefetch: true` / 202 を返す) が
+  // 先に飛ぶ。素朴に最初の /api/tts を掴むとそれを本合成と誤認して 202 で落ちるため、
+  // プリフェッチを除外して「実際に音声を取りに行った呼び出し」だけを待つ。
   const ttsResponse = page.waitForResponse(
-    (res) => res.url().startsWith(`${LIVE_BFF_URL}/api/tts`) && res.request().method() === "POST",
+    (res) =>
+      res.url().startsWith(`${LIVE_BFF_URL}/api/tts`) &&
+      res.request().method() === "POST" &&
+      !(res.request().postData() ?? "").includes('"prefetch":true'),
     { timeout: 210_000 },
   );
 
