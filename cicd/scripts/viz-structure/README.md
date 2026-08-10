@@ -9,7 +9,8 @@
 
 - Azure公式アイコン対応
 - 関係線（Private Link / Linked Backend など）の色分け
-- コードベース由来の論理依存関係を補完（OpenAI / VOICEVOX 連携など）
+- コードベース由来の論理依存関係を補完（OpenAI / VOICEVOX / Cosmos / Speech 連携など）— 実装は [`enrich.py`](enrich.py)（pytest 対象）
+- ブラウザ擬似ノード — SWA は linked backend を使わない設計 (ADR 0013) で Azure リソース間の構造エッジが無いため、「User (Browser) → SWA / BFF / Speech」を描いて入口の流れを可視化する
 - 各リソースの役割を別表で出力（TSV / Markdown）
 - 凡例付き
 - VS Codeプレビュー互換（PNG埋め込み）
@@ -36,6 +37,22 @@ cd cicd/scripts/viz-structure
 
 > `icons` 配下に PNG があれば自動で利用します。
 > 手動指定したい場合は `--icons "$(pwd)/icons"` を使ってください。
+
+## 3) オフラインで検証する（Azure アクセス不要）
+
+`az graph query` の `.data` 相当の JSON（リソースの配列）を渡すと、az を呼ばずに
+図・役割表の生成ロジックだけを検証できます。**`--docs-dir` を必ず指定すること** —
+省略すると commit 対象の `docs/cicd/iac/` を合成データで上書きしてしまいます。
+
+```bash
+./viz-structure.sh \
+  --subs "<GUID>" --rgs "rg-dev-mind-inbox" \
+  --resources-json /tmp/resources.json \
+  --docs-dir /tmp/viz-docs --out /tmp/viz-out
+```
+
+論理エッジ・役割表のロジック（`enrich.py`）は pytest でもテストされます
+（`npm run test:fast` の `test:scripts` に含まれる）。
 
 ## 出力
 

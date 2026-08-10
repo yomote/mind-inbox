@@ -101,6 +101,8 @@ MAP["keyvault.svg"]="*icon-service-Key-Vaults.svg"
 MAP["log-analytics.svg"]="*icon-service-Log-Analytics-Workspaces.svg"
 MAP["container-apps.svg"]="*icon-service-Worker-Container-App.svg"
 MAP["container-apps-environment.svg"]="*icon-service-Container-Apps-Environments.svg"
+MAP["cosmos-db.svg"]="*icon-service-Azure-Cosmos-DB.svg"
+MAP["cognitive-services.svg"]="*icon-service-Cognitive-Services.svg"
 
 echo "== Map (best-effort) =="
 missing=0
