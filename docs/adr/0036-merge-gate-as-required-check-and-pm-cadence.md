@@ -107,6 +107,12 @@ PR (base = main) ごとに走る Actions workflow が、以下の**揃うまで�
 5. 受け入れ後に push を積むと check が赤に戻る (実測)
 6. 状況ページに review-gate の行が出て 🟢/🔴 で判定できる
 
+## 実測記録
+
+- **2026-08-10 (PR #212 / この ADR を入れた PR 自身)**: 検証 1 を通過 — 受け入れコメント前に 🔴「PM 受け入れ ([pm-accept] + 4c411fc) が無い」、コメント投稿 + 再評価で 🟢「受け入れ・スレッド・レビューが揃った」
+- **2026-08-10**: PO が D2 を設定完了 — ruleset (Active / required checks: review-gate + test + lint-and-build / conversation resolution / force push 禁止 / admin バイパス) + `REVIEW_GATE_REQUIRE_CODEX=true` (#211)。Codex GitHub 連携も有効化 (#205)
+- 検証 2 (赤のままマージ拒否) / 4 (docs PR は Codex 不要で緑) / 5 (push で受け入れ失効) は、この記録を積む docs PR で実測する
+
 ## 未決
 
 - Codex connector アカウントの正確な login 名 (#205 の有効化後に実測して確定)
