@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { isTtsSynthesisBody } from "../src/api/ttsCallKind";
 import { fakeEntraLogin, LIVE_BFF_URL, liveEnvMissing } from "./entra-login";
 
 /**
@@ -46,14 +47,21 @@ test("[L4] 相談 → 実AIの返事 → 実VOICEVOXの音声 まで デプロ�
 
   // 発話 → 実 AI の返事。TTS (実 VOICEVOX) は返事の描画後に非同期で走るため、
   // 先にレスポンス待ちを仕掛けてから送信する
-  // #132 以降、ストリーミング中に **プリフェッチ** (`prefetch: true` / 202 を返す) が
-  // 先に飛ぶ。素朴に最初の /api/tts を掴むとそれを本合成と誤認して 202 で落ちるため、
-  // プリフェッチを除外して「実際に音声を取りに行った呼び出し」だけを待つ。
+  // `POST /api/tts` は 3 種類ある — 本合成 (audio/wav) / `plan: true` (文分割だけ・
+  // application/json, #185) / `prefetch: true` (先行合成・202, #132)。待ちたいのは
+  // **本合成だけ**。
+  //
+  // ここは「既知の変種を除外する」書き方で **2 回落ちている** — #132 の prefetch を
+  // 除外した後に #185 の plan が増え、それを掴んで `audio/wav` を期待して落ちた
+  // (deploy 3 連敗 / golden-path-monitor 2 晩)。除外リストは新しい変種が増えるたびに
+  // 黙って古くなるので、**本合成の形を積極的に指定する**方式に変える。
+  // 判定は `src/api/ttsCallKind.ts` が唯一の定義 (L1 テストが、実際のクライアント
+  // 3 種のうち本合成はちょうど 1 つ、を固定している)。
   const ttsResponse = page.waitForResponse(
     (res) =>
       res.url().startsWith(`${LIVE_BFF_URL}/api/tts`) &&
       res.request().method() === "POST" &&
-      !(res.request().postData() ?? "").includes('"prefetch":true'),
+      isTtsSynthesisBody(res.request().postData()),
     { timeout: 210_000 },
   );
 
