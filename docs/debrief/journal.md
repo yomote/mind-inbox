@@ -27,13 +27,14 @@
 - **対象**: ループエンジニアリング体制の相談から、[ADR 0035](../adr/0035-role-split-across-agents-and-actions.md) の未決事項「レビューを待つ仕組み」の設計へ。起案: [ADR 0036](../adr/0036-merge-gate-as-required-check-and-pm-cadence.md)
 - **決定**: **ADR 0036 を Accept** (承認 = 実装着手可)。5 点:
   - **D1 `review-gate` を required status check として Actions に作る** — PM 受け入れコメント (`[pm-accept]` + head SHA。SHA 規約で push リセットが自動化) / スレッド全解決 / (コード PR かつ変数 ON なら) Codex レビュー、が揃うまで赤
-  - **D2 main にブランチ保護** (required checks + 直 push 禁止 + PO の admin バイパスは脱出口として残す) — needs-human 1 クリック。設定までは advisory
+  - **D2 main にブランチ保護** (required checks + 直 push 禁止。Bypass list は空 — 当初の「admin バイパスを脱出口に」は実測 #213 で覆り、脱出口は ruleset の一時 Disable に変更) — needs-human 1 クリック。設定までは advisory
   - **D3 常設承認を「CI + review-gate がともに緑」へ書き換え** — マージ可否を明文の解釈から機械の色へ
   - **D4 PM 運転リズム** — 日次 tick (status → 分配 → マージ判定) + 週次アンカー (debrief で Proposed ADR / needs-human を必ず消化)
   - **D5 並行実装は 2 本まで + ファイル境界必須** (根拠: 8/8 の重複作業 #159 + 採番衝突の実測)
   - 入れ方の選択も PO: 「運用ルールで開始」ではなく**最初から機構で縛る** (このリポジトリの「規律は破られ、機構は守られる」の実績による)
 - **学びメモ**: 理解確認 3 問中 3 問とも設計どおりの理解 (誤答ゼロは design-gate 初)。Q1「保護設定前の review-gate は何を止めるか」→「何も止められない」— 機構としては正答。ニュアンスとして「D3 によりエージェントのマージは実質止まるが、それは規律の強度であって機構ではない」を補足した。Q2 (Codex 沈黙時は詰まる・開けるのは PO だけ = 意図した設計) / Q3 (意図との一致は意図を知らないと判定できない) も正確。**「機構 / 規律」「測定器 / 現実」の区別を先に図で固定する方針が効いている**兆候
 - **特記**: 到達経路の列挙 (ADR 0018 の手順) で **main のブランチ保護が今も未設定** (po-feedback 初回 8/7 からの持ち越し) を再発見 — 門 (check) だけ作っても直 push が開いたままでは意味がなく、D1 と D2 はセットで初めて門になる、が設計の背骨になった
+- **特記 (実測が設計の穴を暴いた / agent の失敗)**: 保護設定後の実測 (PR #213) で **review-gate 🔴 のままマージが通った**。原因はエージェント自身が手順書に書いた「Bypass list に Repository admin」— **エージェントも PO と同一アカウントで操作する**ため admin バイパス = 全操作素通し。「脱出口」の設計がアカウント分離を暗黙の前提にしていた。修正: Bypass list 空 / 脱出口は ruleset の一時 Disable。**「設定したか」ではなく「振る舞い」で検証する (ADR 0018) が無ければ、開いた門を強制済みと信じたまま運用に入っていた**
 - **持ち越し**: ブランチ保護の needs-human 起票と設定 / #205 (Codex 有効化) 後に `REVIEW_GATE_REQUIRE_CODEX` 変数を ON / Codex connector の login 名の実測 / test.yml のどのジョブまで required にするか (testing strategy §373 の具体化)
 
 ---
