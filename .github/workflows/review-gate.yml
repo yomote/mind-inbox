@@ -1,0 +1,45 @@
+# マージの門 (ADR 0036) — PR に required check `review-gate` (commit status) を貼る。
+#
+# 条件: PM 受け入れコメント ([pm-accept] + head SHA) / レビュースレッド全解決 /
+#       (コード PR かつ vars.REVIEW_GATE_REQUIRE_CODEX=true なら) Codex レビュー。
+# workflow run の緑 = 「評価できたこと」。判定の 🟢/🔴 は commit status 側に出る。
+# 強制力はブランチ保護 (required status check) が持つ — 設定は needs-human Issue 参照。
+#
+# 注意: issue_comment / pull_request_review トリガーは main に入った版でしか発火しない。
+#       コメント後の再評価が要るときは workflow_dispatch で PR 番号を渡して叩ける。
+
+name: review-gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created, edited]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "再評価する PR 番号"
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+jobs:
+  gate:
+    name: マージの門を判定
+    runs-on: ubuntu-latest
+    # issue_comment は Issue にも飛ぶ — PR のコメントだけ拾う
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 判定して commit status を貼る
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEW_GATE_REQUIRE_CODEX: ${{ vars.REVIEW_GATE_REQUIRE_CODEX }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+        run: python3 cicd/scripts/review-gate/check.py "$PR_NUMBER"

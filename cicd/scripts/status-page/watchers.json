@@ -36,6 +36,13 @@
       "expect": "PR ごと"
     },
     {
+      "id": "review-gate.yml",
+      "name": "マージの門 (review-gate)",
+      "what": "PM 受け入れ・スレッド解決・(コード PR は) Codex レビューが揃うまで PR のマージを止める",
+      "expect": "PR ごと",
+      "critical": true
+    },
+    {
       "id": "adr-number-guard.yml",
       "name": "ADR 採番の衝突ガード",
       "what": "同じ ADR 番号を 2 本足していないか PR で見る",
