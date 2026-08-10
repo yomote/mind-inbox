@@ -37,6 +37,7 @@ on:
         options:
           - azure-resources
           - cosmos-free-tier
+          - recent-errors
           - cost-summary
           - fetch-doc
       url:
@@ -185,6 +186,59 @@ jobs:
                   echo "" >> "$OUT"
                   echo "> 注: これは「枠が空いているか」の判定であり、**無料枠の RU/s と GB の実額は含まない**。" >> "$OUT"
                   echo "> 実額はアカウント作成時の Portal 表示か \`az cosmosdb create\` の結果で確認すること。" >> "$OUT"
+                fi
+              fi
+              ;;
+
+            recent-errors)
+              # 2026-08-10: 実環境で `consultation.extract` が 500 (upstream-failed) を
+              # 返したが、**例外の中身がどこにも出てこなかった**。BFF は種別トークンだけ
+              # 残して詳細を捨て、ai-agent の例外は Container App の中にある。
+              # 「壊れているのは分かるが、なぜかが分からない」を潰すための read-only 経路。
+              echo "## 直近のエラーログ (BFF / ai-agent)" >> "$OUT"
+              if [ "$AZURE_READY" != "true" ]; then
+                fail "OIDC 未設定のため Azure に接続していない"
+              else
+                RG="rg-${ENV_NAME}-mind-inbox"
+                echo "" >> "$OUT"
+                echo "対象リソースグループ: \`$RG\` / 直近 60 分" >> "$OUT"
+
+                # --- ai-agent (Container Apps のシステムログ) ---
+                echo "" >> "$OUT"
+                echo "### ai-agent (Container App)" >> "$OUT"
+                CA=$(az containerapp list -g "$RG" --query "[?contains(name,'ai-agent')].name | [0]" -o tsv 2>/tmp/err.txt)
+                if [ -z "$CA" ]; then
+                  echo '```' >> "$OUT"; cat /tmp/err.txt >> "$OUT"; echo '```' >> "$OUT"
+                  fail "ai-agent の Container App が見つからない"
+                else
+                  echo '```' >> "$OUT"
+                  if ! az containerapp logs show -g "$RG" -n "$CA" --tail 80 --type console \
+                        >> "$OUT" 2>/tmp/err.txt; then
+                    cat /tmp/err.txt >> "$OUT"
+                    echo '```' >> "$OUT"
+                    fail "az containerapp logs show が失敗した"
+                  else
+                    echo '```' >> "$OUT"
+                  fi
+                fi
+
+                # --- BFF (Functions のログは Log Analytics 側) ---
+                echo "" >> "$OUT"
+                echo "### BFF (Function App / Log Analytics)" >> "$OUT"
+                WS=$(az monitor log-analytics workspace list -g "$RG" --query "[0].customerId" -o tsv 2>/dev/null)
+                if [ -z "$WS" ]; then
+                  echo "(未検証: Log Analytics ワークスペースが見つからない)" >> "$OUT"
+                else
+                  echo '```' >> "$OUT"
+                  if ! az monitor log-analytics query -w "$WS" \
+                        --analytics-query "traces | where timestamp > ago(60m) | where severityLevel >= 3 or message has 'failed' or message has 'error' | project timestamp, message | order by timestamp desc | take 40" \
+                        -o table >> "$OUT" 2>/tmp/err.txt; then
+                    cat /tmp/err.txt >> "$OUT"
+                    echo '```' >> "$OUT"
+                    echo "(未検証: Log Analytics のクエリが失敗した — Functions のログ出力先が別かもしれない)" >> "$OUT"
+                  else
+                    echo '```' >> "$OUT"
+                  fi
                 fi
               fi
               ;;
