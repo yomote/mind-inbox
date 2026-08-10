@@ -104,10 +104,46 @@ else
 fi
 rm -f "$tmp"
 
+# 2026-08-10: PO が実環境で「困りごと抽出がエラーになる」を踏んだ。調べると **抽出は
+# どのテストも実環境で通していなかった** — ここは対話と音声で終わっており、UI 込み E2E も
+# 抽出ボタンを押しておらず、UC 受け入れテスト (L3-real) は偽 ai-agent + メモリ保存で走る。
+# 「実 AI が JSON を返す」「Cosmos に書ける」はこのホップだけが見られる。
+echo "== 6. consultation.extract (実 AI の構造化出力) =="
+body="$(curl -s -m 300 -X POST -H "$A" -H "Content-Type: application/json" \
+  -d '{"sessionId":"golden-path-probe","messages":[{"role":"user","text":"最近レビュー待ちが長くて手が止まる。あと会議が多くて集中できない"},{"role":"assistant","text":"どちらがつらいですか"},{"role":"user","text":"レビュー待ちの方がつらい"}]}' \
+  "$H/api/trpc/consultation.extract")"
+extracted="$(echo "$body" | python3 -c "
+import sys,json
+try:
+  d=json.load(sys.stdin); print(len(d['result']['data']['items']))
+except Exception: print(-1)")"
+if [[ "$extracted" -gt 0 ]]; then
+  ok "抽出が困りごとを $extracted 件返す"
+elif [[ "$extracted" == "0" ]]; then
+  ng "抽出が 0 件。実 AI が構造化出力を返せていない疑い: $(echo "$body" | head -c 300)"
+else
+  ng "抽出が壊れている: $(echo "$body" | head -c 400)"
+fi
+
+# problem.list は query なので GET (health.ping と同じ)。POST すると tRPC が
+# METHOD_NOT_SUPPORTED を返し、「一覧が壊れている」と誤診する
+echo "== 7. problem.list (抽出結果が読み出せるか) =="
+body="$(curl -s -m 60 -H "$A" "$H/api/trpc/problem.list")"
+listed="$(echo "$body" | python3 -c "
+import sys,json
+try:
+  d=json.load(sys.stdin); print(len(d['result']['data']))
+except Exception: print(-1)")"
+if [[ "$listed" -ge 0 ]]; then
+  ok "一覧が読める (${listed} 件)"
+else
+  ng "一覧が壊れている: $(echo "$body" | head -c 400)"
+fi
+
 echo ""
 echo "== Result =="
 if [[ "$FAIL" == "0" ]]; then
-  echo "PASS — ゴールデンパス (認証 → 対話 (実 AI) → 音声) が実環境で通っている"
+  echo "PASS — ゴールデンパス (認証 → 対話 (実 AI) → 音声 → 抽出 → 一覧) が実環境で通っている"
 else
   echo "FAIL — ゴールデンパスが壊れている。上の NG 行から壊れたホップを特定すること"
   exit 1
