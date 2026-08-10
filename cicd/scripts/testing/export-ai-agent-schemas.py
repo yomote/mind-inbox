@@ -34,8 +34,6 @@ from app.schemas import (  # noqa: E402  isort:skip
     ChatStreamError,
     ExtractionResult,
     ExtractRequest,
-    OrganizeRequest,
-    OrganizeResponse,
     PlanRequest,
     PlanResponse,
 )
@@ -66,8 +64,6 @@ SCHEMAS = {
     "ChatStreamDelta": ChatStreamDelta,
     "ChatStreamDone": ChatStreamDone,
     "ChatStreamError": ChatStreamError,
-    "OrganizeRequest": OrganizeRequest,
-    "OrganizeResponse": OrganizeResponse,
     "PlanRequest": PlanRequest,
     "PlanResponse": PlanResponse,
     "ApproveRequest": ApproveRequest,

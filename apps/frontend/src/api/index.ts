@@ -1,11 +1,4 @@
-export {
-  startNewConsultation,
-  sendMessage,
-  organizeResult,
-  createActionPlan,
-} from "./consultation";
-
-export { loadHistories, saveHistory } from "./history";
+export { startNewConsultation, sendMessage } from "./consultation";
 
 export {
   ExtractFailed,

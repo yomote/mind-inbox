@@ -53,7 +53,7 @@ graph LR
 | --- | --- | --- |
 | BFF tRPC | `health` / `speech` / `consultation` / `history` / `problem` | zod schema → [OpenAPI は生成物](../api/README.md) |
 | BFF 非 tRPC | `POST /api/tts` / `POST /api/chat/stream` (SSE) / warmup | 同上 |
-| AI Agent | `/health` `/chat` `/chat/stream` `/extract` `/organize` `/plan` `/approve` | pydantic (`app/schemas.py`) |
+| AI Agent | `/health` `/chat` `/chat/stream` `/extract` `/plan` `/approve` | pydantic (`app/schemas.py`) |
 | VOICEVOX Wrapper | `/health` `/speakers` `/audio-query` `/synthesize` | `apps/services/voicevox/` |
 
 BFF ↔ AI Agent のスキーマ対称性は L0 契約テスト (`apps/bff/scripts/contract-check.mjs`) が守る。
@@ -64,7 +64,7 @@ BFF ↔ AI Agent のスキーマ対称性は L0 契約テスト (`apps/bff/scrip
 
 ## 永続化
 
-困りごと (Problem) と相談履歴は **Cosmos DB (NoSQL)** に載る (#165 / [ADR 0030](../adr/0030-persistence-on-cosmos-db-single-store-behind-bff.md))。BFF は `COSMOS_ENDPOINT` の有無で実装を選び、**未設定ならローカル / テストの既定である in-memory 実装で動く** (`apps/bff/src/repositories/repositoryFactory.ts`) — 外部依存ゼロでローカルを触れる特性は維持する。
+困りごと (Problem) は **Cosmos DB (NoSQL)** に載る (#165 / [ADR 0030](../adr/0030-persistence-on-cosmos-db-single-store-behind-bff.md))。BFF は `COSMOS_ENDPOINT` の有無で実装を選び、**未設定ならローカル / テストの既定である in-memory 実装で動く** (`apps/bff/src/repositories/repositoryFactory.ts`) — 外部依存ゼロでローカルを触れる特性は維持する。
 
 会話セッションと承認レコード (`apps/services/ai-agent/app/repositories.py`) は **in-memory 据え置き**なので、ai-agent が scale-to-zero で落ちれば中断復帰は壊れる。これは ADR 0030 が明示的に受け入れた制約。
 
@@ -72,7 +72,7 @@ BFF ↔ AI Agent のスキーマ対称性は L0 契約テスト (`apps/bff/scrip
 
 | 対象 | 行き先 |
 | --- | --- |
-| 困りごと (Problem / Mention) / 相談履歴 | **Cosmos DB (NoSQL, Japan East)**。マネージド ID + RBAC のみ、アカウントキーは無効化 |
+| 困りごと (Problem / Mention) | **Cosmos DB (NoSQL, Japan East)**。マネージド ID + RBAC のみ、アカウントキーは無効化 |
 | 会話セッション / 承認レコード | **in-memory 据え置き** — ai-agent は bicep 外で MI を安定して付けられず、機微データへの扉も増えるため繋がない |
 | 将来の embedding 索引 (#83) | **同じ Cosmos アカウント**でベクトル検索まで完結させる (v2 計画 §6 の宿題への回答) |
 

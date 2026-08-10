@@ -19,7 +19,7 @@ import { SessionSpecPreview } from '../../../frontend/src/spec/previews/SessionS
 
 ## 1. 目的
 
-ユーザーの入力とAIの応答を時系列で表示し、対話の区切りで**困りごとを抽出**して抽出結果レビューへ進むための対話を行う（organize→extract 移行 / Phase C）。旧「整理結果へ」導線は段階廃止で残す。
+ユーザーの入力とAIの応答を時系列で表示し、対話の区切りで**困りごとを抽出**して抽出結果レビューへ進むための対話を行う。セッションからの出口は抽出 1 本（旧「整理結果へ」は [ADR 0034](../../adr/0034-remove-legacy-session-centric-flow.md) で撤去）。
 
 ## 2. ユーザーがこの画面で達成すること
 
@@ -32,7 +32,7 @@ import { SessionSpecPreview } from '../../../frontend/src/spec/previews/SessionS
 
 1. 新規相談を開始する
 2. 会話を継続する
-3. 困りごとを抽出して抽出結果レビューへ進む（主導線 / 旧「整理結果へ」は段階廃止で併存）
+3. 困りごとを抽出して抽出結果レビューへ進む（セッションからの唯一の出口）
 4. セッションを一時中断する
 5. 危機時サポートへ遷移する
 
@@ -60,7 +60,6 @@ import { SessionSpecPreview } from '../../../frontend/src/spec/previews/SessionS
   - 危機時サポートボタン
   - 一時保存 / 中断ボタン
   - 困りごとを抽出ボタン（主導線 / primary）
-  - 整理結果へボタン（旧 PoC / secondary・段階廃止）
 
 ## 5. UI要素一覧
 
@@ -126,7 +125,6 @@ import { SessionSpecPreview } from '../../../frontend/src/spec/previews/SessionS
 - 「危機時サポート」で `crisisSupport` に遷移
 - 「一時保存 / 中断」で `paused` に遷移
 - 「困りごとを抽出」で抽出後 `extractReview` に遷移（主導線）
-- 「整理結果へ」で結果生成後 `result` に遷移（旧 PoC / 段階廃止で併存）
 
 ## 7. 状態
 
@@ -186,7 +184,6 @@ import { SessionSpecPreview } from '../../../frontend/src/spec/previews/SessionS
 - 危機時サポートボタンから危機時サポートへ遷移できる
 - 一時保存 / 中断ボタンから中断画面へ遷移できる
 - 困りごとを抽出ボタン（primary）で抽出結果レビューへ遷移できる
-- 整理結果へボタン（secondary）で整理結果画面へ遷移できる（段階廃止で併存）
 - 音声入力は明示的に停止するまで継続し、認識エンジンが途中で止まっても自動で再開される（1〜2 分の連続発話で確定テキストが入力欄に蓄積される）
 - 音声入力ボタンを押すと、入力欄にフォーカスが移り、その場で認識が始まる（準備待ちの無反応区間を作らない）
 - 認識中は「マイクを準備中…」と「聞いています m:ss」が区別して表示される

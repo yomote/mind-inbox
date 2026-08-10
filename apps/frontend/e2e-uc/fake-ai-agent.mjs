@@ -90,6 +90,15 @@ const TOPICS = [
     affect: { label: "もどかしさ", valence: "negative", intensity: 0.35 },
   },
   {
+    key: "study",
+    keywords: ["勉強", "資格", "学び直し", "身につか"],
+    title: "学び直しが続かない",
+    theme: "自己理解・生き方",
+    statement: "学び直そうと決めても続かず、身についている実感がない",
+    tags: ["学習習慣"],
+    affect: { label: "焦り", valence: "negative", intensity: 0.5 },
+  },
+  {
     key: "commute",
     keywords: ["通勤", "満員電車"],
     title: "通勤がしんどい",
@@ -101,7 +110,7 @@ const TOPICS = [
 ];
 
 /**
- * 各 spec が「自分の題材」を 1 つ占有できるように 6 種類用意している。
+ * 各 spec が「自分の題材」を 1 つ占有できるように 8 種類用意している。
  * BFF の Problem リポジトリは E2E の全 spec で共有される (プロセスが 1 本) ため、
  * 題材が被ると別 spec が作った Problem に寄ってしまい、テストが順序に依存する。
  */
@@ -239,21 +248,6 @@ const routes = {
   "POST /__drop-sessions": () => {
     sessions.clear();
     return { status: 200, json: { ok: true } };
-  },
-
-  "POST /organize": (body) => {
-    const messages = sessions.get(body.session_id) ?? [];
-    const matched = TOPICS.filter((t) => t.keywords.some((k) => messages.join("\n").includes(k)));
-    return {
-      status: 200,
-      json: {
-        summary: matched.length
-          ? matched.map((t) => t.statement).join(" / ")
-          : "話を受け止めました。",
-        emotions: [...new Set(matched.map((t) => t.affect.label))],
-        priorities: matched.flatMap((t) => t.tags),
-      },
-    };
   },
 
   "POST /plan": (body) => ({

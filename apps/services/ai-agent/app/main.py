@@ -5,8 +5,7 @@ Endpoints:
   POST /chat        — 会話ターン
   POST /chat/stream — 会話ターン (SSE ストリーミング / #120, ADR 0024)
   POST /extract  — セッション全文を Mention[] に抽出 + 既存 Problem へグルーピング (ADR 0007)
-  POST /organize — セッション履歴を OrganizedResult に変換 (deprecated: Phase C で /extract に置換)
-  POST /plan     — OrganizedResult から ActionPlan を生成
+  POST /plan     — Problem の文脈から ActionPlan を生成
   POST /approve  — 承認待ちツール呼び出しの実行 / キャンセル
   GET  /health   — ヘルスチェック
 """
@@ -21,7 +20,6 @@ from .agents import get_chat_client
 from .config import get_settings
 from .extractor import ExtractionParseError, ExtractionUnavailable, extract
 from .kernel import get_kernel
-from .organizer import organize
 from .planner import generate_plan
 from .repositories import (
     ApprovalRepository,
@@ -38,8 +36,6 @@ from .schemas import (
     ExtractionResult,
     ExtractRequest,
     HealthResponse,
-    OrganizeRequest,
-    OrganizeResponse,
     PlanRequest,
     PlanResponse,
 )
@@ -169,20 +165,6 @@ async def extract_endpoint(
         raise HTTPException(status_code=502, detail=str(exc))
     except Exception as exc:
         logger.error("POST /extract error: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-@app.post("/organize", response_model=OrganizeResponse)
-async def organize_endpoint(
-    req: OrganizeRequest,
-    session_repo: SessionRepository = Depends(get_session_repo),
-) -> OrganizeResponse:
-    try:
-        return await organize(req.session_id, session_repo, get_chat_client())
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except Exception as exc:
-        logger.error("POST /organize error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
 
 

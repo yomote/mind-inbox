@@ -1,5 +1,5 @@
 /**
- * 相談フロー (吐き出し → 抽出 → 困りごと → プラン → 履歴) の状態と操作を所有する hook。
+ * 相談フロー (吐き出し → 抽出 → 困りごと → 次の一歩) の状態と操作を所有する hook。
  *
  * 分離の理由 (#142): 元は Layout.tsx が相談ドメインの state 9 とハンドラ 12 を抱え、
  * 相談フローを 1 行変えるのに 900 行のシェル (認証 / AppBar / 読み上げ) ごと読む必要があった。
@@ -12,27 +12,15 @@
 import * as React from "react";
 import {
   ExtractFailed,
-  createActionPlan,
   createProblemPlan,
   extractMentions,
-  loadHistories,
   loadProblem,
   loadProblems,
-  organizeResult,
-  saveHistory,
   sendMessage,
   startNewConsultation,
   triageProblem,
 } from "../api";
-import type {
-  ActionPlan,
-  ConsultationSession,
-  ExtractionResult,
-  HistoryItem,
-  OrganizedResult,
-  Problem,
-  TriageInput,
-} from "../api";
+import type { ConsultationSession, ExtractionResult, Problem, TriageInput } from "../api";
 import type { AppRoute } from "../Router";
 import { deriveSessionTitle } from "./sessionTitle";
 
@@ -46,21 +34,13 @@ export type Consultation = {
   setDraftMessage: (value: string) => void;
 
   session: ConsultationSession | null;
-  result: OrganizedResult | null;
-  plan: ActionPlan | null;
-  histories: HistoryItem[];
-  selectedHistory: HistoryItem | null;
   extraction: ExtractionResult | null;
   problems: Problem[];
   selectedProblem: Problem | null;
 
   startConsultation: () => Promise<void>;
   sendDraftMessage: () => Promise<void>;
-  organize: () => Promise<void>;
   extract: () => Promise<void>;
-  createPlan: () => Promise<void>;
-  saveAndGoHistory: () => Promise<void>;
-  openHistoryResult: (item: HistoryItem) => void;
   openProblemList: () => Promise<void>;
   openProblem: (id: string) => Promise<void>;
   triage: (input: TriageInput) => Promise<void>;
@@ -78,13 +58,10 @@ export type Consultation = {
  * (2026-08-09 に PO が踏んだ症状) は、例外を握らないハンドラが 1 つでもあれば再発する。
  */
 const FAILURE_MESSAGE = {
-  loadHistories: "履歴を読み込めませんでした。通信状況を確認して、画面を開き直してください。",
   startConsultation: "相談を開始できませんでした。通信状況を確認して、もう一度お試しください。",
   sendMessage: "メッセージを送れませんでした。入力はそのまま残っています。もう一度お試しください。",
-  organize: "整理結果を作れませんでした。通信状況を確認して、もう一度お試しください。",
   extract: "困りごとを抽出できませんでした。通信状況を確認して、もう一度お試しください。",
   createPlan: "次の一歩を作れませんでした。通信状況を確認して、もう一度お試しください。",
-  saveHistory: "保存できませんでした。通信状況を確認して、もう一度お試しください。",
   openProblemList: "困りごと一覧を開けませんでした。通信状況を確認して、もう一度お試しください。",
   openProblem: "困りごとを開けませんでした。通信状況を確認して、もう一度お試しください。",
   problemNotFound: "その困りごとは見つかりませんでした。一覧を開き直してください。",
@@ -114,33 +91,20 @@ function extractFailureMessage(err: unknown): string {
 /** runAction の結果。失敗しても throw せず、呼び出し側が後続処理を止められるようにする。 */
 type ActionOutcome<T> = { ok: true; value: T } | { ok: false };
 
-export type ConsultationOptions = {
-  /**
-   * データ読み込みを始めてよいか (= 認証が確定したか)。
-   * 未認証で API を呼ぶと getAccessToken() がログインリダイレクトを誘発し、
-   * オンボーディングを見せないまま Entra へ飛ばしてしまう (#112 / onboarding.mdx)。
-   * 認証の判断は Layout の責務なので、hook は「読んでよいか」だけを受け取る。
-   */
-  ready: boolean;
-};
-
 /**
  * @param transition 画面遷移。認証ガードを持つ Layout 側の実装を受け取る
  *                   (遷移の可否判断は Layout の責務なのでここでは持たない)。
+ *
+ * **マウント時に API を呼ばないこと** — 未認証で叩くと getAccessToken() が
+ * ログインリダイレクトを誘発し、オンボーディングを見せないまま Entra へ飛ばす
+ * (#112 / onboarding.mdx)。データはすべてユーザー操作を起点に読む。
  */
-export function useConsultation(
-  transition: (next: AppRoute) => void,
-  { ready }: ConsultationOptions,
-): Consultation {
+export function useConsultation(transition: (next: AppRoute) => void): Consultation {
   const [loading, setLoading] = React.useState(false);
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [draftMessage, setDraftMessage] = React.useState("");
 
   const [session, setSession] = React.useState<ConsultationSession | null>(null);
-  const [result, setResult] = React.useState<OrganizedResult | null>(null);
-  const [plan, setPlan] = React.useState<ActionPlan | null>(null);
-  const [histories, setHistories] = React.useState<HistoryItem[]>([]);
-  const [selectedHistory, setSelectedHistory] = React.useState<HistoryItem | null>(null);
   const [extraction, setExtraction] = React.useState<ExtractionResult | null>(null);
   const [problems, setProblems] = React.useState<Problem[]>([]);
   const [selectedProblem, setSelectedProblem] = React.useState<Problem | null>(null);
@@ -185,26 +149,6 @@ export function useConsultation(
     [setBusy],
   );
 
-  React.useEffect(() => {
-    if (!ready) return;
-
-    let active = true;
-    void (async () => {
-      // 初期読み込みも無言で失敗させない。ここが黙って落ちると履歴が常に空に見える。
-      try {
-        const data = await loadHistories();
-        if (active) setHistories(data);
-      } catch (err) {
-        console.error("[useConsultation] loadHistories", err);
-        if (active) setActionError(FAILURE_MESSAGE.loadHistories);
-      }
-    })();
-
-    return () => {
-      active = false;
-    };
-  }, [ready]);
-
   const startConsultation = React.useCallback(async () => {
     // テーマ入力画面は廃止 (home.mdx)。常に空で開始し、AI の問いかけから対話が始まる。
     const outcome = await runAction(FAILURE_MESSAGE.startConsultation, () =>
@@ -213,9 +157,6 @@ export function useConsultation(
     if (!outcome.ok) return;
 
     setSession(outcome.value);
-    setResult(null);
-    setPlan(null);
-    setSelectedHistory(null);
     transition("session");
   }, [runAction, transition]);
 
@@ -250,15 +191,6 @@ export function useConsultation(
     setSession((prev) => (prev ? { ...prev, messages: [...prev.messages, outcome.value] } : prev));
   }, [draftMessage, runAction, session]);
 
-  const organize = React.useCallback(async () => {
-    if (!session) return;
-    const outcome = await runAction(FAILURE_MESSAGE.organize, () => organizeResult(session.id));
-    if (!outcome.ok) return;
-
-    setResult(outcome.value);
-    transition("result");
-  }, [runAction, session, transition]);
-
   const extract = React.useCallback(async () => {
     if (!session) return;
     // 会話はこちらが持っているので渡す (#183)。ai-agent のセッション履歴はプロセスメモリで、
@@ -272,41 +204,6 @@ export function useConsultation(
     setExtraction(outcome.value);
     transition("extractReview");
   }, [runAction, session, transition]);
-
-  const createPlan = React.useCallback(async () => {
-    if (!result) return;
-    const outcome = await runAction(FAILURE_MESSAGE.createPlan, () => createActionPlan(result));
-    if (!outcome.ok) return;
-
-    setPlan(outcome.value);
-    transition("actionPlan");
-  }, [result, runAction, transition]);
-
-  const saveAndGoHistory = React.useCallback(async () => {
-    if (!result || !plan || !session) return;
-    const outcome = await runAction(FAILURE_MESSAGE.saveHistory, () =>
-      saveHistory({
-        sessionId: session.id,
-        title: session.title || "相談履歴",
-        result,
-        plan,
-      }),
-    );
-    if (!outcome.ok) return;
-
-    setHistories((prev) => [outcome.value, ...prev]);
-    setSelectedHistory(outcome.value);
-    transition("history");
-  }, [plan, result, runAction, session, transition]);
-
-  const openHistoryResult = React.useCallback(
-    (item: HistoryItem) => {
-      setSelectedHistory(item);
-      setResult(item.result);
-      transition("result");
-    },
-    [transition],
-  );
 
   const openProblemList = React.useCallback(async () => {
     const outcome = await runAction(FAILURE_MESSAGE.openProblemList, () => loadProblems());
@@ -396,9 +293,6 @@ export function useConsultation(
     setActionError(null);
     setDraftMessage("");
     setSession(null);
-    setResult(null);
-    setPlan(null);
-    setSelectedHistory(null);
     setExtraction(null);
     setProblems([]);
     setSelectedProblem(null);
@@ -411,20 +305,12 @@ export function useConsultation(
     draftMessage,
     setDraftMessage,
     session,
-    result,
-    plan,
-    histories,
-    selectedHistory,
     extraction,
     problems,
     selectedProblem,
     startConsultation,
     sendDraftMessage,
-    organize,
     extract,
-    createPlan,
-    saveAndGoHistory,
-    openHistoryResult,
     openProblemList,
     openProblem,
     triage,

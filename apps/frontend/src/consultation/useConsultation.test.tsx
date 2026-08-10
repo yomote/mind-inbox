@@ -16,11 +16,7 @@ vi.mock("../api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api")>()),
   startNewConsultation: vi.fn(),
   sendMessage: vi.fn(),
-  organizeResult: vi.fn(),
-  createActionPlan: vi.fn(),
   extractMentions: vi.fn(),
-  loadHistories: vi.fn(async () => []),
-  saveHistory: vi.fn(),
   loadProblems: vi.fn(async () => []),
   loadProblem: vi.fn(),
   triageProblem: vi.fn(),
@@ -29,14 +25,10 @@ vi.mock("../api", async (importOriginal) => ({
 
 import {
   ExtractFailed,
-  createActionPlan,
   createProblemPlan,
   extractMentions,
-  loadHistories,
   loadProblem,
   loadProblems,
-  organizeResult,
-  saveHistory,
   sendMessage,
   startNewConsultation,
   triageProblem,
@@ -54,12 +46,9 @@ const session = (overrides = {}) => ({
 
 const problem = (id: string) => ({ id, title: `問題 ${id}` }) as never;
 
-function setup(options: { ready?: boolean } = {}) {
+function setup() {
   const transition = vi.fn();
-  const view = renderHook(
-    ({ ready }: { ready: boolean }) => useConsultation(transition, { ready }),
-    { initialProps: { ready: options.ready ?? true } },
-  );
+  const view = renderHook(() => useConsultation(transition));
   return { transition, ...view };
 }
 
@@ -138,56 +127,6 @@ describe("[L1] useConsultation — 相談の開始と発話", () => {
   });
 });
 
-describe("[L1] useConsultation — 整理・プラン・保存", () => {
-  it("整理 → プラン → 保存で状態が積み上がり、履歴に載る", async () => {
-    // 無いと: 途中の状態を落として保存し、履歴から結果やプランが欠ける
-    vi.mocked(startNewConsultation).mockResolvedValue(session());
-    vi.mocked(organizeResult).mockResolvedValue({
-      summary: "疲労",
-      emotions: ["不安"],
-      priorities: ["休む"],
-    });
-    vi.mocked(createActionPlan).mockResolvedValue({ title: "48h", steps: ["休む"] });
-    vi.mocked(saveHistory).mockResolvedValue({
-      id: "h1",
-      title: "相談セッション",
-      createdAt: "2026-01-01",
-      result: { summary: "疲労", emotions: ["不安"], priorities: ["休む"] },
-      plan: { title: "48h", steps: ["休む"] },
-    });
-    const { result, transition } = setup();
-    await act(async () => {
-      await result.current.startConsultation();
-    });
-
-    await act(async () => {
-      await result.current.organize();
-    });
-    expect(result.current.result?.summary).toBe("疲労");
-    expect(transition).toHaveBeenCalledWith("result");
-
-    await act(async () => {
-      await result.current.createPlan();
-    });
-    expect(result.current.plan?.title).toBe("48h");
-    expect(transition).toHaveBeenCalledWith("actionPlan");
-
-    await act(async () => {
-      await result.current.saveAndGoHistory();
-    });
-    expect(result.current.histories.map((h) => h.id)).toEqual(["h1"]);
-    expect(transition).toHaveBeenCalledWith("history");
-  });
-
-  it("整理結果が無いままプランを作ろうとしても呼ばない", () => {
-    const { result } = setup();
-    act(() => {
-      void result.current.createPlan();
-    });
-    expect(createActionPlan).not.toHaveBeenCalled();
-  });
-});
-
 describe("[L1] useConsultation — 困りごとのトリアージ", () => {
   it("却下・統合は一覧へ戻る (対象が消えるため)", async () => {
     // 無いと: 消えた Problem の詳細画面に留まり、空の画面をユーザーに見せる
@@ -251,12 +190,6 @@ describe("[L1] useConsultation — 無音失敗の禁止 (ADR 0018)", () => {
       arrange: () => vi.mocked(extractMentions).mockRejectedValue(failure),
       act: (c) => c.extract(),
       forbiddenRoute: "extractReview",
-    },
-    {
-      name: "整理結果",
-      arrange: () => vi.mocked(organizeResult).mockRejectedValue(failure),
-      act: (c) => c.organize(),
-      forbiddenRoute: "result",
     },
     {
       name: "困りごと一覧を開く",
@@ -327,36 +260,6 @@ describe("[L1] useConsultation — 無音失敗の禁止 (ADR 0018)", () => {
     expect(result.current.session?.messages.map((m) => m.role)).toEqual(["assistant"]);
   });
 
-  it("保存に失敗したら履歴に載せず、履歴画面へ飛ばさない", async () => {
-    // 無いと: 保存できていないのに履歴画面へ遷移し、あるはずの記録が無い
-    vi.mocked(startNewConsultation).mockResolvedValue(session());
-    vi.mocked(organizeResult).mockResolvedValue({
-      summary: "疲労",
-      emotions: ["不安"],
-      priorities: ["休む"],
-    });
-    vi.mocked(createActionPlan).mockResolvedValue({ title: "48h", steps: ["休む"] });
-    vi.mocked(saveHistory).mockRejectedValue(failure);
-    const { result, transition } = setup();
-    await act(async () => {
-      await result.current.startConsultation();
-    });
-    await act(async () => {
-      await result.current.organize();
-    });
-    await act(async () => {
-      await result.current.createPlan();
-    });
-
-    await act(async () => {
-      await result.current.saveAndGoHistory();
-    });
-
-    expect(result.current.actionError).not.toBeNull();
-    expect(result.current.histories).toEqual([]);
-    expect(transition).not.toHaveBeenCalledWith("history");
-  });
-
   it("開いた Problem が消えていたら、その旨を出す", async () => {
     // 無いと: 一覧のカードを押しても無反応 (古い一覧を掴んだときの実挙動)
     vi.mocked(loadProblem).mockResolvedValue(null);
@@ -369,25 +272,19 @@ describe("[L1] useConsultation — 無音失敗の禁止 (ADR 0018)", () => {
     expect(result.current.actionError).not.toBeNull();
     expect(transition).not.toHaveBeenCalledWith("problemDetail");
   });
-
-  it("履歴の初期読み込みが失敗してもエラーを出す", async () => {
-    // 無いと: 履歴が「まだありません」と嘘をつく (読み込み失敗と空を区別できない)
-    vi.mocked(loadHistories).mockRejectedValue(failure);
-    const { result } = setup();
-
-    await waitFor(() => expect(result.current.actionError).not.toBeNull());
-  });
 });
 
-describe("[L1] useConsultation — 履歴の初期読み込み (#112)", () => {
-  it("認証が確定するまで履歴 API を呼ばない", async () => {
+describe("[L1] useConsultation — マウント時に API を呼ばない (#112)", () => {
+  it("hook を張っただけでは通信しない", async () => {
     // 無いと: 未認証で API を叩き getAccessToken() がログインリダイレクトを誘発して、
-    //         オンボーディングを見せないまま Entra へ飛ばす (#112 の再発)
-    const { rerender } = setup({ ready: false });
-    await waitFor(() => expect(loadHistories).not.toHaveBeenCalled());
+    //         オンボーディングを見せないまま Entra へ飛ばす (#112 の再発)。
+    //         履歴の先読みを撤去した (ADR 0034) 今、mount 時の通信はゼロが仕様。
+    setup();
 
-    rerender({ ready: true });
-    await waitFor(() => expect(loadHistories).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(loadProblems).not.toHaveBeenCalled();
+      expect(startNewConsultation).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -423,7 +320,7 @@ describe("[L1] useConsultation — 抽出の失敗をユーザーに見せる (#
       updatedProblemCount: 0,
     });
     const transition = vi.fn();
-    const { result } = renderHook(() => useConsultation(transition, { ready: true }));
+    const { result } = renderHook(() => useConsultation(transition));
 
     await act(async () => await result.current.startConsultation());
     await act(async () => await result.current.extract());
@@ -443,7 +340,7 @@ describe("[L1] useConsultation — 抽出の失敗をユーザーに見せる (#
     vi.mocked(startNewConsultation).mockResolvedValue(session());
     vi.mocked(extractMentions).mockRejectedValue(new ExtractFailed(kind as never));
     const transition = vi.fn();
-    const { result } = renderHook(() => useConsultation(transition, { ready: true }));
+    const { result } = renderHook(() => useConsultation(transition));
 
     await act(async () => await result.current.startConsultation());
     transition.mockClear();
@@ -459,7 +356,7 @@ describe("[L1] useConsultation — 抽出の失敗をユーザーに見せる (#
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(startNewConsultation).mockResolvedValue(session());
     vi.mocked(extractMentions).mockRejectedValue(new ExtractFailed("upstream-failed"));
-    const { result } = renderHook(() => useConsultation(vi.fn(), { ready: true }));
+    const { result } = renderHook(() => useConsultation(vi.fn()));
 
     await act(async () => await result.current.startConsultation());
     await act(async () => await result.current.extract());

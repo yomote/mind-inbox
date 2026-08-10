@@ -1,7 +1,7 @@
 """
 Microsoft Agent Framework の chat client シングルトン (ADR 0016, M1)。
 
-extractor / organizer / planner (単発 structured 呼び出し系) が共有する。
+extractor / planner (単発 structured 呼び出し系) が共有する。
 /chat 系 (workflow.py) は M1-3 で移行するまで kernel.py (Semantic Kernel) を
 使い続ける — 変化を 1 度に 1 種類にするため (implementation_plan_v2 §0.2)。
 """

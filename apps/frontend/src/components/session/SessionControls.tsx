@@ -4,7 +4,6 @@ type SessionControlsProps = {
   loading: boolean;
   onCrisisSupport: () => void;
   onPause: () => void;
-  onOrganize: () => void;
   onExtract?: () => void;
 };
 
@@ -12,7 +11,6 @@ export function SessionControls({
   loading,
   onCrisisSupport,
   onPause,
-  onOrganize,
   onExtract,
 }: SessionControlsProps) {
   return (
@@ -25,17 +23,10 @@ export function SessionControls({
       </Button>
       <Box sx={{ flex: 1 }} />
       {/*
-        organize→extract 移行 (Phase C): 困りごと抽出を主導線に、
-        「整理結果へ」(旧 PoC) は段階廃止で secondary(text) に降格。
-        extract が無い場合のみ organize を primary にフォールバック。
+        セッションからの出口は「困りごとを抽出」1 本だけ (ADR 0034)。
+        旧 PoC の「整理結果へ」は UC にも FR にも無く、下流が 404 を返す
+        壊れた導線だったため撤去した。
       */}
-      <Button
-        variant={onExtract ? "text" : "contained"}
-        onClick={onOrganize}
-        disabled={loading}
-      >
-        整理結果へ
-      </Button>
       {onExtract && (
         <Button variant="contained" onClick={onExtract} disabled={loading}>
           困りごとを抽出

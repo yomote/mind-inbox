@@ -1,8 +1,8 @@
 """
 セッション全文 (Dump) を Mention[] に抽出し、既存 Problem へのグルーピングまで行う。
 
-Problem 中心 2層モデル (ADR 0007) の核。organizer.py の /organize を置換する新エンドポイント
-/extract の本体。organizer と同じく workflow.py の FSM を経由せず、単発の structured LLM
+Problem 中心 2層モデル (ADR 0007) の核であり、セッションからの唯一の抽出経路。
+/extract の本体。workflow.py の FSM を経由せず、単発の structured LLM
 呼び出しで完結する。
 
 処理:

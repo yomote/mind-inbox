@@ -23,7 +23,7 @@
 ### 0.2 実装原則（v1 計画を踏襲 + M1 特有）
 
 - **変化は 1 度に 1 種類** — M1（基盤差し替え）に機能追加を混ぜない。移行のバグと機能のバグを切り分け可能に保つ
-- **BFF 契約は M1 で不変** — `/chat` `/extract` `/organize` `/plan` `/approve` の I/O を変えない。`docs/api/ai-agent.yaml` の再生成 diff = 0 が M1 の合格ライン
+- **BFF 契約は M1 で不変** — `/chat` `/extract` `/plan` `/approve` の I/O を変えない (`/organize` は ADR 0034 で撤去)。`docs/api/ai-agent.yaml` の再生成 diff = 0 が M1 の合格ライン
 - **防御仕様は仕様として維持** — 壊れた LLM JSON → 空結果 / 未知テーマ → 未分類 / confidence clamp。移行前にテストで金網を張ってから中身を差し替える
 - **stub fallback 維持** — `AI_AGENT_BASE_URL` 未設定でも BFF が動く特性を壊さない
 - **課金・外界は再ゲート** — M2 の索引リソース選定・M3 の通知チャネル / 外部 write は着手前に design-gate（ADR 0015/0016 で合意済み）
@@ -41,7 +41,7 @@
 ```text
 M1: 等価移行（ユーザーに見える変化なし。契約不変が合格ライン）
  ├─ M1-1. agent-framework 導入 + クライアント初期化の置換
- ├─ M1-2. 単発呼び出し系の移行（/extract /organize /plan）+ 防御仕様のテスト固定
+ ├─ M1-2. 単発呼び出し系の移行（/extract /plan）+ 防御仕様のテスト固定
  ├─ M1-3. /chat + /approve: FSM → MAF Workflow / ApprovalRepository → HITL checkpoint
  ├─ M1-4. tools の @ai_function 化（read/write 区分維持）
  └─ M1-5. SK 依存除去 + OpenAPI diff 0 + smoke で完了確認
@@ -73,7 +73,7 @@ PR 分割の目安: M1-1+M1-2 / M1-3 / M1-4+M1-5 の 3 PR。各 PR で契約不�
 
 ### M1-2. 単発呼び出し系の移行
 
-- **変更対象**: `extractor.py` / `organizer.py` / `planner.py`
+- **変更対象**: `extractor.py` / `planner.py`
 - **要点**: `ChatHistory` 整形 → MAF の message 型へ。structured 出力は MAF の機構に乗せるが、**防御層（`_coerce_theme` / `_coerce_affect` / `_clamp_confidence` / JSON 失敗 → 空結果）は仕様として維持**。先に防御仕様の L1/L2 テストが無ければ足してから移行する（金網 → 差し替えの順）
 - **完了条件**: 3 エンドポイントの L2 緑 + `ai-agent.yaml` 再生成 diff 0
 

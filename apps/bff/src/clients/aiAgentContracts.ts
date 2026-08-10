@@ -14,12 +14,7 @@
  * 実際の snake_case 変換は `aiAgentClient.ts` の各 fetch が行う。
  */
 import { z } from "zod";
-import {
-  ActionPlanSchema,
-  OrganizedResultSchema,
-  ProblemStatusSchema,
-  ThemeSchema,
-} from "../trpc/domain";
+import { ActionPlanSchema, ProblemStatusSchema, ThemeSchema } from "../trpc/domain";
 
 // ── /chat ────────────────────────────────────────────────────────────────────
 
@@ -60,17 +55,6 @@ export const ChatStreamErrorSchema = z.object({
   message: z.string(),
 });
 export type ChatStreamError = z.infer<typeof ChatStreamErrorSchema>;
-
-// ── /organize ────────────────────────────────────────────────────────────────
-
-export const OrganizeRequestSchema = z.object({
-  sessionId: z.string(),
-});
-export type OrganizeRequest = z.infer<typeof OrganizeRequestSchema>;
-
-/** ai-agent の OrganizeResponse は tRPC の整理結果と同一形 (domain.ts が真実) */
-export const OrganizeResponseSchema = OrganizedResultSchema;
-export type OrganizeResponse = z.infer<typeof OrganizeResponseSchema>;
 
 // ── /plan ────────────────────────────────────────────────────────────────────
 

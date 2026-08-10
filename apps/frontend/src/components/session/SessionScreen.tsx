@@ -22,7 +22,6 @@ type SessionScreenProps = {
   onStopSpeaking: () => void;
   onCrisisSupport: () => void;
   onPause: () => void;
-  onOrganize: () => void;
   onExtract?: () => void;
 };
 
@@ -40,7 +39,6 @@ export function SessionScreen({
   onStopSpeaking,
   onCrisisSupport,
   onPause,
-  onOrganize,
   onExtract,
 }: SessionScreenProps) {
   return (
@@ -67,7 +65,6 @@ export function SessionScreen({
           loading={loading}
           onCrisisSupport={onCrisisSupport}
           onPause={onPause}
-          onOrganize={onOrganize}
           onExtract={onExtract}
         />
       </Stack>

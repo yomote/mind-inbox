@@ -1,5 +1,5 @@
 """
-OrganizedResult を ActionPlan（タイトル・ステップ）に変換する。
+Problem の文脈（要約・感情・タグ）を ActionPlan（タイトル・ステップ）に変換する。
 
 workflow.py の FSM を経由せず、単発の structured LLM 呼び出しで完結する。
 """

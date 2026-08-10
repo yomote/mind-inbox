@@ -13,32 +13,16 @@
  */
 import { z } from "zod";
 
-// ---- 相談の整理結果 / プラン / 履歴 ------------------------------------------
-// もとは repositories/historyRepository.ts に居たが、ドメイン型が永続化実装と同居して
-// trpc/ ⇄ repositories/ の双方向依存を作っていたためここへ移動 (#138)。
-
-export const OrganizedResultSchema = z.object({
-  summary: z.string(),
-  emotions: z.array(z.string()),
-  priorities: z.array(z.string()),
-});
+// ---- ActionPlan（Problem からの派生物 / UC-05）--------------------------------
+// 会話中心モデル (OrganizedResult / HistoryItem) は ADR 0034 で撤去した。
+// 残るプランは Problem に紐づく派生物だけ (domain_model.md §2.2)。
 
 export const ActionPlanSchema = z.object({
   title: z.string(),
   steps: z.array(z.string()),
 });
 
-export const HistoryItemSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  createdAt: z.string(),
-  result: OrganizedResultSchema,
-  plan: ActionPlanSchema,
-});
-
-export type OrganizedResult = z.infer<typeof OrganizedResultSchema>;
 export type ActionPlan = z.infer<typeof ActionPlanSchema>;
-export type HistoryItem = z.infer<typeof HistoryItemSchema>;
 
 // ---- Theme（主テーマ: ライフホイール由来の固定7分類 + 未分類）-------------------
 // domain_model.md §2.4。`未分類` はテーマというより「未確定状態 / 自動分類の逃げ場」。

@@ -38,8 +38,6 @@ const {
   ChatStreamDoneSchema,
   ChatStreamErrorSchema,
   ExtractRequestSchema,
-  OrganizeRequestSchema,
-  OrganizeResponseSchema,
   PlanRequestSchema,
   PlanResponseSchema,
 } = await import("../src/clients/aiAgentContracts.ts");
@@ -50,7 +48,7 @@ const REPO_ROOT = resolve(__dirname, "../../..");
 // ── 比較対象 ────────────────────────────────────────────────────────────────
 //
 // key は ai-agent の export 名 (cicd/scripts/testing/export-ai-agent-schemas.py の SCHEMAS) と
-// 1:1 で対応する。ai-agent のエンドポイント 7 本 (/chat /chat/stream /extract /organize /plan
+// 1:1 で対応する。ai-agent のエンドポイント 7 本 (/chat /chat/stream /extract /plan
 // /approve /health) のうち、BFF が型を持つ I/O をすべて載せる (/health は BFF に型が無い)。
 const BFF_SCHEMAS = {
   ChatRequest: ChatRequestSchema,
@@ -58,11 +56,9 @@ const BFF_SCHEMAS = {
   ChatStreamDelta: ChatStreamDeltaSchema,
   ChatStreamDone: ChatStreamDoneSchema,
   ChatStreamError: ChatStreamErrorSchema,
-  OrganizeRequest: OrganizeRequestSchema,
-  OrganizeResponse: OrganizeResponseSchema,
-  // `consultation.createPlan` の input は `{ result: OrganizedResultSchema }` で受け取り
-  // router 側で summary / emotions / priorities を pluck して ai-agent に渡している
-  // (apps/bff/src/trpc/router.ts createPlan 参照)。比較するのはその「pluck 後の payload」。
+  // `problem.createPlan` は Problem の summary / affect ラベル / tags を pluck して
+  // ai-agent に渡す (apps/bff/src/trpc/router.ts problem.createPlan 参照)。
+  // 比較するのはその「pluck 後の payload」。
   PlanRequest: PlanRequestSchema,
   PlanResponse: PlanResponseSchema,
   ApproveRequest: ApproveRequestSchema,

@@ -101,7 +101,6 @@ describe("[L1] getCosmosContainers", () => {
     process.env["COSMOS_ENDPOINT"] = ENDPOINT;
     process.env["COSMOS_DATABASE"] = "mydb";
     process.env["COSMOS_PROBLEMS_CONTAINER"] = "my-problems";
-    process.env["COSMOS_HISTORY_CONTAINER"] = "my-history";
 
     const { getCosmosContainers } = await loadCosmosClient();
     const containers = getCosmosContainers();
@@ -109,10 +108,8 @@ describe("[L1] getCosmosContainers", () => {
     expect(containers).not.toBeNull();
     expect(mockCalls.clients[0]?.endpoint).toBe(ENDPOINT);
     expect(mockCalls.databases).toEqual(["mydb"]);
-    // 順序込みで見る — problems と history が入れ替わると全データが逆のコンテナに入る
-    expect(mockCalls.containers).toEqual(["my-problems", "my-history"]);
+    expect(mockCalls.containers).toEqual(["my-problems"]);
     expect(containers?.problems).toMatchObject({ id: "my-problems" });
-    expect(containers?.history).toMatchObject({ id: "my-history" });
   });
 
   it("DB / コンテナ名が未設定なら bicep と同じ既定名にフォールバックする", async () => {
@@ -123,7 +120,7 @@ describe("[L1] getCosmosContainers", () => {
 
     // ここが bicep (cicd/modules/bootstrap-core.bicep) の器名とズレると実行時 404 になる
     expect(mockCalls.databases).toEqual(["mindinbox"]);
-    expect(mockCalls.containers).toEqual(["problems", "history"]);
+    expect(mockCalls.containers).toEqual(["problems"]);
   });
 
   it("キーではなく Managed ID (aadCredentials) でクライアントを作る", async () => {
