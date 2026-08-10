@@ -131,9 +131,9 @@
 ## Verification
 
 - [ ] golden-path-monitor の run に artifact `ux-probe-<run_id>` があり、JSON の `turns` が 4 件ある
-- [ ] **人手を介さず** 記録 Issue #162 に `ux-probe-record` のコメントが 1 件増えている — 投稿ステップの初回は次の monitor 実行 (07:00 JST)。**未検証**
+- [x] **人手を介さず** 記録 Issue #162 に `ux-probe-record` のコメントが 1 件増えている — **2026-08-10 07:37 JST に初回を確認** ([run 31339682965](https://github.com/yomote/mind-inbox/actions/runs/31339682965) / `work-overwhelm-v1` 4/4 往復 / warning 0 件)
 - [ ] レイテンシ閾値超過があれば run の Annotations に warning が出ている
-- [ ] **人手を介さず** Issue #127 に採点コメントが増えている (verdict + JSON ブロック) — Routine 初回発火は 2026-08-10 08:00 JST。**未検証**なので翌朝に確認する
+- [ ] **人手を介さず** Issue #127 に採点コメントが増えている (verdict + JSON ブロック) — **初回 (2026-08-10 08:02 JST) は投稿されず**。原因調査は [#194](https://github.com/yomote/mind-inbox/issues/194)
 - [ ] 上の Steps 5 の jq が、増えたコメントを 1 行として抽出できる (蓄積が機械可読なままか)
 
 ## Rollback
@@ -156,6 +156,19 @@
 - 原因: 途中の往復で対話が壊れた (応答空 / stub / タイムアウト)。記録は 1 往復ごとに
   書き出すので、壊れる直前までは残っている
 - 対処: 残った turns とE2E ログで壊れたホップを切り分け。採点は完了分のみで可 (judge に明示)
+
+### #162 に記録は増えたのに #127 に採点が増えない
+
+2026-08-10 の初回でこの形になった ([#194](https://github.com/yomote/mind-inbox/issues/194))。切り分けは**上流から順に**:
+
+1. **記録は読めるか** — #162 の最新コメントを保存して `probe-record-comment.py extract` → `inspect-probe-artifact.py`。
+   ここが通るならコードは無罪 (初回はこの手順で通ることを実データで確認済み)
+2. **Routine が発火したか** — `list_triggers` の `last_fired_at`。**claude-code-remote MCP は承認ゲートで塞がることがある**
+   ([#160](https://github.com/yomote/mind-inbox/issues/160) の「セッションごとの権限差」。通る/通らないが安定しない)
+3. **検証で止まったのか** — `validate-judge-score.py` が落ちた場合は**仕様どおり投稿しない**。
+   バグではなく judge の出力側の問題なので、レポートを見て rubric との差を確認する
+
+**「投稿されない」は必ずしも異常ではない** — 材料なし (終了コード 3 / 4) と検証落ちは、どちらも無投稿が正しい振る舞い。
 
 ### judge のスコアが信用できない気がする
 
