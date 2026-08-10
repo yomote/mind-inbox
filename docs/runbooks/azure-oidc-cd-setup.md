@@ -64,6 +64,45 @@ main マージで常設 dev に自動反映させるには、リポジトリ **S
 > 常設運用では通常使わない（待機コストは SQL / ACR / SWA Standard を外してほぼ ¥0）。
 > 消し忘れ対策の夜間 teardown は廃止し、代わりに**予算アラート**（#69）で支出を見張る。
 
+## read-only の識別を足す (#209 / ops-inspect 用)
+
+**なぜ**: 上のデプロイ用 SP は `main` 限定のフェデレーション資格情報しか持たない。
+そのため **Azure を「読む」だけの確認にも main へのマージが必要**だった
+(2026-08-10 の 1 セッションで 6 往復)。読むだけの用途を、書き込み権を持つ SP から切り離す。
+
+**ワイルドカードは使えない**。標準のフェデレーション資格情報はサブジェクトの完全一致なので、
+`claude/*` のような指定は通らない。そこで **`ops/inspect` という専用ブランチ 1 本に寄せる**
+(エージェントは調査のたびにこのブランチへ push して dispatch する)。
+
+### 手順
+
+1. **アプリ登録を作る** — 例 `gha-oidc-readonly-mind-inbox`。リダイレクト URI は空
+2. **フェデレーション資格情報を 1 本**追加する
+   - シナリオ: 「GitHub Actions が Azure リソースをデプロイする」
+   - 組織 `yomote` / リポジトリ `mind-inbox`
+   - エンティティ型: **ブランチ** / ブランチ名: `ops/inspect`
+   - 生成されるサブジェクト: `repo:yomote/mind-inbox:ref:refs/heads/ops/inspect`
+3. **ロールを 3 つ**割り当てる (サブスクリプション スコープ / **書き込み系は付けない**)
+   - 閲覧者 / Cost Management 閲覧者 / Log Analytics 閲覧者
+4. GitHub の **Actions Variables** に `AZURE_CLIENT_ID_RO` = アプリ登録のクライアント ID
+
+テナントとサブスクリプションは既存の `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` を流用する。
+
+### どう使われるか
+
+`ops-inspect.yml` の guard が ref を見て使い分ける。
+
+| ref | ログインに使う識別 |
+| --- | --- |
+| `main` | 従来のデプロイ SP (`AZURE_CLIENT_ID`) |
+| それ以外 | **read-only ID** (`AZURE_CLIENT_ID_RO`) |
+
+### 動作検証
+
+`ops/inspect` ブランチから `ops-inspect` を dispatch し、`check: azure-resources` が
+🟢 になること。ログの guard ステップに `ログインに使う識別: read-only ID (ops/inspect)`
+が出ていれば、read-only 側で通っている。
+
 ## Verification
 
 - [ ] `setup-oidc.sh` が 3 つの ID を出力し、GitHub Variables に登録済み

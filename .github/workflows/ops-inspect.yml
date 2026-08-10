@@ -70,13 +70,24 @@ jobs:
       - uses: actions/checkout@v4
 
       # Azure を触る check だけ OIDC が要る。fetch-doc は不要。
+      #
+      # 2026-08-10 (#209): main 限定の OIDC しか無かったため、**Azure を読むクエリを 1 行
+      # 直すたびに main へマージが必要**だった (この日だけで 6 往復)。読むだけの確認に
+      # 書き込みブランチを経由していた。そこで read-only 専用の ID を足し、
+      # **main 以外はそちらでログインする**。
+      #   - main            → 従来のデプロイ SP (AZURE_CLIENT_ID)
+      #   - それ以外のブランチ → read-only ID (AZURE_CLIENT_ID_RO)
+      # read-only ID のフェデレーション資格情報は `ops/inspect` ブランチに紐づけている
+      # (ワイルドカードは使えないため専用ブランチに寄せた / Runbook: azure-oidc-cd-setup.md)。
       - name: Guard — OIDC 設定済みか
         id: guard
         env:
           CHECK: ${{ inputs.check }}
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_ID_RO: ${{ vars.AZURE_CLIENT_ID_RO }}
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           if [ "$CHECK" = "fetch-doc" ]; then
@@ -84,19 +95,33 @@ jobs:
             exit 0
           fi
           echo "needs_azure=true" >> "$GITHUB_OUTPUT"
-          # deploy.yml と同じ規律: 3 変数すべて揃って初めて true。partial を後段へ持ち越さない。
-          if [ -n "$AZURE_CLIENT_ID" ] && [ -n "$AZURE_TENANT_ID" ] && [ -n "$AZURE_SUBSCRIPTION_ID" ]; then
+
+          if [ "$REF_NAME" = "main" ]; then
+            CID="$AZURE_CLIENT_ID"
+            WHICH="デプロイ SP (main)"
+            HINT="docs/runbooks/azure-oidc-cd-setup.md"
+          else
+            CID="$AZURE_CLIENT_ID_RO"
+            WHICH="read-only ID ($REF_NAME)"
+            HINT="Issue #209 — AZURE_CLIENT_ID_RO の登録と ops/inspect 向け資格情報が要る"
+          fi
+          echo "which=$WHICH" >> "$GITHUB_OUTPUT"
+          echo "client_id=$CID" >> "$GITHUB_OUTPUT"
+
+          # deploy.yml と同じ規律: 3 つ揃って初めて true。partial を後段へ持ち越さない。
+          if [ -n "$CID" ] && [ -n "$AZURE_TENANT_ID" ] && [ -n "$AZURE_SUBSCRIPTION_ID" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "ログインに使う識別: $WHICH"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::OIDC 未設定 (AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID のいずれか空)。docs/runbooks/azure-oidc-cd-setup.md を参照。"
+            echo "::warning::OIDC 未設定のため Azure に接続しない ($WHICH)。$HINT"
           fi
 
       - name: Azure login (OIDC, no stored secret)
         if: steps.guard.outputs.needs_azure == 'true' && steps.guard.outputs.run == 'true'
         uses: azure/login@v2
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          client-id: ${{ steps.guard.outputs.client_id }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
