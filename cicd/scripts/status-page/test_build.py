@@ -46,7 +46,7 @@ else:
 """
 
 
-def _run(tmp_path: pathlib.Path) -> str:
+def _run(tmp_path: pathlib.Path, defs: dict | None = None) -> str:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     gh = bin_dir / "gh"
@@ -54,6 +54,12 @@ def _run(tmp_path: pathlib.Path) -> str:
     gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
 
     env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    if defs is not None:
+        # 性質のテストは **その時点の watchers.json に依存させない**。
+        # 定義から 1 行消しただけでテストが落ちるのは、守りたい性質がずれている印。
+        dpath = tmp_path / "watchers.json"
+        dpath.write_text(json.dumps(defs, ensure_ascii=False))
+        env["STATUS_PAGE_WATCHERS"] = str(dpath)
     out = tmp_path / "out"
     subprocess.run([sys.executable, str(BUILD), str(out)], env=env, check=True,
                    capture_output=True, text=True)
@@ -73,10 +79,28 @@ def test_L1_取得できたものは緑になる(tmp_path):
 
 
 def test_L1_痕跡を残さない自動化は判定不能のまま残る(tmp_path):
-    """cd-watchdog のように「異常時しか喋らない」ものを緑に見せないこと。"""
-    html = _run(tmp_path)
+    """「異常時しか喋らない」ものを緑に見せないこと。
+
+    無いと何が静かに通るか:
+        沈黙を「異常なし」と表示してしまう。2026-08-10 に無人の仕組みが 4 本とも
+        止まっていたのに気づけなかった原因そのもの。
+    """
+    html = _run(tmp_path, defs={
+        "workflows": [],
+        "routines": [{
+            "name": "異常時しか喋らない見張り",
+            "what": "赤いときだけ Issue を立てる",
+            "trace": {"kind": "issue_label", "label": "nonexistent-label"},
+            "expect_hours": 2,
+            "trace_only_on_anomaly": True,
+        }],
+    })
+    # 元のテストは watchers.json の note (データ) の文字列を見ていた。
+    # それだと定義を 1 行消しただけで落ちる一方、**ロジックが壊れても気づけない**。
+    # 見るのは build.py の振る舞い: 痕跡を残さない watcher は緑にせず、既定の説明を出す。
     assert "❓" in html
-    assert "沈黙と正常が区別できない" in html
+    assert "痕跡を残さないので判定できません" in html
+    assert "🟢" not in html, "痕跡が無いのに緑にしている"
 
 
 def test_L1_定義ファイルが読める():

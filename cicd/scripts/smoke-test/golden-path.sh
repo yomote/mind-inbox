@@ -24,14 +24,32 @@ ok() { echo "OK  - $1"; }
 ng() { echo "NG  - $1"; FAIL=1; }
 
 echo "== Resolve outputs =="
-OUTPUTS="$(az deployment group show -g "$RG" -n "$DEPLOYMENT" --query 'properties.outputs' -o json 2>/dev/null || echo '{}')"
+# 2026-08-10: ここが `2>/dev/null` で az のエラーを捨てていたため、
+# 「デプロイ実行中」「デプロイが存在しない」「権限が無い」がすべて同じ 1 行の NG に見えた。
+# 実際に「マージ直後で bicep が実行中 → outputs が空」を実環境の障害と誤診しかけた。
+# **取れなかった理由を捨てない**。
+DEPLOY_JSON="$(az deployment group show -g "$RG" -n "$DEPLOYMENT" \
+  --query '{state: properties.provisioningState, outputs: properties.outputs}' -o json 2>/tmp/deploy-err.txt)"
+if [[ -z "$DEPLOY_JSON" ]]; then
+  ng "az deployment group show が失敗した: $(head -c 300 /tmp/deploy-err.txt)"
+  exit 1
+fi
+DEPLOY_STATE="$(printf '%s' "$DEPLOY_JSON" | python3 -c \
+  "import sys,json; print(json.load(sys.stdin).get('state') or '')" 2>/dev/null)"
+OUTPUTS="$(printf '%s' "$DEPLOY_JSON" | python3 -c \
+  "import sys,json; print(json.dumps(json.load(sys.stdin).get('outputs') or {}))" 2>/dev/null)"
 _val() { printf '%s' "$OUTPUTS" | python3 -c \
   "import sys,json; print(json.load(sys.stdin).get('$1',{}).get('value',''))" 2>/dev/null; }
 
 FUNC_HOST="$(_val functionAppDefaultHostname)"
 SPA_CLIENT_ID="$(_val functionAuthEntraClientId)"
 if [[ -z "$FUNC_HOST" || -z "$SPA_CLIENT_ID" ]]; then
-  ng "deployment outputs から functionAppDefaultHostname / functionAuthEntraClientId を解決できない"
+  if [[ "$DEPLOY_STATE" == "Running" || "$DEPLOY_STATE" == "Accepted" ]]; then
+    # デプロイ中は outputs が空になる。これは「壊れている」ではなく「まだ確かめられない」。
+    ng "デプロイが実行中 (provisioningState=$DEPLOY_STATE) のため outputs が空。デプロイ完了後に再実行すること"
+  else
+    ng "deployment outputs から functionAppDefaultHostname / functionAuthEntraClientId を解決できない (provisioningState=${DEPLOY_STATE:-unknown})"
+  fi
   exit 1
 fi
 H="https://$FUNC_HOST"
