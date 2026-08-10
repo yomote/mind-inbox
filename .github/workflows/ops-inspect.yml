@@ -299,15 +299,63 @@ jobs:
                 END=$(date -u +%Y-%m-%d)
                 echo "" >> "$OUT"
                 echo "期間: $START 〜 $END (UTC)" >> "$OUT"
-                echo '```' >> "$OUT"
+                # 2026-08-10: --query で projection すると、フィールド名を間違えたときに
+                # 「Cost が全部 None の表」が success として返る (実際に踏んだ)。
+                # 生 JSON を取って python 側で集計し、**金額のキーが見つからなければ
+                # キー一覧を出して落とす** — 次の 1 回で名前が分かる形にしておく。
                 if ! az consumption usage list --start-date "$START" --end-date "$END" \
-                      --query "[].{name:instanceName,cost:pretaxCost,currency:currency}" \
-                      -o table >> "$OUT" 2>/tmp/err.txt; then
+                      -o json > /tmp/usage.json 2>/tmp/err.txt; then
+                  echo '```' >> "$OUT"
                   cat /tmp/err.txt >> "$OUT"
                   echo '```' >> "$OUT"
                   fail "az consumption usage list が失敗した (SP に課金データの参照権が無い可能性)"
                 else
-                  echo '```' >> "$OUT"
+                  # 1 本の python で「$OUT への markdown 追記」と「判定行の stdout」を
+                  # 両方やる。`python3 -` はプログラムを stdin から読むので、
+                  # heredoc とパイプ入力は同時に使えない (最初に書いて踏んだ)。
+                  SUMMARY=$(python3 - /tmp/usage.json "$OUT" <<'PY'
+          import json, sys, collections
+
+          rows = json.load(open(sys.argv[1]))
+          out = open(sys.argv[2], "a")
+          COST_KEYS = ("pretaxCost", "costInBillingCurrency", "cost", "paygCostInBillingCurrency")
+          NAME_KEYS = ("instanceName", "instanceId", "consumedService")
+          CUR_KEYS = ("currency", "billingCurrency", "billingCurrencyCode")
+
+          def bail(reason):
+              out.write("\n集計できませんでした: %s\n" % reason)
+              print("NOKEY\t%s" % reason)
+              raise SystemExit(0)
+
+          if not rows:
+              bail("課金レコードが 0 件 (当月ぶんがまだ確定していない可能性)")
+          sample = rows[0]
+          ck = next((k for k in COST_KEYS if k in sample), None)
+          if ck is None:
+              bail("金額のキーが見つからない。実際のキー: " + ", ".join(sorted(sample)))
+          nk = next((k for k in NAME_KEYS if k in sample), None)
+          cur = next((sample[k] for k in CUR_KEYS if sample.get(k)), "")
+
+          agg = collections.Counter()
+          total = 0.0
+          for r in rows:
+              try:
+                  c = float(r.get(ck) or 0)
+              except (TypeError, ValueError):
+                  c = 0.0
+              total += c
+              agg[str(r.get(nk) or "?").rsplit("/", 1)[-1]] += c
+
+          out.write("\n**合計 %.2f %s** (課金レコード %d 件 / 金額キー: %s)\n\n" % (total, cur, len(rows), ck))
+          out.write("| リソース | コスト |\n| --- | ---: |\n")
+          for name, c in agg.most_common(15):
+              out.write("| %s | %.2f |\n" % (name, c))
+          print("OK\t%.2f\t%s" % (total, cur))
+          PY
+          )
+                  case "$SUMMARY" in
+                    NOKEY*) fail "コスト集計に失敗 (上の理由を見て次の run で直すこと)" ;;
+                  esac
                 fi
               fi
               ;;
