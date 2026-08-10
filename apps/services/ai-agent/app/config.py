@@ -10,7 +10,13 @@ class Settings(BaseSettings):
     azure_openai_endpoint: str = ""
     azure_openai_api_key: str = ""
     azure_openai_deployment: str = "gpt-4o"
+    # chat completions 用 (Semantic Kernel / workflow.py が使う)
     azure_openai_api_version: str = "2024-02-01"
+    # Responses API 用 (Microsoft Agent Framework / extractor・planner が使う)。
+    # **chat completions とは別物**。2026-08-10、共用していたため /extract が
+    # `400 API version not supported` で常時 500 になっていた。
+    # 値は agent_framework_openai の既定 (DEFAULT_AZURE_OPENAI_RESPONSES_API_VERSION) に合わせる。
+    azure_openai_responses_api_version: str = "preview"
 
     # OpenAI (fallback when Azure is not configured)
     openai_api_key: str = ""
