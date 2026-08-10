@@ -1,6 +1,6 @@
 # 0034. UC に無い会話中心モデルの残骸 (整理結果 / 行動プラン / 履歴) を撤去する
 
-- Status: Proposed
+- Status: Accepted (2026-08-10 / 報告会 #5)
 - Date: 2026-08-10
 - Deciders: yomote (PO / 2026-08-10 に撤去を選択) / 実装セッション
 - Related: [ADR 0007](0007-problem-centric-two-layer-domain-model.md) (Problem 中心 2層) / [ADR 0005](0005-mdx-ui-spec-as-truth.md) (MDX が UI の真実) / [ADR 0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md) (永続化) / [ADR 0032](0032-use-case-acceptance-tests-against-real-wiring.md) (UC 受け入れテスト) / #183 (抽出の 404 根治)
@@ -80,7 +80,11 @@ UI だけ取り残されたもの。コード側も自覚していた —
 bicep (`cicd/modules/bootstrap-core.bicep`) の `history` コンテナは**消さない**。
 削除は次のデプロイでデータごと消える**不可逆な操作**であり、エージェントが独断で
 決めてよい範囲を越える。アプリからの参照だけ切り、器は空のまま残す
-(空のコンテナは Cosmos serverless では実質無課金)。**器の削除は PO 判断**。
+(空のコンテナは Cosmos serverless では実質無課金)。
+
+✅ **2026-08-10 の報告会 #5 で PO は「残す」を選択した。** 後日「対話そのものを読み返したい」
+要求が起きたときに器を作り直さずに済むこと、および削除が不可逆であることが理由。
+bicep の宣言 (`cosmosContainerNames` / `COSMOS_HISTORY_CONTAINER` app setting) はそのまま残る。
 
 ### 永続化プローブの付け替え
 
