@@ -111,3 +111,4 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0034](0034-remove-legacy-session-centric-flow.md) — UC に無い会話中心モデルの残骸 (整理結果 / 行動プラン / 履歴) を撤去する
 - [0035](0035-role-split-across-agents-and-actions.md) — 開発ループの役割を分け、それぞれを「生死が見える場所」に置く (実装 Claude / レビュー Codex / 監視 Actions)
 - [0036](0036-merge-gate-as-required-check-and-pm-cadence.md) — マージの門を required check (review-gate) で機構化し、PM の運転リズムを定める
+- [0037](0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md) — 定期評価を「機械計測 = Actions」と「LLM 採点 = PM tick」に分ける (ADR 0035 D1 の残作業)

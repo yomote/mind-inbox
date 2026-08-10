@@ -1,25 +1,38 @@
-# UX プローブと UX judge の運用 (#123 M0/M1)
+# UX プローブと UX 評価の運用 (#123 M0/M1)
+
+## 分担 (ADR 0037 — 旧 ux-judge Routine の後継)
+
+評価は 2 系統に分かれる。**Routine は使わない** (生死が見えない — ADR 0035 D1):
+
+| 系統                                            | 担い手                                                                          | いつ                                              | 痕跡 (#127 のコメント)   |
+| ----------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------- | ------------------------ |
+| **機械計測** (レイテンシ統計 / 往復数 / 警告数) | [`.github/workflows/ux-eval.yml`](../../.github/workflows/ux-eval.yml)          | 毎朝 08:20 JST 頃 (自動)                          | `kind: "ux-eval-mech"`   |
+| **LLM 採点** (rubric 評価)                      | **PM セッションの日次 tick** が subagent `ux-reviewer` を新品コンテキストで起動 | PM が回っている日 (expect 50h — 週末スキップ許容) | `kind: "ux-judge-score"` |
+
+ux-eval.yml は記録の鮮度も見る — **26 時間以内にプローブ記録が無ければ run が赤くなる**
+(古い記録を今日の計測として積まない)。抽出ロジックは `cicd/scripts/ux-eval/ux_eval.py`。
 
 ## Trigger
 
-- 毎朝の golden-path-monitor 実行後、UX プローブ記録 (相談 4 往復の会話 + レイテンシ) を採点したいとき
+- 毎朝の golden-path-monitor 実行後、UX プローブ記録 (相談 4 往復の会話 + レイテンシ) を採点したいとき (PM tick の LLM 採点)
 - プローブを手動で回したいとき (プロンプト変更後の確認等)
 - スコアの時系列トレンドを見たいとき
 
 ## Prerequisites
 
-- `gh` CLI (repo read + issues write) — **満たせるのは人間の手元だけ**。agent セッションでは使えないので GitHub MCP で代替する (下記「agent セッションでは gh が使えない」)
+- `gh` CLI (repo read + issues write) — **満たせるのは人間の手元と Actions runner だけ**。agent セッションでは使えないので GitHub MCP で代替する (下記「agent セッションでは gh が使えない」)
 - 採点は Claude セッションから subagent `ux-reviewer` を起動できること
-- 背景理解: [ADR 0022](../adr/0022-autonomous-ux-improvement-loop.md) / rubric は `.github/claude/ux-rubric.md` (**真実**)
+- 背景理解: [ADR 0022](../adr/0022-autonomous-ux-improvement-loop.md) / [ADR 0037](../adr/0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md) / rubric は `.github/claude/ux-rubric.md` (**真実**)
 
 ## データの流れ (どこに何が残るか)
 
-| データ                                        | 置き場                                                                                                                    | 保持       |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| 会話全文 + 区間レイテンシ (`ux-probe-record`) | **記録 Issue [#162](https://github.com/yomote/mind-inbox/issues/162) のコメント** (1 run = 1 コメント) — **採点が読む先** | 永続       |
-| 同上 (障害調査用の一次情報)                   | golden-path-monitor の artifact `ux-probe-<run_id>` — 人間が `gh` で取る                                                  | 90 日      |
-| レイテンシ閾値超過 (#120)                     | 同 run の warning annotation + step summary                                                                               | run と同じ |
-| judge 採点 (`ux-judge-score`)                 | **スコアボード Issue [#127](https://github.com/yomote/mind-inbox/issues/127) のコメント** (1 採点 = 1 コメント)           | 永続       |
+| データ                                        | 置き場                                                                                                                                 | 保持       |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| 会話全文 + 区間レイテンシ (`ux-probe-record`) | **記録 Issue [#162](https://github.com/yomote/mind-inbox/issues/162) のコメント** (1 run = 1 コメント) — **採点が読む先**              | 永続       |
+| 同上 (障害調査用の一次情報)                   | golden-path-monitor の artifact `ux-probe-<run_id>` — 人間が `gh` で取る                                                               | 90 日      |
+| レイテンシ閾値超過 (#120)                     | 同 run の warning annotation + step summary                                                                                            | run と同じ |
+| 機械計測 (`ux-eval-mech`)                     | **スコアボード Issue [#127](https://github.com/yomote/mind-inbox/issues/127) のコメント** (1 run = 1 コメント。ux-eval.yml が毎朝投稿) | 永続       |
+| judge 採点 (`ux-judge-score`)                 | **スコアボード Issue [#127](https://github.com/yomote/mind-inbox/issues/127) のコメント** (1 採点 = 1 コメント)                        | 永続       |
 
 記録を artifact と Issue コメントの両方に置いている理由は [ADR 0029](../adr/0029-probe-record-transport-via-issue-comment.md) — **agent セッションからは artifact をダウンロードできない** (取得先の `*.blob.core.windows.net` が egress ポリシーで拒否される / [#160](https://github.com/yomote/mind-inbox/issues/160))。採点が読む「正」はコメント側で、artifact は人間が掘るための一次情報。
 
@@ -27,7 +40,7 @@
 
 ## Steps
 
-**既定は無人** (#154 / [ADR 0027](../adr/0027-ux-improvement-loop-ab-protocol-and-mutation-boundary.md) D1) — 毎朝の Routine が下の 1〜4 を自動で回す。以下は **Routine が実行する手順であり、同時に手動フォールバックの手順**でもある (Routine 未登録時 / 個別に採点したい時は同じコマンドを人が打てばよい)。
+**機械計測は無人** (ux-eval.yml が毎朝自動)。**LLM 採点は PM セッションの日次 tick** が下の 2〜4 を回す ([ADR 0037](../adr/0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md) — 旧 Routine 運用 #154 / [ADR 0027](../adr/0027-ux-improvement-loop-ab-protocol-and-mutation-boundary.md) D1 の後継)。以下は **PM tick が実行する手順であり、同時に手動フォールバックの手順**でもある (個別に採点したい時は同じコマンドを人が打てばよい)。
 
 1. プローブを回す (毎朝 07:00 JST は自動。手動なら):
 
@@ -38,7 +51,7 @@
 
 2. 記録 JSON を取得する。**経路は 2 つあり、どちらも同じ判断部品を通る** (ADR 0029):
 
-   **agent (毎朝の Routine — 既定):** 記録 Issue [#162](https://github.com/yomote/mind-inbox/issues/162) の
+   **agent (PM tick — 既定):** 記録 Issue [#162](https://github.com/yomote/mind-inbox/issues/162) の
    最新コメントを GitHub MCP (`issue_read` method=`get_comments`) で読み、本文をファイルに保存してから:
 
    ```bash
@@ -93,14 +106,11 @@
 
    (集計が育ったら M3 で可視化を整える — 現状は目視で足りる件数)
 
-### Routine (登録済み)
+### 旧 Routine (廃止 — ADR 0037)
 
-- 名前: `ux-judge — 毎朝の UX 採点 (ADR 0027 D1)` / ID `trig_01B2tk2Z8kRrsnHAwSgRJQcX`
-- スケジュール: 毎朝 08:00 JST — cron (UTC) `0 23 * * *` (golden-path-monitor の 07:00 JST 実行が終わってから)
-- セッション種別: 毎回新規セッション (fresh session per fire)
-- プロンプトの中身は Routine 側が正典 (`update_trigger` で編集する)。実行する手順は上の Steps 2〜4 と同じ
-
-2026-08-09 に登録した ([#156](https://github.com/yomote/mind-inbox/issues/156))。
+- `ux-judge — 毎朝の UX 採点 (ADR 0027 D1)` / ID `trig_01B2tk2Z8kRrsnHAwSgRJQcX` (2026-08-09 登録, [#156](https://github.com/yomote/mind-inbox/issues/156)) は **ADR 0035 D1 / 0037 で廃止**。一度も投稿しないまま沈黙していた (2026-08-10 実測)
+- claude.ai 側の Routine 実体の削除は needs-human (エージェントからは叩けない)。削除されるまで発火しても、投稿先が同じ #127 なので壊れはしない
+- 後継: 機械計測 = `ux-eval.yml` / LLM 採点 = PM tick (冒頭の「分担」参照)
 
 ### agent セッションでの経路 (gh は使えない)
 
@@ -133,8 +143,10 @@
 - [ ] golden-path-monitor の run に artifact `ux-probe-<run_id>` があり、JSON の `turns` が 4 件ある
 - [ ] **人手を介さず** 記録 Issue #162 に `ux-probe-record` のコメントが 1 件増えている — 投稿ステップの初回は次の monitor 実行 (07:00 JST)。**未検証**
 - [ ] レイテンシ閾値超過があれば run の Annotations に warning が出ている
-- [ ] **人手を介さず** Issue #127 に採点コメントが増えている (verdict + JSON ブロック) — Routine 初回発火は 2026-08-10 08:00 JST。**未検証**なので翌朝に確認する
-- [ ] 上の Steps 5 の jq が、増えたコメントを 1 行として抽出できる (蓄積が機械可読なままか)
+- [ ] **人手を介さず** Issue #127 に機械計測コメント (`ux-eval-mech`) が増えている — ux-eval.yml の初回 run (08:20 JST) で確認する。**未検証**
+- [ ] 記録が 26 時間以上古い朝に ux-eval.yml の run が**赤くなる** (静かに古い記録を積まない)。**未検証**
+- [ ] PM tick の日に Issue #127 に採点コメント (`ux-judge-score` / verdict + JSON ブロック) が増えている
+- [ ] 上の Steps 5 の jq が、増えたコメントを 1 行として抽出できる (蓄積が機械可読なままか — `ux-eval-mech` が混ざっても `select(.kind == "ux-judge-score")` で分離できる)
 
 ## Rollback
 
@@ -157,6 +169,13 @@
   書き出すので、壊れる直前までは残っている
 - 対処: 残った turns とE2E ログで壊れたホップを切り分け。採点は完了分のみで可 (judge に明示)
 
+### ux-eval.yml の run が赤い
+
+- 原因: 26 時間以内のプローブ記録が #162 に無い (プローブ手前で fail / 投稿失敗)、
+  または #127 への投稿失敗。**古い記録を今日の計測として積まないための意図した赤** (ADR 0037)
+- 対処: golden-path-monitor の同朝 run と #162 の最新コメントを確認。記録が
+  復旧すれば次の run で緑に戻り、report-failure が立てた Issue も自動で閉じる
+
 ### judge のスコアが信用できない気がする
 
 - 原因: 生成側と judge が同系モデル (ADR 0022 の既知リスク)
@@ -165,7 +184,7 @@
 
 ## Related
 
-- ADR: [0022 UX 自律改善ループ](../adr/0022-autonomous-ux-improvement-loop.md) / [0019 独立 judge](../adr/0019-independent-judge-agents-security-qa-release.md) / [0018 動作検証](../adr/0018-runtime-verification-in-the-loop.md)
+- ADR: [0022 UX 自律改善ループ](../adr/0022-autonomous-ux-improvement-loop.md) / [0037 定期評価の分担](../adr/0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md) / [0019 独立 judge](../adr/0019-independent-judge-agents-security-qa-release.md) / [0018 動作検証](../adr/0018-runtime-verification-in-the-loop.md)
 - rubric: `.github/claude/ux-rubric.md` / subagent: `.claude/agents/ux-reviewer.md`
-- プローブ実装: `apps/frontend/e2e-live/ux-probe.spec.ts` / workflow: `.github/workflows/golden-path-monitor.yml`
+- プローブ実装: `apps/frontend/e2e-live/ux-probe.spec.ts` / workflow: `.github/workflows/golden-path-monitor.yml` / `.github/workflows/ux-eval.yml` (機械計測: `cicd/scripts/ux-eval/ux_eval.py`)
 - epic: [#123](https://github.com/yomote/mind-inbox/issues/123) / スコアボード: [#127](https://github.com/yomote/mind-inbox/issues/127)

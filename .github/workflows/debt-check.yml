@@ -1,0 +1,87 @@
+# 週次の技術負債チェック (ADR 0037 / 旧 maint-check Routine の機械部分)。
+#
+# 分担: LLM を Actions で走らせる経路は却下済み (ADR 0008/0009/0035 D5)。ここは
+#   **機械検出できる負債だけ**を洗う — docs の壊れた相対リンク / placeholder のままの
+#   テスト script。検出器は「静かに嘘をつかない」ものに絞り、カバーできていない領域
+#   (意味的な docs 陳腐化・デッドコード等) は run のログと Issue 本文に毎回明示する。
+#   「0 件 = 全部健全」と読ませない (silent caps 禁止)。
+#
+# 起票規則: 検出 > 0 のときだけ `[debt-check] YYYY-MM-DD: 検出 N 件` の Issue を立てる。
+#   既存 open の [debt-check] Issue があれば新規に立てずコメント追記 (Issue の氾濫防止)。
+#   0 件なら起票せず run 緑のみ — 動いた痕跡は run 履歴が持つ (ADR 0035 D1)。
+name: debt-check
+
+on:
+  schedule:
+    - cron: "0 21 * * 0" # 月曜 06:00 JST (= 日曜 21:00 UTC)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  debt-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 機械検出を実行
+        id: detect
+        run: |
+          python3 cicd/scripts/debt-check/detect.py . > /tmp/debt-report.json
+          TOTAL=$(jq -r '.total' /tmp/debt-report.json)
+          jq -r '.markdown' /tmp/debt-report.json > /tmp/debt-report.md
+          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
+          # カバー外領域をログにも出す (Issue が立たない 0 件の週でも「狭さ」が見えるように)
+          cat /tmp/debt-report.md
+          cat /tmp/debt-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 検出があれば Issue を起票 / 追記
+        id: post
+        if: steps.detect.outputs.total != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TOTAL: ${{ steps.detect.outputs.total }}
+        run: |
+          gh label create debt-check -R "$GITHUB_REPOSITORY" --color d4c5f9 \
+            --description "週次の機械負債チェックが立てた Issue (ADR 0037)" 2>/dev/null || true
+
+          # 既存 open の [debt-check] Issue に追記する (タイトル前方一致)。
+          # 毎週別 Issue を立てると一覧が氾濫し、誰も読まなくなる
+          EXISTING=$(gh issue list -R "$GITHUB_REPOSITORY" --label debt-check --state open \
+                       --json number,title --limit 50 \
+                       --jq '[.[] | select(.title | startswith("[debt-check]")) | .number] | first // empty')
+
+          TITLE="[debt-check] $(date -u -d '+9 hours' +%Y-%m-%d): 検出 $TOTAL 件"
+          {
+            echo "$TITLE"
+            echo ""
+            echo "- run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo ""
+            cat /tmp/debt-report.md
+          } > /tmp/debt-issue-body.md
+
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" -R "$GITHUB_REPOSITORY" -F /tmp/debt-issue-body.md
+            echo "既存の #$EXISTING に追記した"
+          else
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$TITLE" \
+              --label debt-check -F /tmp/debt-issue-body.md || {
+              # ここで黙って終わると「起票したつもり」になる (report-failure と同じ理由)
+              echo "::error::Issue を作成できなかった (permissions: issues: write を確認)"
+              exit 1
+            }
+            echo "新規 Issue を立てた"
+          fi
+
+      # 落ちたことに気づける唯一の経路 (ADR 0035 D2)。
+      - name: 失敗を Issue にする / 復旧したら閉じる
+        if: always()
+        uses: ./.github/actions/report-failure
+        with:
+          job-status: ${{ job.status }}
+          # 検出が走れば仕事は済んでいる (0 件で post が skip されても「復旧」と言える)
+          work-ran: ${{ steps.detect.outcome == 'success' }}
+          what: "**週次の技術負債チェック (debt-check) が実行できていません。** 壊れた docs リンク等の検出が止まっており、負債が静かに積もります。"
