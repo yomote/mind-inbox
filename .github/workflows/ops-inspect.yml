@@ -247,40 +247,65 @@ jobs:
                   # `take` は**任意の N 行**であって最新ではない。しかも絞り込まないと
                   # 行数の多い voicevox のログで埋まる (初回はそれで規約テキストが 40 行出た)。
                   # 列名も環境で変わるので推測しない — `where * has` で全列を対象に絞る。
+                  # $CA が取れていないと `ContainerAppName_s == ''` が全除外になり、
+                  # 「エラー無し」に見えてしまう。取れていないことを明示して絞り込みを外す。
+                  if [ -z "${CA:-}" ]; then
+                    echo "" >> "$OUT"
+                    echo "> ⚠️ ai-agent の Container App 名を解決できなかったため、アプリでの絞り込みをしていない。" >> "$OUT"
+                    CA_FILTER_CL=""
+                    CA_FILTER=""
+                  else
+                    CA_FILTER_CL="| where ContainerAppName_s == '$CA'"
+                    CA_FILTER="| where ContainerAppName == '$CA'"
+                  fi
                   FOUND=0
                   for T in ContainerAppConsoleLogs_CL ContainerAppConsoleLogs AppTraces AppExceptions FunctionAppLogs; do
                     echo "$ALL" | tr ' ' '\n' | grep -qx "$T" || continue
                     FOUND=1
-                    # 列名は getschema で確定済み。**サイドカーを除く**のが肝 —
-                    # Container App には認証ミドルウェア (http-auth) が同居していて、
-                    # そちらが饒舌なのでアプリ本体のログが押し出される (4 回目の空振りの原因)。
-                    # 出力も project で 2 列に絞る。全列を出すと 1 行が長すぎて読めない。
+                    # 列名は 2026-08-10 の run で getschema を実際に出して確定させた。
+                    # **テーブルごとに列名が違う** — _CL 版は `Log_s` / `ContainerName_s`、
+                    # 素の版は `Log` / `ContainerName`、AppTraces に `Level` は無く
+                    # `SeverityLevel` (int)。ここを共通化しようとして 2 回空振りした。
                     case "$T" in
-                      ContainerAppConsoleLogs_CL|ContainerAppConsoleLogs)
-                        Q="$T | where TimeGenerated > ago(4h) | where ContainerName_s != 'http-auth' | top 200 by TimeGenerated desc | project TimeGenerated, ContainerName_s, Log_s"
+                      ContainerAppConsoleLogs_CL)
+                        # ai-agent の Container App だけに絞る。voicevox は起動のたびに
+                        # 数百行の規約テキストを吐き、200 行の窓を丸ごと食い潰す。
+                        Q="$T | where TimeGenerated > ago(4h) $CA_FILTER_CL | where ContainerName_s != 'http-auth' | top 200 by TimeGenerated desc | project TimeGenerated, ContainerName_s, Log_s"
+                        ;;
+                      ContainerAppConsoleLogs)
+                        Q="$T | where TimeGenerated > ago(4h) $CA_FILTER | where ContainerName != 'http-auth' | top 200 by TimeGenerated desc | project TimeGenerated, ContainerName, Log"
                         ;;
                       AppExceptions)
-                        Q="$T | where TimeGenerated > ago(4h) | top 40 by TimeGenerated desc"
+                        Q="$T | where TimeGenerated > ago(4h) | top 40 by TimeGenerated desc | project TimeGenerated, AppRoleName, ExceptionType, Message, OperationName"
+                        ;;
+                      AppTraces)
+                        # SeverityLevel: 0=Verbose 1=Info 2=Warning 3=Error 4=Critical
+                        Q="$T | where TimeGenerated > ago(4h) | where SeverityLevel >= 3 | top 40 by TimeGenerated desc | project TimeGenerated, AppRoleName, SeverityLevel, Message"
                         ;;
                       *)
                         Q="$T | where TimeGenerated > ago(4h) | where Level in ('Error','Critical') or isnotempty(ExceptionMessage) | top 40 by TimeGenerated desc | project TimeGenerated, Level, ExceptionType, ExceptionMessage, ExceptionDetails"
                         ;;
                     esac
                     echo "" >> "$OUT"
-                    echo "#### $T (直近 4 時間・新しい順・サイドカー除く)" >> "$OUT"
+                    echo "#### $T (直近 4 時間・新しい順)" >> "$OUT"
                     echo '```' >> "$OUT"
                     if ! az monitor log-analytics query -w "$WSID" --analytics-query "$Q" \
                           -o table >> "$OUT" 2>/tmp/err.txt; then
                       cat /tmp/err.txt >> "$OUT"
+                      echo '```' >> "$OUT"
+                      # クエリが通らなかったときだけ列名を出す。毎回出すと schema ダンプが
+                      # 出力の大半を占めて、肝心のログが読めない (前回それで埋まった)。
+                      echo "" >> "$OUT"
+                      echo "<details><summary>$T の列名 (クエリが失敗したので参考に出す)</summary>" >> "$OUT"
+                      echo "" >> "$OUT"; echo '```' >> "$OUT"
+                      az monitor log-analytics query -w "$WSID" \
+                        --analytics-query "$T | getschema | project ColumnName, ColumnType" \
+                        -o table >> "$OUT" 2>&1
+                      echo '```' >> "$OUT"; echo "</details>" >> "$OUT"
+                      fail "$T のクエリが失敗した (列名は上の details を見ること)"
+                    else
+                      echo '```' >> "$OUT"
                     fi
-                    echo '```' >> "$OUT"
-                    echo "" >> "$OUT"
-                    echo "<details><summary>$T の列名</summary>" >> "$OUT"
-                    echo "" >> "$OUT"; echo '```' >> "$OUT"
-                    az monitor log-analytics query -w "$WSID" \
-                      --analytics-query "$T | getschema | project ColumnName, ColumnType" \
-                      -o table >> "$OUT" 2>&1
-                    echo '```' >> "$OUT"; echo "</details>" >> "$OUT"
                   done
                   if [ "$FOUND" = "0" ]; then
                     echo "" >> "$OUT"
