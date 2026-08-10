@@ -58,11 +58,19 @@ def grep_any(paths, patterns):
     return False
 
 
-def _edges(srcs, dsts, rel):
+def _same_scope(a, b):
+    return a.get("sub") == b.get("sub") and lc(a.get("rg")) == lc(b.get("rg"))
+
+
+def _edges(srcs, dsts, rel, scoped=True):
+    """src×dst のエッジを張る。scoped=True (既定) は同一 subscription + RG 内でのみ
+    ペアにする — 複数 RG を 1 枚の図にしたとき、環境をまたぐ偽の依存線
+    (例: dev の BFF → stg の Cosmos) を作らないため。"""
     return [
         {"from": s.get("id"), "to": d.get("id"), "rel": rel, "source": "codebase"}
         for s in srcs
         for d in dsts
+        if not scoped or _same_scope(s, d)
     ]
 
 
@@ -202,15 +210,17 @@ def build_browser_node_and_edges(nodes, codebase_root):
         "external": True,
     }
 
+    # ブラウザは Azure 外なので RG スコープの制約は掛けない (scoped=False)
+
     # ブラウザ -> SWA: SPA の配信元 (SWA が居るなら常に成立する関係)
-    edges += _edges([browser], swas, "spaAssets")
+    edges += _edges([browser], swas, "spaAssets", scoped=False)
 
     # ブラウザ -> BFF: ビルド時に焼き込まれた VITE_BFF_BASE_URL で Functions を直叩き (#69)
     if grep_any(
         [root / "apps/frontend/src/trpc/client.ts"],
         [r"VITE_BFF_BASE_URL"],
     ):
-        edges += _edges([browser], funcs, "trpcApi")
+        edges += _edges([browser], funcs, "trpcApi", scoped=False)
 
     # ブラウザ -> Azure Speech: BFF 発行のトークンで WebSocket ストリーミング STT (ADR 0023)
     if grep_any(
@@ -220,7 +230,7 @@ def build_browser_node_and_edges(nodes, codebase_root):
         ],
         [r"cognitiveservices-speech-sdk"],
     ):
-        edges += _edges([browser], spchs, "speechStt")
+        edges += _edges([browser], spchs, "speechStt", scoped=False)
 
     if not edges:
         return None, []
@@ -268,8 +278,10 @@ NAME_OVERRIDES = [
     # Web tier
     ("microsoft.web/sites", "func-", "BFF (Azure Functions + tRPC)",
         "Single tRPC entrypoint; orchestrates AI Agent / VOICEVOX wrapper, NOT a chat passthrough"),
+    # 注: linked backend の有無は build_role_rows が構造エッジから動的に判定して
+    # 説明を上書きする。ここは linked backend が「無い」場合 (ADR 0013 の設計) の既定文
     ("microsoft.web/staticsites", "swa-", "Frontend SPA (React + Vite + MUI)",
-        "SWA Free SKU serving the SPA bundle; the browser calls the BFF Function App "
+        "Serves the SPA bundle; the browser calls the BFF Function App "
         "directly (no linked backend), auth enforced by Functions EasyAuth 401 (ADR 0013)"),
     ("microsoft.web/serverfarms", "asp-", "Function App Service plan",
         "Compute capacity for the BFF Function App"),
@@ -292,9 +304,11 @@ NAME_OVERRIDES = [
         "Server-side speech-to-text (F0). BFF issues short-lived tokens via managed identity; "
         "the browser streams audio to Speech directly over WebSocket (ADR 0023)"),
     # Networking specifics
-    ("microsoft.network/virtualnetworks", "vnet-", "Network boundary (unused when both SQL and VNet integration are off)",
-        "Only consumed by the SQL private endpoint (enableSql) or Functions VNet integration "
-        "(enableFunctionVnetIntegration); with both flags off nothing references it"),
+    # 注: 実際に使われているかは build_role_rows がグラフ (subnet 所属 / リンク) から
+    # 動的に判定して説明を上書きする。ここは中立の既定文
+    ("microsoft.network/virtualnetworks", "vnet-", "Network boundary",
+        "Consumed only by the SQL private endpoint (enableSql) or Functions VNet "
+        "integration (enableFunctionVnetIntegration)"),
     ("microsoft.network/privateendpoints", "pe-sql", "Private endpoint to SQL",
         "Network-isolated SQL access from within VNet"),
     ("microsoft.network/networkinterfaces", "pe-sql", "Private endpoint NIC (SQL)",
@@ -322,12 +336,45 @@ def role_for(node):
     return ROLE_MAP.get(t, ("General Azure resource", "Role not yet classified"))
 
 
-def build_role_rows(nodes):
+def _dynamic_override(node, nodes, edges):
+    """静的な説明が実デプロイと食い違いうる箇所は、グラフの実データで上書きする。
+
+    - SWA: linked backend の構造エッジがあるなら「直叩き (ADR 0013)」の既定文は嘘になる
+    - VNet: どのリソースも subnet に居らず、リンクのエッジも無いなら「未使用」と明記する
+    """
+    t = lc(node.get("type"))
+    nid = node.get("id")
+
+    if t == "microsoft.web/staticsites":
+        linked = any(
+            e.get("from") == nid and lc(e.get("rel", "")) == "linkedbackend" for e in edges
+        )
+        if linked:
+            return (
+                "Frontend SPA (React + Vite + MUI)",
+                "SWA with a linked backend proxying /api/* — NOTE: this diverges from "
+                "ADR 0013 (browser is supposed to call the BFF directly); verify the deployment",
+            )
+
+    if t == "microsoft.network/virtualnetworks":
+        attached = any(n.get("vnet") == nid and n.get("id") != nid for n in nodes)
+        referenced = any(nid in (e.get("from"), e.get("to")) for e in edges)
+        if not attached and not referenced:
+            role, note = role_for(node)
+            return (
+                f"{role} (unused)",
+                f"{note} — in this deployment nothing sits in it or references it",
+            )
+
+    return None
+
+
+def build_role_rows(nodes, edges=()):
     rows = []
     for n in sorted(nodes, key=lambda x: (lc(x.get("rg")), lc(x.get("type")), lc(x.get("label")))):
         if n.get("external"):
             continue
-        role, note = role_for(n)
+        role, note = _dynamic_override(n, nodes, edges) or role_for(n)
         rows.append(
             {
                 "name": (n.get("label", "").split("\n")[0] if n.get("label") else ""),
@@ -365,7 +412,11 @@ def main(argv):
         json.dumps(logical_edges, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    rows = build_role_rows(graph["nodes"] if browser is not None else nodes)
+    # 役割表の動的判定は構造エッジ (graph.json 由来) だけで行う。logical_edges を
+    # 混ぜないのは、コード由来の推定線が「使われている」の根拠になってしまうのを防ぐため
+    rows = build_role_rows(
+        graph["nodes"] if browser is not None else nodes, graph.get("edges", [])
+    )
 
     with roles_tsv_path.open("w", encoding="utf-8") as f:
         f.write("name\ttype\tresourceGroup\trole\tnote\tid\n")

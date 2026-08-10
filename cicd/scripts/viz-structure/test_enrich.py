@@ -89,9 +89,9 @@ def test_role_notes_match_current_adrs():
     nodes = {n["id"]: n for n in dev_env_nodes()}
 
     swa_role, swa_note = enrich.role_for(nodes["id-swa"])
-    assert "linked-backend" not in swa_note
     assert "Standard SKU" not in swa_note
-    assert "Free" in swa_note
+    assert "no linked backend" in swa_note
+    assert "directly" in swa_note
 
     cosmos_role, cosmos_note = enrich.role_for(nodes["id-cosmos"])
     assert cosmos_role != "General Azure resource"
@@ -101,8 +101,38 @@ def test_role_notes_match_current_adrs():
     assert "LLM" not in spch_role and "LLM" not in spch_note
     assert "STT" in spch_role or "speech-to-text" in spch_note
 
-    vnet_role, vnet_note = enrich.role_for(nodes["id-vnet"])
-    assert "unused" in vnet_role or "nothing references it" in vnet_note
+
+def test_cross_rg_pairs_are_not_wired():
+    """[L2] 複数 RG を 1 枚の図にしたとき、環境をまたぐ偽の依存線を作らない
+    (dev の BFF → stg の Cosmos のような線が出たら、図が嘘をつく)。"""
+    nodes = dev_env_nodes()
+    other = [dict(n, id=n["id"] + "-stg", rg="rg-stg-mind-inbox") for n in nodes]
+    pairs = edge_pairs(enrich.build_logical_edges(nodes + other, REPO_ROOT))
+
+    assert ("id-func", "id-cosmos") in pairs
+    assert ("id-func-stg", "id-cosmos-stg") in pairs
+    assert ("id-func", "id-cosmos-stg") not in pairs
+    assert ("id-func-stg", "id-cosmos") not in pairs
+
+
+def test_vnet_and_swa_notes_follow_deployed_state():
+    """[L2] VNet「未使用」と SWA「直叩き」は決め打ちせず、グラフの実データで判定する
+    (SQL 有効環境の VNet を unused と書いたり、linked backend 有効の SWA を
+    直叩きと書いたりする嘘を防ぐ)。"""
+    nodes = dev_env_nodes()
+
+    # 何も参照されない VNet → unused と明記
+    rows = {r["name"]: r for r in enrich.build_role_rows(nodes, [])}
+    assert "unused" in rows["vnet-dev-mindbox"]["role"]
+    assert "ADR 0013" in rows["swa-dev-mindbox"]["note"]
+
+    # subnet に居るリソースがある VNet → unused と書かない。
+    # linked backend の構造エッジがある SWA → 直叩きの既定文を上書き
+    attached = [dict(n, vnet="id-vnet") if n["id"] == "id-func" else n for n in nodes]
+    linked_edge = [{"from": "id-swa", "to": "id-func", "rel": "linkedBackend"}]
+    rows = {r["name"]: r for r in enrich.build_role_rows(attached, linked_edge)}
+    assert "unused" not in rows["vnet-dev-mindbox"]["role"]
+    assert "linked backend" in rows["swa-dev-mindbox"]["note"]
 
 
 def test_main_writes_classified_roles_and_excludes_browser(tmp_path):
