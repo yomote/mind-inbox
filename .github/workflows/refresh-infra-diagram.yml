@@ -110,6 +110,33 @@ jobs:
           if [ -z "$(git status --porcelain -- docs/cicd/iac/)" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "::notice::構成図に差分なし。インフラは docs と一致しています。"
+            exit 0
+          fi
+
+          # 2026-08-10: SVG には生成時刻が焼き込まれているため、**構成が 1 つも変わって
+          # いなくても毎週 PR が開く** (#193 は実際に生成時刻 1 行だけの PR だった)。
+          # 中身の無い PR は「見なくていい PR」を教育してしまい、本当に見るべき差分も
+          # 素通りする。生成時刻だけの差分は差分として数えない。
+          # ヒアドキュメントは YAML のブロックスカラー内で終端を字下げできないので使わない
+          git diff --name-only -- docs/cicd/iac/ > /tmp/changed.txt
+          SIGNIFICANT=0
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            if [ -n "$(git diff -- "$f" | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' \
+                        | grep -v 'Generated(UTC)')" ]; then
+              SIGNIFICANT=1
+              break
+            fi
+          done < /tmp/changed.txt
+          # 新規ファイル (未追跡) は常に有意な差分として扱う
+          if [ -n "$(git ls-files --others --exclude-standard -- docs/cicd/iac/)" ]; then
+            SIGNIFICANT=1
+          fi
+
+          if [ "$SIGNIFICANT" = "0" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::差分は生成時刻だけ。構成は docs と一致しているので PR は開かない。"
+            git checkout -- docs/cicd/iac/ || true
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
             git status --porcelain -- docs/cicd/iac/
