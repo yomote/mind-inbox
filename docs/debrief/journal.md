@@ -27,7 +27,7 @@
 - **対象**: ループエンジニアリング体制の相談から、[ADR 0035](../adr/0035-role-split-across-agents-and-actions.md) の未決事項「レビューを待つ仕組み」の設計へ。起案: [ADR 0036](../adr/0036-merge-gate-as-required-check-and-pm-cadence.md)
 - **決定**: **ADR 0036 を Accept** (承認 = 実装着手可)。5 点:
   - **D1 `review-gate` を required status check として Actions に作る** — PM 受け入れコメント (`[pm-accept]` + head SHA。SHA 規約で push リセットが自動化) / スレッド全解決 / (コード PR かつ変数 ON なら) Codex レビュー、が揃うまで赤
-  - **D2 main にブランチ保護** (required checks + 直 push 禁止 + PO の admin バイパスは脱出口として残す) — needs-human 1 クリック。設定までは advisory
+  - **D2 main にブランチ保護** (required checks + 直 push 禁止。Bypass list は空 — 当初の「admin バイパスを脱出口に」は実測 #213 で覆り、脱出口は ruleset の一時 Disable に変更) — needs-human 1 クリック。設定までは advisory
   - **D3 常設承認を「CI + review-gate がともに緑」へ書き換え** — マージ可否を明文の解釈から機械の色へ
   - **D4 PM 運転リズム** — 日次 tick (status → 分配 → マージ判定) + 週次アンカー (debrief で Proposed ADR / needs-human を必ず消化)
   - **D5 並行実装は 2 本まで + ファイル境界必須** (根拠: 8/8 の重複作業 #159 + 採番衝突の実測)
