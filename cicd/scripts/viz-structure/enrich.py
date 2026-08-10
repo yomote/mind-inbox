@@ -292,9 +292,9 @@ NAME_OVERRIDES = [
         "Server-side speech-to-text (F0). BFF issues short-lived tokens via managed identity; "
         "the browser streams audio to Speech directly over WebSocket (ADR 0023)"),
     # Networking specifics
-    ("microsoft.network/virtualnetworks", "vnet-", "Network boundary (unused while SQL is off)",
-        "Only consumed by the SQL private endpoint (enableSql) or Functions VNet integration; "
-        "with both off nothing references it"),
+    ("microsoft.network/virtualnetworks", "vnet-", "Network boundary (unused when both SQL and VNet integration are off)",
+        "Only consumed by the SQL private endpoint (enableSql) or Functions VNet integration "
+        "(enableFunctionVnetIntegration); with both flags off nothing references it"),
     ("microsoft.network/privateendpoints", "pe-sql", "Private endpoint to SQL",
         "Network-isolated SQL access from within VNet"),
     ("microsoft.network/networkinterfaces", "pe-sql", "Private endpoint NIC (SQL)",

@@ -751,10 +751,12 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
     },
     enableFunctionVnetIntegration ? { virtualNetworkSubnetId: appSubnetResourceId } : {}
   )
-  // vnetEnabled=false のとき ARM は存在しない依存を無視するので、無条件で書いてよい
-  dependsOn: [
-    vnet
-  ]
+  // VNet への依存が要るのは VNet 統合を有効にした時だけ (そのとき vnetEnabled も true)。
+  // なお bicep はこの三項式を無条件の dependsOn に平坦化して emit するが、それで安全:
+  // ARM は「条件 false で skip されたリソースは依存関係から自動で除外する」と明文化している
+  // (learn.microsoft.com resource-dependency: "When a conditional resource isn't deployed,
+  //  Azure Resource Manager automatically removes it from the required dependencies.")
+  dependsOn: enableFunctionVnetIntegration ? [vnet] : []
 }
 
 // VOICEVOX tier(ADR 0010) による実効値。gpu 以外は Consumption ベースの CPU 構成にフォールバック。
