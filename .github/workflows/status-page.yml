@@ -93,4 +93,8 @@ jobs:
           job-status: ${{ job.status }}
           # このワークフローは guard を持たず、success なら必ず生成まで走っている
           work-ran: "true"
+          # このワークフローは cancel-in-progress: true で 4 系統のトリガーを持つため、
+          # **自己中断 (cancelled) が正常運用**。ここを障害扱いにすると、中断のたびに
+          # Issue が立って「Issue 一覧が現在の状態を表す」を自分で壊す (レビュー指摘)。
+          cancelled-is-failure: "false"
           what: "**状況ページの生成が失敗しました。** ページが古い状態で止まっているため、そこの緑は当てになりません。"
