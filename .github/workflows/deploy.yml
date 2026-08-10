@@ -40,6 +40,7 @@ permissions:
   id-token: write # OIDC トークン取得に必須
   contents: read
   actions: read # IMAGE_TAG 解決で build-images の run 履歴を読む (#107)
+  issues: write # 落ちたら自分で Issue を立てる (ADR 0035 D2)
 
 concurrency:
   # 自動デプロイ / 手動 up / 手動 down を RG 単位で「同一グループ」に入れて直列化する。
@@ -266,3 +267,15 @@ jobs:
           else
             echo "::warning::SWA の defaultHostname を取得できませんでした。deploy-frontend のログを参照してください。"
           fi
+
+      # 落ちたことに気づける唯一の経路。別の見張りを置かず、落ちた当人が Issue を立てる
+      # (ADR 0035 D2)。緑になれば同じ Issue を自分で閉じるので、Issue 一覧が現在の状態を表す。
+      - name: 失敗を Issue にする / 復旧したら閉じる
+        if: always()
+        uses: ./.github/actions/report-failure
+        with:
+          job-status: ${{ job.status }}
+          # 他のデプロイ系ステップと同じ条件。guard で skip / `down` 実行のときは
+          # 「デプロイが通った」とは言えないので Issue を閉じない
+          work-ran: ${{ steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true')) }}
+          what: "**dev への自動デプロイが失敗しました。** 実環境が古いまま、あるいは壊れた状態で止まっている可能性があります。"
