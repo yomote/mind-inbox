@@ -46,3 +46,10 @@
 2. `viz-structure.sh` の `iconMap` に種別 → ファイル名を足す
 3. `refresh-infra-diagram` が「図に 1 個も入っていなければ中止」を見ているので、
    壊れれば CI が赤になる
+
+## 未入手のアイコン
+
+`iconMap` には `cosmos-db.png` (`microsoft.documentdb/databaseaccounts`) と
+`cognitive-services.png` (`microsoft.cognitiveservices/accounts`) も登録済みだが、
+配布 CDN 廃止のため **PNG 実体は未入手**。無い間は箱 (アイコン無しノード) で描画される。
+公式パックを入手できたら、この名前で PNG を置くだけで図に載る。
