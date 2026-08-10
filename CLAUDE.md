@@ -4,6 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **このファイルはエージェント向けの作業規約**。プロダクトの説明・構成・起動手順は [README.md](README.md) が入口 (ここには再掲しない)。
 
+> **`AGENTS.md` との関係**: Codex など `AGENTS.md` を読むエージェント向けに、実装時に効く規約だけを抜き出した [`AGENTS.md`](AGENTS.md) を置いている。**このファイルが正典**で、規約を変えたら AGENTS.md も同じ PR で直す (食い違うと、別系統のエージェントが違うルールで実装する)。
+
 ## Working in this repo
 
 ### まず読む戦略 doc
