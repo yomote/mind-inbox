@@ -247,40 +247,65 @@ jobs:
                   # `take` は**任意の N 行**であって最新ではない。しかも絞り込まないと
                   # 行数の多い voicevox のログで埋まる (初回はそれで規約テキストが 40 行出た)。
                   # 列名も環境で変わるので推測しない — `where * has` で全列を対象に絞る。
+                  # $CA が取れていないと `ContainerAppName_s == ''` が全除外になり、
+                  # 「エラー無し」に見えてしまう。取れていないことを明示して絞り込みを外す。
+                  if [ -z "${CA:-}" ]; then
+                    echo "" >> "$OUT"
+                    echo "> ⚠️ ai-agent の Container App 名を解決できなかったため、アプリでの絞り込みをしていない。" >> "$OUT"
+                    CA_FILTER_CL=""
+                    CA_FILTER=""
+                  else
+                    CA_FILTER_CL="| where ContainerAppName_s == '$CA'"
+                    CA_FILTER="| where ContainerAppName == '$CA'"
+                  fi
                   FOUND=0
                   for T in ContainerAppConsoleLogs_CL ContainerAppConsoleLogs AppTraces AppExceptions FunctionAppLogs; do
                     echo "$ALL" | tr ' ' '\n' | grep -qx "$T" || continue
                     FOUND=1
-                    # 列名は getschema で確定済み。**サイドカーを除く**のが肝 —
-                    # Container App には認証ミドルウェア (http-auth) が同居していて、
-                    # そちらが饒舌なのでアプリ本体のログが押し出される (4 回目の空振りの原因)。
-                    # 出力も project で 2 列に絞る。全列を出すと 1 行が長すぎて読めない。
+                    # 列名は 2026-08-10 の run で getschema を実際に出して確定させた。
+                    # **テーブルごとに列名が違う** — _CL 版は `Log_s` / `ContainerName_s`、
+                    # 素の版は `Log` / `ContainerName`、AppTraces に `Level` は無く
+                    # `SeverityLevel` (int)。ここを共通化しようとして 2 回空振りした。
                     case "$T" in
-                      ContainerAppConsoleLogs_CL|ContainerAppConsoleLogs)
-                        Q="$T | where TimeGenerated > ago(4h) | where ContainerName_s != 'http-auth' | top 200 by TimeGenerated desc | project TimeGenerated, ContainerName_s, Log_s"
+                      ContainerAppConsoleLogs_CL)
+                        # ai-agent の Container App だけに絞る。voicevox は起動のたびに
+                        # 数百行の規約テキストを吐き、200 行の窓を丸ごと食い潰す。
+                        Q="$T | where TimeGenerated > ago(4h) $CA_FILTER_CL | where ContainerName_s != 'http-auth' | top 200 by TimeGenerated desc | project TimeGenerated, ContainerName_s, Log_s"
+                        ;;
+                      ContainerAppConsoleLogs)
+                        Q="$T | where TimeGenerated > ago(4h) $CA_FILTER | where ContainerName != 'http-auth' | top 200 by TimeGenerated desc | project TimeGenerated, ContainerName, Log"
                         ;;
                       AppExceptions)
-                        Q="$T | where TimeGenerated > ago(4h) | top 40 by TimeGenerated desc"
+                        Q="$T | where TimeGenerated > ago(4h) | top 40 by TimeGenerated desc | project TimeGenerated, AppRoleName, ExceptionType, Message, OperationName"
+                        ;;
+                      AppTraces)
+                        # SeverityLevel: 0=Verbose 1=Info 2=Warning 3=Error 4=Critical
+                        Q="$T | where TimeGenerated > ago(4h) | where SeverityLevel >= 3 | top 40 by TimeGenerated desc | project TimeGenerated, AppRoleName, SeverityLevel, Message"
                         ;;
                       *)
                         Q="$T | where TimeGenerated > ago(4h) | where Level in ('Error','Critical') or isnotempty(ExceptionMessage) | top 40 by TimeGenerated desc | project TimeGenerated, Level, ExceptionType, ExceptionMessage, ExceptionDetails"
                         ;;
                     esac
                     echo "" >> "$OUT"
-                    echo "#### $T (直近 4 時間・新しい順・サイドカー除く)" >> "$OUT"
+                    echo "#### $T (直近 4 時間・新しい順)" >> "$OUT"
                     echo '```' >> "$OUT"
                     if ! az monitor log-analytics query -w "$WSID" --analytics-query "$Q" \
                           -o table >> "$OUT" 2>/tmp/err.txt; then
                       cat /tmp/err.txt >> "$OUT"
+                      echo '```' >> "$OUT"
+                      # クエリが通らなかったときだけ列名を出す。毎回出すと schema ダンプが
+                      # 出力の大半を占めて、肝心のログが読めない (前回それで埋まった)。
+                      echo "" >> "$OUT"
+                      echo "<details><summary>$T の列名 (クエリが失敗したので参考に出す)</summary>" >> "$OUT"
+                      echo "" >> "$OUT"; echo '```' >> "$OUT"
+                      az monitor log-analytics query -w "$WSID" \
+                        --analytics-query "$T | getschema | project ColumnName, ColumnType" \
+                        -o table >> "$OUT" 2>&1
+                      echo '```' >> "$OUT"; echo "</details>" >> "$OUT"
+                      fail "$T のクエリが失敗した (列名は上の details を見ること)"
+                    else
+                      echo '```' >> "$OUT"
                     fi
-                    echo '```' >> "$OUT"
-                    echo "" >> "$OUT"
-                    echo "<details><summary>$T の列名</summary>" >> "$OUT"
-                    echo "" >> "$OUT"; echo '```' >> "$OUT"
-                    az monitor log-analytics query -w "$WSID" \
-                      --analytics-query "$T | getschema | project ColumnName, ColumnType" \
-                      -o table >> "$OUT" 2>&1
-                    echo '```' >> "$OUT"; echo "</details>" >> "$OUT"
                   done
                   if [ "$FOUND" = "0" ]; then
                     echo "" >> "$OUT"
@@ -299,15 +324,63 @@ jobs:
                 END=$(date -u +%Y-%m-%d)
                 echo "" >> "$OUT"
                 echo "期間: $START 〜 $END (UTC)" >> "$OUT"
-                echo '```' >> "$OUT"
+                # 2026-08-10: --query で projection すると、フィールド名を間違えたときに
+                # 「Cost が全部 None の表」が success として返る (実際に踏んだ)。
+                # 生 JSON を取って python 側で集計し、**金額のキーが見つからなければ
+                # キー一覧を出して落とす** — 次の 1 回で名前が分かる形にしておく。
                 if ! az consumption usage list --start-date "$START" --end-date "$END" \
-                      --query "[].{name:instanceName,cost:pretaxCost,currency:currency}" \
-                      -o table >> "$OUT" 2>/tmp/err.txt; then
+                      -o json > /tmp/usage.json 2>/tmp/err.txt; then
+                  echo '```' >> "$OUT"
                   cat /tmp/err.txt >> "$OUT"
                   echo '```' >> "$OUT"
                   fail "az consumption usage list が失敗した (SP に課金データの参照権が無い可能性)"
                 else
-                  echo '```' >> "$OUT"
+                  # 1 本の python で「$OUT への markdown 追記」と「判定行の stdout」を
+                  # 両方やる。`python3 -` はプログラムを stdin から読むので、
+                  # heredoc とパイプ入力は同時に使えない (最初に書いて踏んだ)。
+                  SUMMARY=$(python3 - /tmp/usage.json "$OUT" <<'PY'
+          import json, sys, collections
+
+          rows = json.load(open(sys.argv[1]))
+          out = open(sys.argv[2], "a")
+          COST_KEYS = ("pretaxCost", "costInBillingCurrency", "cost", "paygCostInBillingCurrency")
+          NAME_KEYS = ("instanceName", "instanceId", "consumedService")
+          CUR_KEYS = ("currency", "billingCurrency", "billingCurrencyCode")
+
+          def bail(reason):
+              out.write("\n集計できませんでした: %s\n" % reason)
+              print("NOKEY\t%s" % reason)
+              raise SystemExit(0)
+
+          if not rows:
+              bail("課金レコードが 0 件 (当月ぶんがまだ確定していない可能性)")
+          sample = rows[0]
+          ck = next((k for k in COST_KEYS if k in sample), None)
+          if ck is None:
+              bail("金額のキーが見つからない。実際のキー: " + ", ".join(sorted(sample)))
+          nk = next((k for k in NAME_KEYS if k in sample), None)
+          cur = next((sample[k] for k in CUR_KEYS if sample.get(k)), "")
+
+          agg = collections.Counter()
+          total = 0.0
+          for r in rows:
+              try:
+                  c = float(r.get(ck) or 0)
+              except (TypeError, ValueError):
+                  c = 0.0
+              total += c
+              agg[str(r.get(nk) or "?").rsplit("/", 1)[-1]] += c
+
+          out.write("\n**合計 %.2f %s** (課金レコード %d 件 / 金額キー: %s)\n\n" % (total, cur, len(rows), ck))
+          out.write("| リソース | コスト |\n| --- | ---: |\n")
+          for name, c in agg.most_common(15):
+              out.write("| %s | %.2f |\n" % (name, c))
+          print("OK\t%.2f\t%s" % (total, cur))
+          PY
+          )
+                  case "$SUMMARY" in
+                    NOKEY*) fail "コスト集計に失敗 (上の理由を見て次の run で直すこと)" ;;
+                  esac
                 fi
               fi
               ;;
