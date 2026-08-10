@@ -275,4 +275,7 @@ jobs:
         uses: ./.github/actions/report-failure
         with:
           job-status: ${{ job.status }}
+          # 他のデプロイ系ステップと同じ条件。guard で skip / `down` 実行のときは
+          # 「デプロイが通った」とは言えないので Issue を閉じない
+          work-ran: ${{ steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true')) }}
           what: "**dev への自動デプロイが失敗しました。** 実環境が古いまま、あるいは壊れた状態で止まっている可能性があります。"

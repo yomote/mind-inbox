@@ -204,4 +204,6 @@ jobs:
         uses: ./.github/actions/report-failure
         with:
           job-status: ${{ job.status }}
+          # OIDC guard で skip された run は 1 ホップも叩いていない
+          work-ran: ${{ steps.guard.outputs.run == 'true' }}
           what: "**ゴールデンパス (認証 → 対話 → 音声 → 抽出 → 一覧) が実環境で通っていません。** ユーザーが触ると失敗する状態です。"

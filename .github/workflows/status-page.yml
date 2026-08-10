@@ -91,4 +91,6 @@ jobs:
         uses: ./.github/actions/report-failure
         with:
           job-status: ${{ job.status }}
+          # このワークフローは guard を持たず、success なら必ず生成まで走っている
+          work-ran: "true"
           what: "**状況ページの生成が失敗しました。** ページが古い状態で止まっているため、そこの緑は当てになりません。"
