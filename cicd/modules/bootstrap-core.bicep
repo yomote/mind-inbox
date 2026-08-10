@@ -752,10 +752,12 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
     enableFunctionVnetIntegration ? { virtualNetworkSubnetId: appSubnetResourceId } : {}
   )
   // VNet への依存が要るのは VNet 統合を有効にした時だけ (そのとき vnetEnabled も true)。
-  // なお bicep はこの三項式を無条件の dependsOn に平坦化して emit するが、それで安全:
-  // ARM は「条件 false で skip されたリソースは依存関係から自動で除外する」と明文化している
-  // (learn.microsoft.com resource-dependency: "When a conditional resource isn't deployed,
-  //  Azure Resource Manager automatically removes it from the required dependencies.")
+  // ソースは意図を示すため条件分岐形を保つこと (無条件 [vnet] に「単純化」しない)。
+  // 注意: ARM JSON には条件付き dependsOn が存在しないため、bicep build はこの三項式を
+  // 無条件の dependsOn に平坦化して emit する (2026-08-10 に最小 repro で実測)。
+  // それでもデプロイが安全なのは ARM の仕様による:
+  // "When a conditional resource isn't deployed, Azure Resource Manager automatically
+  //  removes it from the required dependencies." (learn.microsoft.com resource-dependency)
   dependsOn: enableFunctionVnetIntegration ? [vnet] : []
 }
 
