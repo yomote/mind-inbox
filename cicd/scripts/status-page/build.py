@@ -19,6 +19,7 @@
 
 import html
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -26,7 +27,11 @@ from datetime import datetime, timedelta, timezone
 
 JST = timezone(timedelta(hours=9))
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
-DEFS = pathlib.Path(__file__).with_name("watchers.json")
+# 既定は隣の watchers.json。テストは環境変数で自前の定義に差し替える —
+# **性質を守るテストが、その時点の定義ファイルの中身に依存しないようにするため**
+# (cd-watchdog を廃止したら「痕跡を残さない自動化」のテストが道連れで落ちた / 2026-08-10)。
+DEFS = pathlib.Path(os.environ.get("STATUS_PAGE_WATCHERS") or "") \
+    if os.environ.get("STATUS_PAGE_WATCHERS") else pathlib.Path(__file__).with_name("watchers.json")
 
 OK, BAD, WARN, UNKNOWN = "ok", "bad", "warn", "unknown"
 

@@ -196,3 +196,14 @@ jobs:
             apps/frontend/test-results-live/
           if-no-files-found: ignore
           retention-days: 14
+
+      # 落ちたことに気づける唯一の経路。別の見張りを置かず、落ちた当人が Issue を立てる
+      # (ADR 0035 D2)。緑になれば同じ Issue を自分で閉じるので、Issue 一覧が現在の状態を表す。
+      - name: 失敗を Issue にする / 復旧したら閉じる
+        if: always()
+        uses: ./.github/actions/report-failure
+        with:
+          job-status: ${{ job.status }}
+          # OIDC guard で skip された run は 1 ホップも叩いていない
+          work-ran: ${{ steps.guard.outputs.run == 'true' }}
+          what: "**ゴールデンパス (認証 → 対話 → 音声 → 抽出 → 一覧) が実環境で通っていません。** ユーザーが触ると失敗する状態です。"
