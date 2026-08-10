@@ -244,19 +244,31 @@ jobs:
                   echo "$ALL" | tr ' ' '\n' | sort >> "$OUT"
                   echo '```' >> "$OUT"; echo "</details>" >> "$OUT"
 
+                  # `take` は**任意の N 行**であって最新ではない。しかも絞り込まないと
+                  # 行数の多い voicevox のログで埋まる (初回はそれで規約テキストが 40 行出た)。
+                  # 列名も環境で変わるので推測しない — `where * has` で全列を対象に絞る。
                   FOUND=0
                   for T in ContainerAppConsoleLogs_CL ContainerAppConsoleLogs AppTraces AppExceptions FunctionAppLogs; do
                     echo "$ALL" | tr ' ' '\n' | grep -qx "$T" || continue
                     FOUND=1
+                    for SUBJ in ai-agent func-dev; do
+                      echo "" >> "$OUT"
+                      echo "#### $T — \`$SUBJ\` を含む行 (直近 4 時間・新しい順)" >> "$OUT"
+                      echo '```' >> "$OUT"
+                      if ! az monitor log-analytics query -w "$WSID" \
+                            --analytics-query "$T | where TimeGenerated > ago(4h) | where * has '$SUBJ' | top 60 by TimeGenerated desc" \
+                            -o table >> "$OUT" 2>/tmp/err.txt; then
+                        cat /tmp/err.txt >> "$OUT"
+                      fi
+                      echo '```' >> "$OUT"
+                    done
                     echo "" >> "$OUT"
-                    echo "#### $T (直近 60 分)" >> "$OUT"
-                    echo '```' >> "$OUT"
-                    if ! az monitor log-analytics query -w "$WSID" \
-                          --analytics-query "$T | where TimeGenerated > ago(60m) | take 40" \
-                          -o table >> "$OUT" 2>/tmp/err.txt; then
-                      cat /tmp/err.txt >> "$OUT"
-                    fi
-                    echo '```' >> "$OUT"
+                    echo "<details><summary>$T の列名</summary>" >> "$OUT"
+                    echo "" >> "$OUT"; echo '```' >> "$OUT"
+                    az monitor log-analytics query -w "$WSID" \
+                      --analytics-query "$T | getschema | project ColumnName, ColumnType" \
+                      -o table >> "$OUT" 2>&1
+                    echo '```' >> "$OUT"; echo "</details>" >> "$OUT"
                   done
                   if [ "$FOUND" = "0" ]; then
                     echo "" >> "$OUT"
