@@ -1,0 +1,85 @@
+# 「いまの状況」ページを GitHub の実データから組み立て、gh-pages の /status/ に置く。
+#
+# なぜ必要か (2026-08-10 の PO 指摘):
+#   「今何が動いていて何が問題か」がぱっと分かる場所が無かった。セッションで作る HTML は
+#   作った瞬間に古くなる静的スナップショットで、手で書く表は腐る (docs に置いた台帳が
+#   実際そうなった)。**状態を持たず毎回作り直す**ことで、どちらの失敗も避ける。
+#
+# 置き場所: gh-pages の **/status/ 配下だけ**。ルートには 2026-07 のフロント配信物が
+#   残っているので触らない。
+#
+# 運用手順 (URL / 止め方 / 監視項目の足し方): docs/runbooks/status-page.md
+
+name: status-page
+
+on:
+  schedule:
+    - cron: "10 22 * * *" # 07:10 JST — golden-path-monitor (07:00) の直後
+  push:
+    branches: [main]
+  workflow_run:
+    workflows: [deploy, golden-path-monitor]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write # gh-pages に push する
+  actions: read # 他ワークフローの run 履歴を読む
+  issues: read
+
+concurrency:
+  group: status-page
+  cancel-in-progress: true # 常に最新だけあればよい
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ページを組み立てる
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 cicd/scripts/status-page/build.py out/
+
+      # 生成が空・極端に短いときは push しない。壊れたページで上書きすると
+      # 「見に行ったら白紙」になり、赤を見落とす (静かに壊さない)。
+      - name: 生成物を検査する
+        run: |
+          bytes=$(wc -c < out/index.html)
+          echo "index.html = ${bytes} bytes"
+          if [ "$bytes" -lt 2000 ]; then
+            echo "::error::生成物が小さすぎます (${bytes} bytes)。push を中止します"
+            exit 1
+          fi
+
+      - name: gh-pages の /status/ を差し替える
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin gh-pages --depth=1
+          git worktree add /tmp/pages origin/gh-pages
+          rm -rf /tmp/pages/status
+          mkdir -p /tmp/pages/status
+          cp out/index.html /tmp/pages/status/index.html
+          cd /tmp/pages
+          git checkout -B gh-pages
+          git add status
+          if git diff --cached --quiet; then
+            echo "変化なし — push しません"
+            exit 0
+          fi
+          git commit -q -m "status: ${GITHUB_SHA:0:7} 時点の状況ページ"
+          git push origin gh-pages
+
+      - name: URL を出す
+        run: |
+          owner="${GITHUB_REPOSITORY%%/*}"
+          name="${GITHUB_REPOSITORY#*/}"
+          echo "### いまの状況" >> "$GITHUB_STEP_SUMMARY"
+          echo "https://${owner}.github.io/${name}/status/" >> "$GITHUB_STEP_SUMMARY"

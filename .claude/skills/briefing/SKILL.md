@@ -26,6 +26,16 @@ description: 節目の成果を音声ナレーション付きスライド + 対�
 
 `docs/debrief/journal.md` の直近の報告会 / debrief エントリをマーカーに、それ以降のマージ PR・完了 Issue・承認待ち事項 (Proposed ADR / rubric 初版等) を集める。「この回で PO が判断すべきこと」を先に列挙する (承認事項ゼロの報告会は情報量を疑う)。
 
+### Step 1.5 — 先に engine を起動しておく (待ち時間の正体)
+
+**スライドを書き始める前に**、VOICEVOX の docker イメージ取得を background で走らせる。実測では **pull だけで数分**かかり、report 全体の待ち時間の大半がこれ。スライド作成 (Step 2-3) と完全に並行できるので、後回しにすると PO をそのぶん待たせる (briefing #6 の PO 指摘)。
+
+```bash
+# 1 発目に投げて、返事を待たずに Step 2 へ進む
+docker info >/dev/null 2>&1 || (dockerd >/tmp/dockerd.log 2>&1 &)
+cicd/scripts/local-voicevox/start-voicevox.sh   # run_in_background: true
+```
+
 ### Step 2 — スライド作成
 
 **`assets/deck-template.html` をコピーして中身を書き換える** (雛形にはスライド送り・音声プレイヤー・テーマ対応・音声の差し込み口が入っている)。装飾を変える前に artifact-design skill を読む。
@@ -39,15 +49,27 @@ description: 節目の成果を音声ナレーション付きスライド + 対�
 
 スライドごとに 30〜60 秒相当。**書き言葉ではなく話し言葉**で書く (「〜です。ここでのポイントは〜」)。専門用語は初出時に一言添える。原稿はスライドの `<details>` にも収録 (文字でも追える保険)。
 
+**読みを外さない** (briefing #6 で PO が「読みがおかしいと聞くのがしんどい」と指摘)。VOICEVOX は英字・略語・4 桁の ADR 番号を素直に読まないので、`scripts/reading-dict.json` でカタカナへ正規化してから合成する。運用は 2 手:
+
+```bash
+python3 .claude/skills/briefing/scripts/synthesize.py scripts.json --check   # engine 不要
+```
+
+- 辞書に無い英字が残ると **警告 + 語の一覧** が出る (`ADR` `PR` `UX` 等は登録済み)。**警告が出たまま合成しない** — 出た語を `reading-dict.json` に足してから回す
+- `--check` は正規化後の全文も表示する。固有名詞の読みが変なときはここで気づける
+- `ADR 0034` / 単体の `0021` は自動で桁読み (エーディーアール ゼロゼロサンヨン)、`#196` は「196 番」になる
+
 ### Step 4 — 音声合成 (VOICEVOX)
 
 同梱スクリプトを使う (毎回書き直さない — briefing #1 で書き直しがページングを壊したため)。
 
-1. **engine 起動**: `cicd/scripts/local-voicevox/start-voicevox.sh` (docker。daemon が落ちていれば `dockerd` を起動。**イメージ pull のディスク残量とネットワークポリシーに注意** — 取得できなければ 5 のフォールバックへ)
+1. **engine**: Step 1.5 で起動済みのはず。落ちていたら `cicd/scripts/local-voicevox/start-voicevox.sh` を再実行 (**イメージ pull のディスク残量とネットワークポリシーに注意** — 取得できなければ 5 のフォールバックへ)
 2. **原稿を `scripts.json`** に書く: `{"1": "1 枚目の原稿", "2": "..."}` (キー = スライド番号)
-3. **合成**: `python3 .claude/skills/briefing/scripts/synthesize.py scripts.json <out_dir>` — ずんだもん・`speedScale` 1.5 (PO 評価)・mp3 40kbps で `b64.json` を吐く。ffmpeg が無ければ `apt-get install -y ffmpeg`
-4. **埋め込み**: `python3 .claude/skills/briefing/scripts/embed_audio.py <deck>.html <out_dir>/b64.json scripts.json` — マーカーに差し込み、**進行ロジックの存在と JS 構文を自動検証**する。エラーが出たら公開しない
+3. **合成**: `python3 .claude/skills/briefing/scripts/synthesize.py scripts.json <out_dir>` — 読み辞書で正規化 → ずんだもん・`speedScale` 1.5 (PO 評価)・mp3 40kbps・4 並列で `b64.json` を吐く。ffmpeg が無ければ `apt-get install -y ffmpeg`。**警告が出たら Step 3 に戻る**
+4. **埋め込み**: `python3 .claude/skills/briefing/scripts/embed_audio.py <deck>.html <out_dir>/b64.json scripts.json` — マーカーに差し込み、**進行ロジックの存在と JS 構文を自動検証**する。エラーが出たら公開しない。初回に `<deck>.src.html` (差し込み前の原本) を自動保存するので、**音声を録り直したら同じコマンドをもう一度叩くだけでよい** (スライドを書き直さない)
 5. **フォールバック**: engine が使えない場合は音声を埋め込まずに公開してよい (雛形が自動でブラウザ読み上げに切り替わる)。ただし PO にその旨を伝え、原因を needs-human Issue に積む。「音声なしで公開」はしない (聞き流し要件が PO 決定のため)
+
+**PO を待たせない出し方** (briefing #6 の PO 指摘): 合成は 10 枚で数分かかる。**スライドが書けた時点で音声なしのまま一度 Artifact を publish して URL を渡し**、合成できたら同じファイルパスで再 publish する (URL は変わらない)。PO は先に目次を眺められ、音声は追いつく。
 
 ### Step 5 — 開催 (プレゼンター進行)
 
