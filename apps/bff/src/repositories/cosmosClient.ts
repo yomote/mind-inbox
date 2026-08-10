@@ -18,7 +18,6 @@ import { ManagedIdentityCosmosCredential } from "./cosmosCredential";
 
 type Containers = {
   problems: Container;
-  history: Container;
 };
 
 let cached: Containers | null | undefined;
@@ -29,7 +28,7 @@ export function resetCosmosContainers(): void {
 }
 
 /**
- * problems / history コンテナを返す。Cosmos 未設定なら null。
+ * problems コンテナを返す。Cosmos 未設定なら null。
  *
  * @returns Cosmos が構成されていれば Container 一式、未設定なら null。
  */
@@ -49,7 +48,6 @@ export function getCosmosContainers(): Containers | null {
   const database = client.database(config.cosmosDatabase);
   cached = {
     problems: database.container(config.cosmosProblemsContainer),
-    history: database.container(config.cosmosHistoryContainer),
   };
   return cached;
 }

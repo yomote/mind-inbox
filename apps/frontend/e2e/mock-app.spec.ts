@@ -22,7 +22,6 @@ test.describe("mock ビルド (認証なし)", () => {
 
     await expect(pageHeading(page, "ホーム")).toBeVisible();
     await expect(page.getByRole("button", { name: "困りごと一覧" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "履歴・振り返り" })).toBeVisible();
   });
 
   test("[L3] 相談 → 発話 → 困りごと抽出 → 一覧まで通る", async ({ page }) => {
@@ -83,11 +82,15 @@ test.describe("mock ビルド (認証なし)", () => {
     await expect(pageHeading(page, "困りごと一覧")).toBeVisible();
   });
 
-  test("[L3] 履歴画面が開く", async ({ page }) => {
+  test("[L3] 旧 PoC 導線 (整理結果 / 履歴) が UI から消えている", async ({ page }) => {
+    // 無いと: ADR 0034 で撤去した導線が復活しても誰も気づかない。
+    // 「整理結果へ」は下流 (/organize) が 404 を返す壊れた導線だったので、
+    // 押せる状態に戻してはいけない。
     await gotoHome(page);
+    await expect(page.getByRole("button", { name: "履歴・振り返り" })).toHaveCount(0);
 
-    await page.getByRole("button", { name: "履歴・振り返り" }).click();
-    await expect(page).toHaveURL(/\/history$/);
-    await expect(pageHeading(page, "履歴・振り返り")).toBeVisible();
+    await page.getByRole("button", { name: "新しい相談を始める" }).click();
+    await expect(page.getByRole("button", { name: "整理結果へ" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "困りごとを抽出" })).toBeVisible();
   });
 });

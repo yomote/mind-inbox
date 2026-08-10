@@ -10,20 +10,16 @@
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { z } from "zod";
 
 import {
   __resetProblemStore,
   createProblemPlan,
   extractMentions,
-  loadHistories,
   loadProblem,
   loadProblems,
-  organizeResult,
   sendMessage,
   triageProblem,
 } from "./mockApi";
-import type { ActionPlan, HistoryItem, OrganizedResult } from "./api/types";
 // Problem 系の shape は domain.ts（BFF = 型の真実 / CLAUDE.md §8.3）の zod schema を
 // 直接 import して縛る。inline コピーだと .int()/.min(1) などランタイムバリデータの
 // 乖離をこのテストが検知できなくなる（PR #44 レビュー指摘）。
@@ -34,46 +30,6 @@ import { ProblemSchema } from "../../bff/src/trpc/domain";
 // type だけだと TypeScript の structural typing で「未宣言の余分なキー」を許してしまう。
 // ここで zod parse することで「mock data に新フィールド追加」「型変更」「null 混入」など
 // type 越しに静かに通る変更を捕まえる。
-const OrganizedResultSchema = z.object({
-  summary: z.string(),
-  emotions: z.array(z.string()),
-  priorities: z.array(z.string()),
-}) satisfies z.ZodType<OrganizedResult>;
-
-const ActionPlanSchema = z.object({
-  title: z.string(),
-  steps: z.array(z.string()),
-}) satisfies z.ZodType<ActionPlan>;
-
-const HistoryItemSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  createdAt: z.string(),
-  result: OrganizedResultSchema,
-  plan: ActionPlanSchema,
-}) satisfies z.ZodType<HistoryItem>;
-
-describe("[L1] mockApi shape integrity", () => {
-  // 無いと何が静かに通るか: organizeResult の戻り値に新フィールド追加 / 既存フィールド型変更が
-  // type だけだと許される。runtime parse で気づく。
-  it("organizeResult が OrganizedResult schema に一致する", async () => {
-    const result = await organizeResult("dummy-session-id");
-    expect(() => OrganizedResultSchema.parse(result)).not.toThrow();
-    // strategy.md §1.2 の「assert は意図のあるところだけ」原則: parse 通過 + 必須要素存在
-    expect(result.priorities.length).toBeGreaterThan(0);
-  });
-
-  // 無いと何が静かに通るか: loadHistories の mock データを更新するときに HistoryItem の必須
-  // フィールドを欠落させても type 推論だけだと気づかない。parse で確実に弾く。
-  it("loadHistories の各 item が HistoryItem schema に一致する", async () => {
-    const items = await loadHistories();
-    expect(items.length).toBeGreaterThan(0);
-    for (const item of items) {
-      expect(() => HistoryItemSchema.parse(item)).not.toThrow();
-    }
-  });
-});
-
 describe("[L1] mockApi Problem shape & 不変条件", () => {
   beforeEach(() => {
     __resetProblemStore();

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 永続化の実測 (L4) — 「昨日保存したものが今日も残っている」を毎朝確かめる。
 #
-# 背景 (#165 / ADR 0030 / ADR 0018): Problem と履歴は in-memory の module singleton にしか
+# 背景 (#165 / ADR 0030 / ADR 0018): Problem は in-memory の module singleton にしか
 # 無く、Functions は Y1 (Consumption) なのでアイドルで確実にリサイクルされ、実質翌日には
 # 空になっていた。Cosmos DB へ移したあと、それが**本当に効いているか**は
 # 「プロセスが落ちるだけの時間を空けて読み直す」ことでしか分からない。
@@ -12,15 +12,20 @@
 # 毎朝の golden-path-monitor から呼ぶと、24 時間のアイドル (= 確実なリサイクル) を挟んだ
 # 実測になる。デプロイ直後のスモークテストでは絶対に捕まらない層。
 #
-# AI は呼ばない (history.save / history.list だけ) のでコストは実質ゼロ。
+# 見る対象は **Problem** (UC-02〜05 の事前条件そのもの)。ADR 0034 で会話中心モデル
+# (history) を撤去したので、マーカーは Problem のタイトルに置く。
+#
+# **定常状態では AI を呼ばない** — マーカー Problem が既にあれば `problem.list` の
+# 読み取りだけで判定が終わる。マーカーが 1 件も無いとき (初回 / データ消去後) だけ、
+# 唯一の書き込み経路である `consultation.extract` を 1 回使って種を置く。
 #
 # 保存先のパーティションは **このスクリプトを実行した主体の userId** (CI なら gha-oidc SP、
 # 手動なら実行した人間) になる。PO 本人の履歴を汚さない代わりに、**PO の目に見える
 # データが残っているかまでは見ていない** — 見ているのは「BFF ↔ Cosmos の往復が
 # プロセスの寿命を越えて成立しているか」。
 #
-# 初回実行は「前回のマーカーが無い」ので **PASS 扱いで seed だけ置く**。
-# 2 回目以降が本番の検証になる。
+# 初回実行は「前回のマーカーが無い」ので **PASS 扱いで seed だけ置く** (ここだけ AI を 1 回呼ぶ)。
+# 2 回目以降が本番の検証になり、以降は読み取りだけで済む。
 set -uo pipefail
 
 RG="${RG:-rg-dev-mind-inbox}"
@@ -70,8 +75,8 @@ if [[ -z "$TOKEN" ]]; then
 fi
 A="Authorization: Bearer $TOKEN"
 
-echo "== 1. history.list で前回 run のマーカーを探す =="
-list_body="$(curl -s -m 120 -H "$A" "$H/api/trpc/history.list")"
+echo "== 1. problem.list で前回 run のマーカーを探す =="
+list_body="$(curl -s -m 120 -H "$A" "$H/api/trpc/problem.list")"
 
 verdict="$(MARKER_PREFIX="$MARKER_PREFIX" MIN_AGE_SEC="$MIN_AGE_SEC" python3 -c "
 import json, os, sys
@@ -101,15 +106,9 @@ if not markers:
     print('SEED\t過去のマーカーが 1 件も無い (初回 / データ消去後)')
     raise SystemExit(0)
 
-# 一覧は createdAt 降順のはず。並びが壊れていないかもここで見る。
-ages = [age for _, _, age in markers]
-if ages != sorted(ages):
-    print('ORDER\thistory.list が createdAt 降順になっていない: ' + repr(ages[:5]))
-    raise SystemExit(0)
-
-old = [m for m in markers if m[2] >= min_age]
+old = [m for m in sorted(markers, key=lambda m: -m[2]) if m[2] >= min_age]
 if not old:
-    youngest = min(ages)
+    youngest = min(age for _, _, age in markers)
     print(f'TOOYOUNG\tマーカーはあるが全て {int(youngest)}s 前より新しい (閾値 {min_age}s)')
     raise SystemExit(0)
 
@@ -123,41 +122,68 @@ detail="${verdict#*$'\t'}"
 case "$kind" in
   SURVIVED)
     ok "永続化が効いている — $detail"
+    echo "== 2. マーカーは既にある — 書き込みは不要 (AI を呼ばない) =="
     ;;
-  SEED)
-    echo "INFO- $detail → 今回は seed だけ置きます (次回 run が本番の検証)"
-    ;;
-  TOOYOUNG)
-    # アイドルを挟んでいない (手動連続実行など)。赤くはしない。
-    echo "INFO- $detail → 判定を保留します"
-    ;;
-  ORDER)
-    ng "一覧の並びが壊れている — $detail"
+  SEED | TOOYOUNG)
+    if [[ "$kind" == "SEED" ]]; then
+      echo "INFO- $detail → 今回は seed だけ置きます (次回 run が本番の検証)"
+    else
+      # アイドルを挟んでいない (手動連続実行など)。赤くはしない。
+      echo "INFO- $detail → 判定を保留します"
+    fi
     ;;
   *)
-    ng "history.list を読めない — $detail: $(echo "$list_body" | head -c 200)"
+    ng "problem.list を読めない — $detail: $(echo "$list_body" | head -c 200)"
     ;;
 esac
 
-echo "== 2. 次回 run 用のマーカーを保存する =="
-STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-MARKER_TITLE="$MARKER_PREFIX $STAMP"
-save_body="$(curl -s -m 120 -X POST -H "$A" -H "Content-Type: application/json" \
-  -d "$(MARKER_TITLE="$MARKER_TITLE" python3 -c "
-import json, os
+# マーカーが無いときだけ種を置く。**唯一の書き込み経路が extract なので AI を 1 回呼ぶ** —
+# 定常状態 (SURVIVED) では通らないので、日々のコストはゼロのまま。
+if [[ "$kind" == "SEED" ]]; then
+  echo "== 2. マーカーを作る (extract を 1 回だけ使う) =="
+  STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  MARKER_TITLE="$MARKER_PREFIX $STAMP"
+
+  extract_body="$(curl -s -m 180 -X POST -H "$A" -H "Content-Type: application/json" \
+    -d "$(python3 -c "
+import json
 print(json.dumps({
     'sessionId': 'persistence-probe',
-    'title': os.environ['MARKER_TITLE'],
-    'result': {'summary': '永続化の実測マーカー (#165)', 'emotions': [], 'priorities': []},
-    'plan': {'title': '次回 run で読み直す', 'steps': []},
+    'messages': [{'role': 'user', 'text': '永続化の実測用マーカーです。これは監視のための固定文です。'}],
 }))
 ")" \
-  "$H/api/trpc/history.save")"
+    "$H/api/trpc/consultation.extract")"
 
-if echo "$save_body" | grep -q '"id"'; then
-  ok "マーカーを保存した ($MARKER_TITLE)"
-else
-  ng "マーカーの保存に失敗: $(echo "$save_body" | head -c 300)"
+  new_id="$(python3 -c "
+import json, sys
+try:
+    items = json.load(sys.stdin)['result']['data']['items']
+    print(items[0]['grouping']['problemId'] if items else '')
+except Exception:
+    print('')
+" <<<"$extract_body")"
+
+  if [[ -z "$new_id" ]]; then
+    ng "マーカーの種を作れなかった: $(echo "$extract_body" | head -c 300)"
+  else
+    # AI が付けたタイトルを、次回 run が見つけられる決定的な名前に上書きする。
+    rename_body="$(curl -s -m 120 -X POST -H "$A" -H "Content-Type: application/json" \
+      -d "$(MARKER_TITLE="$MARKER_TITLE" NEW_ID="$new_id" python3 -c "
+import json, os
+print(json.dumps({
+    'action': 'editTitle',
+    'problemId': os.environ['NEW_ID'],
+    'title': os.environ['MARKER_TITLE'],
+}))
+")" \
+      "$H/api/trpc/problem.triage")"
+
+    if echo "$rename_body" | grep -q "$MARKER_PREFIX"; then
+      ok "マーカーを保存した ($MARKER_TITLE)"
+    else
+      ng "マーカーの命名に失敗: $(echo "$rename_body" | head -c 300)"
+    fi
+  fi
 fi
 
 echo ""

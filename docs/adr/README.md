@@ -108,3 +108,4 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0031](0031-agent-reaches-outside-via-github-actions.md) — サンドボックスの外にある事実は GitHub Actions 経由で取る (その場しのぎの回避策を作らない) — **Proposed**
 - [0032](0032-use-case-acceptance-tests-against-real-wiring.md) — ユースケース受け入れテストを「mock を通らない実配線」で持つ (L3-real) — **Proposed**
 - [0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) — 子セッションを起動できない環境では、親が subagent で実装を回す (ADR 0021 条項の改訂) — **Proposed**
+- [0034](0034-remove-legacy-session-centric-flow.md) — UC に無い会話中心モデルの残骸 (整理結果 / 行動プラン / 履歴) を撤去する — **Proposed**

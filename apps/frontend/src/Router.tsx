@@ -2,24 +2,13 @@ import * as React from "react";
 import { Button, Stack, Typography } from "@mui/material";
 import { Navigate, Route, Routes } from "react-router-dom";
 import type { PaletteMode } from "@mui/material";
-import type {
-  ActionPlan,
-  ConsultationSession,
-  ExtractionResult,
-  HistoryItem,
-  OrganizedResult,
-  Problem,
-  TriageInput,
-} from "./api";
+import type { ConsultationSession, ExtractionResult, Problem, TriageInput } from "./api";
 import type { TtsStatus } from "./voice/useTextToSpeech";
 import { SessionScreen } from "./components/session/SessionScreen";
 import { OnboardingScreen } from "./components/screens/OnboardingScreen";
 import { HomeScreen } from "./components/screens/HomeScreen";
 import { PausedScreen } from "./components/screens/PausedScreen";
 import { CrisisSupportScreen } from "./components/screens/CrisisSupportScreen";
-import { ResultScreen } from "./components/screens/ResultScreen";
-import { ActionPlanScreen } from "./components/screens/ActionPlanScreen";
-import { HistoryScreen } from "./components/screens/HistoryScreen";
 import { SettingsScreen } from "./components/screens/SettingsScreen";
 import { ExtractReviewScreen } from "./components/screens/ExtractReviewScreen";
 import { ProblemListScreen } from "./components/screens/ProblemListScreen";
@@ -32,9 +21,6 @@ export const ROUTE_PATHS = {
   home: "/home",
   specPreview: "/spec",
   session: "/consultations/current",
-  result: "/consultations/current/result",
-  actionPlan: "/consultations/current/action-plan",
-  history: "/history",
   settings: "/settings",
   paused: "/consultations/current/paused",
   crisisSupport: "/consultations/current/crisis-support",
@@ -57,10 +43,6 @@ type AppRouterProps = {
   ttsStatus?: TtsStatus;
   ttsEnabled: boolean;
   voiceError: string | null;
-  result: OrganizedResult | null;
-  plan: ActionPlan | null;
-  histories: HistoryItem[];
-  selectedHistory: HistoryItem | null;
   extraction: ExtractionResult | null;
   problems: Problem[];
   selectedProblem: Problem | null;
@@ -73,11 +55,7 @@ type AppRouterProps = {
   handleSendMessage: () => Promise<void>;
   toggleTtsEnabled: () => void;
   stopSpeaking: () => void;
-  handleOrganize: () => Promise<void>;
   handleExtract: () => Promise<void>;
-  handleCreatePlan: () => Promise<void>;
-  handleSaveAndGoHistory: () => void;
-  openHistoryResult: (item: HistoryItem) => void;
   handleOpenProblemList: () => Promise<void>;
   handleOpenProblem: (id: string) => Promise<void>;
   handleTriage: (input: TriageInput) => Promise<void>;
@@ -127,10 +105,6 @@ export function AppRouter({
   ttsStatus,
   ttsEnabled,
   voiceError,
-  result,
-  plan,
-  histories,
-  selectedHistory,
   extraction,
   problems,
   selectedProblem,
@@ -143,11 +117,7 @@ export function AppRouter({
   handleSendMessage,
   toggleTtsEnabled,
   stopSpeaking,
-  handleOrganize,
   handleExtract,
-  handleCreatePlan,
-  handleSaveAndGoHistory,
-  openHistoryResult,
   handleOpenProblemList,
   handleOpenProblem,
   handleTriage,
@@ -175,7 +145,6 @@ export function AppRouter({
               // (タイトルは最初の発話から自動生成 — 2026-08-07 user 決定で newConsultation 画面を廃止)
               onStartConsultation={() => void handleStartConsultation()}
               onProblemList={() => void handleOpenProblemList()}
-              onHistory={() => transition("history")}
               onSpecPreview={isDev ? () => transition("specPreview") : undefined}
             />
           </ProtectedRoute>
@@ -223,7 +192,6 @@ export function AppRouter({
                 onStopSpeaking={stopSpeaking}
                 onCrisisSupport={() => transition("crisisSupport")}
                 onPause={() => transition("paused")}
-                onOrganize={handleOrganize}
                 onExtract={handleExtract}
               />
             </RouteStateGuard>
@@ -247,47 +215,6 @@ export function AppRouter({
             <RouteStateGuard when={session !== null} redirectTo={ROUTE_PATHS.home}>
               <CrisisSupportScreen onBackSession={() => transition("session")} />
             </RouteStateGuard>
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path={ROUTE_PATHS.result}
-        element={
-          <ProtectedRoute authStatus={authStatus}>
-            <RouteStateGuard when={result !== null} redirectTo={ROUTE_PATHS.home}>
-              <ResultScreen
-                result={result!}
-                loading={loading}
-                onHistory={() => transition("history")}
-                onCreatePlan={handleCreatePlan}
-              />
-            </RouteStateGuard>
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path={ROUTE_PATHS.actionPlan}
-        element={
-          <ProtectedRoute authStatus={authStatus}>
-            <RouteStateGuard
-              when={plan !== null}
-              redirectTo={result ? ROUTE_PATHS.result : ROUTE_PATHS.home}
-            >
-              <ActionPlanScreen plan={plan!} onSave={handleSaveAndGoHistory} />
-            </RouteStateGuard>
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path={ROUTE_PATHS.history}
-        element={
-          <ProtectedRoute authStatus={authStatus}>
-            <HistoryScreen
-              histories={histories}
-              selectedHistory={selectedHistory}
-              onBackHome={() => transition("home")}
-              onOpenResult={openHistoryResult}
-            />
           </ProtectedRoute>
         }
       />

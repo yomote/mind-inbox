@@ -1,7 +1,7 @@
 """
 Semantic Kernel のシングルトン。
 
-workflow / organizer / planner が共有する。
+workflow / planner が共有する。
 """
 
 from __future__ import annotations

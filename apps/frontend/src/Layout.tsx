@@ -44,9 +44,6 @@ const HEADER_BY_ROUTE: Record<AppRoute, string> = {
   home: "ホーム",
   specPreview: "UI仕様プレビュー",
   session: "対話セッション",
-  result: "整理結果",
-  actionPlan: "行動プラン / 保存",
-  history: "履歴・振り返り",
   settings: "設定",
   paused: "一時保存 / 中断",
   crisisSupport: "危機時サポート",
@@ -127,10 +124,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   );
 
   // 相談フロー (state 9 + ハンドラ 12) は consultation/ が所有する (#142)。
-  // 履歴の初期読み込みは認証確定後 (#112 / onboarding.mdx)。
-  const consultation = useConsultation(transition, {
-    ready: authStatus === "authenticated",
-  });
+  const consultation = useConsultation(transition);
   const { speakOnce, unlock, reset: resetTts, toggleEnabled: toggleTtsEnabled } = tts;
   const { reset: resetConsultation, startConsultation, sendDraftMessage } = consultation;
 
@@ -212,12 +206,6 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
         return "specPreview";
       case ROUTE_PATHS.session:
         return "session";
-      case ROUTE_PATHS.result:
-        return "result";
-      case ROUTE_PATHS.actionPlan:
-        return "actionPlan";
-      case ROUTE_PATHS.history:
-        return "history";
       case ROUTE_PATHS.settings:
         return "settings";
       case ROUTE_PATHS.paused:
@@ -242,7 +230,10 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   return (
     // data-voice-output: 実際に音を出した経路 (dialogue-session.mdx §5.5)。
     // L4 live E2E が「ずんだもんで鳴ったか」を検証するための観測点 (#150)。
-    <Box data-voice-output={tts.outputMode} sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
+    <Box
+      data-voice-output={tts.outputMode}
+      sx={{ minHeight: "100vh", bgcolor: "background.default" }}
+    >
       <AppBar
         position="fixed"
         elevation={0}
@@ -329,10 +320,6 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
                 ttsStatus={tts.status}
                 ttsEnabled={tts.enabled}
                 voiceError={tts.error}
-                result={consultation.result}
-                plan={consultation.plan}
-                histories={consultation.histories}
-                selectedHistory={consultation.selectedHistory}
                 extraction={consultation.extraction}
                 problems={consultation.problems}
                 selectedProblem={consultation.selectedProblem}
@@ -345,11 +332,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
                 handleSendMessage={sendDraftMessageWithAudio}
                 toggleTtsEnabled={toggleTtsEnabledWithAudio}
                 stopSpeaking={tts.stop}
-                handleOrganize={consultation.organize}
                 handleExtract={consultation.extract}
-                handleCreatePlan={consultation.createPlan}
-                handleSaveAndGoHistory={consultation.saveAndGoHistory}
-                openHistoryResult={consultation.openHistoryResult}
                 handleOpenProblemList={consultation.openProblemList}
                 handleOpenProblem={consultation.openProblem}
                 handleTriage={consultation.triage}

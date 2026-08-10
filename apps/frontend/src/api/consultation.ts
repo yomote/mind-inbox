@@ -1,5 +1,5 @@
 import * as mock from "../mockApi";
-import type { ActionPlan, ChatMessage, ConsultationSession, OrganizedResult } from "./types";
+import type { ChatMessage, ConsultationSession } from "./types";
 import { trpc } from "../trpc/client";
 import { chatStreamFetch, ttsPrefetchFetch, useMock } from "./http";
 import { parseSseJsonStream } from "./sse";
@@ -174,14 +174,4 @@ export async function sendMessage(sessionId: string, text: string): Promise<Chat
       createdAt: new Date().toISOString(),
     };
   }
-}
-
-export async function organizeResult(sessionId: string): Promise<OrganizedResult> {
-  if (useMock) return mock.organizeResult(sessionId);
-  return await trpc.consultation.organize.mutate({ sessionId });
-}
-
-export async function createActionPlan(result: OrganizedResult): Promise<ActionPlan> {
-  if (useMock) return mock.createActionPlan(result);
-  return await trpc.consultation.createPlan.mutate({ result });
 }

@@ -34,23 +34,9 @@ export type ConsultationSession = {
   messages: ChatMessage[];
 };
 
-export type OrganizedResult = {
-  summary: string;
-  emotions: string[];
-  priorities: string[];
-};
-
 export type ActionPlan = {
   title: string;
   steps: string[];
-};
-
-export type HistoryItem = {
-  id: string;
-  title: string;
-  createdAt: string;
-  result: OrganizedResult;
-  plan: ActionPlan;
 };
 
 export type ProblemFilter = {

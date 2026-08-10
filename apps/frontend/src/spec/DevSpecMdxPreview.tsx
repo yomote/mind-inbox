@@ -4,9 +4,6 @@ import ReadmeDoc from "../../../docs/frontend/ui_specs/README.mdx";
 import OnboardingDoc from "../../../docs/frontend/ui_specs/onboarding.mdx";
 import HomeDoc from "../../../docs/frontend/ui_specs/home.mdx";
 import DialogueSessionDoc from "../../../docs/frontend/ui_specs/dialogue-session.mdx";
-import ResultDoc from "../../../docs/frontend/ui_specs/result.mdx";
-import ActionPlanDoc from "../../../docs/frontend/ui_specs/action-plan.mdx";
-import HistoryDoc from "../../../docs/frontend/ui_specs/history.mdx";
 import SettingsDoc from "../../../docs/frontend/ui_specs/settings.mdx";
 import PausedDoc from "../../../docs/frontend/ui_specs/paused.mdx";
 import CrisisSupportDoc from "../../../docs/frontend/ui_specs/crisis-support.mdx";
@@ -19,9 +16,6 @@ type DocKey =
   | "onboarding"
   | "home"
   | "dialogueSession"
-  | "result"
-  | "actionPlan"
-  | "history"
   | "settings"
   | "paused"
   | "crisisSupport"
@@ -34,9 +28,6 @@ const docs: Record<DocKey, React.ComponentType<Record<string, unknown>>> = {
   onboarding: OnboardingDoc,
   home: HomeDoc,
   dialogueSession: DialogueSessionDoc,
-  result: ResultDoc,
-  actionPlan: ActionPlanDoc,
-  history: HistoryDoc,
   settings: SettingsDoc,
   paused: PausedDoc,
   crisisSupport: CrisisSupportDoc,
@@ -50,9 +41,6 @@ const labels: Array<{ key: DocKey; label: string }> = [
   { key: "onboarding", label: "オンボード" },
   { key: "home", label: "ホーム" },
   { key: "dialogueSession", label: "対話" },
-  { key: "result", label: "整理結果" },
-  { key: "actionPlan", label: "行動プラン" },
-  { key: "history", label: "履歴" },
   { key: "settings", label: "設定" },
   { key: "paused", label: "中断" },
   { key: "crisisSupport", label: "危機" },
@@ -66,9 +54,6 @@ const hrefToDocKey: Record<string, DocKey> = {
   "./onboarding.mdx": "onboarding",
   "./home.mdx": "home",
   "./dialogue-session.mdx": "dialogueSession",
-  "./result.mdx": "result",
-  "./action-plan.mdx": "actionPlan",
-  "./history.mdx": "history",
   "./settings.mdx": "settings",
   "./paused.mdx": "paused",
   "./crisis-support.mdx": "crisisSupport",

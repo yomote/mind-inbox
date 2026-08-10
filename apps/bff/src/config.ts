@@ -20,7 +20,6 @@ export const config = {
   cosmosEndpoint: process.env["COSMOS_ENDPOINT"] || undefined,
   cosmosDatabase: process.env["COSMOS_DATABASE"] || "mindinbox",
   cosmosProblemsContainer: process.env["COSMOS_PROBLEMS_CONTAINER"] || "problems",
-  cosmosHistoryContainer: process.env["COSMOS_HISTORY_CONTAINER"] || "history",
 } as const;
 
 export type Config = typeof config;

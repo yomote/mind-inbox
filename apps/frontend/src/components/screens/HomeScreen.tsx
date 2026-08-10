@@ -5,16 +5,10 @@ import { requestWarmup } from "../../api/warmup";
 type HomeScreenProps = {
   onStartConsultation: () => void;
   onProblemList?: () => void;
-  onHistory: () => void;
   onSpecPreview?: () => void;
 };
 
-export function HomeScreen({
-  onStartConsultation,
-  onProblemList,
-  onHistory,
-  onSpecPreview,
-}: HomeScreenProps) {
+export function HomeScreen({ onStartConsultation, onProblemList, onSpecPreview }: HomeScreenProps) {
   // ホーム閲覧中に scale-to-zero の下流を温めておく (#120)。fire-and-forget +
   // スロットルは requestWarmup 側。認証後の画面なので Authorization も付く (ADR 0017)。
   React.useEffect(() => {
@@ -36,9 +30,6 @@ export function HomeScreen({
             UI仕様プレビュー
           </Button>
         )}
-        <Button variant="outlined" onClick={onHistory}>
-          履歴・振り返り
-        </Button>
       </Stack>
     </Paper>
   );

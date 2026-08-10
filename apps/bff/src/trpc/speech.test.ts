@@ -27,7 +27,6 @@ vi.mock("../clients/serviceToken", () => ({
 }));
 
 import { getServiceToken } from "../clients/serviceToken";
-import { InMemoryHistoryRepository } from "../repositories/historyRepository";
 import { InMemoryProblemRepository } from "../repositories/problemRepository";
 import type { TrpcContext } from "./context";
 import { appRouter } from "./router";
@@ -35,7 +34,6 @@ import { appRouter } from "./router";
 function makeCaller() {
   const ctx: TrpcContext = {
     req: new Request("http://localhost/api/trpc"),
-    historyRepo: new InMemoryHistoryRepository(),
     problemRepo: new InMemoryProblemRepository(),
   };
   return appRouter.createCaller(ctx);

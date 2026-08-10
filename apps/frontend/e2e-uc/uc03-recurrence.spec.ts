@@ -53,7 +53,11 @@ test.describe.serial("UC-03 繰り返している悩みに気づく", () => {
     await gotoHome(page);
     await openProblemList(page);
 
-    await expect(page.getByText("🔁 2回")).toBeVisible();
+    // 自分の題材のカードに限定する — 他 spec も再出現を作るので、素の "🔁 2回" は
+    // 一覧に複数出る。カードの aria-label (タイトル + 状態 + 言及回数 / #98) で絞る。
+    await expect(
+      page.getByRole("button", { name: new RegExp(`${TOPIC.title}.*言及 2 回`) }),
+    ).toBeVisible();
 
     await openProblem(page, TOPIC.title);
     await expect(page.getByText("言及の履歴（2件）")).toBeVisible();

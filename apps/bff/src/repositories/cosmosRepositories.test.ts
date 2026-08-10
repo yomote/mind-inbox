@@ -1,5 +1,5 @@
 /**
- * [L2] Cosmos リポジトリ (Problem / History) の結合テスト。
+ * [L2] Cosmos リポジトリ (Problem) の結合テスト。
  *
  * Cosmos SDK の `Container` は差し替え可能な最小のテストダブルにする。ここで検証するのは
  * **BFF が Cosmos に何を渡し、返ってきたものをどう解釈するか**であって、Cosmos 自体の
@@ -14,9 +14,8 @@
  */
 import type { Container } from "@azure/cosmos";
 import { describe, expect, it } from "vitest";
-import { CosmosHistoryRepository } from "./cosmosHistoryRepository";
 import { CosmosProblemRepository, isNotFound } from "./cosmosProblemRepository";
-import type { HistoryItem, Mention, Problem } from "../trpc/domain";
+import type { Mention, Problem } from "../trpc/domain";
 
 // ---- テストダブル ----------------------------------------------------------
 
@@ -102,17 +101,6 @@ function makeProblem(overrides: Partial<Problem> = {}): Problem {
     lastMentionedAt: "2026-01-01T00:00:00.000Z",
     resolvedAt: null,
     shelvedAt: null,
-    ...overrides,
-  };
-}
-
-function makeHistoryItem(overrides: Partial<HistoryItem> = {}): HistoryItem {
-  return {
-    id: "hist-1",
-    title: "転職の相談",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    result: { summary: "まとめ", emotions: ["不安"], priorities: ["情報収集"] },
-    plan: { title: "まず調べる", steps: ["求人を見る"] },
     ...overrides,
   };
 }
@@ -222,43 +210,5 @@ describe("[L2] CosmosProblemRepository", () => {
     expect(isNotFound({ code: 403 })).toBe(false);
     expect(isNotFound(new Error("boom"))).toBe(false);
     expect(isNotFound(null)).toBe(false);
-  });
-});
-
-// ---- CosmosHistoryRepository ----------------------------------------------
-
-describe("[L2] CosmosHistoryRepository", () => {
-  it("list は createdAt 降順を SQL で明示する (挿入順に依存しない)", async () => {
-    const fake = makeFakeContainer({ queryResults: [] });
-    const repo = new CosmosHistoryRepository(fake.container, "user-a");
-
-    await repo.list();
-
-    const call = fake.calls.queries[0] as QueryCall;
-    const spec = call.query as { query: string; parameters: { name: string; value: string }[] };
-    expect(spec.query).toContain("ORDER BY c.createdAt DESC");
-    expect(spec.parameters).toContainEqual({ name: "@userId", value: "user-a" });
-    expect(call.options).toEqual({ partitionKey: "user-a" });
-  });
-
-  it("list はシステム属性と userId を剥がしてドメイン型で返す", async () => {
-    const item = makeHistoryItem();
-    const fake = makeFakeContainer({ queryResults: [asStoredDocument(item, "user-a")] });
-    const repo = new CosmosHistoryRepository(fake.container, "user-a");
-
-    const [got] = await repo.list();
-
-    expect(got).toEqual(item);
-  });
-
-  it("save は userId を載せて保存する", async () => {
-    const fake = makeFakeContainer();
-    const repo = new CosmosHistoryRepository(fake.container, "user-a");
-    const item = makeHistoryItem();
-
-    const returned = await repo.save(item);
-
-    expect(fake.calls.upserts[0]).toEqual({ ...item, userId: "user-a" });
-    expect(returned).toEqual(item);
   });
 });

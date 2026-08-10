@@ -21,7 +21,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../clients/aiAgentClient", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../clients/aiAgentClient")>()),
   sendChatMessage: vi.fn(),
-  organize: vi.fn(),
   extract: vi.fn(),
   createPlan: vi.fn(),
   approve: vi.fn(),
@@ -32,11 +31,9 @@ import {
   approve as approveAiAgent,
   createPlan as createPlanAiAgent,
   extract as extractAiAgent,
-  organize as organizeAiAgent,
   sendChatMessage,
 } from "../clients/aiAgentClient";
 import type { ExtractionResult, Mention, Problem } from "./domain";
-import { InMemoryHistoryRepository } from "../repositories/historyRepository";
 import { InMemoryProblemRepository } from "../repositories/problemRepository";
 import type { TrpcContext } from "./context";
 import { appRouter } from "./router";
@@ -52,7 +49,6 @@ function makeCallerWithRepos() {
   const problemRepo = new InMemoryProblemRepository();
   const ctx: TrpcContext = {
     req: new Request("http://localhost/api/trpc"),
-    historyRepo: new InMemoryHistoryRepository(),
     problemRepo,
   };
   return { caller: appRouter.createCaller(ctx), problemRepo };
@@ -210,73 +206,6 @@ describe("[L2] consultation.sendMessage", () => {
   });
 });
 
-// ---- consultation.organize ------------------------------------------------
-
-describe("[L2] consultation.organize", () => {
-  it("returns OrganizeResponse from aiAgentClient pass-through", async () => {
-    // 無いと: organize 結果の構造変更が BFF→Frontend で deserialize 失敗を引き起こす退行が静かに通る
-    vi.mocked(organizeAiAgent).mockResolvedValue({
-      summary: "仕事のストレス",
-      emotions: ["疲労"],
-      priorities: ["休息"],
-    });
-
-    const result = await makeCaller().consultation.organize({
-      sessionId: "s1",
-    });
-
-    expect(result).toEqual({
-      summary: "仕事のストレス",
-      emotions: ["疲労"],
-      priorities: ["休息"],
-    });
-    expect(organizeAiAgent).toHaveBeenCalledWith({ sessionId: "s1" });
-  });
-
-  it("rejects empty sessionId with zod validation", async () => {
-    await expect(makeCaller().consultation.organize({ sessionId: "" })).rejects.toBeInstanceOf(
-      TRPCError,
-    );
-    expect(organizeAiAgent).not.toHaveBeenCalled();
-  });
-});
-
-// ---- consultation.createPlan ----------------------------------------------
-
-describe("[L2] consultation.createPlan", () => {
-  it("plucks summary/emotions/priorities from input.result and forwards to aiAgentClient", async () => {
-    // 無いと: input mapping のミス (例: result.summary を渡し忘れ) が空プランを生む退行が静かに通る
-    vi.mocked(createPlanAiAgent).mockResolvedValue({
-      title: "48 時間プラン",
-      steps: ["休む", "話す"],
-    });
-
-    const result = await makeCaller().consultation.createPlan({
-      result: {
-        summary: "仕事のストレス",
-        emotions: ["疲労"],
-        priorities: ["休息"],
-      },
-    });
-
-    expect(result).toEqual({ title: "48 時間プラン", steps: ["休む", "話す"] });
-    expect(createPlanAiAgent).toHaveBeenCalledWith({
-      summary: "仕事のストレス",
-      emotions: ["疲労"],
-      priorities: ["休息"],
-    });
-  });
-
-  it("rejects malformed organized result with zod validation", async () => {
-    // 無いと: schema 不整合な input が AI Agent に流れて 500 を引き起こす退行が静かに通る
-    await expect(
-      // @ts-expect-error: missing required fields, intentional
-      makeCaller().consultation.createPlan({ result: { summary: "x" } }),
-    ).rejects.toBeInstanceOf(TRPCError);
-    expect(createPlanAiAgent).not.toHaveBeenCalled();
-  });
-});
-
 // ---- consultation.approve --------------------------------------------------
 
 describe("[L2] consultation.approve", () => {
@@ -300,51 +229,20 @@ describe("[L2] consultation.approve", () => {
   });
 });
 
-// ---- history --------------------------------------------------------------
-
-describe("[L2] history", () => {
-  it("save then list returns the saved item with generated id and createdAt", async () => {
-    // 無いと: history.save の zod schema 検証や id/createdAt 自動付与の退行が静かに通る
-    // makeCaller() ごとに fresh historyRepo が作られるため、save+list は同一 caller で実行する
-    const caller = makeCaller();
-
-    const saved = await caller.history.save({
-      sessionId: "s1",
-      title: "仕事のストレス",
-      result: {
-        summary: "summary",
-        emotions: ["疲労"],
-        priorities: ["休息"],
-      },
-      plan: { title: "プラン", steps: ["step1"] },
-    });
-
-    expect(saved.id).toMatch(/^[0-9a-f-]{36}$/);
-    expect(saved.title).toBe("仕事のストレス");
-    expect(saved.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-
-    const list = await caller.history.list();
-    expect(list).toEqual([saved]);
-  });
-});
-
 // ---- 通しフロー ------------------------------------------------------------
 
-describe("[L2] flow: start → sendMessage → organize → createPlan → save", () => {
-  it("completes the full consultation workflow with all aiAgentClient mocks wired", async () => {
-    // 無いと: BFF を跨ぐ session の受け渡し or schema 連携の退行が
-    // 個別 endpoint の test では捕まらず静かに通る
+describe("[L2] flow: start → sendMessage → extract → problem.createPlan → triage", () => {
+  it("completes the use-case golden path (UC-01 → UC-02 → UC-05 → UC-04)", async () => {
+    // 無いと: BFF を跨ぐ session / Problem の受け渡しの退行が、個別 endpoint の
+    // test では捕まらず静かに通る。UC に無い旧導線 (organize → history) は ADR 0034 で
+    // 撤去したので、通しフローも use_cases.md の道に合わせてある。
     vi.mocked(sendChatMessage).mockResolvedValue({
-      reply: "整理を始めましょう",
+      reply: "もう少し聞かせてください",
       requiresApproval: false,
       approvalRequestId: null,
       citations: [],
     });
-    vi.mocked(organizeAiAgent).mockResolvedValue({
-      summary: "仕事のストレス",
-      emotions: ["疲労"],
-      priorities: ["休息"],
-    });
+    vi.mocked(extractAiAgent).mockResolvedValue(newExtraction("prob-1"));
     vi.mocked(createPlanAiAgent).mockResolvedValue({
       title: "48 時間プラン",
       steps: ["早く帰る", "信頼できる人に話す"],
@@ -352,29 +250,29 @@ describe("[L2] flow: start → sendMessage → organize → createPlan → save"
 
     const caller = makeCaller();
 
+    // UC-01 吐き出す → 抽出して Problem が open で立つ
     const startRes = await caller.consultation.start({ concern: "仕事が辛い" });
     const sessionId = startRes.session.id;
-
-    await caller.consultation.sendMessage({
+    await caller.consultation.sendMessage({ sessionId, message: "もう少し詳しく" });
+    const extraction = await caller.consultation.extract({
       sessionId,
-      message: "もう少し詳しく",
+      messages: [{ role: "user", text: "仕事が辛い" }],
     });
+    expect(extraction.newProblemCount).toBe(1);
 
-    const organized = await caller.consultation.organize({ sessionId });
-    const plan = await caller.consultation.createPlan({ result: organized });
+    // UC-02 一覧に載る
+    expect((await caller.problem.list()).map((p) => p.id)).toEqual(["prob-1"]);
 
-    const saved = await caller.history.save({
-      sessionId,
-      title: startRes.session.title,
-      result: organized,
-      plan,
-    });
+    // UC-05 次の一歩が Problem に紐づく (状態は変わらない = 派生物)
+    const planned = await caller.problem.createPlan({ problemId: "prob-1" });
+    expect(planned.plans).toHaveLength(1);
+    expect(planned.plans[0]?.steps).toEqual(["早く帰る", "信頼できる人に話す"]);
+    expect(planned.status).toBe("open");
 
-    const list = await caller.history.list();
-    expect(list).toHaveLength(1);
-    expect(list[0]).toEqual(saved);
-    expect(list[0].title).toBe("仕事が辛い");
-    expect(list[0].plan.steps).toEqual(["早く帰る", "信頼できる人に話す"]);
+    // UC-04 棚卸しすると既定の一覧から外れる
+    await caller.problem.triage({ action: "resolve", problemId: "prob-1" });
+    expect(await caller.problem.list({ status: "open" })).toEqual([]);
+    expect((await caller.problem.list()).map((p) => p.status)).toEqual(["resolved"]);
   });
 });
 

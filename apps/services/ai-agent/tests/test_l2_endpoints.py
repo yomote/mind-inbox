@@ -5,7 +5,7 @@ HTTP レイヤをバイパスし FastAPI を in-process に叩く。
 
 モック方針:
 - /chat /approve : workflow 全体を monkeypatch (workflow 内部分岐は L1 の領域)
-- /organize /extract /plan: get_chat_client() を mock して各関数本体を動かす
+- /extract /plan: get_chat_client() を mock して各関数本体を動かす
 - /health        : 何もモックしない (FastAPI 自体の wiring 確認)
 
 ここで test しないこと:
@@ -159,49 +159,6 @@ class TestChatStream:
         events = _parse_sse_events(body)
         assert events[-1]["type"] == "error"
         assert "LLM connection lost" in events[-1]["message"]
-
-
-# ---- /organize --------------------------------------------------------------
-
-
-class TestOrganize:
-    async def test_l2_organize_returns_200_with_existing_session(
-        self, client, monkeypatch, make_client, session_repo
-    ):
-        # 無いと: organize() の戻り値を FastAPI が JSON で正しく返さない退行が静かに通る
-        history = ChatHistory()
-        history.add_user_message("仕事が辛い")
-        await session_repo.save("s1", history)
-
-        client_mock = make_client(
-            json.dumps(
-                {
-                    "summary": "仕事のストレス",
-                    "emotions": ["疲労"],
-                    "priorities": ["休息"],
-                }
-            )
-        )
-        monkeypatch.setattr(app_main, "get_chat_client", lambda: client_mock)
-
-        res = await client.post("/organize", json={"session_id": "s1"})
-        assert res.status_code == 200
-        assert res.json() == {
-            "summary": "仕事のストレス",
-            "emotions": ["疲労"],
-            "priorities": ["休息"],
-        }
-
-    async def test_l2_organize_returns_404_when_session_not_found(
-        self, client, monkeypatch, make_client
-    ):
-        # 無いと: ValueError → HTTPException(404) マッピングが切れて 500 を返す退行が静かに通る
-        client_mock = make_client("{}")
-        monkeypatch.setattr(app_main, "get_chat_client", lambda: client_mock)
-
-        res = await client.post("/organize", json={"session_id": "nonexistent"})
-        assert res.status_code == 404
-        assert "Session not found" in res.json()["detail"]
 
 
 # ---- /extract ---------------------------------------------------------------

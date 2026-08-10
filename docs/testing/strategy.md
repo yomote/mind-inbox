@@ -40,7 +40,7 @@ Mind Inbox は **コーディングエージェント駆動の高速開発** を
 | **契約集約**      | tRPC の `zod` と AI Agent の `pydantic` は同じ I/O を別言語で書いている。両者の対称性を契約テストで担保 |
 | **L2 重視**       | エージェントは unit を機械的に通す書き方を学習しているので、サービス結合層を主戦場に置く                |
 | **mock 一元化**   | `apps/frontend/src/mockApi.ts` を共通 fixture に。テストごとに別の mock を増やさない                    |
-| **snapshot 最小** | 境界 (tRPC レスポンス JSON / organize 出力 JSON) のみ。UI snapshot は採用しない                         |
+| **snapshot 最小** | 境界 (tRPC レスポンス JSON / extract 出力 JSON) のみ。UI snapshot は採用しない                          |
 | **失敗の局所化**  | テスト名に `[L0]` `[L1]` `[L2]` プレフィックスを付け、CI ログで層を即特定                               |
 
 ### 1.4 テスト可能性を設計基準にする
@@ -62,7 +62,7 @@ Mind Inbox は **コーディングエージェント駆動の高速開発** を
 │ Layer  │ 何を守るか           │ 代表例                          │
 ├────────┼─────────────────────┼────────────────────────────────┤
 │ L0 契約 │ 言語間スキーマ整合    │ tRPC zod ↔ pydantic schema     │
-│ L1 単体 │ 純粋ロジック          │ deriveTitle / organize JSON 解析│
+│ L1 単体 │ 純粋ロジック          │ deriveTitle / extract JSON 解析 │
 │ L2 結合 │ Router/API 全体動作  │ createCaller / FastAPI ASGI     │
 │ L3 E2E  │ UI 描画 + 主要フロー  │ Playwright / mock ビルド        │
 │ L3-real │ ユースケース受け入れ  │ Playwright / 実 BFF + AI ダブル │
@@ -78,21 +78,21 @@ Mind Inbox は **コーディングエージェント駆動の高速開発** を
 
 ### L0 契約 (Contract Test)
 
-| 項目               | 内容                                                                                                                                                                                                                                                |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **目的**           | BFF と AI Agent が同じ I/O を別言語で書いているため、片側だけ変更されても気づけるようにする                                                                                                                                                         |
-| **対象**           | ai-agent の全エンドポイント (`/chat` `/chat/stream` `/extract` `/organize` `/plan` `/approve`) の I/O。BFF 側の真実は `apps/bff/src/clients/aiAgentContracts.ts` + `apps/bff/src/trpc/domain.ts` の zod、ai-agent 側は `app/schemas.py` の pydantic |
-| **フレームワーク** | TS スクリプト + JSON Schema diff (`apps/bff/scripts/contract-check.mjs` / 比較器は `apps/bff/src/contract/schemaDiff.ts`)                                                                                                                           |
-| **書き方の指針**   | zod と pydantic からそれぞれ JSON Schema を生成し、**ネストを再帰展開したフィールドパス** (`items[].mention.affect.valence`) 単位で 型 / nullable / 欠落可能性 / enum メンバ集合 を比較。差分があれば fail                                          |
-| **非ゴール**       | フィールドの値の妥当性 (それは L2 でやる)。数値の min/max・description などの注釈差、camelCase↔snake_case・`Optional[T]`↔`z.nullable()` の表現差は**意図的に無視**する (false positive を出すと誰も直さなくなる)                                    |
-| **実行コマンド**   | `npm run test:contract` (比較器自身の回帰は `apps/bff/src/contract/schemaDiff.test.ts` が守る)                                                                                                                                                      |
+| 項目               | 内容                                                                                                                                                                                                                                    |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **目的**           | BFF と AI Agent が同じ I/O を別言語で書いているため、片側だけ変更されても気づけるようにする                                                                                                                                             |
+| **対象**           | ai-agent の全エンドポイント (`/chat` `/chat/stream` `/extract` `/plan` `/approve`) の I/O。BFF 側の真実は `apps/bff/src/clients/aiAgentContracts.ts` + `apps/bff/src/trpc/domain.ts` の zod、ai-agent 側は `app/schemas.py` の pydantic |
+| **フレームワーク** | TS スクリプト + JSON Schema diff (`apps/bff/scripts/contract-check.mjs` / 比較器は `apps/bff/src/contract/schemaDiff.ts`)                                                                                                               |
+| **書き方の指針**   | zod と pydantic からそれぞれ JSON Schema を生成し、**ネストを再帰展開したフィールドパス** (`items[].mention.affect.valence`) 単位で 型 / nullable / 欠落可能性 / enum メンバ集合 を比較。差分があれば fail                              |
+| **非ゴール**       | フィールドの値の妥当性 (それは L2 でやる)。数値の min/max・description などの注釈差、camelCase↔snake_case・`Optional[T]`↔`z.nullable()` の表現差は**意図的に無視**する (false positive を出すと誰も直さなくなる)                        |
+| **実行コマンド**   | `npm run test:contract` (比較器自身の回帰は `apps/bff/src/contract/schemaDiff.test.ts` が守る)                                                                                                                                          |
 
 ### L1 単体 (Unit Test)
 
 | 項目               | 内容                                                                                                     |
 | ------------------ | -------------------------------------------------------------------------------------------------------- |
 | **目的**           | 純粋ロジック / パース / フォーマット関数の正しさ                                                         |
-| **対象**           | `deriveTitle`、env 未設定時の stub フォールバック判定、organizer の JSON 抽出、historyRepository の CRUD |
+| **対象**           | `deriveTitle`、env 未設定時の stub フォールバック判定、extractor の JSON 抽出、problemRepository の CRUD |
 | **フレームワーク** | TS: vitest / Python: pytest                                                                              |
 | **書き方の指針**   | I/O は in-memory のみ。ネットワーク / ファイル / DB を触らない。1 テスト < 50ms                          |
 | **非ゴール**       | コンポーネント描画の見た目検証、router 全体の挙動                                                        |
@@ -103,7 +103,7 @@ Mind Inbox は **コーディングエージェント駆動の高速開発** を
 | 項目               | 内容                                                                                                                |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------- |
 | **目的**           | HTTP レイヤをバイパスして router / FastAPI を in-process で叩き、外部依存だけモック化したフロー単位の挙動を固定     |
-| **対象**           | tRPC mutation 全部、FastAPI endpoint 全部、`start → send → organize → plan → save` の通しフロー                     |
+| **対象**           | tRPC mutation 全部、FastAPI endpoint 全部、`start → send → extract → problem.createPlan → triage` の通しフロー      |
 | **フレームワーク** | TS: vitest + `appRouter.createCaller(ctx)` / Python: pytest + `httpx.AsyncClient(transport=ASGITransport(app=app))` |
 | **書き方の指針**   | Azure OpenAI / Container App は必ずモック。in-memory repository を使う。フロー単位で 1 テスト = 1 シナリオ          |
 | **非ゴール**       | UI、実 Azure 環境                                                                                                   |

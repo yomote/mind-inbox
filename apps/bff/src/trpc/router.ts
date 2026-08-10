@@ -8,15 +8,11 @@ import {
   createPlan as createPlanAiAgent,
   ExtractError,
   extract as extractAiAgent,
-  organize as organizeAiAgent,
   sendChatMessage,
 } from "../clients/aiAgentClient";
 import { issueSpeechAuthToken } from "../clients/speechTokenClient";
 import type { ProblemRepository } from "../repositories/problemRepository";
 import {
-  ActionPlanSchema,
-  HistoryItemSchema,
-  OrganizedResultSchema,
   ExtractionResultSchema,
   ProblemSchema,
   ProblemStatusSchema,
@@ -384,15 +380,7 @@ const consultationRouter = router({
       };
     }),
 
-  organize: publicProcedure
-    .input(z.object({ sessionId: z.string().min(1) }))
-    .output(OrganizedResultSchema)
-    .mutation(async ({ input }) => {
-      console.log(`[consultation.organize] sessionId=${input.sessionId}`);
-      return await organizeAiAgent({ sessionId: input.sessionId });
-    }),
-
-  // 吐き出し全文 → Mention 抽出 + 自動グルーピング（ADR 0007）。organize を置換する新導線。
+  // 吐き出し全文 → Mention 抽出 + 自動グルーピング（ADR 0007）。セッションからの唯一の出口。
   // BFF が既存 Problem 候補を渡し（ADR 0012）、結果を Problem リポジトリに反映する。
   extract: publicProcedure
     .input(
@@ -443,18 +431,6 @@ const consultationRouter = router({
       }
     }),
 
-  createPlan: publicProcedure
-    .input(z.object({ result: OrganizedResultSchema }))
-    .output(ActionPlanSchema)
-    .mutation(async ({ input }) => {
-      console.log(`[consultation.createPlan]`);
-      return await createPlanAiAgent({
-        summary: input.result.summary,
-        emotions: input.result.emotions,
-        priorities: input.result.priorities,
-      });
-    }),
-
   approve: publicProcedure
     .input(
       z.object({
@@ -471,36 +447,6 @@ const consultationRouter = router({
         approvalRequestId: input.approvalRequestId,
         approved: input.approved,
       });
-    }),
-});
-
-// ---- history ---------------------------------------------------------------
-
-const historyRouter = router({
-  list: publicProcedure.output(z.array(HistoryItemSchema)).query(async ({ ctx }) => {
-    return await ctx.historyRepo.list();
-  }),
-
-  save: publicProcedure
-    .input(
-      z.object({
-        sessionId: z.string().min(1),
-        title: z.string().min(1),
-        result: OrganizedResultSchema,
-        plan: ActionPlanSchema,
-      }),
-    )
-    .output(HistoryItemSchema)
-    .mutation(async ({ input, ctx }) => {
-      const item = HistoryItemSchema.parse({
-        id: randomUUID(),
-        title: input.title,
-        createdAt: nowIso(),
-        result: input.result,
-        plan: input.plan,
-      });
-      console.log(`[history.save] id=${item.id} title=${item.title}`);
-      return await ctx.historyRepo.save(item);
     }),
 });
 
@@ -559,7 +505,6 @@ export const appRouter = router({
   health: healthRouter,
   speech: speechRouter,
   consultation: consultationRouter,
-  history: historyRouter,
   problem: problemRouter,
 });
 

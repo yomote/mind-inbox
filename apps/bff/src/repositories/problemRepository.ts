@@ -6,7 +6,7 @@ import type { Problem, ProblemStatus, Theme } from "../trpc/domain";
  * ADR 0007 の集約ルート = Problem。Mention は Problem に内包される（独立集約にしない）ため、
  * Mention 専用リポジトリは設けず Problem 経由でアクセスする。
  *
- * historyRepository と同じパターン（interface + InMemory 実装 + module singleton）。
+ * interface + InMemory 実装 + module singleton のパターン。
  * 本番の永続化は `CosmosProblemRepository`（ADR 0030）。実装の選択は
  * `repositoryFactory.ts` が `COSMOS_ENDPOINT` の有無で行う。
  */

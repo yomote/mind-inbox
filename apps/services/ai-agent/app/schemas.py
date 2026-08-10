@@ -71,17 +71,7 @@ class ApprovalRecord(BaseModel):
     status: Literal["pending", "approved", "rejected"] = "pending"
 
 
-# ── Organize / Plan schemas ───────────────────────────────────────────────────
-
-
-class OrganizeRequest(BaseModel):
-    session_id: str = Field(..., description="Session identifier")
-
-
-class OrganizeResponse(BaseModel):
-    summary: str
-    emotions: list[str] = []
-    priorities: list[str] = []
+# ── Plan schemas ──────────────────────────────────────────────────────────────
 
 
 class PlanRequest(BaseModel):

@@ -10,9 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("./cosmosClient", () => ({ getCosmosContainers: vi.fn() }));
 
 import { getCosmosContainers } from "./cosmosClient";
-import { CosmosHistoryRepository } from "./cosmosHistoryRepository";
 import { CosmosProblemRepository } from "./cosmosProblemRepository";
-import { historyRepository } from "./historyRepository";
 import { problemRepository } from "./problemRepository";
 import { createRepositories } from "./repositoryFactory";
 
@@ -25,17 +23,15 @@ describe("[L1] createRepositories", () => {
     const repos = createRepositories("local");
 
     // new せず singleton を返すこと自体が仕様 (リクエストをまたいで状態が残る)
-    expect(repos.historyRepo).toBe(historyRepository);
     expect(repos.problemRepo).toBe(problemRepository);
   });
 
   it("Cosmos 設定済みなら userId を束ねた Cosmos 実装を返す", () => {
-    const containers = { problems: {}, history: {} };
+    const containers = { problems: {} };
     getCosmosContainersMock.mockReturnValue(containers as never);
 
     const repos = createRepositories("oid-123");
 
-    expect(repos.historyRepo).toBeInstanceOf(CosmosHistoryRepository);
     expect(repos.problemRepo).toBeInstanceOf(CosmosProblemRepository);
   });
 });

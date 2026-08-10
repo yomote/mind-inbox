@@ -8,8 +8,6 @@ import type {
   ChatRequest,
   ChatResponse,
   ExtractRequest,
-  OrganizeRequest,
-  OrganizeResponse,
   PlanRequest,
   PlanResponse,
 } from "./aiAgentContracts";
@@ -23,8 +21,6 @@ export type {
   ChatResponse,
   ExistingProblemRef,
   ExtractRequest,
-  OrganizeRequest,
-  OrganizeResponse,
   PlanRequest,
   PlanResponse,
 } from "./aiAgentContracts";
@@ -92,35 +88,6 @@ export async function sendChatMessage(req: ChatRequest): Promise<ChatResponse> {
   };
 }
 
-export async function organize(req: OrganizeRequest): Promise<OrganizeResponse> {
-  if (!config.aiAgentBaseUrl) {
-    console.log("[aiAgentClient] AI_AGENT_BASE_URL not set — using stub /organize");
-    return stubOrganizeResponse();
-  }
-
-  const url = `${config.aiAgentBaseUrl}/organize`;
-  console.log(`[aiAgentClient] POST ${url}`);
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: await serviceHeaders(config.aiAgentAudience, {
-      "Content-Type": "application/json",
-    }),
-    body: JSON.stringify({ session_id: req.sessionId }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`aiAgentClient: POST /organize failed — ${res.status} ${res.statusText}`);
-  }
-
-  const json = (await res.json()) as OrganizeResponse;
-  return {
-    summary: json.summary ?? "",
-    emotions: json.emotions ?? [],
-    priorities: json.priorities ?? [],
-  };
-}
-
 /**
  * セッション全文を Mention[] に抽出 + 既存 Problem へグルーピング（ai-agent /extract）。
  * レスポンスは domain.ts の ExtractionResult（camelCase）と一致する。
@@ -157,14 +124,24 @@ export async function extract(req: ExtractRequest): Promise<ExtractionResult> {
     });
   } catch (err) {
     // ネットワーク断・コールドスタートのタイムアウト等。理由を落とさない。
-    throw new ExtractError("upstream-failed", `POST /extract に到達できませんでした: ${String(err)}`);
+    throw new ExtractError(
+      "upstream-failed",
+      `POST /extract に到達できませんでした: ${String(err)}`,
+    );
   }
 
   if (!res.ok) {
     // 種別を保って上げる。呼び出し側 (router) が tRPC のエラーコードに翻訳する。
     const kind: ExtractFailureKind =
-      res.status === 404 ? "session-missing" : res.status === 502 ? "llm-parse-failed" : "upstream-failed";
-    throw new ExtractError(kind, `aiAgentClient: POST /extract failed — ${res.status} ${res.statusText}`);
+      res.status === 404
+        ? "session-missing"
+        : res.status === 502
+          ? "llm-parse-failed"
+          : "upstream-failed";
+    throw new ExtractError(
+      kind,
+      `aiAgentClient: POST /extract failed — ${res.status} ${res.statusText}`,
+    );
   }
 
   return (await res.json()) as ExtractionResult;
@@ -235,14 +212,6 @@ function stubChatResponse(req: ChatRequest): ChatResponse {
     requiresApproval: false,
     approvalRequestId: null,
     citations: [],
-  };
-}
-
-function stubOrganizeResponse(): OrganizeResponse {
-  return {
-    summary: "[stub] 会話の整理結果がここに表示されます。",
-    emotions: ["[stub] 不安", "[stub] 期待"],
-    priorities: ["[stub] 最優先タスクを決める", "[stub] 休息を確保する"],
   };
 }
 

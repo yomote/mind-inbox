@@ -9,13 +9,10 @@
  * Container 参照と userId を束ねるだけ (Container / CosmosClient 自体はシングルトン)。
  */
 import { getCosmosContainers } from "./cosmosClient";
-import { CosmosHistoryRepository } from "./cosmosHistoryRepository";
 import { CosmosProblemRepository } from "./cosmosProblemRepository";
-import { historyRepository, type HistoryRepository } from "./historyRepository";
 import { problemRepository, type ProblemRepository } from "./problemRepository";
 
 export type Repositories = {
-  historyRepo: HistoryRepository;
   problemRepo: ProblemRepository;
 };
 
@@ -23,10 +20,7 @@ export type Repositories = {
 export function createRepositories(userId: string): Repositories {
   const containers = getCosmosContainers();
   if (!containers) {
-    return { historyRepo: historyRepository, problemRepo: problemRepository };
+    return { problemRepo: problemRepository };
   }
-  return {
-    historyRepo: new CosmosHistoryRepository(containers.history, userId),
-    problemRepo: new CosmosProblemRepository(containers.problems, userId),
-  };
+  return { problemRepo: new CosmosProblemRepository(containers.problems, userId) };
 }

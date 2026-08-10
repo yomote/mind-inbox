@@ -1,5 +1,4 @@
 import { resolveUserId } from "../auth/clientPrincipal";
-import type { HistoryRepository } from "../repositories/historyRepository";
 import type { ProblemRepository } from "../repositories/problemRepository";
 import { createRepositories } from "../repositories/repositoryFactory";
 
@@ -12,12 +11,11 @@ import { createRepositories } from "../repositories/repositoryFactory";
  * BFF の入口は Functions だけではなく、ローカル配信サーバからも同じ router を叩く。
  *
  * **userId は repo のコンストラクタに束ねてある** (ADR 0030 D5)。ここで解決して
- * `createRepositories` に渡すので、`ProblemRepository` / `HistoryRepository` の
+ * `createRepositories` に渡すので、`ProblemRepository` の
  * シグネチャにはユーザーの概念が現れない — router もテストも userId を知らない。
  */
 export type TrpcContext = {
   req: Request;
-  historyRepo: HistoryRepository;
   problemRepo: ProblemRepository;
 };
 

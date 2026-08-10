@@ -21,9 +21,8 @@
     "// COSMOS_ENDPOINT": "Cosmos DB による永続化 (ADR 0030)。**ローカルでは空のまま** — 空なら in-memory リポジトリで動く (再起動で消えるが外部依存ゼロ / D7)。Azure 上でのみ bicep が値を配線する。キー・接続文字列は存在しない (disableLocalAuth: true) ので、値を入れても Managed Identity の無いローカルからは繋がらない",
     "COSMOS_ENDPOINT": "",
 
-    "// COSMOS_DATABASE / COSMOS_*_CONTAINER": "器の名前。既定値がコード側にあるので通常は空でよい (mindinbox / problems / history)",
+    "// COSMOS_DATABASE / COSMOS_*_CONTAINER": "器の名前。既定値がコード側にあるので通常は空でよい (mindinbox / problems)",
     "COSMOS_DATABASE": "",
-    "COSMOS_PROBLEMS_CONTAINER": "",
-    "COSMOS_HISTORY_CONTAINER": ""
+    "COSMOS_PROBLEMS_CONTAINER": ""
   }
 }
