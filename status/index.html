@@ -40,27 +40,27 @@ a { color:var(--accent); }
 </style></head><body><div class="wrap">
 
 <h1>Mind Inbox — いまの状況</h1>
-<div class="stamp">2026-08-11 00:11 JST 時点。GitHub の実データから毎回作り直しています（手で書いている欄はありません）。</div>
+<div class="stamp">2026-08-11 00:12 JST 時点。GitHub の実データから毎回作り直しています（手で書いている欄はありません）。</div>
 
 <div class="headline bad">いま壊れているものが <strong>3 件</strong>あります</div>
 
 <h2>いま壊れているもの</h2>
 <div class="tablewrap"><table><tr class="bad"><td class="mark">🔴</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31391867963">毎朝の実環境チェック</a></div><div class="sub">毎朝 07:00 JST に相談ユースケースを実環境で通し、体験を記録する</div></td><td class="when">1 時間前</td><td class="detail">直近 5 回連続で失敗</td></tr>
-<tr class="bad"><td class="mark">🔴</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31398832419">外の事実を取る (read-only)</a></div><div class="sub">エージェントが Azure の実態などをサンドボックスの外から読む</div></td><td class="when">38 分前</td><td class="detail">直近の実行が失敗</td></tr>
+<tr class="bad"><td class="mark">🔴</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31398832419">外の事実を取る (read-only)</a></div><div class="sub">エージェントが Azure の実態などをサンドボックスの外から読む</div></td><td class="when">39 分前</td><td class="detail">直近の実行が失敗</td></tr>
 <tr class="bad"><td class="mark">🔴</td><td><div class="nm">ux-judge (毎朝の UX 採点)</div><div class="sub">前夜のプローブ記録を採点してスコアを積む</div></td><td class="when">—</td><td class="detail">Issue #127 のコメント に痕跡が 1 件もありません</td></tr></table></div>
 
 <h2>自動で動くもの (CI)</h2>
-<div class="tablewrap"><table><tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31400934933">自動デプロイ (main → dev)</a></div><div class="sub">main が動いたら dev に配って、実環境で通るところまで確かめる</div></td><td class="when">14 分前</td><td class="detail"></td></tr>
+<div class="tablewrap"><table><tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31401526002">自動デプロイ (main → dev)</a></div><div class="sub">main が動いたら dev に配って、実環境で通るところまで確かめる</div></td><td class="when">9 分前</td><td class="detail"></td></tr>
 <tr class="bad"><td class="mark">🔴</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31391867963">毎朝の実環境チェック</a></div><div class="sub">毎朝 07:00 JST に相談ユースケースを実環境で通し、体験を記録する</div></td><td class="when">1 時間前</td><td class="detail">直近 5 回連続で失敗</td></tr>
-<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31401858217">テスト (L0〜L3)</a></div><div class="sub">PR ごとに契約・単体・結合・画面テストを回す</div></td><td class="when">4 分前</td><td class="detail"></td></tr>
+<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31402095063">テスト (L0〜L3)</a></div><div class="sub">PR ごとに契約・単体・結合・画面テストを回す</div></td><td class="when">3 分前</td><td class="detail"></td></tr>
 <tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31369710266">コンテナ image の事前ビルド</a></div><div class="sub">main の image を ghcr に積んでおく (デプロイは sha タグ差し替えだけ)</div></td><td class="when">6 時間前</td><td class="detail"></td></tr>
-<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31401526083">bicep の検証</a></div><div class="sub">インフラ定義がビルドできるかを PR で見る</div></td><td class="when">8 分前</td><td class="detail"></td></tr>
-<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31402201910">マージの門 (review-gate)</a></div><div class="sub">PM 受け入れ・スレッド解決・(コード PR は) Codex レビューが揃うまで PR のマージを止める</div></td><td class="when">0 分前</td><td class="detail"></td></tr>
-<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31401573365">ADR 採番の衝突ガード</a></div><div class="sub">同じ ADR 番号を 2 本足していないか PR で見る</div></td><td class="when">7 分前</td><td class="detail"></td></tr>
-<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31402094918">自動改変の範囲ガード</a></div><div class="sub">自動 PR が触ってよいファイルの外に出ていないか見る</div></td><td class="when">2 分前</td><td class="detail"></td></tr>
-<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31401587311">構成図の再生成</a></div><div class="sub">週次で実環境から構成図を描き直し、差分があれば PR を開く</div></td><td class="when">7 分前</td><td class="detail"></td></tr>
-<tr class="bad"><td class="mark">🔴</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31398832419">外の事実を取る (read-only)</a></div><div class="sub">エージェントが Azure の実態などをサンドボックスの外から読む</div></td><td class="when">38 分前</td><td class="detail">直近の実行が失敗</td></tr>
-<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31401674339">このページ自身</a></div><div class="sub">GitHub の実データから、このページを組み立て直す</div></td><td class="when">6 分前</td><td class="detail"></td></tr></table></div>
+<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31401526083">bicep の検証</a></div><div class="sub">インフラ定義がビルドできるかを PR で見る</div></td><td class="when">9 分前</td><td class="detail"></td></tr>
+<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31402292116">マージの門 (review-gate)</a></div><div class="sub">PM 受け入れ・スレッド解決・(コード PR は) Codex レビューが揃うまで PR のマージを止める</div></td><td class="when">0 分前</td><td class="detail"></td></tr>
+<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31401573365">ADR 採番の衝突ガード</a></div><div class="sub">同じ ADR 番号を 2 本足していないか PR で見る</div></td><td class="when">8 分前</td><td class="detail"></td></tr>
+<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31402094918">自動改変の範囲ガード</a></div><div class="sub">自動 PR が触ってよいファイルの外に出ていないか見る</div></td><td class="when">3 分前</td><td class="detail"></td></tr>
+<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31401587311">構成図の再生成</a></div><div class="sub">週次で実環境から構成図を描き直し、差分があれば PR を開く</div></td><td class="when">8 分前</td><td class="detail"></td></tr>
+<tr class="bad"><td class="mark">🔴</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31398832419">外の事実を取る (read-only)</a></div><div class="sub">エージェントが Azure の実態などをサンドボックスの外から読む</div></td><td class="when">39 分前</td><td class="detail">直近の実行が失敗</td></tr>
+<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31402261400">このページ自身</a></div><div class="sub">GitHub の実データから、このページを組み立て直す</div></td><td class="when">1 分前</td><td class="detail"></td></tr></table></div>
 
 <h2>無人で回るもの (Routine)</h2>
 <div class="tablewrap"><table><tr class="bad"><td class="mark">🔴</td><td><div class="nm">ux-judge (毎朝の UX 採点)</div><div class="sub">前夜のプローブ記録を採点してスコアを積む</div></td><td class="when">—</td><td class="detail">Issue #127 のコメント に痕跡が 1 件もありません</td></tr>
