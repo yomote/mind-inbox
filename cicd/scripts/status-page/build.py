@@ -97,22 +97,33 @@ def workflow_state(w: dict) -> dict:
 
 
 def trace_time(trace: dict) -> tuple[datetime | None, str, bool]:
-    """痕跡の最終時刻を返す。(時刻, 説明, 取得できたか)"""
+    """痕跡の最終時刻を返す。(時刻, 説明, 取得できたか)
+
+    `gh --jq` はスカラー文字列を **クォート無し** で出す (jq -r と同じ) ため、
+    `max` の結果をそのまま json.loads すると必ず失敗し、痕跡があるのに
+    「取得できませんでした」になる (初回 run で実際にそうなった)。
+    かならず**オブジェクトで包んで** JSON として受け取ること。
+    """
     kind = trace.get("kind")
     if kind == "issue_comment":
         n = trace["issue"]
         got = gh("api", f"repos/{{owner}}/{{repo}}/issues/{n}/comments?per_page=100",
-                 "--jq", "[.[].created_at] | max")
-        return parse(got if isinstance(got, str) else None), f"Issue #{n} のコメント", got is not None
-    if kind == "issue_label":
+                 "--jq", "{t: ([.[].created_at] | max)}")
+        where = f"Issue #{n} のコメント"
+    elif kind == "issue_label":
         got = gh("api", f"repos/{{owner}}/{{repo}}/issues?state=all&per_page=20"
-                 f"&labels={trace['label']}", "--jq", "[.[].updated_at] | max")
-        return parse(got if isinstance(got, str) else None), f"`{trace['label']}` ラベルの Issue", got is not None
-    if kind == "issue_title":
+                 f"&labels={trace['label']}", "--jq", "{t: ([.[].updated_at] | max)}")
+        where = f"`{trace['label']}` ラベルの Issue"
+    elif kind == "issue_title":
         got = gh("api", "repos/{owner}/{repo}/issues?state=all&per_page=100", "--jq",
-                 f'[.[] | select(.title | contains("{trace["query"]}")) | .created_at] | max')
-        return parse(got if isinstance(got, str) else None), f"タイトルに `{trace['query']}` を含む Issue", got is not None
-    return None, "", False
+                 f'{{t: ([.[] | select(.title | contains("{trace["query"]}")) | .created_at] | max)}}')
+        where = f"タイトルに `{trace['query']}` を含む Issue"
+    else:
+        return None, "", False
+    if not isinstance(got, dict):
+        return None, where, False
+    # t が null = 取得はできたが痕跡が 1 件も無い (= 沈黙。取得失敗とは別物)
+    return parse(got.get("t")), where, True
 
 
 def routine_state(r: dict) -> dict:
@@ -199,8 +210,10 @@ def build(out_dir: pathlib.Path) -> int:
         head_class = "ok"
 
     def li_pending() -> str:
+        # 想定外の形が返っても**ページごと落とさない**。落ちると gh-pages が
+        # 更新されず、古い緑が残り続けて赤を見落とす。
         parts = []
-        if pend["needs_human"] is None:
+        if not isinstance(pend["needs_human"], list):
             parts.append("<li>(未検証: needs-human の Issue を取得できませんでした)</li>")
         else:
             for i in pend["needs_human"]:
@@ -208,7 +221,7 @@ def build(out_dir: pathlib.Path) -> int:
                              f'#{i["n"]}</a> {html.escape(i["t"])}</li>')
         for a in pend["proposed"]:
             parts.append(f'<li>ADR 未裁定: {html.escape(a["title"])}</li>')
-        if pend["prs"] is None:
+        if not isinstance(pend["prs"], list):
             parts.append("<li>(未検証: open PR を取得できませんでした)</li>")
         else:
             for p in pend["prs"]:
