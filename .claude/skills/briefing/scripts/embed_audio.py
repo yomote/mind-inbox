@@ -31,7 +31,14 @@ def main() -> int:
         return 2
 
     deck = pathlib.Path(sys.argv[1])
-    html = deck.read_text()
+    # 差し込み前の原本を残しておき、2 回目以降はそこから作り直す。
+    # 音声を録り直すたびにスライドを書き直していては遅い (briefing #6 の PO 指摘)。
+    src = deck.with_suffix(".src.html")
+    if src.exists():
+        html = src.read_text()
+    else:
+        html = deck.read_text()
+        src.write_text(html)
     b64 = json.loads(pathlib.Path(sys.argv[2]).read_text())
 
     audio_literal = "{\n" + ",\n".join(
