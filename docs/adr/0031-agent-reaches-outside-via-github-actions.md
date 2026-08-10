@@ -1,6 +1,6 @@
 # 0031. サンドボックスの外にある事実は GitHub Actions 経由で取る (その場しのぎの回避策を作らない)
 
-- Status: Proposed
+- Status: Accepted (2026-08-10 / 対話にて PO 承認)
 - Date: 2026-08-09
 - Deciders: omoteforlab (方向は 2026-08-09 の対話で選択済み。Accept は debrief で)
 - Consulted: —

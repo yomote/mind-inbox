@@ -1,6 +1,6 @@
 # 0028. 分配は「起票パケットを Issue 本文に残す」形にし、並行の衝突は SessionStart の事前提示と CI で防ぐ
 
-- Status: Accepted (design-gate #4, 2026-08-09)
+- Status: Accepted (design-gate #4, 2026-08-09) / 一部 Superseded by [0035](0035-role-split-across-agents-and-actions.md) (2026-08-10 — 起票パケットの置き場所のみ Issue → PR。必須項目は不変)
 - Date: 2026-08-09
 - Deciders: omoteforlab
 - Consulted: —
