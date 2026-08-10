@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""機械検出できる技術負債を洗う (ADR 0037 / 旧 maint-check Routine の機械部分)。
+
+規律 — **静かに嘘をつかない検出器だけを置く**:
+    - 検出できることは決定論的に検出する (壊れた相対リンク / placeholder の test script)。
+      LLM の判断が要るもの・偽陽性が混ざるヒューリスティックは置かない
+    - 検出できないこと (意味的な docs 陳腐化 / デッドコード / 依存の逆流 …) は
+      UNCOVERED として**毎回明示する**。「0 件 = 全部健全」と読ませないため —
+      ここを省くと、カバー範囲の狭さが緑色の顔をして通る
+
+使い方:
+    detect.py <repo_root>
+      stdout に JSON 1 個:
+        {"total": int, "detectors": [{"id", "name", "findings": [...]}, ...],
+         "uncovered": [...], "markdown": str}
+      markdown は Issue 本文にそのまま使える形 (uncovered を必ず含む)。診断は stderr。
+
+終了コード: 0 = 検出処理が走った (件数は total で表す) / 1 = 前提不足
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import sys
+import urllib.parse
+from pathlib import Path
+
+# 検出器がカバーしていない領域 (旧 maint-check の想定範囲との差分)。
+# 新しい検出器を足したらここから消す。消せない項目は debrief / PM tick で人が見る。
+UNCOVERED = [
+    "意味的な docs の陳腐化 (実装と説明の乖離) — LLM の判断が要る。debrief / PM tick で拾う",
+    "未使用 export・デッドコード — ts-prune / knip 等のツール未導入。導入したら検出器に昇格する",
+    "依存の逆流 (レイヤ違反) — 検出器未実装",
+    "Markdown の参照形式リンク ([text][ref]) と外部 URL の死活 — インライン相対リンクのみ検査している",
+    "リポジトリ外へ抜ける相対リンク (例: `../../../issues/4` — GitHub web 上でだけ解決する形) — "
+    "ローカルに実体が無く機械では真偽を判定できないため検査対象外",
+]
+
+_FENCED_CODE = re.compile(r"```.*?```", re.DOTALL)
+# インラインリンク [text](target) / 画像 ![alt](target)。title 付き (target "title") も拾う
+_INLINE_LINK = re.compile(r"\]\(\s*<?([^)<>\s]+)>?(?:\s+\"[^\"]*\")?\s*\)")
+
+
+def log(message: str) -> None:
+    print(message, file=sys.stderr)
+
+
+def strip_fenced_code(text: str) -> str:
+    """コード fence 内を検査対象から外す (例示のリンクを壊れ扱いしない)。"""
+    return _FENCED_CODE.sub("", text)
+
+
+def iter_inline_links(text: str) -> list[str]:
+    return _INLINE_LINK.findall(strip_fenced_code(text))
+
+
+def is_checkable_relative(target: str) -> bool:
+    """検査対象の相対リンクか。外部 URL / ページ内アンカー / mailto は対象外。"""
+    if not target or target.startswith("#"):
+        return False
+    parsed = urllib.parse.urlparse(target)
+    return not parsed.scheme  # http(s):, mailto:, tel: などを一括で除外
+
+
+def broken_links_in(md_file: Path, text: str, root: Path) -> list[dict]:
+    """1 つの Markdown ファイル内の壊れた相対リンクを返す (root からの相対で報告)。"""
+    findings = []
+    for target in iter_inline_links(text):
+        if not is_checkable_relative(target):
+            continue
+        path_part = urllib.parse.unquote(target.split("#", 1)[0])
+        if not path_part:
+            continue  # 純アンカー (#section) — アンカーの実在検査は対象外 (UNCOVERED ではなく仕様)
+        resolved = (md_file.parent / path_part).resolve()
+        if not resolved.is_relative_to(root):
+            # リポジトリ外へ抜けるリンクは GitHub web 相対 (../../../issues/N 等) で、
+            # ローカルでは真偽を判定できない。「壊れている」と誤報するより
+            # UNCOVERED として明示する方を選ぶ (実出力 2026-08-10 で ADR 0018 の
+            # Issue リンク 5 件を誤報しかけた)
+            continue
+        if not resolved.exists():
+            findings.append(
+                {
+                    "file": md_file.relative_to(root).as_posix(),
+                    "target": target,
+                }
+            )
+    return findings
+
+
+def detect_broken_doc_links(root: Path) -> list[dict]:
+    """docs/**/*.md のインライン相対リンク切れ。"""
+    docs = root / "docs"
+    findings = []
+    for md_file in sorted(docs.rglob("*.md")):
+        if md_file.name == "template.md":
+            # 雛形の NNNN-xxx.md は意図した placeholder。毎週誤報すると
+            # Issue がノイズで埋まり、本物の壊れリンクが読まれなくなる
+            continue
+        try:
+            text = md_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            # 読めないファイルを黙って飛ばさない — 読めないこと自体を負債として報告する
+            findings.append(
+                {
+                    "file": md_file.relative_to(root).as_posix(),
+                    "target": f"(読めません: {exc})",
+                }
+            )
+            continue
+        findings.extend(broken_links_in(md_file, text, root))
+    return findings
+
+
+def detect_placeholder_test_scripts(root: Path) -> list[dict]:
+    """package.json の scripts に残っている placeholder (テストのふりをする echo)。
+
+    例 (実物): "test:py:voicevox": "echo 'placeholder: ...' && exit 0" —
+    test:fast が緑でも voicevox は 1 行もテストされていない。
+    """
+    findings = []
+    for pkg in sorted(root.rglob("package.json")):
+        if "node_modules" in pkg.parts:
+            continue
+        try:
+            data = json.loads(pkg.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue  # 壊れた package.json は lint / CI が別途落とす守備範囲
+        scripts = data.get("scripts") if isinstance(data, dict) else None
+        if not isinstance(scripts, dict):
+            continue
+        for name, command in scripts.items():
+            if isinstance(command, str) and "placeholder" in command.lower():
+                findings.append(
+                    {
+                        "file": pkg.relative_to(root).as_posix(),
+                        "script": name,
+                        "command": command,
+                    }
+                )
+    return findings
+
+
+def detect_all(root: Path) -> dict:
+    detectors = [
+        {
+            "id": "broken-doc-links",
+            "name": "docs 内の壊れた相対リンク",
+            "findings": detect_broken_doc_links(root),
+        },
+        {
+            "id": "placeholder-test-scripts",
+            "name": "placeholder のままのテスト script",
+            "findings": detect_placeholder_test_scripts(root),
+        },
+    ]
+    total = sum(len(d["findings"]) for d in detectors)
+    report = {
+        "total": total,
+        "detectors": detectors,
+        "uncovered": UNCOVERED,
+    }
+    report["markdown"] = to_markdown(report)
+    return report
+
+
+def _finding_line(finding: dict) -> str:
+    if "script" in finding:
+        return f"- `{finding['file']}` scripts.`{finding['script']}`: `{finding['command']}`"
+    return f"- `{finding['file']}` → `{finding['target']}`"
+
+
+def to_markdown(report: dict) -> str:
+    """Issue 本文 / step summary 用。0 件でも uncovered は必ず出す (silent caps 禁止)。"""
+    lines = [f"## 機械検出できた負債 ({report['total']} 件)", ""]
+    for detector in report["detectors"]:
+        lines.append(f"### {detector['name']} ({len(detector['findings'])} 件)")
+        lines.append("")
+        if detector["findings"]:
+            lines.extend(_finding_line(f) for f in detector["findings"])
+        else:
+            lines.append("- なし")
+        lines.append("")
+    lines += [
+        "## この検出器がカバーしていないもの",
+        "",
+        "**0 件 = 全部健全、ではありません。** 以下は機械検出の対象外です (ADR 0037):",
+        "",
+    ]
+    lines.extend(f"- {item}" for item in report["uncovered"])
+    lines += [
+        "",
+        "---",
+        "",
+        "_Generated by [Claude Code](https://claude.ai/code) — "
+        "`.github/workflows/debt-check.yml` / 検出器: `cicd/scripts/debt-check/detect.py`_",
+    ]
+    return "\n".join(lines)
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 2:
+        log(f"使い方: {Path(argv[0]).name} <repo_root>")
+        return 1
+    root = Path(argv[1]).resolve()
+    if not (root / "docs").is_dir():
+        log(f"repo root に見えません (docs/ がありません): {root}")
+        return 1
+    report = detect_all(root)
+    log(
+        f"検出 {report['total']} 件 / カバー外 {len(report['uncovered'])} 領域 (本文に明示)"
+    )
+    print(json.dumps(report, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

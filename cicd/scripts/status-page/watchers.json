@@ -1,5 +1,5 @@
 {
-  "_comment": "状況ページ (gh-pages /status/) が読む定義。ここが『何を見張るか』の唯一の真実で、状態そのものは持たない (状態は GitHub の実データから毎回生成する)。自動化を足したらここに 1 行足す。足せないなら作らない。 cd-watchdog は ADR 0035 D2 で廃止した — 落ちた workflow 自身が Issue を立てる (.github/actions/report-failure) ので、見張り役は不要になった。",
+  "_comment": "状況ページ (gh-pages /status/) が読む定義。ここが『何を見張るか』の唯一の真実で、状態そのものは持たない (状態は GitHub の実データから毎回生成する)。自動化を足したらここに 1 行足す。足せないなら作らない。 cd-watchdog は ADR 0035 D2 で廃止した — 落ちた workflow 自身が Issue を立てる (.github/actions/report-failure) ので、見張り役は不要になった。routines は ADR 0035 D1 / ADR 0037 で 0 本にした — ux-judge は ux-eval.yml (機械計測) + PM tick の LLM 採点 (traces 欄) に、maint-check は debt-check.yml に移し、PR レビューは Codex の GitHub 連携 + review-gate.yml (required check) が痕跡を持つ。claude.ai 側の Routine 実体の削除は needs-human。",
   "workflows": [
     {
       "id": "deploy.yml",
@@ -14,6 +14,19 @@
       "what": "毎朝 07:00 JST に相談ユースケースを実環境で通し、体験を記録する",
       "expect_hours": 26,
       "critical": true
+    },
+    {
+      "id": "ux-eval.yml",
+      "name": "毎朝の UX 機械計測",
+      "what": "前夜のプローブ記録からレイテンシ統計・往復数・警告数を抽出して #127 に積む (LLM 採点は PM tick — traces 欄)",
+      "expect_hours": 26,
+      "critical": true
+    },
+    {
+      "id": "debt-check.yml",
+      "name": "週次の技術負債チェック",
+      "what": "docs の壊れたリンク・placeholder テスト等を機械検出して Issue に積む (カバー外領域は本文に明示)",
+      "expect_hours": 192
     },
     {
       "id": "test.yml",
@@ -39,7 +52,8 @@
       "name": "マージの門 (review-gate)",
       "what": "PM 受け入れ・スレッド解決・(コード PR は) Codex レビューが揃うまで PR のマージを止める",
       "expect": "PR ごと",
-      "critical": true
+      "critical": true,
+      "note": "PR レビュー Routine (ADR 0008) の廃止後、レビューの痕跡はこの required check と PR 上の Codex / PM コメントが持つ (ADR 0035 D1/D4)。"
     },
     {
       "id": "adr-number-guard.yml",
@@ -72,34 +86,7 @@
       "expect_hours": 26
     }
   ],
-  "routines": [
-    {
-      "name": "ux-judge (毎朝の UX 採点)",
-      "what": "前夜のプローブ記録を採点してスコアを積む",
-      "trace": {
-        "kind": "issue_comment",
-        "issue": 127
-      },
-      "expect_hours": 26
-    },
-    {
-      "name": "maint-check (週次の健全性チェック)",
-      "what": "docs の陳腐化・デッドコード・依存の逆流を週次で洗う",
-      "trace": {
-        "kind": "issue_title",
-        "query": "[maint-check]"
-      },
-      "expect_hours": 192
-    },
-    {
-      "name": "PR レビュー Routine",
-      "what": "開いた PR をレビューする",
-      "trace": {
-        "kind": "unknown"
-      },
-      "note": "2026-08-10 に #208 で稼働を確認 (同日午前の PR 8 本には無反応だったので、動く日と動かない日がある)。ADR 0035 D1 で Codex の GitHub 連携へ移す予定 (#205)。"
-    }
-  ],
+  "routines": [],
   "traces": [
     {
       "name": "UX プローブ記録の運搬",
@@ -109,6 +96,16 @@
         "issue": 162
       },
       "expect_hours": 26
+    },
+    {
+      "name": "UX LLM 採点 (PM tick → #127 コメント)",
+      "what": "PM セッションの日次 tick が subagent (ux-reviewer) で rubric 採点し #127 に積む (ADR 0037)",
+      "trace": {
+        "kind": "issue_comment",
+        "issue": 127
+      },
+      "expect_hours": 50,
+      "note": "expect 50h は週末スキップ許容。既知の穴: この trace はコメントの kind を区別しないため、ux-eval.yml の機械計測コメントでも緑になる — LLM 採点だけが止まった状態を検出できない (ADR 0037 Negative Consequences。塞ぐには build.py に kind フィルタが要る)。"
     }
   ]
 }

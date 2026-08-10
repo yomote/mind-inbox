@@ -1,0 +1,80 @@
+# 毎朝の UX 機械計測 (ADR 0037 / 旧 ux-judge Routine の機械部分)。
+#
+# 分担: LLM を Actions で走らせる経路は却下済み (API キー = 従量課金 / OAuth トークン =
+#   長期クレデンシャル — ADR 0008/0009/0035 D5)。ここは**機械で計算できる計測だけ**を
+#   毎朝積み、LLM 採点 (ux-judge-score) は PM セッションの日次 tick が subagent で行う。
+#   Routine と違い、run 履歴が必ず残るので「沈黙 = 落ちていない」が成立する (ADR 0035 D1)。
+#
+# 流れ: 記録 Issue #162 の最新プローブ記録コメント (golden-path-monitor が 07:00 JST に
+#   投稿) を読み → 鮮度を確認 (26h 以内に記録が無ければ run を赤にする — 古い記録を
+#   「今日の計測」として積まない) → 機械計測を抽出してスコアボード Issue #127 に
+#   1 run = 1 コメント (kind: "ux-eval-mech") で投稿する。
+name: ux-eval
+
+on:
+  schedule:
+    - cron: "20 23 * * *" # 08:20 JST 毎朝 (07:00 JST の golden-path-monitor が終わってから)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write # #127 への投稿と report-failure の Issue 起票
+
+env:
+  PROBE_RECORD_ISSUE: "162" # 記録の置き場 (ADR 0029)
+  SCOREBOARD_ISSUE: "127" # スコアボード
+
+jobs:
+  ux-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 記録 Issue のコメント一覧を取得
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # --paginate はページごとに別の JSON 配列を吐くので、.[] で行に崩してから
+          # jq -s で 1 つの配列に束ね直す (最新の選択は script 側が created_at で行う)
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/issues/$PROBE_RECORD_ISSUE/comments?per_page=100" \
+            --jq '.[] | {body: .body, created_at: .created_at}' \
+            | jq -s '.' > /tmp/comments.json
+          echo "コメント $(jq 'length' /tmp/comments.json) 件を取得"
+
+      - name: 機械計測を抽出 (鮮度 26h を確認)
+        id: eval
+        run: |
+          # 終了コードは必ずコマンド単体の直後に取る (PR #157 レビュー指摘と同じ理由)
+          set +e
+          python3 cicd/scripts/ux-eval/ux_eval.py /tmp/comments.json > /tmp/ux-eval-comment.md
+          rc=$?
+          set -e
+          if [ "$rc" -eq 3 ]; then
+            # 鮮度切れ / 記録なしは**この run の赤で表現する** (ADR 0037 D1)。
+            # 黙って skip すると「プローブが止まったまま計測も静かに止まる」が再発する
+            echo "::error::26 時間以内のプローブ記録がありません — golden-path-monitor か記録の投稿が止まっています (詳細は上のログ)"
+            exit 1
+          fi
+          exit "$rc"
+
+      - name: スコアボードへ投稿
+        id: post
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue comment "$SCOREBOARD_ISSUE" -R "$GITHUB_REPOSITORY" -F /tmp/ux-eval-comment.md
+          echo "Issue #$SCOREBOARD_ISSUE に投稿した"
+
+      # 落ちたことに気づける唯一の経路。別の見張りを置かず、落ちた当人が Issue を立てる
+      # (ADR 0035 D2)。緑になれば同じ Issue を自分で閉じる。
+      - name: 失敗を Issue にする / 復旧したら閉じる
+        if: always()
+        uses: ./.github/actions/report-failure
+        with:
+          job-status: ${{ job.status }}
+          # 投稿まで通って初めて「計測が積まれた」— 手前で止まった success (無いはずだが)
+          # を復旧と誤認しないため、post の成否で判定する
+          work-ran: ${{ steps.post.outcome == 'success' }}
+          what: "**毎朝の UX 機械計測 (ux-eval) が落ちています。** プローブ記録が古い/無いか、スコアボード #127 への投稿に失敗しています。レイテンシのトレンドが途切れます。"

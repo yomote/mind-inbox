@@ -105,6 +105,9 @@ def test_L1_痕跡を残さない自動化は判定不能のまま残る(tmp_pat
 
 def test_L1_定義ファイルが読める():
     defs = json.loads((pathlib.Path(__file__).with_name("watchers.json")).read_text())
-    assert defs["workflows"] and defs["routines"]
+    assert defs["workflows"]
+    # routines は ADR 0035 D1 / 0037 で 0 本が目標状態 — 空を許す (キー自体は
+    # build.py が defs["routines"] を直接読むので必須)
+    assert isinstance(defs["routines"], list)
     for w in defs["workflows"]:
         assert w.get("id", "").endswith(".yml"), w
