@@ -85,6 +85,24 @@ def test_l1_リポジトリ外へ抜けるリンクとtemplateは誤報しない
     assert detect_broken_doc_links(root) == []
 
 
+def test_l1_ルート相対リンクはリポジトリルートに解決して検査する(tmp_path) -> None:
+    """](/x.md) 形式を黙って検査対象外にしない (PR #224 レビュー指摘)。
+
+    無いと何が静かに通るか:
+        Path の `/` 演算子は右辺が絶対パスだと左辺を捨てるため、/x.md が OS ルートに
+        解決され「リポジトリ外」として黙って skip される。壊れたルート相対リンクが
+        UNCOVERED にも載らず緑のままになる — 検出器の「静かに嘘をつかない」原則に反する。
+    """
+    root = _repo(tmp_path)
+    (root / "README.md").write_text("# top", encoding="utf-8")
+    (root / "docs" / "index.md").write_text(
+        "[生きてる](/README.md) / [壊れてる](/nope/gone.md)",
+        encoding="utf-8",
+    )
+    findings = detect_broken_doc_links(root)
+    assert {f["target"] for f in findings} == {"/nope/gone.md"}
+
+
 def test_l1_リンク書式のバリエーションを拾う() -> None:
     text = '[a](x.md) ![img](img/y.png) [b](<z.md>) [c](w.md "title")'
     assert iter_inline_links(text) == ["x.md", "img/y.png", "z.md", "w.md"]

@@ -72,7 +72,14 @@ def broken_links_in(md_file: Path, text: str, root: Path) -> list[dict]:
         path_part = urllib.parse.unquote(target.split("#", 1)[0])
         if not path_part:
             continue  # 純アンカー (#section) — アンカーの実在検査は対象外 (UNCOVERED ではなく仕様)
-        resolved = (md_file.parent / path_part).resolve()
+        if path_part.startswith("/"):
+            # ルート相対 (](/README.md) 等)。Path の `/` 演算子は右辺が絶対パスだと
+            # 左辺を丸ごと捨てるため、素通しすると OS ルートに解決され
+            # 「リポジトリ外」として黙って検査対象外になる (PR #224 レビュー指摘)。
+            # 書き手の意図 (リポジトリルート相対) に解決して実在を検査する
+            resolved = (root / path_part.lstrip("/")).resolve()
+        else:
+            resolved = (md_file.parent / path_part).resolve()
         if not resolved.is_relative_to(root):
             # リポジトリ外へ抜けるリンクは GitHub web 相対 (../../../issues/N 等) で、
             # ローカルでは真偽を判定できない。「壊れている」と誤報するより
