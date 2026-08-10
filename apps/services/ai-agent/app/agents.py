@@ -58,7 +58,7 @@ def _build_client() -> BaseChatClient:
             return OpenAIChatClient(
                 model=settings.azure_openai_deployment,
                 azure_endpoint=settings.azure_openai_endpoint,
-                api_version=settings.azure_openai_api_version,
+                api_version=settings.azure_openai_responses_api_version,
                 credential=DefaultAzureCredential(),
             )
         logger.info(
@@ -67,7 +67,7 @@ def _build_client() -> BaseChatClient:
         return OpenAIChatClient(
             model=settings.azure_openai_deployment,
             azure_endpoint=settings.azure_openai_endpoint,
-            api_version=settings.azure_openai_api_version,
+            api_version=settings.azure_openai_responses_api_version,
             api_key=settings.azure_openai_api_key,
         )
     logger.info("Using OpenAI: %s", settings.openai_model)
