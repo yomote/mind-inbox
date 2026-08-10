@@ -10,7 +10,7 @@
 <title>G</title>
 <polygon fill="white" stroke="transparent" points="-18,18 -18,-927 948,-927 948,18 -18,18"/>
 <text text-anchor="middle" x="204" y="-897" font-family="Segoe UI" font-size="10.00">Mind Inbox Azure Infra Arch</text>
-<text text-anchor="middle" x="204" y="-886" font-family="Segoe UI" font-size="10.00">Generated(UTC): 2026&#45;08&#45;09T12:01:06Z</text>
+<text text-anchor="middle" x="204" y="-886" font-family="Segoe UI" font-size="10.00">Generated(UTC): 2026&#45;08&#45;09T20:37:05Z</text>
 <text text-anchor="middle" x="204" y="-875" font-family="Segoe UI" font-size="10.00">Scope: subs=52b97dd7&#45;805f&#45;4026&#45;b8ec&#45;4be344272c29 | rgs=rg&#45;dev&#45;mind&#45;inbox</text>
 <g id="clust1" class="cluster">
 <title>cluster_rg_rg&#45;dev&#45;mind&#45;inbox</title>
