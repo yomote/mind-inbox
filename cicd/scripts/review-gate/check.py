@@ -30,6 +30,11 @@ import sys
 from dataclasses import dataclass, field
 
 PM_ACCEPT_MARKER = "[pm-accept]"
+# 受け入れとして数えるコメントの投稿者。**このリポジトリは public なので、
+# 誰でも PR にコメントできる** — 投稿者を見ないと第三者が `[pm-accept] <sha>` と
+# 書くだけで門が開く (2026-08-10 の受け入れレビューで発見)。
+# GitHub が付ける author_association で絞る (本文からは詐称できない)。
+TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 CODE_PREFIXES = ("apps/", "cicd/")
 STATUS_CONTEXT = "review-gate"
 SHORT_SHA_LEN = 7
@@ -54,22 +59,35 @@ def is_code_pr(changed_paths: list[str]) -> bool:
     return any(p.startswith(CODE_PREFIXES) for p in changed_paths)
 
 
-def has_pm_accept(comment_bodies: list[str], head_sha: str) -> bool:
-    """マーカーと現在の head SHA の両方を含むコメントだけを受け入れと数える。"""
+def has_pm_accept(comments: list[tuple[str, str]], head_sha: str) -> bool:
+    """受け入れと数える条件は 3 つ全部。
+
+    1. マーカー `[pm-accept]` を含む
+    2. **いまの** head SHA (先頭 7 桁) を含む — push で自動失効させるため
+    3. **投稿者がこのリポジトリの権限保持者** (author_association) — public リポジトリで
+       第三者がコメントするだけで門が開くのを塞ぐ
+
+    comments は (本文, author_association) の列。
+    """
     short = head_sha[:SHORT_SHA_LEN]
-    return any(PM_ACCEPT_MARKER in body and short in body for body in comment_bodies)
+    return any(
+        PM_ACCEPT_MARKER in body
+        and short in body
+        and (association or "").upper() in TRUSTED_ASSOCIATIONS
+        for body, association in comments
+    )
 
 
 def decide(
     head_sha: str,
     changed_paths: list[str],
-    comment_bodies: list[str],
+    comments: list[tuple[str, str]],
     unresolved_threads: int,
     codex_present: bool,
     require_codex: bool,
 ) -> Verdict:
     missing: list[str] = []
-    if not has_pm_accept(comment_bodies, head_sha):
+    if not has_pm_accept(comments, head_sha):
         missing.append(f"PM 受け入れ ([pm-accept] + {head_sha[:SHORT_SHA_LEN]}) が無い")
     if unresolved_threads > 0:
         missing.append(f"未解決スレッド {unresolved_threads} 件")
@@ -186,7 +204,10 @@ def main() -> int:
     verdict = decide(
         head_sha=head_sha,
         changed_paths=[f["filename"] for f in files],  # type: ignore[index]
-        comment_bodies=[c.get("body") or "" for c in comments],  # type: ignore[union-attr]
+        comments=[
+            (c.get("body") or "", c.get("author_association") or "")  # type: ignore[union-attr]
+            for c in comments
+        ],
         unresolved_threads=unresolved,
         codex_present=codex_present,
         require_codex=require_codex,

@@ -8,7 +8,9 @@
 from check import decide, has_pm_accept, is_code_pr
 
 HEAD = "abc1234def5678"
-ACCEPT_OK = "[pm-accept] abc1234 受け入れ確認: 意図どおり"
+# (本文, author_association) の組で渡す。association は GitHub が付ける値で、
+# 本文からは詐称できない。
+ACCEPT_OK = ("[pm-accept] abc1234 受け入れ確認: 意図どおり", "OWNER")
 
 
 def test_l1_受け入れコメントが無いと赤() -> None:
@@ -19,7 +21,7 @@ def test_l1_受け入れコメントが無いと赤() -> None:
 
 def test_l1_古いshaの受け入れは押し流される() -> None:
     # push 前の SHA で受け入れたコメントは、新しい head では無効 (リセットの本体)
-    stale = "[pm-accept] 9999999 これは前のコミットへの受け入れ"
+    stale = ("[pm-accept] 9999999 これは前のコミットへの受け入れ", "OWNER")
     assert not has_pm_accept([stale], HEAD)
     assert not decide(HEAD, [], [stale], 0, False, False).ok
 
@@ -31,8 +33,8 @@ def test_l1_マーカーとshaが揃えば緑() -> None:
 
 
 def test_l1_マーカーだけshaだけでは受け入れにならない() -> None:
-    assert not has_pm_accept(["[pm-accept] だけで SHA なし"], HEAD)
-    assert not has_pm_accept([f"SHA {HEAD[:7]} はあるがマーカーなし"], HEAD)
+    assert not has_pm_accept([("[pm-accept] だけで SHA なし", "OWNER")], HEAD)
+    assert not has_pm_accept([(f"SHA {HEAD[:7]} はあるがマーカーなし", "OWNER")], HEAD)
 
 
 def test_l1_未解決スレッドがあると赤() -> None:
@@ -62,3 +64,24 @@ def test_l1_codexフラグが切のときは要求しない() -> None:
 def test_l1_説明文は140字に収まる() -> None:
     v = decide(HEAD, ["apps/bff/x.ts"] * 3, [], 5, False, True)
     assert len(v.description) <= 140
+
+
+def test_l1_第三者のコメントは受け入れにならない() -> None:
+    """public リポジトリなので誰でも PR にコメントできる。
+
+    無いと何が静かに通るか:
+        通りすがりのアカウントが `[pm-accept] <sha>` と書くだけで門が緑になり、
+        エージェントの常設承認と組み合わさると **レビューされていない PR が
+        マージされる**。門が開いていること自体は誰の目にも留まらない。
+    """
+    body = "[pm-accept] abc1234 いいと思います"
+    assert not has_pm_accept([(body, "NONE")], HEAD)
+    assert not has_pm_accept([(body, "CONTRIBUTOR")], HEAD)
+    assert not has_pm_accept([(body, "FIRST_TIME_CONTRIBUTOR")], HEAD)
+    assert not decide(HEAD, ["apps/x.ts"], [(body, "NONE")], 0, False, False).ok
+
+
+def test_l1_権限保持者の受け入れは通る() -> None:
+    body = "[pm-accept] abc1234 受け入れます"
+    for association in ("OWNER", "MEMBER", "COLLABORATOR", "owner"):
+        assert has_pm_accept([(body, association)], HEAD), association
