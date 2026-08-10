@@ -34,8 +34,14 @@ BFF の再起動で応答が不安定になる（#118）。その間にユーザ
 
 - 公開リポジトリの GitHub Actions API を**匿名で**読む:
   `GET https://api.github.com/repos/{VITE_ENV_STATUS_REPO}/actions/workflows/deploy.yml/runs?branch=main&per_page=5`
-- 初回マウント時 + 120 秒ごとのポーリング + **タブがフォアグラウンドに戻った瞬間**に再取得
+- 初回マウント時 + 180 秒ごとのポーリング + **タブがフォアグラウンドに戻った瞬間**に再取得
   （「ぱっと触るとき」に最新であることが目的なので visibilitychange が本命）
+- 匿名 API の rate limit（60 req/h/IP）は**全タブで共有**されるため、超えない設計を 3 段で持つ:
+  背面タブは fetch しない / 結果を localStorage（TTL 150 秒）で全タブ共有し TTL 内は
+  fetch しない / ポーリング 180 秒 = 20 req/h/タブ。別タブの取得結果は storage イベントで
+  即時反映する
+- 取得が並行した場合は**最新の要求だけ**が表示を更新する（古いレスポンスが新しい判定を
+  巻き戻さない）
 - 取得失敗（rate limit / ネットワーク断）は無視して直前の表示を保つ。バナー自身の障害で
   アプリを巻き込まない
 

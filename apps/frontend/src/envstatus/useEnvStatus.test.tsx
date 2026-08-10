@@ -36,6 +36,9 @@ afterEach(() => {
   cleanup();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  // タブ間共有キャッシュがテスト間に漏れると「fetch したから出た」のか
+  // 「前のテストの残骸を読んだ」のか区別できなくなる。
+  localStorage.clear();
 });
 
 describe("[L1] deriveEnvStatus", () => {
@@ -111,6 +114,45 @@ describe("[L2] useEnvStatus + EnvStatusBanner", () => {
     render(<Harness />);
     await waitFor(() => expect(screen.getByTestId("probe").textContent).toBe("unknown"));
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("新鮮な共有キャッシュがあれば fetch せずそれを表示する (複数タブで匿名 quota を食い潰さない)", async () => {
+    vi.stubEnv("VITE_ENV_STATUS_REPO", "yomote/mind-inbox");
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    localStorage.setItem(
+      "mind-inbox:env-status",
+      JSON.stringify({ ts: Date.now(), status: "deploying" }),
+    );
+
+    render(<Harness />);
+    expect(await screen.findByText(/デプロイ進行中です/)).toBeTruthy();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("遅れて返った古いレスポンスが新しい判定を巻き戻さない", async () => {
+    vi.stubEnv("VITE_ENV_STATUS_REPO", "yomote/mind-inbox");
+    let resolveFirst!: (r: Response) => void;
+    let resolveSecond!: (r: Response) => void;
+    const fetchSpy = vi
+      .fn()
+      .mockReturnValueOnce(new Promise<Response>((r) => (resolveFirst = r)))
+      .mockReturnValueOnce(new Promise<Response>((r) => (resolveSecond = r)));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(<Harness />);
+    // 2 本目の refresh をタブ復帰イベントで起こす (1 本目は未応答なのでキャッシュも無い)
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+
+    // 新しい要求 (2 本目) が先に完了 → ok
+    resolveSecond(runsResponse([{ status: "completed", conclusion: "success" }]));
+    await waitFor(() => expect(screen.getByTestId("probe").textContent).toBe("ok"));
+
+    // 古い要求 (1 本目) が遅れて完了しても ok のまま (deploying に巻き戻らない)
+    resolveFirst(runsResponse([{ status: "in_progress", conclusion: null }]));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.getByTestId("probe").textContent).toBe("ok");
   });
 
   it("fetch が失敗してもクラッシュせずバナー非表示のまま (バナーの障害でアプリを巻き込まない)", async () => {
