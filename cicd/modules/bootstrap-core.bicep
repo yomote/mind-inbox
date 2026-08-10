@@ -365,7 +365,12 @@ resource law 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
 }
 
 // -------------------- VNet --------------------
-resource vnet 'Microsoft.Network/virtualNetworks@2024-01-01' = {
+// 使い道は enableSql (SQL Private Endpoint) と enableFunctionVnetIntegration の 2 つだけ。
+// どちらも false (dev の既定) なら作らない — 未使用の VNet が構成図に浮くのを防ぐ。
+// Container Apps 環境はこの VNet を使わない (既定のマネージドネットワークで動く)。
+var vnetEnabled = enableSql || enableFunctionVnetIntegration
+
+resource vnet 'Microsoft.Network/virtualNetworks@2024-01-01' = if (vnetEnabled) {
   name: vnetName
   location: location
   properties: {
@@ -406,14 +411,10 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-01-01' = {
   }
 }
 
-resource peSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-01-01' existing = {
-  parent: vnet
-  name: peSubnetName
-}
-resource appSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-01-01' existing = {
-  parent: vnet
-  name: appSubnetName
-}
+// 条件リソース (vnet) のプロパティ参照を避け、resourceId() で組み立てる
+// (SPEECH_RESOURCE_ID / COSMOS_ENDPOINT と同じ流儀)。
+var peSubnetResourceId = resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, peSubnetName)
+var appSubnetResourceId = resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, appSubnetName)
 
 // -------------------- Private DNS Zone (SQL) --------------------
 var sqlServerHostnameSuffix = startsWith(environment().suffixes.sqlServerHostname, '.')
@@ -429,14 +430,17 @@ resource sqlPrivateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = if (
 
 resource sqlPrivateDnsVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (enableSql) {
   parent: sqlPrivateDnsZone
-  name: '${vnet.name}-link'
+  name: '${vnetName}-link'
   location: 'global'
   properties: {
     virtualNetwork: {
-      id: vnet.id
+      id: resourceId('Microsoft.Network/virtualNetworks', vnetName)
     }
     registrationEnabled: false
   }
+  dependsOn: [
+    vnet
+  ]
 }
 
 // -------------------- Key Vault for SQL admin password --------------------
@@ -503,7 +507,7 @@ resource sqlPe 'Microsoft.Network/privateEndpoints@2024-01-01' = if (enableSql) 
   location: location
   properties: {
     subnet: {
-      id: peSubnet.id
+      id: peSubnetResourceId
     }
     privateLinkServiceConnections: [
       {
@@ -517,6 +521,9 @@ resource sqlPe 'Microsoft.Network/privateEndpoints@2024-01-01' = if (enableSql) 
       }
     ]
   }
+  dependsOn: [
+    vnet
+  ]
 }
 
 // DNS Zone Group to auto-create A records in privatelink zone
@@ -742,8 +749,12 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
         enableFunctionVnetIntegration ? { vnetRouteAllEnabled: true } : {}
       )
     },
-    enableFunctionVnetIntegration ? { virtualNetworkSubnetId: appSubnet.id } : {}
+    enableFunctionVnetIntegration ? { virtualNetworkSubnetId: appSubnetResourceId } : {}
   )
+  // vnetEnabled=false のとき ARM は存在しない依存を無視するので、無条件で書いてよい
+  dependsOn: [
+    vnet
+  ]
 }
 
 // VOICEVOX tier(ADR 0010) による実効値。gpu 以外は Consumption ベースの CPU 構成にフォールバック。
@@ -1344,9 +1355,9 @@ output logAnalyticsCustomerId string = law.properties.customerId
 output sqlEnabled bool = enableSql
 output sqlServerFqdn string = enableSql ? '${sqlServerName}.${sqlServerHostnameSuffix}' : ''
 output sqlDatabase string = enableSql ? sqlDatabaseName : ''
-output vnetId string = vnet.id
-output peSubnetId string = peSubnet.id
-output appSubnetId string = appSubnet.id
+output vnetId string = vnetEnabled ? resourceId('Microsoft.Network/virtualNetworks', vnetName) : ''
+output peSubnetId string = vnetEnabled ? peSubnetResourceId : ''
+output appSubnetId string = vnetEnabled ? appSubnetResourceId : ''
 output sqlAdminKeyVaultName string = enableSql ? sqlAdminKeyVaultName : ''
 
 output staticSiteDefaultHostname string = staticSite.properties.defaultHostname
