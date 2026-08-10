@@ -28,6 +28,7 @@ const voiceState = {
   phase: "idle" as "idle" | "preparing" | "listening",
   engine: null as "azure" | "browser" | null,
   degraded: false,
+  muted: false,
   interimTranscript: "",
   elapsedSec: 0,
   error: null as string | null,
@@ -153,6 +154,18 @@ describe("[L1] SessionComposer — 音声入力の即時性 (#186)", () => {
     renderComposer({ value: "" });
     expect(screen.queryByText("聞いています 1:05")).not.toBeNull();
     expect(screen.queryByText("マイクを準備中…")).toBeNull();
+  });
+});
+
+describe("[L1] SessionComposer — 読み上げ中の音声入力ミュート表示 (#228)", () => {
+  it("読み上げ中は「聞いています」ではなく一時停止中と表示する", () => {
+    // 無いと: 認識結果を破棄している間も「聞いています」のままになり、
+    //         この間に喋った内容が入ると誤解させる (実際は破棄される)。
+    Object.assign(voiceState, { listening: true, phase: "listening", muted: true });
+    renderComposer({ value: "", speaking: true, ttsStatus: "playing" });
+
+    expect(screen.getByTestId("stt-muted").textContent).toContain("一時停止中");
+    expect(screen.queryByText(/聞いています/)).toBeNull();
   });
 });
 
