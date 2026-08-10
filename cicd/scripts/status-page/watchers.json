@@ -1,0 +1,107 @@
+{
+  "_comment": "状況ページ (gh-pages /status/) が読む定義。ここが『何を見張るか』の唯一の真実で、状態そのものは持たない (状態は GitHub の実データから毎回生成する)。自動化を足したらここに 1 行足す。足せないなら作らない。",
+
+  "workflows": [
+    {
+      "id": "deploy.yml",
+      "name": "自動デプロイ (main → dev)",
+      "what": "main が動いたら dev に配って、実環境で通るところまで確かめる",
+      "expect": "main への push ごと",
+      "critical": true
+    },
+    {
+      "id": "golden-path-monitor.yml",
+      "name": "毎朝の実環境チェック",
+      "what": "毎朝 07:00 JST に相談ユースケースを実環境で通し、体験を記録する",
+      "expect_hours": 26,
+      "critical": true
+    },
+    {
+      "id": "test.yml",
+      "name": "テスト (L0〜L3)",
+      "what": "PR ごとに契約・単体・結合・画面テストを回す",
+      "expect": "PR ごと",
+      "critical": true
+    },
+    {
+      "id": "build-images.yml",
+      "name": "コンテナ image の事前ビルド",
+      "what": "main の image を ghcr に積んでおく (デプロイは sha タグ差し替えだけ)",
+      "expect": "main への push ごと"
+    },
+    {
+      "id": "iac-validate.yml",
+      "name": "bicep の検証",
+      "what": "インフラ定義がビルドできるかを PR で見る",
+      "expect": "PR ごと"
+    },
+    {
+      "id": "adr-number-guard.yml",
+      "name": "ADR 採番の衝突ガード",
+      "what": "同じ ADR 番号を 2 本足していないか PR で見る",
+      "expect": "PR ごと"
+    },
+    {
+      "id": "auto-improve-guard.yml",
+      "name": "自動改変の範囲ガード",
+      "what": "自動 PR が触ってよいファイルの外に出ていないか見る",
+      "expect": "PR ごと"
+    },
+    {
+      "id": "refresh-infra-diagram.yml",
+      "name": "構成図の再生成",
+      "what": "週次で実環境から構成図を描き直し、差分があれば PR を開く",
+      "expect_hours": 192
+    },
+    {
+      "id": "ops-inspect.yml",
+      "name": "外の事実を取る (read-only)",
+      "what": "エージェントが Azure の実態などをサンドボックスの外から読む",
+      "expect": "必要なときだけ (手動)"
+    },
+    {
+      "id": "status-page.yml",
+      "name": "このページ自身",
+      "what": "GitHub の実データから、このページを組み立て直す",
+      "expect_hours": 26
+    }
+  ],
+
+  "routines": [
+    {
+      "name": "cd-watchdog (CD の赤を毎時ひろう)",
+      "what": "デプロイや毎朝チェックが赤くなったら診断して修正 PR を出す",
+      "trace": { "kind": "issue_label", "label": "cd-watchdog" },
+      "expect_hours": 2,
+      "trace_only_on_anomaly": true,
+      "note": "全緑のときは何も残さない設計なので、沈黙と正常が区別できない。心拍を打たせるまで判定不能。"
+    },
+    {
+      "name": "ux-judge (毎朝の UX 採点)",
+      "what": "前夜のプローブ記録を採点してスコアを積む",
+      "trace": { "kind": "issue_comment", "issue": 127 },
+      "expect_hours": 26
+    },
+    {
+      "name": "maint-check (週次の健全性チェック)",
+      "what": "docs の陳腐化・デッドコード・依存の逆流を週次で洗う",
+      "trace": { "kind": "issue_title", "query": "[maint-check]" },
+      "expect_hours": 192
+    },
+    {
+      "name": "PR レビュー Routine",
+      "what": "開いた PR をレビューする",
+      "trace": { "kind": "unknown" },
+      "note": "痕跡の在り処が定義できていない。次の PR で 1 回確認して、ここを埋めるか畳むかを決める。"
+    }
+  ],
+
+  "traces": [
+    {
+      "name": "UX プローブ記録の運搬",
+      "what": "毎朝のプローブ記録を Issue へ自動投稿する (採点の入力)",
+      "trace": { "kind": "issue_comment", "issue": 162 },
+      "expect_hours": 26
+    }
+  ]
+}

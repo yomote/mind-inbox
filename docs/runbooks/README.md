@@ -10,7 +10,7 @@
 
 | Runbook                                                        | いつ使うか                                                                |
 | -------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| [`automation-inventory.md`](automation-inventory.md)           | **今どの自動化が生きているか**を 1 枚で見る (自動化を足したら 1 行足す)   |
+| [`status-page.md`](status-page.md)                             | **今どれが動いていて何が問題か**を見る / 監視項目を足す・外す             |
 | [`local-fullstack-dev.md`](local-fullstack-dev.md)             | ローカルで VOICEVOX + BFF + frontend を起動し、声の UX を評価する         |
 | [`claude-web-azure-access.md`](claude-web-azure-access.md)     | Claude Code (web) セッションから device-code で Azure を操作する          |
 | [`azure-oidc-cd-setup.md`](azure-oidc-cd-setup.md)             | 常設 dev の CD (GitHub Actions + OIDC) を設定する / up・down する         |
