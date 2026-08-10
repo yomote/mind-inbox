@@ -251,17 +251,29 @@ jobs:
                   for T in ContainerAppConsoleLogs_CL ContainerAppConsoleLogs AppTraces AppExceptions FunctionAppLogs; do
                     echo "$ALL" | tr ' ' '\n' | grep -qx "$T" || continue
                     FOUND=1
-                    for SUBJ in ai-agent func-dev; do
-                      echo "" >> "$OUT"
-                      echo "#### $T — \`$SUBJ\` を含む行 (直近 4 時間・新しい順)" >> "$OUT"
-                      echo '```' >> "$OUT"
-                      if ! az monitor log-analytics query -w "$WSID" \
-                            --analytics-query "$T | where TimeGenerated > ago(4h) | where * has '$SUBJ' | top 60 by TimeGenerated desc" \
-                            -o table >> "$OUT" 2>/tmp/err.txt; then
-                        cat /tmp/err.txt >> "$OUT"
-                      fi
-                      echo '```' >> "$OUT"
-                    done
+                    # 列名は getschema で確定済み。**サイドカーを除く**のが肝 —
+                    # Container App には認証ミドルウェア (http-auth) が同居していて、
+                    # そちらが饒舌なのでアプリ本体のログが押し出される (4 回目の空振りの原因)。
+                    # 出力も project で 2 列に絞る。全列を出すと 1 行が長すぎて読めない。
+                    case "$T" in
+                      ContainerAppConsoleLogs_CL|ContainerAppConsoleLogs)
+                        Q="$T | where TimeGenerated > ago(4h) | where ContainerName_s != 'http-auth' | top 200 by TimeGenerated desc | project TimeGenerated, ContainerName_s, Log_s"
+                        ;;
+                      AppExceptions)
+                        Q="$T | where TimeGenerated > ago(4h) | top 40 by TimeGenerated desc"
+                        ;;
+                      *)
+                        Q="$T | where TimeGenerated > ago(4h) | where Level in ('Error','Critical') or isnotempty(ExceptionMessage) | top 40 by TimeGenerated desc | project TimeGenerated, Level, ExceptionType, ExceptionMessage, ExceptionDetails"
+                        ;;
+                    esac
+                    echo "" >> "$OUT"
+                    echo "#### $T (直近 4 時間・新しい順・サイドカー除く)" >> "$OUT"
+                    echo '```' >> "$OUT"
+                    if ! az monitor log-analytics query -w "$WSID" --analytics-query "$Q" \
+                          -o table >> "$OUT" 2>/tmp/err.txt; then
+                      cat /tmp/err.txt >> "$OUT"
+                    fi
+                    echo '```' >> "$OUT"
                     echo "" >> "$OUT"
                     echo "<details><summary>$T の列名</summary>" >> "$OUT"
                     echo "" >> "$OUT"; echo '```' >> "$OUT"
