@@ -205,7 +205,10 @@ jobs:
 
                 # --- ai-agent (Container Apps のシステムログ) ---
                 echo "" >> "$OUT"
-                echo "### ai-agent (Container App)" >> "$OUT"
+                echo "### ai-agent (Container App / 生きている replica のみ)" >> "$OUT"
+                echo "" >> "$OUT"
+                echo "> ⚠️ scale-to-zero のため、**失敗した当時の replica はもう存在しない**ことが多い。" >> "$OUT"
+                echo "> 過去の障害を追うときは下の「保存されたログ」を見ること。" >> "$OUT"
                 CA=$(az containerapp list -g "$RG" --query "[?contains(name,'ai-agent')].name | [0]" -o tsv 2>/tmp/err.txt)
                 if [ -z "$CA" ]; then
                   echo '```' >> "$OUT"; cat /tmp/err.txt >> "$OUT"; echo '```' >> "$OUT"
@@ -222,22 +225,42 @@ jobs:
                   fi
                 fi
 
-                # --- BFF (Functions のログは Log Analytics 側) ---
+                # --- 保存されたログ (Log Analytics) ---
+                # ライブ tail は replica が消えると同時に消えるので、**過去の障害はここでしか追えない**。
+                # テーブル名は構成で変わる (Container Apps / Functions / App Insights で別) ため、
+                # 決め打ちせず**存在するものを探してから**引く。前回 `traces` を決め打ちして空振りした。
                 echo "" >> "$OUT"
-                echo "### BFF (Function App / Log Analytics)" >> "$OUT"
-                WS=$(az monitor log-analytics workspace list -g "$RG" --query "[0].customerId" -o tsv 2>/dev/null)
-                if [ -z "$WS" ]; then
+                echo "### 保存されたログ (Log Analytics)" >> "$OUT"
+                WSNAME=$(az monitor log-analytics workspace list -g "$RG" --query "[0].name" -o tsv 2>/dev/null)
+                WSID=$(az monitor log-analytics workspace list -g "$RG" --query "[0].customerId" -o tsv 2>/dev/null)
+                if [ -z "$WSID" ]; then
                   echo "(未検証: Log Analytics ワークスペースが見つからない)" >> "$OUT"
                 else
-                  echo '```' >> "$OUT"
-                  if ! az monitor log-analytics query -w "$WS" \
-                        --analytics-query "traces | where timestamp > ago(60m) | where severityLevel >= 3 or message has 'failed' or message has 'error' | project timestamp, message | order by timestamp desc | take 40" \
-                        -o table >> "$OUT" 2>/tmp/err.txt; then
-                    cat /tmp/err.txt >> "$OUT"
+                  ALL=$(az monitor log-analytics workspace table list -g "$RG" \
+                          --workspace-name "$WSNAME" --query "[].name" -o tsv 2>/dev/null)
+                  echo "" >> "$OUT"
+                  echo "<details><summary>このワークスペースにあるテーブル</summary>" >> "$OUT"
+                  echo "" >> "$OUT"; echo '```' >> "$OUT"
+                  echo "$ALL" | tr ' ' '\n' | sort >> "$OUT"
+                  echo '```' >> "$OUT"; echo "</details>" >> "$OUT"
+
+                  FOUND=0
+                  for T in ContainerAppConsoleLogs_CL ContainerAppConsoleLogs AppTraces AppExceptions FunctionAppLogs; do
+                    echo "$ALL" | tr ' ' '\n' | grep -qx "$T" || continue
+                    FOUND=1
+                    echo "" >> "$OUT"
+                    echo "#### $T (直近 60 分)" >> "$OUT"
                     echo '```' >> "$OUT"
-                    echo "(未検証: Log Analytics のクエリが失敗した — Functions のログ出力先が別かもしれない)" >> "$OUT"
-                  else
+                    if ! az monitor log-analytics query -w "$WSID" \
+                          --analytics-query "$T | where TimeGenerated > ago(60m) | take 40" \
+                          -o table >> "$OUT" 2>/tmp/err.txt; then
+                      cat /tmp/err.txt >> "$OUT"
+                    fi
                     echo '```' >> "$OUT"
+                  done
+                  if [ "$FOUND" = "0" ]; then
+                    echo "" >> "$OUT"
+                    fail "既知のログテーブルがどれも存在しない (上の一覧から選び直すこと)"
                   fi
                 fi
               fi
