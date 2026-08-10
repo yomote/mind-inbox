@@ -25,7 +25,7 @@ on:
 permissions:
   contents: write # gh-pages に push する
   actions: read # 他ワークフローの run 履歴を読む
-  issues: read
+  issues: write # 落ちたら自分で Issue を立てる (ADR 0035 D2)
 
 concurrency:
   group: status-page
@@ -83,3 +83,12 @@ jobs:
           name="${GITHUB_REPOSITORY#*/}"
           echo "### いまの状況" >> "$GITHUB_STEP_SUMMARY"
           echo "https://${owner}.github.io/${name}/status/" >> "$GITHUB_STEP_SUMMARY"
+
+      # 落ちたことに気づける唯一の経路。別の見張りを置かず、落ちた当人が Issue を立てる
+      # (ADR 0035 D2)。緑になれば同じ Issue を自分で閉じるので、Issue 一覧が現在の状態を表す。
+      - name: 失敗を Issue にする / 復旧したら閉じる
+        if: always()
+        uses: ./.github/actions/report-failure
+        with:
+          job-status: ${{ job.status }}
+          what: "**状況ページの生成が失敗しました。** ページが古い状態で止まっているため、そこの緑は当てになりません。"
