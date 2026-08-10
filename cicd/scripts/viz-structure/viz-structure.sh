@@ -38,6 +38,7 @@ ARCH_FILE_NAME="infra_arch"
 SUBS=""
 RGS=""
 OUT="artifacts/$ARCH_FILE_NAME/latest"
+RESOURCES_JSON=""
 ICONS_DIR=""
 DEFAULT_ICONS_DIR="$HERE_DIR/icons"
 DOCS_DIR="$PROJECT_ROOT/docs/cicd/iac"
@@ -48,6 +49,11 @@ while [[ $# -gt 0 ]]; do
     --subs) SUBS="$2"; shift 2;;
     --rgs)  RGS="$2"; shift 2;;
     --out)  OUT="$2"; shift 2;;
+    # オフラインモード: az を呼ばず、事前に用意した Resource Graph 相当の JSON
+    # (resources の配列) から図を生成する。ローカル検証・テスト用。
+    --resources-json) RESOURCES_JSON="$2"; shift 2;;
+    # 生成物のコピー先 (既定: docs/cicd/iac)。検証時に commit 対象の docs を汚さないため
+    --docs-dir) DOCS_DIR="$(resolve_path "$2")"; shift 2;;
     --icons) ICONS_DIR="$2"; shift 2;;
     --codebase-root) CODEBASE_ROOT="$2"; shift 2;;
     *) echo "Unknown arg: $1" >&2; exit 1;;
@@ -78,7 +84,9 @@ if [[ -z "$ICONS_DIR" && -d "$DEFAULT_ICONS_DIR" ]]; then
   fi
 fi
 
-command -v az >/dev/null || { echo "az not found" >&2; exit 1; }
+if [[ -z "$RESOURCES_JSON" ]]; then
+  command -v az >/dev/null || { echo "az not found" >&2; exit 1; }
+fi
 command -v jq >/dev/null || { echo "jq not found" >&2; exit 1; }
 command -v dot >/dev/null || { echo "dot (graphviz) not found" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "python3 not found" >&2; exit 1; }
@@ -126,6 +134,11 @@ resolve_sub_id() {
     return 0
   fi
 
+  if [[ -n "$RESOURCES_JSON" ]]; then
+    echo "ERROR: --resources-json (offline) mode requires GUID subscription ids in --subs." >&2
+    return 1
+  fi
+
   # Accept subscription name or any selector az understands.
   # This returns the GUID subscription id.
   local sub_id
@@ -153,12 +166,20 @@ fi
 
 # Resource Graph query (across subscriptions)
 # Note: We filter by resourceGroup client-side to keep query simple.
-az graph query -q "$QUERY" --subscriptions "${SUB_IDS[@]}" -o json \
-  | jq --arg rgs "$RGS" '
+if [[ -n "$RESOURCES_JSON" ]]; then
+  # Offline: a pre-captured array shaped like `az graph query`'s .data.
+  jq --arg rgs "$RGS" '
       ($rgs | split(",") | map(ascii_downcase)) as $rgset
-      | .data
       | map(select((.resourceGroup // "" | ascii_downcase) as $rg | ($rgset | index($rg))))
-    ' > "$OUT/resources.json"
+    ' "$RESOURCES_JSON" > "$OUT/resources.json"
+else
+  az graph query -q "$QUERY" --subscriptions "${SUB_IDS[@]}" -o json \
+    | jq --arg rgs "$RGS" '
+        ($rgs | split(",") | map(ascii_downcase)) as $rgset
+        | .data
+        | map(select((.resourceGroup // "" | ascii_downcase) as $rg | ($rgset | index($rg))))
+      ' > "$OUT/resources.json"
+fi
 
 # 2) Normalize to graph.json (nodes + inferred edges)
 # Node id: Azure resource id
@@ -333,281 +354,13 @@ jq '
 
 # 2.5) Enrich with logical dependencies from codebase + generate resource role table.
 if [[ -n "$CODEBASE_ROOT" ]]; then
-  python3 - "$OUT/graph.json" "$CODEBASE_ROOT" "$OUT/logical-edges.json" "$OUT/resource-roles.tsv" "$OUT/resource-roles.md" <<'PY'
-import json
-import pathlib
-import re
-import sys
-
-graph_path = pathlib.Path(sys.argv[1])
-codebase_root = pathlib.Path(sys.argv[2])
-logical_edges_path = pathlib.Path(sys.argv[3])
-roles_tsv_path = pathlib.Path(sys.argv[4])
-roles_md_path = pathlib.Path(sys.argv[5])
-
-graph = json.loads(graph_path.read_text(encoding="utf-8"))
-nodes = graph.get("nodes", [])
-
-def lc(s):
-  return (s or "").lower()
-
-def find_nodes(type_lc=None, name_contains=None):
-  out = []
-  for n in nodes:
-    t = lc(n.get("type"))
-    nm = lc(n.get("label", "").split("\n")[0])
-    if type_lc and t != type_lc:
-      continue
-    if name_contains and name_contains not in nm:
-      continue
-    out.append(n)
-  return out
-
-def read_text_safe(path):
-  try:
-    return path.read_text(encoding="utf-8", errors="ignore")
-  except Exception:
-    return ""
-
-def grep_any(paths, patterns):
-  regex = re.compile("|".join(patterns), re.IGNORECASE)
-  for p in paths:
-    if not p.exists() or not p.is_file():
-      continue
-    txt = read_text_safe(p)
-    if txt and regex.search(txt):
-      return True
-  return False
-
-logical_edges = []
-
-# Heuristic 1: AI Agent Container App -> Azure OpenAI account
-ai_agent_uses_openai = grep_any(
-  [
-    codebase_root / "apps/services/ai-agent/README.md",
-    codebase_root / "cicd/scripts/deploy/deploy-ai-agent.sh",
-  ],
-  [r"AZURE_OPENAI_ENDPOINT", r"openai\\.azure\\.com", r"openAiEndpoint"],
-)
-if ai_agent_uses_openai:
-  ai_apps = find_nodes("microsoft.app/containerapps", "ai-agent")
-  openai_accounts = find_nodes("microsoft.cognitiveservices/accounts", None)
-  for src in ai_apps:
-    for dst in openai_accounts:
-      logical_edges.append(
-        {
-          "from": src.get("id"),
-          "to": dst.get("id"),
-          "rel": "openaiApi",
-          "source": "codebase",
-        }
-      )
-
-# Heuristic 2: VOICEVOX Wrapper Container App -> VOICEVOX Engine Container App
-wrapper_uses_engine = grep_any(
-  [
-    codebase_root / "apps/services/voicevox/README.md",
-    codebase_root / "cicd/scripts/deploy/deploy-voicevox-wrapper.sh",
-  ],
-  [r"VOICEVOX_ENGINE_BASE_URL", r"voicevox"],
-)
-if wrapper_uses_engine:
-  wrappers = find_nodes("microsoft.app/containerapps", "vv-wrap")
-  engines = [
-    n
-    for n in find_nodes("microsoft.app/containerapps", "voicevox")
-    if "vv-wrap" not in lc(n.get("label", ""))
-  ]
-  for src in wrappers:
-    for dst in engines:
-      logical_edges.append(
-        {
-          "from": src.get("id"),
-          "to": dst.get("id"),
-          "rel": "voicevoxEngine",
-          "source": "codebase",
-        }
-      )
-
-# Heuristic 3: Function App (BFF) -> VOICEVOX Wrapper API
-bff_uses_voicevox = grep_any(
-  [
-    codebase_root / "apps/bff/src/config.ts",
-    codebase_root / "apps/bff/src/clients/voicevoxClient.ts",
-  ],
-  [r"VOICEVOX_BASE_URL", r"/synthesize", r"voicevox"],
-)
-if bff_uses_voicevox:
-  function_apps = find_nodes("microsoft.web/sites", "func-")
-  wrappers = find_nodes("microsoft.app/containerapps", "vv-wrap")
-  for src in function_apps:
-    for dst in wrappers:
-      logical_edges.append(
-        {
-          "from": src.get("id"),
-          "to": dst.get("id"),
-          "rel": "voicevoxApi",
-          "source": "codebase",
-        }
-      )
-
-# Heuristic 4: Function App (BFF) -> AI Agent Container App
-bff_uses_ai_agent = grep_any(
-  [
-    codebase_root / "apps/bff/src/config.ts",
-    codebase_root / "apps/bff/src/clients/aiAgentClient.ts",
-    codebase_root / "apps/bff/src/trpc/routers/chat.ts",
-  ],
-  [r"AI_AGENT_BASE_URL", r"aiAgentClient", r"ai-agent"],
-)
-if bff_uses_ai_agent:
-  function_apps = find_nodes("microsoft.web/sites", "func-")
-  ai_apps = find_nodes("microsoft.app/containerapps", "ai-agent")
-  for src in function_apps:
-    for dst in ai_apps:
-      logical_edges.append(
-        {
-          "from": src.get("id"),
-          "to": dst.get("id"),
-          "rel": "aiAgentApi",
-          "source": "codebase",
-        }
-      )
-
-# Keep only edges that point to existing nodes.
-node_ids = {n.get("id") for n in nodes}
-logical_edges = [
-  e
-  for e in logical_edges
-  if e.get("from") in node_ids and e.get("to") in node_ids and e.get("from") and e.get("to")
-]
-
-# Deduplicate by from/to so we don't clash with structural edges.
-unique = {}
-for e in logical_edges:
-  key = (e["from"], e["to"])
-  if key not in unique:
-    unique[key] = e
-logical_edges = list(unique.values())
-
-logical_edges_path.write_text(json.dumps(logical_edges, ensure_ascii=False, indent=2), encoding="utf-8")
-
-ROLE_MAP = {
-  "microsoft.web/staticsites": ("Frontend hosting", "Browser UI delivery and edge auth entry point"),
-  "microsoft.web/sites": ("Backend API", "Hosts Azure Functions/BFF endpoints"),
-  "microsoft.web/serverfarms": ("Compute plan", "Function/App Service compute capacity"),
-  "microsoft.storage/storageaccounts": ("Function runtime storage", "Functions runtime/state storage"),
-  "microsoft.operationalinsights/workspaces": ("Central logging", "Aggregates app/platform logs and metrics"),
-  "microsoft.network/virtualnetworks": ("Network boundary", "Private address space and subnet isolation"),
-  "microsoft.network/privateendpoints": ("Private ingress", "Private connectivity to PaaS resources"),
-  "microsoft.network/privatednszones": ("Private name resolution", "DNS for private endpoints"),
-  "microsoft.network/privatednszones/virtualnetworklinks": ("DNS-to-VNet link", "Binds private DNS zone to VNet"),
-  "microsoft.sql/servers": ("Relational DB server", "Managed SQL control plane"),
-  "microsoft.sql/servers/databases": ("Application database", "Persistent relational data"),
-  "microsoft.keyvault/vaults": ("Secrets management", "Stores/guards credentials and secrets"),
-  "microsoft.cognitiveservices/accounts": ("LLM endpoint", "Azure OpenAI account for model inference"),
-  "microsoft.cognitiveservices/accounts/deployments": ("Model deployment", "Specific model/runtime deployment"),
-  "microsoft.containerregistry/registries": ("Container image registry", "Stores deployable images"),
-  "microsoft.app/managedenvironments": ("Container app environment", "Shared runtime/network for Container Apps"),
-  "microsoft.app/containerapps": ("App microservice", "Runtime endpoint for service workloads"),
-}
-
-# Per-resource overrides: (type_lc, name_substring_lc, role, note)
-# Resolution: first match wins — list more specific patterns BEFORE general ones.
-# Returning (None, None) means "fall through to ROLE_MAP" (used to short-circuit a generic
-# resource without overriding it; currently unused but kept as an escape hatch).
-NAME_OVERRIDES = [
-  # Container Apps: 3 services, distinct roles
-  ("microsoft.app/containerapps", "ai-agent", "AI Agent service",
-    "FastAPI + Semantic Kernel; orchestrates Azure OpenAI calls and human-in-the-loop tool approval"),
-  ("microsoft.app/containerapps", "vv-wrap", "VOICEVOX wrapper API",
-    "FastAPI; bridges BFF and the VOICEVOX engine, handles audio post-processing"),
-  ("microsoft.app/containerapps", "voicevox", "VOICEVOX TTS engine",
-    "Speech synthesis runtime (open-source VOICEVOX engine)"),
-  # Managed environments: name-based hint about which CA group they host
-  ("microsoft.app/managedenvironments", "ai", "Container app env (AI Agent)",
-    "Hosts AI Agent Container App"),
-  ("microsoft.app/managedenvironments", "vv-wrap", "Container app env (VOICEVOX wrap)",
-    "Hosts VOICEVOX wrapper Container App"),
-  ("microsoft.app/managedenvironments", "voicevox", "Container app env (VOICEVOX engine)",
-    "Hosts VOICEVOX engine Container App"),
-  # Web tier
-  ("microsoft.web/sites", "func-", "BFF (Azure Functions + tRPC)",
-    "Single tRPC entrypoint; orchestrates AI Agent / VOICEVOX wrapper, NOT a chat passthrough"),
-  ("microsoft.web/staticsites", "swa-", "Frontend SPA (React + Vite + MUI)",
-    "SWA Standard SKU; linked-backend proxies /api/* to BFF, built-in Entra auth"),
-  ("microsoft.web/serverfarms", "asp-", "Function App Service plan",
-    "Compute capacity for the BFF Function App"),
-  # Data & secrets
-  ("microsoft.sql/servers/databases", "master", "(SQL system DB)",
-    "Default master DB; not used by the application"),
-  ("microsoft.sql/servers/databases", "sqldb-", "Application database (provisioned, not wired)",
-    "Provisioned for future session/artifact persistence; BFF and AI Agent currently do not reference it"),
-  ("microsoft.sql/servers", "sql-", "Relational DB server (provisioned, not wired)",
-    "SQL infra is fully set up (server + DB + private endpoint + DNS) but no application code references it yet"),
-  ("microsoft.keyvault/vaults", "kv-", "Secrets management (SQL creds)",
-    "Stores SQL admin password and other deployment secrets"),
-  # LLM
-  ("microsoft.cognitiveservices/accounts", "oai-", "Azure OpenAI account",
-    "GPT-4o for AI Agent inference"),
-  # Networking specifics
-  ("microsoft.network/privateendpoints", "pe-sql", "Private endpoint to SQL",
-    "Network-isolated SQL access from within VNet"),
-  ("microsoft.network/networkinterfaces", "pe-sql", "Private endpoint NIC (SQL)",
-    "Auto-created NIC for SQL private endpoint"),
-  ("microsoft.network/privatednszones", "privatelink.database.windows.net", "Private DNS zone (SQL)",
-    "Resolves SQL private endpoint FQDN inside the VNet"),
-  ("microsoft.containerregistry/registries", "cr", "Container image registry",
-    "Stores AI Agent / VOICEVOX wrapper images for Container Apps"),
-  ("microsoft.storage/storageaccounts", "st", "Function runtime storage",
-    "Required by Azure Functions for state/queues/triggers"),
-  ("microsoft.operationalinsights/workspaces", "law-", "Central Log Analytics workspace",
-    "Aggregates logs/metrics from BFF, Container Apps, and platform"),
-  # Bicep deployment artifacts (transient — note this so reader doesn't mistake them for app components)
-  ("microsoft.resources/deploymentscripts", "ds-", "Bicep deployment script (transient)",
-    "Generated by IaC for one-shot tasks (e.g., Entra ID auth setup); safe to ignore in arch view"),
-]
-
-def role_for(node):
-  t = lc(node.get("type"))
-  name = lc((node.get("label") or "").split("\n")[0])
-  for pat_t, pat_n, pat_role, pat_note in NAME_OVERRIDES:
-    if t == pat_t and pat_n in name and pat_role is not None:
-      return (pat_role, pat_note)
-  return ROLE_MAP.get(t, ("General Azure resource", "Role not yet classified"))
-
-rows = []
-for n in sorted(nodes, key=lambda x: (lc(x.get("rg")), lc(x.get("type")), lc(x.get("label")))):
-  t = lc(n.get("type"))
-  role, note = role_for(n)
-  name = (n.get("label", "").split("\n")[0] if n.get("label") else "")
-  rows.append(
-    {
-      "name": name,
-      "type": n.get("type", ""),
-      "resourceGroup": n.get("rg", ""),
-      "role": role,
-      "note": note,
-      "id": n.get("id", ""),
-    }
-  )
-
-with roles_tsv_path.open("w", encoding="utf-8") as f:
-  f.write("name\ttype\tresourceGroup\trole\tnote\tid\n")
-  for r in rows:
-    f.write(
-      f"{r['name']}\t{r['type']}\t{r['resourceGroup']}\t{r['role']}\t{r['note']}\t{r['id']}\n"
-    )
-
-with roles_md_path.open("w", encoding="utf-8") as f:
-  f.write("# Resource Roles\n\n")
-  f.write("| Name | Type | RG | Role | Note |\n")
-  f.write("|---|---|---|---|---|\n")
-  for r in rows:
-    f.write(
-      f"| {r['name']} | {r['type']} | {r['resourceGroup']} | {r['role']} | {r['note']} |\n"
-    )
-PY
+  # 論理エッジ推定 + ブラウザ擬似ノード + 役割表は enrich.py (pytest でテストされる)
+  python3 "$HERE_DIR/enrich.py" \
+    "$OUT/graph.json" \
+    "$CODEBASE_ROOT" \
+    "$OUT/logical-edges.json" \
+    "$OUT/resource-roles.tsv" \
+    "$OUT/resource-roles.md"
 
   jq -s '
   .[0] as $g
@@ -661,7 +414,9 @@ jq -r --arg iconsDir "$ICONS_DIR" --arg generatedAt "$GENERATED_AT_UTC" --arg su
     "microsoft.storage/storageaccounts": "storage-account.png",
     "microsoft.web/serverfarms": "app-service-plan.png",
     "microsoft.web/sites": "function-app.png",
-    "microsoft.web/staticsites": "static-web-app.png"
+    "microsoft.web/staticsites": "static-web-app.png",
+    "microsoft.documentdb/databaseaccounts": "cosmos-db.png",
+    "microsoft.cognitiveservices/accounts": "cognitive-services.png"
   };
 
   def icon_for($t):
@@ -679,7 +434,12 @@ jq -r --arg iconsDir "$ICONS_DIR" --arg generatedAt "$GENERATED_AT_UTC" --arg su
     "voicevoxengine": { color: "#2E7D32", style: "dashed", label: "VOICEVOX Engine" },
     "voicevoxapi": { color: "#6A1B9A", style: "dashed", label: "VOICEVOX API" },
     "aiagentapi": { color: "#1565C0", style: "dashed", label: "AI Agent API" },
-    "registry": { color: "#455A64", style: "dotted", label: "ACR Pull" }
+    "registry": { color: "#455A64", style: "dotted", label: "ACR Pull" },
+    "cosmosdata": { color: "#AD1457", style: "dashed", label: "Cosmos DB (Problems)" },
+    "speechtoken": { color: "#00695C", style: "dashed", label: "Issues STT token" },
+    "spaassets": { color: "#455A64", style: "solid", label: "Loads SPA" },
+    "trpcapi": { color: "#8E44AD", style: "solid", label: "tRPC API (EasyAuth)" },
+    "speechstt": { color: "#00838F", style: "dashed", label: "Speech STT (WebSocket)" }
   };
 
   def edge_stmt($e):
@@ -793,8 +553,11 @@ jq -r --arg iconsDir "$ICONS_DIR" --arg generatedAt "$GENERATED_AT_UTC" --arg su
   "  labelloc=\"t\";",
   "  labeljust=\"l\";",
   "",
+  # external pseudo-nodes (user browser など Azure 外のクライアント) はクラスタ外に描く
+  (.nodes | map(select(.external == true))[]? | node_stmt(.)),
+  "",
   # clusters: RG > VNet > Subnet
-  (.nodes | sort_by(.rg // "") | group_by(.rg // "")[] ) as $rggrp
+  (.nodes | map(select(.external != true)) | sort_by(.rg // "") | group_by(.rg // "")[] ) as $rggrp
   | cluster_rg($rggrp),
   legend_cluster,
   # edges
