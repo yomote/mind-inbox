@@ -20,8 +20,12 @@
 test_ux_eval.py が format との往復を実 module で検証している (片方だけ直すと落ちる)。
 
 使い方:
-    ux_eval.py <comments.json>
-      comments.json = [{"body": str, "created_at": ISO8601}, ...] (gh api の出力)
+    ux_eval.py <comments.json> [scoreboard.json]
+      comments.json   = [{"body": str, "created_at": ISO8601}, ...] (gh api の出力)
+      scoreboard.json = #127 のコメント一覧 (同形式)。渡すと **評価済み runId の再投稿を
+                        拒否する** — 鮮度 26h は前日 07:00 の記録 (約 25h 前) を通して
+                        しまうため、時刻だけでは「今朝の記録が欠けた朝」を検出できない
+                        (Codex レビュー指摘 / PR #224)
       環境変数: UX_EVAL_MAX_AGE_HOURS (既定 26) / GITHUB_RUN_ID / GITHUB_SERVER_URL /
                 GITHUB_REPOSITORY (計測 run へのリンク用・無くても動く)
 
@@ -30,6 +34,7 @@ test_ux_eval.py が format との往復を実 module で検証している (片�
 終了コード:
     0 = 計測できた (コメント本文を stdout に出力)
     3 = 鮮度内の記録が無い (記録ゼロ / 全部古い) — 呼び出し側は run を赤にする
+    4 = 最新の記録は評価済み (今朝の新しい記録が来ていない) — 同じく赤にする
     1 = 前提不足・想定外 (ファイルが無い / JSON が壊れている)
 """
 
@@ -62,6 +67,7 @@ SEGMENTS = (
 EXIT_OK = 0
 EXIT_UNEXPECTED = 1
 EXIT_NO_FRESH_RECORD = 3
+EXIT_ALREADY_EVALUATED = 4
 
 
 def log(message: str) -> None:
@@ -115,6 +121,31 @@ def latest_record(comments: list) -> tuple[dict, datetime] | None:
 def is_fresh(created_at: datetime, now: datetime, max_age_hours: float) -> bool:
     """記録がまだ「今日の計測」として使える鮮度かを判定する (純粋関数)。"""
     return now - created_at <= timedelta(hours=max_age_hours)
+
+
+def evaluated_probe_run_ids(scoreboard_comments: list) -> set[str]:
+    """スコアボードのコメントから評価済みプローブの runId を集める (純粋関数)。
+
+    自分 (kind: ux-eval-mech) の出力だけを見る — ux-judge-score 等の他 kind は
+    「機械計測が積まれた」ことを意味しないので数えない。
+    """
+    ids: set[str] = set()
+    for comment in scoreboard_comments:
+        if not isinstance(comment, dict):
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str):
+            continue
+        for block in _FENCE.findall(body):
+            try:
+                out = json.loads(block)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(out, dict) and out.get("kind") == OUTPUT_KIND:
+                rid = out.get("probeRunId")
+                if isinstance(rid, str) and rid:
+                    ids.add(rid)
+    return ids
 
 
 def _stats(values: list[float]) -> dict:
@@ -240,7 +271,11 @@ def build_comment(
     )
 
 
-def run(comments_path: Path, now: datetime | None = None) -> int:
+def run(
+    comments_path: Path,
+    scoreboard_path: Path | None = None,
+    now: datetime | None = None,
+) -> int:
     now = now or datetime.now(timezone.utc)
     try:
         comments = json.loads(comments_path.read_text(encoding="utf-8"))
@@ -250,6 +285,18 @@ def run(comments_path: Path, now: datetime | None = None) -> int:
     if not isinstance(comments, list):
         log(f"コメント一覧が配列ではありません: {comments_path}")
         return EXIT_UNEXPECTED
+
+    evaluated: set[str] = set()
+    if scoreboard_path is not None:
+        try:
+            scoreboard = json.loads(scoreboard_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            log(f"スコアボード一覧を読めません: {scoreboard_path}: {exc}")
+            return EXIT_UNEXPECTED
+        if not isinstance(scoreboard, list):
+            log(f"スコアボード一覧が配列ではありません: {scoreboard_path}")
+            return EXIT_UNEXPECTED
+        evaluated = evaluated_probe_run_ids(scoreboard)
 
     try:
         max_age_hours = float(
@@ -276,6 +323,22 @@ def run(comments_path: Path, now: datetime | None = None) -> int:
         log("     古い記録を今日の計測として積まないため、この run は赤にします。")
         return EXIT_NO_FRESH_RECORD
 
+    # 鮮度 26h は前日 07:00 の記録 (約 25h 前) も通す。時刻だけで「今朝の記録が
+    # 欠けた朝」は検出できないので、評価済み runId の再評価をここで拒否する。
+    probe_run_id = envelope.get("runId")
+    if isinstance(probe_run_id, str) and probe_run_id in evaluated:
+        log(
+            f"最新の記録 (runId={probe_run_id}) は評価済みです。"
+            " 今朝の新しい記録が来ていません。"
+        )
+        log("  → golden-path-monitor か記録の投稿が止まっています。")
+        log("     同じ記録を重複して積まないため、この run は赤にします。")
+        return EXIT_ALREADY_EVALUATED
+    if scoreboard_path is not None and not (
+        isinstance(probe_run_id, str) and probe_run_id
+    ):
+        log("記録に runId が無いため重複判定はできません — そのまま計測します。")
+
     metrics = measure(envelope["record"])
     log(
         f"記録: probeId={envelope.get('probeId', '?')} "
@@ -296,10 +359,10 @@ def run(comments_path: Path, now: datetime | None = None) -> int:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        log(f"使い方: {Path(argv[0]).name} <comments.json>")
+    if len(argv) not in (2, 3):
+        log(f"使い方: {Path(argv[0]).name} <comments.json> [scoreboard.json]")
         return EXIT_UNEXPECTED
-    return run(Path(argv[1]))
+    return run(Path(argv[1]), Path(argv[2]) if len(argv) == 3 else None)
 
 
 if __name__ == "__main__":

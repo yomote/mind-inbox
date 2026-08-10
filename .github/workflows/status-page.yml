@@ -18,7 +18,10 @@ on:
   push:
     branches: [main]
   workflow_run:
-    workflows: [deploy, golden-path-monitor]
+    # 監視対象 (watchers.json で critical / 定期のもの) の完了で描き直す。
+    # ux-eval (08:20 JST) は 07:10 の schedule より後に走るため、ここに無いと
+    # 赤くなっても翌朝まで前日の緑が表示され続ける (Codex レビュー指摘 / PR #224)
+    workflows: [deploy, golden-path-monitor, ux-eval, debt-check]
     types: [completed]
   workflow_dispatch:
 

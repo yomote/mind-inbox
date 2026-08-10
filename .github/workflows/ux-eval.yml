@@ -43,18 +43,36 @@ jobs:
             | jq -s '.' > /tmp/comments.json
           echo "コメント $(jq 'length' /tmp/comments.json) 件を取得"
 
-      - name: 機械計測を抽出 (鮮度 26h を確認)
+      - name: スコアボードの評価済み一覧を取得
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 鮮度 26h だけでは前日 07:00 の記録 (約 25h 前) を今朝の計測として
+          # 通してしまう (Codex レビュー指摘 / PR #224)。評価済み runId を集めて
+          # script 側で再評価を拒否する
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/issues/$SCOREBOARD_ISSUE/comments?per_page=100" \
+            --jq '.[] | {body: .body, created_at: .created_at}' \
+            | jq -s '.' > /tmp/scoreboard.json
+          echo "スコアボードのコメント $(jq 'length' /tmp/scoreboard.json) 件を取得"
+
+      - name: 機械計測を抽出 (鮮度 26h + 評価済み runId を確認)
         id: eval
         run: |
           # 終了コードは必ずコマンド単体の直後に取る (PR #157 レビュー指摘と同じ理由)
           set +e
-          python3 cicd/scripts/ux-eval/ux_eval.py /tmp/comments.json > /tmp/ux-eval-comment.md
+          python3 cicd/scripts/ux-eval/ux_eval.py /tmp/comments.json /tmp/scoreboard.json > /tmp/ux-eval-comment.md
           rc=$?
           set -e
           if [ "$rc" -eq 3 ]; then
             # 鮮度切れ / 記録なしは**この run の赤で表現する** (ADR 0037 D1)。
             # 黙って skip すると「プローブが止まったまま計測も静かに止まる」が再発する
             echo "::error::26 時間以内のプローブ記録がありません — golden-path-monitor か記録の投稿が止まっています (詳細は上のログ)"
+            exit 1
+          fi
+          if [ "$rc" -eq 4 ]; then
+            # 前日の記録しか無い朝 — 重複を積まず、入力が止まったことを赤で表現する
+            echo "::error::最新のプローブ記録は評価済みです — 今朝の新しい記録が来ていません (golden-path-monitor の停止か投稿失敗。詳細は上のログ)"
             exit 1
           fi
           exit "$rc"

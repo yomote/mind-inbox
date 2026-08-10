@@ -16,9 +16,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ux_eval import (
+    EXIT_ALREADY_EVALUATED,
     EXIT_NO_FRESH_RECORD,
     EXIT_OK,
     build_comment,
+    evaluated_probe_run_ids,
     is_fresh,
     latest_record,
     measure,
@@ -239,3 +241,69 @@ def test_l1_cli_記録ゼロは赤(tmp_path) -> None:
         json.dumps([{"body": "記録なし", "created_at": "2026-08-09T22:00:00Z"}])
     )
     assert run(path, now=NOW) == EXIT_NO_FRESH_RECORD
+
+
+def test_l1_評価済みの記録は再評価せず赤にする(tmp_path, capsys) -> None:
+    """前日の記録が鮮度 26h 内に残る朝 (今朝のプローブ欠落) の検出。
+
+    無いと何が静かに通るか:
+        golden-path-monitor (07:00 JST) の記録は翌朝の ux-eval (08:20 JST) 時点で
+        約 25 時間前 — 鮮度 26h を通る。今朝の記録が欠けても前日分で緑になり、
+        #127 に同じ計測が重複して積まれ、入力停止の検出が 1 日遅れる (Codex P1)。
+    """
+    fresh = _envelope_comment(_record(), "2026-08-09T22:37:35Z")
+    comments = tmp_path / "comments.json"
+    comments.write_text(json.dumps([fresh]), encoding="utf-8")
+
+    # 前回 run の出力そのもの (build_comment) を評価済みとして置く —
+    # 出力形式と重複判定の結合を実物で検証する (どちらか片方だけ直すと落ちる)
+    capsys.readouterr()
+    assert run(comments, now=NOW) == EXIT_OK
+    previous_output = capsys.readouterr().out
+    scoreboard = tmp_path / "scoreboard.json"
+    scoreboard.write_text(
+        json.dumps([{"body": previous_output, "created_at": "2026-08-09T23:20:00Z"}]),
+        encoding="utf-8",
+    )
+
+    assert run(comments, scoreboard, now=NOW) == EXIT_ALREADY_EVALUATED
+
+
+def test_l1_未評価の記録はスコアボードがあっても計測する(tmp_path, capsys) -> None:
+    fresh = _envelope_comment(_record(), "2026-08-09T22:37:35Z")
+    comments = tmp_path / "comments.json"
+    comments.write_text(json.dumps([fresh]), encoding="utf-8")
+
+    # 別 runId の評価済みと、LLM 採点 (別 kind) — どちらも今回の記録の評価には数えない
+    other = {"kind": "ux-eval-mech", "probeRunId": "99999999999"}
+    judge = {"kind": "ux-judge-score", "probeRunId": _record()["environment"]["runId"]}
+    scoreboard = tmp_path / "scoreboard.json"
+    scoreboard.write_text(
+        json.dumps(
+            [
+                {"body": f"```json\n{json.dumps(other)}\n```", "created_at": "x"},
+                {"body": f"```json\n{json.dumps(judge)}\n```", "created_at": "x"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    capsys.readouterr()
+    assert run(comments, scoreboard, now=NOW) == EXIT_OK
+    assert "ux-eval-mech" in capsys.readouterr().out
+
+
+def test_l1_評価済みidの抽出はkindで絞る() -> None:
+    mech = {"kind": "ux-eval-mech", "probeRunId": "111"}
+    judge = {"kind": "ux-judge-score", "probeRunId": "222"}
+    broken = "```json\n{壊れたJSON\n```"
+    ids = evaluated_probe_run_ids(
+        [
+            {"body": f"```json\n{json.dumps(mech)}\n```"},
+            {"body": f"```json\n{json.dumps(judge)}\n```"},
+            {"body": broken},
+            {"body": None},
+            "not-a-dict",
+        ]
+    )
+    assert ids == {"111"}
