@@ -82,7 +82,7 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0005](0005-mdx-ui-spec-as-truth.md) — UI 仕様は MDX が真実、実装が乖離したら実装を直す
 - [0006](0006-azure-access-via-device-code.md) — 開発・運用での Azure アクセスは device-code を主とする
 - [0007](0007-problem-centric-two-layer-domain-model.md) — 困りごとを Problem 集約とする 2層ドメインモデル (Mention → Problem)
-- [0008](0008-pr-review-via-cloud-routine.md) — PR レビューを Claude Code on the web の Routine で行う
+- [0008](0008-pr-review-via-cloud-routine.md) — PR レビューを Claude Code on the web の Routine で行う — **Superseded by 0035**
 - [0009](0009-on-demand-cd-via-github-actions-oidc.md) — デプロイは GitHub Actions のオンデマンド CD（手動 up/down + 夜間 teardown, OIDC）で行う — **Superseded by 0013**
 - [0010](0010-voicevox-cpu-gpu-deploy-tier.md) — VOICEVOX を `voicevoxTier`(cpu/gpu) 単一スイッチで切替（既定 cpu）で up を高速・安価に
 - [0011](0011-github-projects-as-execution-dashboard.md) — GitHub Projects は実行状態のダッシュボードに徹し、設計の真実は docs に置く
@@ -96,16 +96,19 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0019](0019-independent-judge-agents-security-qa-release.md) — セキュリティ / QA / リリース判定を実装コンテキストから分離した独立 judge エージェントにする
 - [0020](0020-hitl-choice-format-and-needs-human-queue.md) — 人間の確認は選択肢形式で出し、人間宿題は needs-human キューに一元化する
 - [0021](0021-parent-session-as-pm-orchestrator.md) — 親セッションを PM ハブにして、並行作業は子セッションへ分配する (hub-and-spoke)
-- [0022](0022-autonomous-ux-improvement-loop.md) — UX 品質は自律改善ループで維持する (観測・評価・改善を自動化、人間は基準定義と例外裁定)
+- [0022](0022-autonomous-ux-improvement-loop.md) — UX 品質は自律改善ループで維持する (観測・評価・改善を自動化、人間は基準定義と例外裁定) — 一部 Superseded by 0035 (起動経路のみ)
 - [0023](0023-server-stt-azure-speech-f0.md) — 音声入力のサーバー STT に Azure Speech (F0・MI 認証) を採用し、Web Speech をフォールバックに残す
 - [0024](0024-chat-streaming-via-sse-side-channel.md) — チャット応答の逐次表示は SSE サイドチャネル (`/api/chat/stream`) で通す
 - [0025](0025-deploy-container-images-by-immutable-sha-tag.md) — コンテナ image のデプロイは :latest ではなく不変 sha タグの解決 + 稼働検証で行う (#107)
-- [0026](0026-cd-watchdog-routine.md) — CD の赤は毎時の watchdog Routine が検知し、診断と fix PR まで無人で進める
+- [0026](0026-cd-watchdog-routine.md) — CD の赤は毎時の watchdog Routine が検知し、診断と fix PR まで無人で進める — **Superseded by 0035**
 - [0027](0027-ux-improvement-loop-ab-protocol-and-mutation-boundary.md) — UX 自律改善ループ M2: 採点の無人化を先行させ、A/B は実環境の外で回し、改変対象はパスで縛る
-- [0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) — 分配は「起票パケットを Issue 本文に残す」形にし、並行の衝突は SessionStart の事前提示と CI で防ぐ
+- [0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) — 分配は「起票パケットを Issue 本文に残す」形にし、並行の衝突は SessionStart の事前提示と CI で防ぐ — 一部 Superseded by 0035 (パケットの置き場所のみ Issue → PR)
 - [0029](0029-probe-record-transport-via-issue-comment.md) — UX プローブ記録は artifact ではなく Issue コメントで採点セッションへ運ぶ
 - [0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md) — 永続化は Cosmos DB 1 本に寄せ、BFF の内側だけに置く (Redis は廃止予定のため不採用)
-- [0031](0031-agent-reaches-outside-via-github-actions.md) — サンドボックスの外にある事実は GitHub Actions 経由で取る (その場しのぎの回避策を作らない) — **Proposed**
+- [0031](0031-agent-reaches-outside-via-github-actions.md) — サンドボックスの外にある事実は GitHub Actions 経由で取る (その場しのぎの回避策を作らない)
 - [0032](0032-use-case-acceptance-tests-against-real-wiring.md) — ユースケース受け入れテストを「mock を通らない実配線」で持つ (L3-real)
-- [0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) — 子セッションを起動できない環境では、親が subagent で実装を回す (ADR 0021 条項の改訂) — **Proposed**
+- [0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) — 子セッションを起動できない環境では、親が subagent で実装を回す (ADR 0021 条項の改訂)
 - [0034](0034-remove-legacy-session-centric-flow.md) — UC に無い会話中心モデルの残骸 (整理結果 / 行動プラン / 履歴) を撤去する
+- [0035](0035-role-split-across-agents-and-actions.md) — 開発ループの役割を分け、それぞれを「生死が見える場所」に置く (実装 Claude / レビュー Codex / 監視 Actions)
+- [0036](0036-merge-gate-as-required-check-and-pm-cadence.md) — マージの門を required check (review-gate) で機構化し、PM の運転リズムを定める
+- [0037](0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md) — 定期評価を「機械計測 = Actions」と「LLM 採点 = PM tick」に分ける (ADR 0035 D1 の残作業)

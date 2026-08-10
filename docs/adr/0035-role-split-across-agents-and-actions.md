@@ -1,6 +1,6 @@
 # 0035. 開発ループの役割を分け、それぞれを「生死が見える場所」に置く
 
-- Status: Proposed
+- Status: Accepted (2026-08-10 / 対話にて PO 承認)
 - Date: 2026-08-10
 - Deciders: yomote (PO) / 実装セッション
 - Related: [ADR 0019](0019-independent-judge-agents-security-qa-release.md) (独立 judge) / [ADR 0021](0021-parent-session-as-pm-orchestrator.md) (hub-and-spoke) / [ADR 0031](0031-agent-reaches-outside-via-github-actions.md) (外の事実は Actions 経由)
@@ -12,12 +12,12 @@ Technical Story: 2026-08-10 の対話 (報告会 #7)。PO の「自動化の仕�
 
 この日、実測で以下が分かった。
 
-| 仕組み | 実績 |
-| --- | --- |
-| PR レビュー Routine | 同日の PR 8 本に **1 件も反応なし** |
+| 仕組み              | 実績                                                      |
+| ------------------- | --------------------------------------------------------- |
+| PR レビュー Routine | 同日の PR 8 本に **1 件も反応なし**                       |
 | cd-watchdog Routine | deploy / golden-path の赤 5 回に無反応 (最後の起票は 8/8) |
-| ux-judge Routine | **一度も投稿していない** |
-| maint-check Routine | 今朝初動作。10 件検出したが**そのまま放置** |
+| ux-judge Routine    | **一度も投稿していない**                                  |
+| maint-check Routine | 今朝初動作。10 件検出したが**そのまま放置**               |
 
 共通点は **claude.ai 側にいて、実行履歴がリポジトリに残らない**こと。加えて「異常がなければ何も残さない」設計だったため、**沈黙と正常が同じ見え方になっていた**。
 
@@ -37,16 +37,16 @@ Technical Story: 2026-08-10 の対話 (報告会 #7)。PO の「自動化の仕�
 
 **役割を 6 つに分け、それぞれを「生死が見える場所」に置く。**
 
-| 役割 | 担い手 | 起動 | 生死の見え方 |
-| --- | --- | --- | --- |
-| **PO** | 人間 | — | — |
-| **PM** | Claude Code セッション | PO の一言 / 定期 | 対話そのもの |
-| **実装** | **Claude Code** | PM が Issue を選んで着手 | PR |
-| **技術レビュー** | **Codex** (`@codex review`) | PR で自動 | PR にコメントが付く |
-| **セキュリティレビュー** | **Codex** (`@codex security review`) | 節目で PM が指名 | 同上 |
-| **受け入れレビュー** | **PM (Claude)** | PR ごと | PR にコメントが付く |
-| **QA** | qa-reviewer subagent | **節目で PM が判断して回す** (毎回ではない) | 状況ページに実施痕跡 |
-| **監視** | **GitHub Actions** | イベント / 定期 | run 履歴が必ず残る |
+| 役割                     | 担い手                               | 起動                                        | 生死の見え方         |
+| ------------------------ | ------------------------------------ | ------------------------------------------- | -------------------- |
+| **PO**                   | 人間                                 | —                                           | —                    |
+| **PM**                   | Claude Code セッション               | PO の一言 / 定期                            | 対話そのもの         |
+| **実装**                 | **Claude Code**                      | PM が Issue を選んで着手                    | PR                   |
+| **技術レビュー**         | **Codex** (`@codex review`)          | PR で自動                                   | PR にコメントが付く  |
+| **セキュリティレビュー** | **Codex** (`@codex security review`) | 節目で PM が指名                            | 同上                 |
+| **受け入れレビュー**     | **PM (Claude)**                      | PR ごと                                     | PR にコメントが付く  |
+| **QA**                   | qa-reviewer subagent                 | **節目で PM が判断して回す** (毎回ではない) | 状況ページに実施痕跡 |
+| **監視**                 | **GitHub Actions**                   | イベント / 定期                             | run 履歴が必ず残る   |
 
 ### 決定の内訳
 
@@ -56,10 +56,10 @@ Technical Story: 2026-08-10 の対話 (報告会 #7)。PO の「自動化の仕�
 - **D4 実装は Claude Code、技術レビューは Codex。** 実装者とレビュアーが別のモデル系統になる (同じモデルは同じ盲点を持つ)。加えて Codex は**枠が別プール**なので、開発量に影響されない
 - **D5 Claude → Codex の橋は 2 本あり、用途で使い分ける。**
 
-  | 橋 | 仕組み | 向く用途 | 認証 |
-  | --- | --- | --- | --- |
-  | **MCP 直接** | `codex mcp-server` (stdio) を Claude Code の MCP として繋ぐ | 対話中に PM が「これを見て」と呼ぶ | **人が一度 `codex login` するだけ**。新しい秘密は増えない |
-  | **PR コメント** | `@codex review` 等 | 無人・自動のレビュー | GitHub 連携（設定のみ） |
+  | 橋              | 仕組み                                                      | 向く用途                           | 認証                                                      |
+  | --------------- | ----------------------------------------------------------- | ---------------------------------- | --------------------------------------------------------- |
+  | **MCP 直接**    | `codex mcp-server` (stdio) を Claude Code の MCP として繋ぐ | 対話中に PM が「これを見て」と呼ぶ | **人が一度 `codex login` するだけ**。新しい秘密は増えない |
+  | **PR コメント** | `@codex review` 等                                          | 無人・自動のレビュー               | GitHub 連携（設定のみ）                                   |
 
   **却下するのは「CI に `auth.json` を置く」だけ**であり、`codex mcp-server` は該当しない。
   前者は長期クレデンシャルを無人環境に保存する話 (公開リポジトリで公式に非推奨 / ADR 0009 違反)、
@@ -68,7 +68,6 @@ Technical Story: 2026-08-10 の対話 (報告会 #7)。PO の「自動化の仕�
 
   **2026-08-10 に実測して確定した条件** (当初「毎セッション login は負荷が高い」と書いたが、
   device auth を確かめずにブラウザ必須と思い込んでいた。PO の指摘で測り直した):
-
   - `codex login --device-auth` が**存在する**。URL とコードが出るだけなので
     **ヘッドレス VM でもスマホで完結する** (localhost へのコールバックは不要)
   - このクラウド環境は既定の `Trusted` で **OpenAI 系を遮断している** (CONNECT に 403)。
@@ -82,21 +81,22 @@ Technical Story: 2026-08-10 の対話 (報告会 #7)。PO の「自動化の仕�
   無人で回す経路には MCP を使わない (対話セッションが前提のため)。
   **アクセストークンを環境変数に置く形も採らない** — 環境変数は「その環境を使う全員に見える」と
   公式に明記されており、長期クレデンシャルの保管場所として不適切
+
 - **D6 QA とセキュリティは「毎回」ではなく「節目」で回す。ただし回した痕跡を残す。** 現状 release-gate はリリース PR でしか起動せず、リリース PR は**過去 0 件**のため一度も使われていない。トリガーを「ユーザーに見える振る舞いが変わったとき」に変え、判断は PM が持つ
 - **D7 Issue と PR の役割を分ける。** **Issue = 解きたい問題 / PR = 1 つの解の単位**。作業指示は PR に書く。1 Issue が複数 PR に分かれても破綻しない ([ADR 0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) の起票パケットを PR 側へ移す)
 
-### 覆す既存の決定 (Accept 時に Status を動かすもの)
+### 覆す既存の決定
 
-**この ADR は Proposed なので、既存 ADR の本文は書き換えていない。**
-Accept された時点で下表のとおり Status を動かす — 何がどこで死ぬかを先に明示しておく。
+**2026-08-10 の PO 承認をもって、下表のとおり Status を動かした。**
+各 ADR の本文は書き換えず、Status 行だけを更新している (docs/adr/README.md の規約)。
 
-| ADR | 現 Status | 覆す決定 | この ADR での置き換え | Accept 時の扱い |
-| --- | --- | --- | --- | --- |
-| [0008](0008-pr-review-via-cloud-routine.md) PR レビュー Routine | Accepted | PR レビューを claude.ai の Routine で回す | D1 + D4 (Codex の GitHub 連携) | **Superseded by 0035** |
-| [0026](0026-cd-watchdog-routine.md) cd-watchdog Routine | Accepted | CD の赤を毎時の watchdog Routine が検知 | D2 (落ちた workflow 自身が Issue を立てる) | **Superseded by 0035** |
-| [0022](0022-autonomous-ux-improvement-loop.md) UX 自律改善ループ | Accepted | 採点・改善子セッションの**起動を Routine が持つ** | D1 (`ux-eval` を Actions へ)。**ループの目的と 3 段構成は覆さない — 起動経路だけ差し替える** | 一部 Superseded (起動経路の節のみ)。#123 / #166 は生きる |
-| [0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) 起票パケット | Accepted | 起票パケットを **Issue** に書く | D7 (Issue = 問題 / PR = 解の単位。パケットは PR 側) | 一部 Superseded (置き場所のみ)。パケットの必須項目は不変 |
-| [0032](0032-use-case-acceptance-tests-against-real-wiring.md) L3-real | Accepted | UC 受け入れを L3-real (偽 ai-agent) で機械検証 | テスト戦略 §0。UC 受け入れは実環境 E2E へ | **未決** — 引き継ぎ先の網羅範囲が決まるまで L3-real は残す ([strategy.md §0](../testing/strategy.md)) |
+| ADR                                                                               | 現 Status | 覆す決定                                          | この ADR での置き換え                                                                        | Accept 時の扱い                                                                                       |
+| --------------------------------------------------------------------------------- | --------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| [0008](0008-pr-review-via-cloud-routine.md) PR レビュー Routine                   | Accepted  | PR レビューを claude.ai の Routine で回す         | D1 + D4 (Codex の GitHub 連携)                                                               | ✅ **Superseded by 0035**                                                                             |
+| [0026](0026-cd-watchdog-routine.md) cd-watchdog Routine                           | Accepted  | CD の赤を毎時の watchdog Routine が検知           | D2 (落ちた workflow 自身が Issue を立てる)                                                   | ✅ **Superseded by 0035**                                                                             |
+| [0022](0022-autonomous-ux-improvement-loop.md) UX 自律改善ループ                  | Accepted  | 採点・改善子セッションの**起動を Routine が持つ** | D1 (`ux-eval` を Actions へ)。**ループの目的と 3 段構成は覆さない — 起動経路だけ差し替える** | ✅ 一部 Superseded (起動経路のみ)。#123 / #166 は生きる                                               |
+| [0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) 起票パケット | Accepted  | 起票パケットを **Issue** に書く                   | D7 (Issue = 問題 / PR = 解の単位。パケットは PR 側)                                          | ✅ 一部 Superseded (置き場所のみ)。パケットの必須項目は不変                                           |
+| [0032](0032-use-case-acceptance-tests-against-real-wiring.md) L3-real             | Accepted  | UC 受け入れを L3-real (偽 ai-agent) で機械検証    | テスト戦略 §0。UC 受け入れは実環境 E2E へ                                                    | **未決** — 引き継ぎ先の網羅範囲が決まるまで L3-real は残す ([strategy.md §0](../testing/strategy.md)) |
 
 ### Positive Consequences
 
@@ -110,7 +110,7 @@ Accept された時点で下表のとおり Status を動かす — 何がどこ
 - **Codex は GitHub の Issue から自動起動できない** (Linear / Slack / PR / アプリのみ)。Issue 駆動の自動化には PR を先に作る必要がある
 - Codex の枠は「週に数回の集中セッション程度」とされ、**全 PR の自動レビューには足りない可能性**がある。機能 PR に絞る運用が要る
 - claude.ai の Routine 設定は引き続きリポジトリ管理外。**移行が終わるまでは二重管理**
-- **レビューを待つ仕組みがまだ無い** — 現状 CI が緑になり次第マージしており、レビューが付いても誰も待っていない。ここを決めないと Codex を入れても結果が変わらない (本 ADR では未決)
+- ~~レビューを待つ仕組みがまだ無い~~ → **[ADR 0036](0036-merge-gate-as-required-check-and-pm-cadence.md) で解決** (required check `review-gate` + ブランチ保護)
 
 ## Considered Options
 
@@ -128,7 +128,12 @@ Accept された時点で下表のとおり Status を動かす — 何がどこ
 
 ## 未決 (次の design-gate へ)
 
-- **レビューを待つ仕組み** (ブランチ保護 / マージ手順への組み込み)
+- ~~レビューを待つ仕組み~~ → **[ADR 0036](0036-merge-gate-as-required-check-and-pm-cadence.md) で決着済み**
 - Codex の指摘の質 — 最初の 3〜5 本で「Claude が見落としたものを拾えたか」を分類して測る
 - ~~`codex mcp` による直接接続の可否~~ → **確認済み。`codex mcp-server` で可能** (D5 に反映)
-- クラウドセッションでの `codex login` の手間が実運用に耐えるか (device auth を毎回踏む必要がある)
+- ~~クラウドセッションでの `codex login` の手間~~ → **実運用では優先度が下がった。**
+  2026-08-10 に GitHub 連携 (#205) だけで PR レビューが回ることを実測した
+  (初回で P1 を 2 件検出)。MCP は「対話中に呼びたいとき」だけの手段になる
+- **受け入れを実装セッション自身が書ける構造** — PM も実装者も同じアカウントで投稿するため
+  機構では分離できない。Codex レビュー必須化 (`REVIEW_GATE_REQUIRE_CODEX`) で代替できるかを
+  次の debrief で決める
