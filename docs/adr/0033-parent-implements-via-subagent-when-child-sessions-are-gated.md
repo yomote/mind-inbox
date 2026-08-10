@@ -34,7 +34,7 @@ Technical Story: 2026-08-09、PM セッションが「あなたの番」を 3 �
 
 ## Decision Outcome
 
-Chosen option: **"Option B"**。user のクリックが 0 になり、かつ subagent は別コンテキストなので親の集約品質も比較的保たれる。
+Chosen option: **"Option B + C のハイブリッド"** (当初は Option B 単独。2026-08-10 の改訂で C を小さい作業に限って併用 — 基準は D1 の表)。user のクリックは 0 のまま、実装者の独立性はレビュー側 ([ADR 0035](0035-role-split-across-agents-and-actions.md) D4 の Codex) で担保する。
 
 **ADR 0021 は supersede せず、条項の一部だけを置き換える** (ADR 0028 D1 が条項 2 のみ置き換えたのと同じ形)。窓口一元化 (条項 1) / GitHub をライブの真実とする (条項 3・4) / 使い捨てローテーション (条項 7) は維持する。
 
@@ -49,7 +49,7 @@ Chosen option: **"Option B"**。user のクリックが 0 になり、かつ sub
 
   親が直接書くときも、**レビューは必ず別系統 (Codex / ADR 0035 D4) を通す**。
   独立性はレビュー側で担保する — 実装者を分けることでは担保しない
-- **D2 起票パケットは維持する** ([ADR 0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) D1)。**subagent への指示文がそのままパケットになる**形にし、Issue 本文にも残す — 別のセッションや将来の自分が拾えるようにするため。「対象 Issue / 完遂条件 / **触ってはいけないファイル境界** / CLAUDE.md 参照」を必ず含める
+- **D2 起票パケットは維持する** ([ADR 0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) D1)。**subagent への指示文がそのままパケットになる**形にし、成果 **PR の本文にも残す** — 別のセッションや将来の自分が拾えるようにするため ([ADR 0035](0035-role-split-across-agents-and-actions.md) D7 により置き場所は Issue から PR へ移った。Issue = 問題 / PR = 解の単位)。「対象 Issue / 完遂条件 / **触ってはいけないファイル境界** / CLAUDE.md 参照」を必ず含める
 - **D3 子セッションを起動できる環境では、従来どおり子に出してよい。** 判定は「`create_session` が通るか」であり、通るなら子の方が優れる (新品コンテキスト・自分の PR・真の並行)
 - **D4 セッション名の規約は親の `[PM]` 接頭辞のみ維持し、子の命名規約は削除する。** 親は user が一覧で窓口を見つけるために要るが、子の命名は subagent 方式では意味を持たない
 - **D5 親のローテーション閾値を下げる。** subagent は別コンテキストだが、その**報告と PR レビューは親に積もる**。ADR 0021 条項 7 の「節目 or コンテキスト劣化」に加え、**実装を数件回したら交代を検討する**
@@ -59,6 +59,11 @@ Chosen option: **"Option B"**。user のクリックが 0 になり、かつ sub
 **当初の D1 (親は subagent にしか実装させない) は、初日に破られた。** 2026-08-10 のセッションで、
 親である PM が workflow・python・シェルを全部直接書いた。ADR を守れなかったのではなく、
 **守る理由が実測で薄くなった**ので、実態に合わせて改訂する。
+
+> **本文改訂の正当性**: この改訂は本 ADR がまだ `Proposed` (承認キュー) の段階で行い、
+> PO は**改訂後の本文**を確認して Accept した。`docs/adr/README.md` の「過去 ADR は
+> 書き換えない」は Accepted 済み ADR の判断記録を守る規約であり、Accept 前の Proposed に
+> 対する修正はこれに当たらない (Accepted 後に覆すなら新規 ADR で supersede する)。
 
 | 当初の狙い | 2026-08-10 に何が起きたか |
 | --- | --- |
@@ -95,7 +100,7 @@ Chosen option: **"Option B"**。user のクリックが 0 になり、かつ sub
 - Bad, because **作業 1 件ごとに user のクリックが要る**。PO が明示的に「面倒」と言っており、これは運用が続かない兆候
 - Bad, because クリック待ちの間、作業が止まる
 
-### Option B: 親が subagent に実装させる (採用)
+### Option B: 親が subagent に実装させる (採用 — 大きい作業)
 
 - Good, because user のクリックが 0
 - Good, because subagent は別コンテキストなので、親が直接書くより劣化が小さい
@@ -103,10 +108,10 @@ Chosen option: **"Option B"**。user のクリックが 0 になり、かつ sub
 - Bad, because PR の面倒を親が見ることになり、親のコンテキストが削られる
 - Bad, because subagent が user に直接聞けない
 
-### Option C: 親が直接実装する
+### Option C: 親が直接実装する (当初は却下 → 2026-08-10 改訂で小さい作業に限り採用)
 
 - Good, because 最速。中間層が無い
-- Bad, because **親のコンテキストが実装で埋まる**。ADR 0021 が避けたかったものそのもの
+- Bad, because **親のコンテキストが実装で埋まる**。ADR 0021 が避けたかったものそのもの (大きい作業を C に流さない理由として生きている)
 - Bad, because 集約品質が落ちた親は PM として機能しない
 
 ### Option D: GitHub Actions + `claude-code-action`
