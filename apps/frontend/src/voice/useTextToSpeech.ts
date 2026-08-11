@@ -110,6 +110,15 @@ export type TextToSpeech = {
   unlock: () => void;
   toggleEnabled: () => void;
   stop: () => void;
+  /**
+   * 再生単位の表示状態 (劣化警告 `error` / 出力経路 `outputMode`) だけを消す。
+   *
+   * 新しいセッションに前セッションの読み上げ警告を持ち込まないための口 (#146 レビュー):
+   * `stop()` は再生 status しか戻さず、警告は次の `speak()` まで残るが、挨拶を撤去した
+   * (#241) 新セッションには speak の契機が無い。`enabled` (ユーザーの ON/OFF 設定) と
+   * 解錠状態・読み上げ済み id は保持する — それらまで消すのは `reset()` (ログアウト用)。
+   */
+  clearTransient: () => void;
   speak: (text: string) => Promise<void>;
   /** 同じ id は二度読み上げない (assistant メッセージの自動読み上げ用)。 */
   speakOnce: (id: string, text: string) => void;
@@ -404,6 +413,11 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
     [speak],
   );
 
+  const clearTransient = React.useCallback(() => {
+    setError(null);
+    setOutputMode("idle");
+  }, []);
+
   const toggleEnabled = React.useCallback(() => {
     setEnabled((prev) => {
       const next = !prev;
@@ -432,6 +446,7 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
     unlock,
     toggleEnabled,
     stop,
+    clearTransient,
     speak,
     speakOnce,
     reset,

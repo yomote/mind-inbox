@@ -137,6 +137,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     unlock,
     reset: resetTts,
     stop: stopTts,
+    clearTransient: clearTtsTransient,
     toggleEnabled: toggleTtsEnabled,
   } = tts;
   const { reset: resetConsultation, startConsultation, sendDraftMessage } = consultation;
@@ -178,6 +179,16 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     // Entra へリダイレクトしてサインインする (#69)。戻りは main.tsx の initAuth() が回収する。
     void login();
   }, [authStatus, isDev, transition]);
+
+  // 新しいセッションに前セッションの読み上げ表示 (劣化警告 error / 出力経路) を持ち込まない
+  // (#146 レビュー): stop() は再生 status しか戻さず、挨拶を撤去した (#241) 新セッションには
+  // error を消す契機の speak() も無いため、前セッションの警告が出続けてしまう。
+  // **セッション id が変わった時 = start 成功後にだけ**消す (start 失敗時は旧セッションに
+  // 留まるので警告も残す — stub バナーのリセットと同じ理由)。enabled 設定は触らない。
+  const consultationSessionId = consultation.session?.id ?? null;
+  React.useEffect(() => {
+    clearTtsTransient();
+  }, [consultationSessionId, clearTtsTransient]);
 
   // AI の返事が増えたら読み上げる。同じ id を二度読まない判定は hook 側 (speakOnce)。
   // hook オブジェクトごと依存にすると毎レンダーで再実行されるため、安定な関数だけを取る。

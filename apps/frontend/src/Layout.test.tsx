@@ -41,6 +41,7 @@ vi.mock("./api", () => ({
 }));
 
 import { Layout } from "./Layout";
+import { startNewConsultation } from "./api";
 
 /**
  * iOS の解錠は「音量 0 の空発話を speechSynthesis に流す」で表現されるので、
@@ -91,6 +92,9 @@ const renderLayout = () =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // stubGlobal はファイル内で持ち越される。speechSynthesis の有無をテストごとに
+  // 制御したい (「無い環境」で読み上げ失敗を再現するテストがある) ので毎回戻す。
+  vi.unstubAllGlobals();
 });
 
 // vitest は isolate:false で走るので、DOM は test 間で共有される。
@@ -171,5 +175,36 @@ describe("[L2] Layout — 新しい相談の開始で読み上げを止める (#
       .filter((e) => e.kind === "cancel").length;
     expect(cancelsTotalInGesture).toBe(cancelsBeforeUnlockOrNever); // 同期区間の cancel は全て解錠前
     expect(cancelsBeforeUnlockOrNever).toBeGreaterThanOrEqual(1); // stop は呼ばれている (P2-4 の配線)
+  });
+
+  it("新しい相談の開始で前セッションの読み上げ警告 (tts.error) を持ち込まない", async () => {
+    // 無いと: 前の応答の読み上げが劣化/失敗した警告は stop() では消えず (stop は再生
+    // status しか戻さない)、挨拶を撤去した (#241) 新セッションには error を消す契機の
+    // speak() も無いため、応答が 1 つも無い新セッションに前セッションの警告が次の返事まで
+    // 出続ける退行が静かに通る。speechSynthesis の無い環境 (jsdom 素) が読み上げ失敗の
+    // 最短再現 — 警告文言が voiceError として SessionComposer に表示される。
+    vi.mocked(startNewConsultation)
+      .mockResolvedValueOnce({
+        id: "tts-err-1",
+        title: "相談セッション",
+        messages: [
+          { id: "a-err-1", role: "assistant", text: "どうしましたか", createdAt: "2026-01-01" },
+        ],
+      } as never)
+      // 2 セッション目は空 (挨拶なし) = speak の契機が無いことまで含めた再現
+      .mockResolvedValueOnce({ id: "tts-err-2", title: "相談セッション", messages: [] } as never);
+
+    renderLayout();
+    await userEvent.click(await screen.findByRole("button", { name: "新しい相談を始める" }));
+    // 前セッション: 自動読み上げが失敗し劣化警告が出る
+    await screen.findByText("このブラウザは音声読み上げに対応していません。");
+
+    // ホームへ戻り、新しい相談 (空セッション) を開始すると警告は消える
+    await userEvent.click(screen.getByRole("button", { name: "Mind Inbox" }));
+    await userEvent.click(await screen.findByRole("button", { name: "新しい相談を始める" }));
+
+    await waitFor(() =>
+      expect(screen.queryByText("このブラウザは音声読み上げに対応していません。")).toBeNull(),
+    );
   });
 });
