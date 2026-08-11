@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""UX プローブ記録を Issue コメントとして運ぶ (format) / 取り出す (extract)。
+"""UX プローブ記録の封筒 (kind: "ux-probe-record") を作る / 取り出す。
 
-記録の運搬に artifact を使わない理由は ADR 0029 (#160): agent セッションからは
-artifact のダウンロード先 (`*.blob.core.windows.net`) が egress ポリシーで拒否され、
-`gh` 経由の直接 API も塞がっているため、**artifact は両方の経路から取得できない**。
-Issue コメントなら GitHub MCP でそのまま読めるので、採点ループが agent だけで完結する。
+`envelope` がデータブランチ蓄積 (ADR 0040) 用の現行の出口。golden-path-monitor が
+これで作った 1 行 JSON を `cicd/scripts/ux-data/append-observation.sh` で
+`data/ux-observations` の probes/*.jsonl に追記する。封筒の形の真実はこのモジュール
+(読み取り側 ux_eval.py とは round-trip テストで結合している)。
 
-投稿側 (golden-path-monitor) と読み取り側 (毎朝の採点セッション) が同じ封筒の形を
-共有できるように、整形と取り出しを 1 つのモジュールに置く。片方だけ直して壊れるのを防ぐ。
+`format` / `extract` は Issue コメント時代 (ADR 0029 / #162) のレガシー。移行完了
+(#162 クローズ) 後に削除してよいが、それまでは旧コメントの形の記録として残す。
+artifact を使わなかった理由は ADR 0029 (#160): agent セッションからは artifact の
+ダウンロード先が egress ポリシーで拒否される。
 
 使い方:
-    probe-record-comment.py format  <記録 JSON>              # コメント本文を stdout へ
-    probe-record-comment.py extract <コメント本文> <出力先ディレクトリ>
+    probe-record-comment.py envelope <記録 JSON>             # 封筒 JSON 1 行を stdout へ
+    probe-record-comment.py format  <記録 JSON>              # (レガシー) コメント本文
+    probe-record-comment.py extract <コメント本文> <出力先ディレクトリ>  # (レガシー)
 
 `extract` は出力先ディレクトリに記録 JSON を書き出し、そのディレクトリを stdout に出す。
 採点する材料があるかの判断はここではせず `inspect-probe-artifact.py` に委ねる (責務の分離)。
@@ -28,6 +31,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 KIND = "ux-probe-record"
@@ -72,6 +76,44 @@ def _load_json(path: Path) -> object | None:
         return None
 
 
+def build_envelope(record: dict, run_id: str) -> dict:
+    """封筒 (kind: "ux-probe-record") を組み立てる (純粋関数)。ここが形の真実。"""
+    scenario = (
+        record.get("scenario") if isinstance(record.get("scenario"), dict) else {}
+    )
+    turns = record.get("turns") if isinstance(record.get("turns"), list) else []
+    return {
+        "kind": KIND,
+        "runId": run_id,
+        "scenarioId": scenario.get("id"),
+        "plannedTurns": scenario.get("plannedTurns"),
+        "completedTurns": len(turns),
+        "probeId": record.get("probeId"),
+        "record": record,
+    }
+
+
+def envelope_line(probe_json: Path, run_id: str, now: datetime | None = None) -> int:
+    """データブランチ追記用の封筒 JSON を 1 行で stdout に出す (ADR 0040)。
+
+    recordedAt (追記時刻 = 鮮度判定の基準) を持たせる — Issue コメント時代の
+    created_at に相当し、これが無いと ux_eval の鮮度・月振り分けが働かない。
+    """
+    record = _load_json(probe_json)
+    if record is None:
+        return EXIT_UNEXPECTED
+    if not isinstance(record, dict):
+        log(f"記録 JSON がオブジェクトではありません: {probe_json}")
+        return EXIT_UNEXPECTED
+    now = now or datetime.now(timezone.utc)
+    envelope = {
+        **build_envelope(record, run_id),
+        "recordedAt": now.isoformat().replace("+00:00", "Z"),
+    }
+    print(json.dumps(envelope, ensure_ascii=False))
+    return EXIT_OK
+
+
 def format_comment(probe_json: Path, run_id: str, run_url: str) -> int:
     record = _load_json(probe_json)
     if record is None:
@@ -85,15 +127,7 @@ def format_comment(probe_json: Path, run_id: str, run_url: str) -> int:
     )
     turns = record.get("turns") if isinstance(record.get("turns"), list) else []
 
-    envelope = {
-        "kind": KIND,
-        "runId": run_id,
-        "scenarioId": scenario.get("id"),
-        "plannedTurns": scenario.get("plannedTurns"),
-        "completedTurns": len(turns),
-        "probeId": record.get("probeId"),
-        "record": record,
-    }
+    envelope = build_envelope(record, run_id)
 
     run_line = f"[run {run_id}]({run_url})" if run_url else f"run {run_id}"
     body = "\n".join(
@@ -163,6 +197,11 @@ def extract_record(comment_body: Path, out_dir: Path) -> int:
 
 def main(argv: list[str]) -> int:
     name = Path(argv[0]).name
+    if len(argv) >= 2 and argv[1] == "envelope" and len(argv) == 3:
+        import os
+
+        return envelope_line(Path(argv[2]), os.environ.get("GITHUB_RUN_ID", "?"))
+
     if len(argv) >= 2 and argv[1] == "format" and len(argv) == 3:
         import os
 
@@ -175,8 +214,9 @@ def main(argv: list[str]) -> int:
     if len(argv) >= 2 and argv[1] == "extract" and len(argv) == 4:
         return extract_record(Path(argv[2]), Path(argv[3]))
 
-    log(f"使い方: {name} format <記録 JSON>")
-    log(f"        {name} extract <コメント本文> <出力先ディレクトリ>")
+    log(f"使い方: {name} envelope <記録 JSON>")
+    log(f"        {name} format <記録 JSON>  (レガシー)")
+    log(f"        {name} extract <コメント本文> <出力先ディレクトリ>  (レガシー)")
     return EXIT_UNEXPECTED
 
 

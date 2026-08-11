@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UX プローブ記録から機械計測を抽出し、スコアボードへのコメント本文を作る (ADR 0037)。
+"""UX プローブ記録から機械計測を抽出し、データブランチへの追記 payload を作る (ADR 0037 / 0040)。
 
 なぜあるか:
     ux-judge Routine (claude.ai) は実行履歴がリポジトリに残らず、一度も投稿しない
@@ -7,42 +7,44 @@
     か長期クレデンシャル (OAuth トークン) を要するため全部却下 (ADR 0008/0009/0035 D5)。
     そこで**機械で計算できる計測だけ**をこの script に切り出して Actions (ux-eval.yml)
     で毎朝走らせ、LLM 採点 (ux-judge-score) は PM セッションの日次 tick が subagent で
-    行う — 分担の判断は ADR 0037。
+    行う — 分担の判断は ADR 0037。蓄積先は Issue コメントから git データブランチ
+    `data/ux-observations` へ移した — 判断は ADR 0040 (PO 裁定 2026-08-11 / #197)。
 
 責務 (LLM 判断は含めない):
-    - 記録 Issue #162 のコメント一覧 (JSON) から最新の ux-probe-record を選ぶ
+    - データブランチ checkout の probes/*.jsonl から最新の ux-probe-record を選ぶ
     - 鮮度を確かめる (既定 26 時間)。**古い記録を「今日の計測」として積まない** —
       ここを黙って通すと、プローブが止まっているのにトレンドが伸び続ける
     - 記録 JSON から区間レイテンシ統計 / 往復数 / 警告・エラー数を計算する
-    - スコアボード Issue #127 への投稿本文 (kind: "ux-eval-mech") を stdout に出す
+    - evals/*.jsonl への追記 payload (kind: "ux-eval-mech") を stdout に 1 行で出す
+      (追記そのものは append-observation.sh の責務)
 
-封筒の形 (kind: "ux-probe-record") の真実は cicd/scripts/ux-probe/probe-record-comment.py。
-test_ux_eval.py が format との往復を実 module で検証している (片方だけ直すと落ちる)。
+蓄積の形 (JSONL / 封筒) の真実は cicd/scripts/ux-data/append.py と
+cicd/scripts/ux-probe/probe-record-comment.py (envelope)。test_ux_eval.py が
+envelope との往復を実 module で検証している (片方だけ直すと落ちる)。
 
 使い方:
-    ux_eval.py <comments.json> [scoreboard.json]
-      comments.json   = [{"body": str, "created_at": ISO8601}, ...] (gh api の出力)
-      scoreboard.json = #127 のコメント一覧 (同形式)。渡すと **評価済み runId の再投稿を
-                        拒否する** — 鮮度 26h は前日 07:00 の記録 (約 25h 前) を通して
-                        しまうため、時刻だけでは「今朝の記録が欠けた朝」を検出できない
-                        (Codex レビュー指摘 / PR #224)
+    ux_eval.py <data_dir>
+      data_dir = データブランチ (data/ux-observations) の checkout。
+                 probes/*.jsonl を読み、evals/*.jsonl で評価済み runId を確認して
+                 再評価を拒否する — 鮮度 26h は前日 07:00 の記録 (約 25h 前) を通して
+                 しまうため、時刻だけでは「今朝の記録が欠けた朝」を検出できない
+                 (Codex レビュー指摘 / PR #224)
       環境変数: UX_EVAL_MAX_AGE_HOURS (既定 26) / GITHUB_RUN_ID / GITHUB_SERVER_URL /
                 GITHUB_REPOSITORY (計測 run へのリンク用・無くても動く)
 
-診断は stderr、成果物 (コメント本文) だけを stdout に出す (PR #88 で踏んだ実例と同じ規律)。
+診断は stderr、成果物 (payload JSON 1 行) だけを stdout に出す (PR #88 で踏んだ実例と同じ規律)。
 
 終了コード:
-    0 = 計測できた (コメント本文を stdout に出力)
+    0 = 計測できた (payload を stdout に出力)
     3 = 鮮度内の記録が無い (記録ゼロ / 全部古い) — 呼び出し側は run を赤にする
     4 = 最新の記録は評価済み (今朝の新しい記録が来ていない) — 同じく赤にする
-    1 = 前提不足・想定外 (ファイルが無い / JSON が壊れている)
+    1 = 前提不足・想定外 (ディレクトリが無い / JSON が壊れている)
 """
 
 from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -50,9 +52,6 @@ from pathlib import Path
 RECORD_KIND = "ux-probe-record"
 OUTPUT_KIND = "ux-eval-mech"
 DEFAULT_MAX_AGE_HOURS = 26.0
-
-# probe-record-comment.py と同じフェンス規則 (封筒の真実はあちら)
-_FENCE = re.compile(r"```json\s*(.*?)```", re.DOTALL)
 
 # 記録 JSON の turns[].timings のキー (真実: apps/frontend/e2e-live/ux-probe.spec.ts の
 # TurnRecord。実コメント #162 でも確認済み — 2026-08-10)
@@ -74,19 +73,6 @@ def log(message: str) -> None:
     print(message, file=sys.stderr)
 
 
-def parse_probe_comment(body: str) -> dict | None:
-    """コメント本文から ux-probe-record の封筒を取り出す。無ければ None。"""
-    for block in _FENCE.findall(body):
-        try:
-            envelope = json.loads(block)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(envelope, dict) and envelope.get("kind") == RECORD_KIND:
-            if isinstance(envelope.get("record"), dict):
-                return envelope
-    return None
-
-
 def parse_ts(ts: str | None) -> datetime | None:
     if not ts or not isinstance(ts, str):
         return None
@@ -96,55 +82,68 @@ def parse_ts(ts: str | None) -> datetime | None:
         return None
 
 
-def latest_record(comments: list) -> tuple[dict, datetime] | None:
-    """コメント一覧から最新の記録 (封筒, created_at) を返す。無ければ None。
+def read_observations(subdir: Path) -> list[dict]:
+    """月別 JSONL から観測を読む。壊れた行は読み飛ばす (stderr に位置を出す)。
 
-    created_at で選ぶ (配列の並び順に依存しない — ページネーションで
-    順序の保証が崩れても最新を取り違えないため)。
+    黙って全滅させない — 1 行の破損で「記録なし」に見えると、破損と停止の
+    区別がつかないまま採点が止まる。
+    """
+    observations: list[dict] = []
+    if not subdir.is_dir():
+        return observations
+    for path in sorted(subdir.glob("*.jsonl")):
+        for lineno, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                log(f"壊れた行を読み飛ばします: {path}:{lineno}")
+                continue
+            if isinstance(obj, dict):
+                observations.append(obj)
+    return observations
+
+
+def latest_record(observations: list[dict]) -> tuple[dict, datetime] | None:
+    """観測一覧から最新のプローブ記録 (封筒, recordedAt) を返す。無ければ None。
+
+    recordedAt で選ぶ (ファイル内の並び順に依存しない — 移行データと実運用の
+    追記が混ざっても最新を取り違えないため)。
     """
     best: tuple[dict, datetime] | None = None
-    for comment in comments:
-        if not isinstance(comment, dict):
+    for obs in observations:
+        if obs.get("kind") != RECORD_KIND or not isinstance(obs.get("record"), dict):
             continue
-        created = parse_ts(comment.get("created_at"))
-        body = comment.get("body")
-        if created is None or not isinstance(body, str):
+        recorded = parse_ts(obs.get("recordedAt"))
+        if recorded is None:
+            log(f"recordedAt の無い記録を読み飛ばします: probeId={obs.get('probeId')!r}")
             continue
-        envelope = parse_probe_comment(body)
-        if envelope is None:
-            continue
-        if best is None or created > best[1]:
-            best = (envelope, created)
+        if best is None or recorded > best[1]:
+            best = (obs, recorded)
     return best
 
 
-def is_fresh(created_at: datetime, now: datetime, max_age_hours: float) -> bool:
+def is_fresh(recorded_at: datetime, now: datetime, max_age_hours: float) -> bool:
     """記録がまだ「今日の計測」として使える鮮度かを判定する (純粋関数)。"""
-    return now - created_at <= timedelta(hours=max_age_hours)
+    return now - recorded_at <= timedelta(hours=max_age_hours)
 
 
-def evaluated_probe_run_ids(scoreboard_comments: list) -> set[str]:
-    """スコアボードのコメントから評価済みプローブの runId を集める (純粋関数)。
+def evaluated_probe_run_ids(observations: list[dict]) -> set[str]:
+    """evals の観測から評価済みプローブの runId を集める (純粋関数)。
 
     自分 (kind: ux-eval-mech) の出力だけを見る — ux-judge-score 等の他 kind は
     「機械計測が積まれた」ことを意味しないので数えない。
     """
     ids: set[str] = set()
-    for comment in scoreboard_comments:
-        if not isinstance(comment, dict):
+    for obs in observations:
+        if not isinstance(obs, dict) or obs.get("kind") != OUTPUT_KIND:
             continue
-        body = comment.get("body")
-        if not isinstance(body, str):
-            continue
-        for block in _FENCE.findall(body):
-            try:
-                out = json.loads(block)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(out, dict) and out.get("kind") == OUTPUT_KIND:
-                rid = out.get("probeRunId")
-                if isinstance(rid, str) and rid:
-                    ids.add(rid)
+        rid = obs.get("probeRunId")
+        if isinstance(rid, str) and rid:
+            ids.add(rid)
     return ids
 
 
@@ -210,93 +209,41 @@ def measure(record: dict) -> dict:
     }
 
 
-def build_comment(
+def build_payload(
     envelope: dict,
-    record_created_at: datetime,
+    probe_recorded_at: datetime,
     metrics: dict,
     now: datetime,
     eval_run_id: str | None,
     eval_run_url: str | None,
-) -> str:
-    """#127 へのコメント本文を組み立てる (純粋関数)。
+) -> dict:
+    """evals/*.jsonl への追記 payload を組み立てる (純粋関数)。
 
-    会話本文は含めない — 自由文を含めないことでフェンス破壊 (probe-record-comment.py
-    が \\u0060 置換で守っている問題) をそもそも持ち込まない。
+    会話本文は含めない — 自由文を持ち込まないことで肥大化を避け、トレンド描画
+    (status-page) が読むのは数値だけ、という分担を保つ。
     """
-    record = envelope.get("record") or {}
-    env = (
-        record.get("environment") if isinstance(record.get("environment"), dict) else {}
-    )
-    probe_run_id = envelope.get("runId")
-    probe_run_url = env.get("runUrl")
-
-    out = {
+    now_iso = now.isoformat().replace("+00:00", "Z")
+    return {
         "kind": OUTPUT_KIND,
-        "schemaVersion": 1,
-        "evaluatedAt": now.isoformat().replace("+00:00", "Z"),
+        "schemaVersion": 2,  # 2 = データブランチ蓄積 (ADR 0040)。1 は #127 コメント時代
+        "recordedAt": now_iso,
+        "evaluatedAt": now_iso,
         "probeId": envelope.get("probeId"),
-        "probeRunId": probe_run_id,
+        "probeRunId": envelope.get("runId"),
         "scenarioId": envelope.get("scenarioId"),
-        "recordCommentCreatedAt": record_created_at.isoformat().replace("+00:00", "Z"),
+        "probeRecordedAt": probe_recorded_at.isoformat().replace("+00:00", "Z"),
         "metrics": metrics,
         "evalRunId": eval_run_id,
         "evalRunUrl": eval_run_url,
     }
 
-    visible = metrics["latency"]["sendToReplyVisibleMs"]
-    run_line = (
-        f"[run {probe_run_id}]({probe_run_url})"
-        if probe_run_url
-        else f"run {probe_run_id}"
-    )
-    return "\n".join(
-        [
-            "## UX 機械計測 (ux-eval-mech)",
-            "",
-            f"- 対象プローブ: {run_line} / scenario `{envelope.get('scenarioId', '?')}` / "
-            f"完了 {metrics['completedTurns']}/{metrics.get('plannedTurns') or '?'} 往復",
-            f"- send→表示: avg {visible['avgMs'] if visible['avgMs'] is not None else '欠測'} ms / "
-            f"max {visible['maxMs'] if visible['maxMs'] is not None else '欠測'} ms",
-            f"- warnings: latency {metrics['warnings']['latency']} / "
-            f"functional {metrics['warnings']['functional']} / "
-            f"TTS エラー往復 {metrics['ttsErrorTurns']}",
-            "",
-            "機械で計算できる値だけを積んでいます。LLM 採点 (kind: `ux-judge-score`) は"
-            " PM セッションの日次 tick が別コメントで積みます (ADR 0037)。",
-            "",
-            "```json",
-            json.dumps(out, ensure_ascii=False),
-            "```",
-        ]
-    )
 
-
-def run(
-    comments_path: Path,
-    scoreboard_path: Path | None = None,
-    now: datetime | None = None,
-) -> int:
+def run(data_dir: Path, now: datetime | None = None) -> int:
     now = now or datetime.now(timezone.utc)
-    try:
-        comments = json.loads(comments_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        log(f"コメント一覧を読めません: {comments_path}: {exc}")
+    if not data_dir.is_dir():
+        log(f"データディレクトリがありません: {data_dir}")
+        log("  → データブランチ (data/ux-observations) の checkout を渡してください。")
         return EXIT_UNEXPECTED
-    if not isinstance(comments, list):
-        log(f"コメント一覧が配列ではありません: {comments_path}")
-        return EXIT_UNEXPECTED
-
-    evaluated: set[str] = set()
-    if scoreboard_path is not None:
-        try:
-            scoreboard = json.loads(scoreboard_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            log(f"スコアボード一覧を読めません: {scoreboard_path}: {exc}")
-            return EXIT_UNEXPECTED
-        if not isinstance(scoreboard, list):
-            log(f"スコアボード一覧が配列ではありません: {scoreboard_path}")
-            return EXIT_UNEXPECTED
-        evaluated = evaluated_probe_run_ids(scoreboard)
 
     try:
         max_age_hours = float(
@@ -306,44 +253,46 @@ def run(
         log("UX_EVAL_MAX_AGE_HOURS が数値ではありません")
         return EXIT_UNEXPECTED
 
-    found = latest_record(comments)
+    probes = read_observations(data_dir / "probes")
+    evals = read_observations(data_dir / "evals")
+
+    found = latest_record(probes)
     if found is None:
-        log(f"kind={RECORD_KIND} のコメントが 1 件もありません。")
-        log("  → golden-path-monitor の投稿ステップが動いていない可能性があります。")
+        log(f"kind={RECORD_KIND} の観測が 1 件もありません。")
+        log("  → golden-path-monitor の追記ステップが動いていない可能性があります。")
         return EXIT_NO_FRESH_RECORD
 
-    envelope, created_at = found
-    age_hours = (now - created_at).total_seconds() / 3600
-    if not is_fresh(created_at, now, max_age_hours):
+    envelope, recorded_at = found
+    age_hours = (now - recorded_at).total_seconds() / 3600
+    if not is_fresh(recorded_at, now, max_age_hours):
         log(
-            f"最新の記録が古すぎます: {created_at.isoformat()} "
+            f"最新の記録が古すぎます: {recorded_at.isoformat()} "
             f"({age_hours:.1f} 時間前 > 期待 {max_age_hours:g} 時間以内)。"
         )
-        log("  → プローブ (golden-path-monitor) か記録の投稿が止まっています。")
+        log("  → プローブ (golden-path-monitor) か記録の追記が止まっています。")
         log("     古い記録を今日の計測として積まないため、この run は赤にします。")
         return EXIT_NO_FRESH_RECORD
 
     # 鮮度 26h は前日 07:00 の記録 (約 25h 前) も通す。時刻だけで「今朝の記録が
     # 欠けた朝」は検出できないので、評価済み runId の再評価をここで拒否する。
+    evaluated = evaluated_probe_run_ids(evals)
     probe_run_id = envelope.get("runId")
     if isinstance(probe_run_id, str) and probe_run_id in evaluated:
         log(
             f"最新の記録 (runId={probe_run_id}) は評価済みです。"
             " 今朝の新しい記録が来ていません。"
         )
-        log("  → golden-path-monitor か記録の投稿が止まっています。")
+        log("  → golden-path-monitor か記録の追記が止まっています。")
         log("     同じ記録を重複して積まないため、この run は赤にします。")
         return EXIT_ALREADY_EVALUATED
-    if scoreboard_path is not None and not (
-        isinstance(probe_run_id, str) and probe_run_id
-    ):
+    if not (isinstance(probe_run_id, str) and probe_run_id):
         log("記録に runId が無いため重複判定はできません — そのまま計測します。")
 
     metrics = measure(envelope["record"])
     log(
         f"記録: probeId={envelope.get('probeId', '?')} "
         f"scenario={envelope.get('scenarioId', '?')} "
-        f"created={created_at.isoformat()} ({age_hours:.1f} 時間前) "
+        f"recorded={recorded_at.isoformat()} ({age_hours:.1f} 時間前) "
         f"turns={metrics['completedTurns']}/{metrics.get('plannedTurns') or '?'}"
     )
 
@@ -354,15 +303,16 @@ def run(
         f"{server}/{repo}/actions/runs/{run_id}" if run_id and server and repo else None
     )
 
-    print(build_comment(envelope, created_at, metrics, now, run_id, run_url))
+    payload = build_payload(envelope, recorded_at, metrics, now, run_id, run_url)
+    print(json.dumps(payload, ensure_ascii=False))
     return EXIT_OK
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) not in (2, 3):
-        log(f"使い方: {Path(argv[0]).name} <comments.json> [scoreboard.json]")
+    if len(argv) != 2:
+        log(f"使い方: {Path(argv[0]).name} <data_dir>")
         return EXIT_UNEXPECTED
-    return run(Path(argv[1]), Path(argv[2]) if len(argv) == 3 else None)
+    return run(Path(argv[1]))
 
 
 if __name__ == "__main__":
