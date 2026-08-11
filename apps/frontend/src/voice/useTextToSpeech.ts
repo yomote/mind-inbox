@@ -110,6 +110,15 @@ export type TextToSpeech = {
   unlock: () => void;
   toggleEnabled: () => void;
   stop: () => void;
+  /**
+   * 再生単位の表示状態 (劣化警告 `error` / 出力経路 `outputMode`) だけを消す。
+   *
+   * 新しいセッションに前セッションの読み上げ警告を持ち込まないための口 (#146 レビュー):
+   * `stop()` は再生 status しか戻さず、警告は次の `speak()` まで残るが、挨拶を撤去した
+   * (#241) 新セッションには speak の契機が無い。`enabled` (ユーザーの ON/OFF 設定) と
+   * 解錠状態・読み上げ済み id は保持する — それらまで消すのは `reset()` (ログアウト用)。
+   */
+  clearTransient: () => void;
   speak: (text: string) => Promise<void>;
   /** 同じ id は二度読み上げない (assistant メッセージの自動読み上げ用)。 */
   speakOnce: (id: string, text: string) => void;
@@ -329,6 +338,12 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
       let sentences: string[] = [text];
       try {
         const res = await ttsPlanFetch(text, speaker);
+        // 非同期境界の後は、**publish (再生開始 / error / outputMode の set) の前に必ず世代を
+        // 確認する**。plan の往復中に stop() された (新しい相談の開始等) のにここで
+        // フォールバックすると、停止済みの旧応答のブラウザ読み上げと劣化警告が
+        // 新しい空セッションで復活する。ループ内の各フォールバックは既に確認している —
+        // ここ (204 分岐) だけ確認より先に publish していた。
+        if (isStale()) return;
         if (res.status === 204) {
           // VOICEVOX 未構成。合成しても無駄なのでここでフォールバックする。
           speakWithBrowser(text, MSG_SYNTH_STUB);
@@ -404,6 +419,11 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
     [speak],
   );
 
+  const clearTransient = React.useCallback(() => {
+    setError(null);
+    setOutputMode("idle");
+  }, []);
+
   const toggleEnabled = React.useCallback(() => {
     setEnabled((prev) => {
       const next = !prev;
@@ -432,6 +452,7 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
     unlock,
     toggleEnabled,
     stop,
+    clearTransient,
     speak,
     speakOnce,
     reset,

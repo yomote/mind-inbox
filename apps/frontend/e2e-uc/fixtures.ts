@@ -56,9 +56,10 @@ export async function startConsultationAndSay(page: Page, ...utterances: string[
   await expect(page).toHaveURL(/\/consultations\/current$/);
 
   const guide = page.getByText("ガイド", { exact: true });
-  // 開始直後の問いかけ (AI 非呼び出し / dialogue-session.mdx §3.1) が出るまで待つ。
-  // ここを待たずに数え始めると「返事が 1 つ増えた」の基準がずれる。
-  await expect(guide).toHaveCount(1);
+  // 開始直後は AI の挨拶を出さない (#241 / dialogue-session.mdx §3.1)。会話は空で始まり、
+  // 待機マスコットだけが表示される。ここが 0 でないなら撤去した挨拶が復活している。
+  await expect(guide).toHaveCount(0);
+  await expect(page.getByTestId("mascot-empty-state")).toBeVisible();
 
   const composer = page.getByPlaceholder("ここに入力 / 話して入力");
 

@@ -37,6 +37,17 @@ export type ExtractFailureKind =
   /** それ以外の上流失敗 (5xx / ネットワーク断)。 */
   | "upstream-failed";
 
+/**
+ * stub フォールバック応答の機械判別フラグ (#146 / ADR 0039 D6)。
+ *
+ * `AI_AGENT_BASE_URL` 未設定で stub に落ちた応答にだけ `stubbed: true` が付く。
+ * 実 ai-agent の応答には付かない (undefined)。ai-agent の wire 契約
+ * (`aiAgentContracts.ts` ↔ pydantic) には**含めない** — ai-agent は本物なので
+ * このフラグを返すことがなく、片側にだけ足すと L0 契約テストが正しく落ちる。
+ * フロント向けの真実は tRPC 出力 schema (router.ts の `ChatReplySchema` 等) に置く。
+ */
+export type StubMarked<T> = T & { stubbed?: boolean };
+
 export class ExtractError extends Error {
   // パラメータプロパティ短縮記法は erasableSyntaxOnly で使えないため明示代入する。
   readonly kind: ExtractFailureKind;
@@ -52,7 +63,7 @@ export class ExtractError extends Error {
  * ai-agent サービスへの HTTP クライアント。
  * AI_AGENT_BASE_URL 未設定時は stub レスポンスを返す。
  */
-export async function sendChatMessage(req: ChatRequest): Promise<ChatResponse> {
+export async function sendChatMessage(req: ChatRequest): Promise<StubMarked<ChatResponse>> {
   if (!config.aiAgentBaseUrl) {
     console.log("[aiAgentClient] AI_AGENT_BASE_URL not set — using stub response");
     return stubChatResponse(req);
@@ -92,7 +103,7 @@ export async function sendChatMessage(req: ChatRequest): Promise<ChatResponse> {
  * セッション全文を Mention[] に抽出 + 既存 Problem へグルーピング（ai-agent /extract）。
  * レスポンスは domain.ts の ExtractionResult（camelCase）と一致する。
  */
-export async function extract(req: ExtractRequest): Promise<ExtractionResult> {
+export async function extract(req: ExtractRequest): Promise<StubMarked<ExtractionResult>> {
   if (!config.aiAgentBaseUrl) {
     console.log("[aiAgentClient] AI_AGENT_BASE_URL not set — using stub /extract");
     return stubExtractResponse(req);
@@ -206,16 +217,18 @@ export async function approve(req: ApproveRequest): Promise<ApproveResponse> {
   return (await res.json()) as ApproveResponse;
 }
 
-function stubChatResponse(req: ChatRequest): ChatResponse {
+function stubChatResponse(req: ChatRequest): StubMarked<ChatResponse> {
   return {
     reply: `[stub] received: "${req.message}"`,
     requiresApproval: false,
     approvalRequestId: null,
     citations: [],
+    // 本物のふりをさせない (#146): フロントはこのフラグで警告バナーを出す。
+    stubbed: true,
   };
 }
 
-function stubExtractResponse(req: ExtractRequest): ExtractionResult {
+function stubExtractResponse(req: ExtractRequest): StubMarked<ExtractionResult> {
   const problemId = `prob-stub-${randomUUID()}`;
   const now = new Date().toISOString();
   return {
@@ -249,6 +262,8 @@ function stubExtractResponse(req: ExtractRequest): ExtractionResult {
     ],
     newProblemCount: 1,
     updatedProblemCount: 0,
+    // 本物のふりをさせない (#146): フロントはこのフラグで警告バナーを出す。
+    stubbed: true,
   };
 }
 

@@ -4,6 +4,7 @@ import { trpc } from "../trpc/client";
 import { chatStreamFetch, ttsPrefetchFetch, useMock } from "./http";
 import { parseSseJsonStream } from "./sse";
 import { appendStreamingReply, beginStreamingReply, clearStreamingReply } from "./streamingReply";
+import { reportStubbedResponse, resetStubbedResponse } from "./stubStatus";
 
 const voicevoxSpeaker = Number(import.meta.env.VITE_VOICEVOX_SPEAKER || "3");
 
@@ -13,8 +14,20 @@ export async function startNewConsultation(concern: string): Promise<Consultatio
   // 変わると id が一致しなくなり、前セッションの応答が新セッションに幽霊バブルとして
   // 出てしまう (アプリ内遷移ではリロードが挟まらないので実際に踏む)。
   clearStreamingReply();
-  if (useMock) return mock.startNewConsultation(concern);
-  const { session } = await trpc.consultation.start.mutate({ concern });
+  if (useMock) {
+    const session = await mock.startNewConsultation(concern);
+    // 成功後にリセット (real 経路と同じ意味論)。mock は stub フラグを立てないが、
+    // ビルド切り替え等で残った状態を空の新セッションに持ち越さない。
+    resetStubbedResponse();
+    return session;
+  }
+  const { session, stubbed } = await trpc.consultation.start.mutate({ concern });
+  // 前セッションの stub 状態は**新セッションの作成が成功してから**捨てる (#146)。
+  // 冒頭でリセットすると、start が失敗したとき (useConsultation は旧セッションを保持して
+  // 遷移しない) に旧 stub セッションへ戻ってもバナーが消えたままになる。
+  // reportStubbedResponse は undefined (空 concern 開始 = AI 非呼び出し / 実応答) を
+  // false と扱うのでリセットを兼ね、テーマ入力あり開始が stub ならそのまま再点灯する。
+  reportStubbedResponse(stubbed);
   return session;
 }
 
@@ -31,6 +44,8 @@ type ChatStreamEvent =
         requires_approval?: boolean;
         approval_request_id?: string | null;
         citations?: string[];
+        /** stub 判別フラグ (#146)。BFF が合成する stub ストリームにだけ現れる。 */
+        stubbed?: boolean;
       };
     }
   | { type: "error"; message: string };
@@ -57,6 +72,7 @@ function asChatStreamEvent(raw: unknown): ChatStreamEvent | null {
           citations: Array.isArray(response.citations)
             ? response.citations.filter((c): c is string => typeof c === "string")
             : undefined,
+          stubbed: response.stubbed === true,
         },
       };
     }
@@ -122,6 +138,8 @@ async function sendMessageStreaming(
       prefetchSentences(accumulated);
     } else if (event.type === "done") {
       finalReply = event.response.reply;
+      // stub 応答の可視化 (#146): 実応答 (フラグ無し) なら下ろす。
+      reportStubbedResponse(event.response.stubbed);
     } else {
       throw new Error(`chat stream error event: ${event.message}`);
     }
@@ -167,6 +185,8 @@ export async function sendMessage(sessionId: string, text: string): Promise<Chat
       sessionId,
       message: text,
     });
+    // stub 応答の可視化 (#146)。ストリーミング不能時のフォールバック経路でも見落とさない。
+    reportStubbedResponse(res.stubbed);
     return {
       id: messageId,
       role: "assistant",
