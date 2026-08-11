@@ -1039,8 +1039,10 @@ var aiAgentEnvVars = concat(
 resource aiAgentContainerApp 'Microsoft.App/containerApps@2024-03-01' = if (enableAiAgentAca) {
   name: aiAgentContainerAppName
   location: containerAppsLocation
-  // SystemAssigned MI: OpenAI (Cognitive Services OpenAI User) と Cosmos
-  // (Built-in Data Contributor) の data plane 認証に使う。静的シークレット 0 の系譜。
+  // SystemAssigned MI: OpenAI (Cognitive Services OpenAI User — 付与は
+  // deploy-ai-agent.sh 側 / #262 の教訓コメント参照) と Cosmos (Built-in Data
+  // Contributor — 下の sqlRoleAssignments) の data plane 認証に使う。
+  // 静的シークレット 0 の系譜。
   identity: {
     type: 'SystemAssigned'
   }
@@ -1194,22 +1196,20 @@ var effectiveVoicevoxWrapperBaseUrl = enableVoicevoxWrapperAca
   ? 'https://${voicevoxWrapperContainerApp.?properties.?configuration.?ingress.?fqdn ?? ''}'
   : voicevoxWrapperBaseUrl
 
-// Cognitive Services OpenAI User — ai-agent MI の LLM 呼び出し (deploy-ai-agent.sh が
-// az role assignment で足していたものを宣言に固定)。
-var cognitiveServicesOpenAiUserRoleId = subscriptionResourceId(
-  'Microsoft.Authorization/roleDefinitions',
-  '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
-)
-
-resource aiAgentOpenAiRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableOpenAi && enableAiAgentAca) {
-  name: guid(resourceGroup().id, openAiAccountName, aiAgentContainerAppName, 'openai-user')
-  scope: openAiAccount
-  properties: {
-    roleDefinitionId: cognitiveServicesOpenAiUserRoleId
-    principalId: aiAgentContainerApp.?identity.?principalId ?? ''
-    principalType: 'ServicePrincipal'
-  }
-}
+// Cognitive Services OpenAI User (ai-agent MI の LLM 呼び出し) は**ここでは宣言しない**。
+// 担当は deploy-ai-agent.sh の `az role assignment create` (毎デプロイで冪等に適用 /
+// provision.sh が bicep 適用直後に必ず実行する)。
+//
+// #262 の教訓: PR #261 でこの assignment を bicep に宣言したところ、既存環境で
+// RoleAssignmentExists により provisioning が落ちた (deploy run 164/165)。原因は
+// 「guid() シードの不安定さ」ではなく所有者の二重化 — スクリプトが過去に**ランダム名**
+// (`az role assignment create` は name を自動生成する) で同一 (principal, role, scope) の
+// assignment を作成済みで、ARM は同一 tuple の**別名** assignment の作成を拒否する。
+// ランダム名は guid() で導出できないため、既存環境がある限り bicep 宣言は成立しない。
+// 宣言に移すなら「旧 assignment の削除 + スクリプトの _assign_role 撤去 + ここに再宣言」を
+// 1 セットで行うこと (それまでは真実の所在をスクリプト側に一本化する)。
+// なお Cosmos の sqlRoleAssignments (下) は別機構 (Microsoft.DocumentDB) で、スクリプトが
+// 作った既存 assignment が無い (= 初回から bicep が所有) ため宣言のままでよい。
 
 // -------------------- Cosmos DB (ADR 0030 / #165) --------------------
 // Problem / 履歴の永続化ストア。FR-4「再起動・再ログインで消えない」の実体。
