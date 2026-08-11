@@ -14,6 +14,9 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { SESSION_TITLE_MAX, deriveSessionTitle } from "./sessionTitle";
 
+const segmenter = new Intl.Segmenter("ja", { granularity: "grapheme" });
+const countGraphemes = (text: string): number => [...segmenter.segment(text)].length;
+
 describe("[単体] deriveSessionTitle (property)", () => {
   it("どんな入力でも空にならない", () => {
     fc.assert(
@@ -23,11 +26,31 @@ describe("[単体] deriveSessionTitle (property)", () => {
     );
   });
 
-  it("長さは常に SESSION_TITLE_MAX + 1 (省略記号込み) 以下", () => {
+  it("長さは常に SESSION_TITLE_MAX + 1 書記素 (省略記号込み) 以下", () => {
+    // 2026-08-11 PO 裁定「文字境界で安全に切る」: 「26 文字」の単位は書記素
+    // (見た目の 1 文字)。以前は .length (UTF-16 ユニット) で数えていた。
     fc.assert(
       fc.property(fc.string({ unit: "grapheme", maxLength: 100 }), (text) => {
-        expect(deriveSessionTitle(text).length).toBeLessThanOrEqual(SESSION_TITLE_MAX + 1);
+        expect(countGraphemes(deriveSessionTitle(text))).toBeLessThanOrEqual(SESSION_TITLE_MAX + 1);
       }),
+    );
+  });
+
+  it("サロゲートペア・結合文字を切り詰めで壊さない — 書記素境界で切る (2026-08-11 PO 裁定)", () => {
+    // BFF `domain/title.property.test.ts` の昇格テストと対 (mock と実 API の対称性)。
+    fc.assert(
+      fc.property(
+        // 1 (あ) + n 書記素で必ず SESSION_TITLE_MAX を超える → 必ず切り詰めが起きる
+        fc.integer({ min: SESSION_TITLE_MAX, max: 40 }),
+        fc.constantFrom("😀", "👩‍👩‍👧‍👦", "か\u3099"),
+        (n, unit) => {
+          const title = deriveSessionTitle(`あ${unit.repeat(n)}`);
+          // 本文は入力の先頭 26 書記素そのまま + 省略記号 (書記素を千切らない)
+          expect(title).toBe(`あ${unit.repeat(SESSION_TITLE_MAX - 1)}…`);
+          // 孤立サロゲート (「�」表示の原因) が一切現れない
+          expect(title).not.toMatch(/[\uD800-\uDFFF]/u);
+        },
+      ),
     );
   });
 

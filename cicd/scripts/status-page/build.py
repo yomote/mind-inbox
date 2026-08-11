@@ -105,9 +105,14 @@ def overdue(dt: datetime | None, expect_hours: int | None) -> bool:
 
 
 def workflow_state(w: dict) -> dict:
+    # 定義に "event" があればその起動種別の run だけで判定する (#258 / Codex P2)。
+    # review-gate のように PR・コメントイベントでも起動する workflow は、最新 run
+    # だけ見ると schedule sweep (マージ再試行・補償) の連続失敗が直後の PR run の
+    # 成功に隠れて緑に見える。フィルタ無しの watcher は従来どおり全 run で判定。
+    event = f"&event={w['event']}" if w.get("event") else ""
     runs = gh(
         "api",
-        f"repos/{{owner}}/{{repo}}/actions/workflows/{w['id']}/runs?per_page=5",
+        f"repos/{{owner}}/{{repo}}/actions/workflows/{w['id']}/runs?per_page=5{event}",
         "--jq",
         "[.workflow_runs[] | {c: .conclusion, s: .status, t: .created_at, u: .html_url}]",
     )
