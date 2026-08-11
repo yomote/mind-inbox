@@ -108,8 +108,11 @@ def dev_state(runs: object, deploy_issue: int | None = None, run_steps=None) -> 
     anchor, down, verify_failed = None, None, False
     checked = 0
     for r in done:
-        if r.get("c") != "success" or checked >= MAX_STEP_CHECKS:
+        if r.get("c") != "success":
             continue
+        if checked >= MAX_STEP_CHECKS:
+            # 打ち切り。「痕跡が見つからない」側に倒す (反映済みとは書かない)
+            break
         checked += 1
         info = check(r)
         if not isinstance(info, dict):
