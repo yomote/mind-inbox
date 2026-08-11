@@ -14,9 +14,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
-from semantic_kernel.contents import ChatHistory
 
 from .config import get_settings
+from .history import ChatHistory
 from .schemas import ApprovalRecord
 
 if TYPE_CHECKING:
@@ -66,7 +66,8 @@ class InMemoryApprovalRepository:
 class CosmosSessionRepository:
     """会話セッション (ChatHistory) の Cosmos 永続化 (#188)。
 
-    直列化は SK 標準の ChatHistory.serialize() / restore_chat_history() を使い、
+    直列化は app.history.ChatHistory の serialize() / deserialize() (MAF Message
+    ベース。SK 形式の既存文書も読める後方互換つき — M1-5 の SK 除去) を使い、
     この実装の内側に閉じる。文書は {id: session_id, history: <JSON 文字列>}。
     寿命はコンテナ TTL (7 日 / bicep 宣言) — _ts 起点なので save のたびに延びる。
     """
@@ -81,7 +82,7 @@ class CosmosSessionRepository:
             )
         except CosmosResourceNotFoundError:
             return None
-        return ChatHistory.restore_chat_history(doc["history"])
+        return ChatHistory.deserialize(doc["history"])
 
     async def save(self, session_id: str, history: ChatHistory) -> None:
         await self._container.upsert_item(
