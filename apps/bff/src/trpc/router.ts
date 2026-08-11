@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { initTRPC, TRPCError } from "@trpc/server";
 import { ConversationMessageSchema } from "../clients/aiAgentContracts";
+import type { ConversationMessage } from "../clients/aiAgentContracts";
 import { z } from "zod";
 import type { TrpcContext } from "./context";
 import {
@@ -9,6 +10,7 @@ import {
   ExtractError,
   extract as extractAiAgent,
   sendChatMessage,
+  type StubMarked,
 } from "../clients/aiAgentClient";
 import { issueSpeechAuthToken } from "../clients/speechTokenClient";
 import { deriveTitle } from "../domain/title";
@@ -21,6 +23,7 @@ import {
 } from "../domain/problem";
 import type { ProblemRepository } from "../repositories/problemRepository";
 import {
+  ExtractedItemSchema,
   ExtractionResultSchema,
   ProblemSchema,
   ProblemStatusSchema,
@@ -106,6 +109,50 @@ async function materializeExtraction(
       // 既存が見つからない（候補集合との齟齬）→ 取りこぼさず新規として作る
     }
     await repo.upsert(problemFromMention(mention, grouping));
+  }
+}
+
+/**
+ * ai-agent `/extract` を呼び、失敗種別を tRPC エラーへ翻訳する (preview / extract 共通)。
+ *
+ * **ここでは書かない** — 永続化するかは呼び出し側の責務 (preview は書かない / extract は
+ * materializeExtraction で書く)。失敗の翻訳は #183 の「理由を失わない」規律をそのまま使う:
+ * message は機械可読な token に留め、ユーザー向けの文面はフロント (UI 仕様の持ち場) で決める。
+ */
+async function runExtraction(
+  label: string,
+  sessionId: string,
+  messages: ConversationMessage[],
+  repo: ProblemRepository,
+): Promise<StubMarked<ExtractionResult>> {
+  const existing = await repo.list();
+  try {
+    return await extractAiAgent({
+      sessionId,
+      existingProblems: existing.map((p) => ({
+        id: p.id,
+        title: p.title,
+        theme: p.theme,
+        summary: p.summary,
+        mentionCount: p.mentionCount,
+        status: p.status,
+      })),
+      messages,
+    });
+  } catch (err) {
+    if (err instanceof ExtractError) {
+      console.error(`[${label}] failed kind=${err.kind}: ${err.message}`);
+      throw new TRPCError({
+        code:
+          err.kind === "session-missing"
+            ? "NOT_FOUND"
+            : err.kind === "llm-parse-failed"
+              ? "BAD_GATEWAY"
+              : "INTERNAL_SERVER_ERROR",
+        message: err.kind,
+      });
+    }
+    throw err;
   }
 }
 
@@ -337,6 +384,34 @@ const consultationRouter = router({
       };
     }),
 
+  // 会話の途中経過 → 読み取り専用の下書き抽出 (#283 / ADR 0039 D1)。
+  // ai-agent `/extract` で抽出 + グルーピング候補を計算するが、**Problem リポジトリには
+  // 一切書かない** — 右ペインの下書きは揮発し、確定 (extract) して初めて Problem が増える。
+  // ここが書いてしまうと「確定していない下書き」が蓄積データを静かに汚す (ADR 0039 の核)。
+  // 読み取り専用だが mutation にしているのは、会話全文を GET の URL クエリではなく
+  // POST body で運ぶため (extract と同じ理由 — 長い会話で URL 長制限を踏まない)。
+  preview: publicProcedure
+    .input(
+      z.object({
+        sessionId: z.string().min(1),
+        // 会話全文はクライアントが渡す (#183 と同じ理由 — ai-agent の履歴はプロセスメモリ)。
+        messages: z.array(ConversationMessageSchema),
+      }),
+    )
+    .output(ExtractionReplySchema)
+    .mutation(async ({ input, ctx }) => {
+      console.log(
+        `[consultation.preview] sessionId=${input.sessionId} messages=${input.messages.length}`,
+      );
+      // 書かない: materializeExtraction を呼ばずそのまま返す。
+      return await runExtraction(
+        "consultation.preview",
+        input.sessionId,
+        input.messages,
+        ctx.problemRepo,
+      );
+    }),
+
   // 吐き出し全文 → Mention 抽出 + 自動グルーピング（ADR 0007）。セッションからの唯一の出口。
   // BFF が既存 Problem 候補を渡し（ADR 0012）、結果を Problem リポジトリに反映する。
   extract: publicProcedure
@@ -346,46 +421,39 @@ const consultationRouter = router({
         // 会話全文はクライアントが渡す (#183)。省略時は ai-agent 側の履歴に賭ける
         // (旧クライアント互換) が、その経路は 404 になりうる。
         messages: z.array(ConversationMessageSchema).default([]),
+        // 確定時に再抽出しない commit 経路 (#283 / ADR 0039 D1/D3)。
+        // 「この内容で確定」は**表示中の preview の結果 (items + グルーピング) をそのまま
+        // 永続化する** — 抽出は非決定的なので、確定時に再抽出すると画面で確認した内容と
+        // 違うものが書かれうる (PR #240 の Codex 指摘で設計を修正)。draft があれば
+        // ai-agent を呼ばずこれを確定する。optional なのは後方互換 (プレビューを経ない
+        // 旧クライアント / preview 未対応ビルドは従来どおり抽出してから確定)。
+        draft: z.object({ items: z.array(ExtractedItemSchema) }).optional(),
       }),
     )
     .output(ExtractionReplySchema)
     .mutation(async ({ input, ctx }) => {
       console.log(
-        `[consultation.extract] sessionId=${input.sessionId} messages=${input.messages.length}`,
+        `[consultation.extract] sessionId=${input.sessionId} messages=${input.messages.length}` +
+          (input.draft ? ` draft=${input.draft.items.length}` : ""),
       );
-      const existing = await ctx.problemRepo.list();
-      try {
-        const result = await extractAiAgent({
-          sessionId: input.sessionId,
-          existingProblems: existing.map((p) => ({
-            id: p.id,
-            title: p.title,
-            theme: p.theme,
-            summary: p.summary,
-            mentionCount: p.mentionCount,
-            status: p.status,
-          })),
-          messages: input.messages,
-        });
-        await materializeExtraction(result, ctx.problemRepo);
-        return result;
-      } catch (err) {
-        if (err instanceof ExtractError) {
-          // **失敗の種別をクライアントまで運ぶ** (#183)。message は機械可読な token に
-          // 留め、ユーザー向けの文面はフロント (UI 仕様の持ち場) で決める。
-          console.error(`[consultation.extract] failed kind=${err.kind}: ${err.message}`);
-          throw new TRPCError({
-            code:
-              err.kind === "session-missing"
-                ? "NOT_FOUND"
-                : err.kind === "llm-parse-failed"
-                  ? "BAD_GATEWAY"
-                  : "INTERNAL_SERVER_ERROR",
-            message: err.kind,
-          });
-        }
-        throw err;
-      }
+      const result = input.draft
+        ? // 再抽出しない: 下書きをそのまま確定する。counts は items から導出
+          // (クライアント申告に頼らない — mockApi.previewExtraction と同じ導出)。
+          {
+            sessionId: input.sessionId,
+            items: input.draft.items,
+            newProblemCount: input.draft.items.filter((i) => i.grouping.kind === "new").length,
+            updatedProblemCount: input.draft.items.filter((i) => i.grouping.kind === "existing")
+              .length,
+          }
+        : await runExtraction(
+            "consultation.extract",
+            input.sessionId,
+            input.messages,
+            ctx.problemRepo,
+          );
+      await materializeExtraction(result, ctx.problemRepo);
+      return result;
     }),
 
   approve: publicProcedure

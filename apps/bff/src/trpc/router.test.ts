@@ -14,6 +14,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
+import fc from "fast-check";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ExtractError は router が instanceof で判定するので、実物を残したまま関数だけ差し替える
@@ -33,7 +34,13 @@ import {
   extract as extractAiAgent,
   sendChatMessage,
 } from "../clients/aiAgentClient";
-import type { ExtractionResult, Mention, Problem } from "./domain";
+import {
+  THEMES,
+  type ExtractedItem,
+  type ExtractionResult,
+  type Mention,
+  type Problem,
+} from "./domain";
 import { InMemoryProblemRepository } from "../repositories/problemRepository";
 import type { TrpcContext } from "./context";
 import { appRouter } from "./router";
@@ -534,6 +541,242 @@ describe("[L2] consultation.extract", () => {
       TRPCError,
     );
     expect(extractAiAgent).not.toHaveBeenCalled();
+  });
+});
+
+// ---- consultation.preview (#283 / ADR 0039 D1) ------------------------------
+// 仕様: ADR 0039 D1「preview は Cosmos には一切書かない」「preview が書かないことは
+// L2 テストで固定する」。契約は mockApi.previewExtraction (ADR 0004) と同形。
+
+/** ExtractionReplySchema (output 検証) を満たすコンパクトな arbitrary 群。 */
+const arbAffect = fc.record({
+  label: fc.constantFrom("不安", "焦り", "安堵"),
+  valence: fc.constantFrom("negative", "neutral", "positive" as const),
+  intensity: fc.double({ min: 0, max: 1, noNaN: true }),
+});
+
+const arbDraftMention = fc.record({
+  id: fc.uuid(),
+  sessionId: fc.constant("s1"),
+  dumpId: fc.option(fc.uuid(), { nil: null }),
+  createdAt: fc
+    .date({ min: new Date("2020-01-01"), max: new Date("2030-01-01"), noInvalidDate: true })
+    .map((d) => d.toISOString()),
+  statement: fc.string({ maxLength: 40 }),
+  excerpt: fc.string({ maxLength: 40 }),
+  affect: arbAffect,
+  proposedTheme: fc.constantFrom(...THEMES),
+  proposedTags: fc.array(fc.string({ maxLength: 6 }), { maxLength: 3 }),
+  problemId: fc.option(fc.uuid(), { nil: null }),
+  groupingConfidence: fc.option(fc.double({ min: 0, max: 1, noNaN: true }), { nil: null }),
+});
+
+const arbGrouping = fc.record({
+  kind: fc.constantFrom("new", "existing" as const),
+  problemId: fc.uuid(),
+  problemTitle: fc.string({ minLength: 1, maxLength: 26 }),
+  problemTheme: fc.constantFrom(...THEMES),
+  isRecurrence: fc.boolean(),
+  mentionCount: fc.integer({ min: 1, max: 99 }),
+  reignited: fc.boolean(),
+  groupingConfidence: fc.option(fc.double({ min: 0, max: 1, noNaN: true }), { nil: null }),
+});
+
+/**
+ * ExtractedItem[]。mention.id / grouping.problemId は index で一意化する
+ * (shrink で同値に潰れると「同 id の new が上書き合戦する」別問題を踏んで flaky になる)。
+ */
+const arbExtractedItems: fc.Arbitrary<ExtractedItem[]> = fc
+  .array(fc.record({ mention: arbDraftMention, grouping: arbGrouping }), { maxLength: 4 })
+  .map((items) =>
+    items.map((item, i) => ({
+      mention: { ...item.mention, id: `men-${i}-${item.mention.id}` },
+      grouping: { ...item.grouping, problemId: `prob-${i}-${item.grouping.problemId}` },
+    })),
+  );
+
+function extractionOf(items: ExtractedItem[]): ExtractionResult {
+  return {
+    sessionId: "s1",
+    items,
+    newProblemCount: items.filter((i) => i.grouping.kind === "new").length,
+    updatedProblemCount: items.filter((i) => i.grouping.kind === "existing").length,
+  };
+}
+
+describe("[単体] consultation.preview (#283 / ADR 0039 D1)", () => {
+  it("returns the extraction result and passes candidates + conversation to ai-agent", async () => {
+    // 無いと: preview が既存 Problem 候補や会話全文を ai-agent に渡さない退行が静かに通り、
+    //         下書きのグルーピング (🔁 既存に追加) が実環境でだけ壊れる (#183 と同型)
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem());
+    vi.mocked(extractAiAgent).mockResolvedValue(newExtraction("prob-2"));
+
+    const result = await caller.consultation.preview({
+      sessionId: "s1",
+      messages: [
+        { role: "assistant", text: "どうしましたか" },
+        { role: "user", text: "眠れない" },
+      ],
+    });
+
+    expect(result.newProblemCount).toBe(1);
+    expect(extractAiAgent).toHaveBeenCalledWith({
+      sessionId: "s1",
+      existingProblems: [
+        expect.objectContaining({ id: "prob-1", title: "転職の迷い", mentionCount: 1 }),
+      ],
+      messages: [
+        { role: "assistant", text: "どうしましたか" },
+        { role: "user", text: "眠れない" },
+      ],
+    });
+  });
+
+  it("never writes to the problem repository, whatever ai-agent extracts", async () => {
+    // 無いと: preview が Problem を書いてしまう退行が静かに通る。例外は出ず、
+    //         「確定していない下書き」が蓄積データを汚す (ADR 0039 の核が黙って死ぬ)。
+    //         ADR 0039「preview が書かないことは L2 テストで固定する」の固定先。
+    await fc.assert(
+      fc.asyncProperty(arbExtractedItems, async (items) => {
+        const { caller, problemRepo } = makeCallerWithRepos();
+        await problemRepo.upsert(makeProblem());
+        const before = await problemRepo.list();
+        vi.mocked(extractAiAgent).mockResolvedValue(extractionOf(items));
+
+        await caller.consultation.preview({
+          sessionId: "s1",
+          messages: [{ role: "user", text: "眠れない" }],
+        });
+
+        expect(await problemRepo.list()).toEqual(before);
+      }),
+    );
+  });
+
+  it("marks the preview as stubbed on the stub path and leaves the flag absent on the real path", async () => {
+    // 無いと: stub フォールバックの機械判別フラグ (#146 / ADR 0039 D6) が preview 経路で
+    //         落ち、「[stub] 困りごと」の下書きが本物のふりをして右ペインに並ぶ退行が静かに通る
+    const caller = makeCaller();
+    vi.mocked(extractAiAgent).mockResolvedValueOnce({
+      ...newExtraction("prob-stub-1"),
+      stubbed: true,
+    });
+    const stubResult = await caller.consultation.preview({ sessionId: "s1", messages: [] });
+    expect(stubResult.stubbed).toBe(true);
+
+    vi.mocked(extractAiAgent).mockResolvedValueOnce(newExtraction("prob-2"));
+    const realResult = await caller.consultation.preview({ sessionId: "s1", messages: [] });
+    expect(realResult.stubbed).toBeUndefined();
+  });
+
+  it.each([
+    ["session-missing", "NOT_FOUND"],
+    ["llm-parse-failed", "BAD_GATEWAY"],
+    ["upstream-failed", "INTERNAL_SERVER_ERROR"],
+  ])("%s は %s として種別つきでクライアントへ返す (#183 と同じ翻訳)", async (kind, code) => {
+    // 無いと: preview の失敗理由が潰れ、右ペインは「何が起きたか分からないエラー」しか
+    //         出せない。extract と翻訳がズレると復帰導線の出し分けも壊れる。
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(extractAiAgent).mockRejectedValue(new ExtractError(kind as never, "boom"));
+
+    await expect(
+      makeCaller().consultation.preview({ sessionId: "s1", messages: [] }),
+    ).rejects.toMatchObject({ code, message: kind });
+  });
+
+  it("rejects empty sessionId with zod validation", async () => {
+    await expect(
+      makeCaller().consultation.preview({ sessionId: "", messages: [] }),
+    ).rejects.toBeInstanceOf(TRPCError);
+    expect(extractAiAgent).not.toHaveBeenCalled();
+  });
+});
+
+// ---- consultation.extract — draft commit (#283 / ADR 0039 D1/D3) ------------
+
+describe("[単体] consultation.extract — draft commit (#283 / ADR 0039 D1/D3)", () => {
+  it("persists the given draft as-is without calling ai-agent (確定時に再抽出しない)", async () => {
+    // 無いと: 確定時に再抽出する実装に戻る退行が静かに通る。抽出は非決定的なので、
+    //         画面で確認した「この内容」と違う Problem が書かれうる (PR #240 Codex 指摘の再発)。
+    const caller = makeCaller();
+    const draft = newExtraction("prob-1");
+
+    const result = await caller.consultation.extract({
+      sessionId: "s1",
+      draft: { items: draft.items },
+    });
+
+    expect(extractAiAgent).not.toHaveBeenCalled();
+    expect(result.items).toEqual(draft.items);
+
+    const problem = await caller.problem.get({ id: "prob-1" });
+    expect(problem.title).toBe("転職の迷い");
+    expect(problem.mentions.map((m) => m.id)).toEqual(["men-1"]);
+  });
+
+  it("derives counts from draft items and persists every draft mention", async () => {
+    // 無いと: newProblemCount / updatedProblemCount をクライアント申告のまま返す・
+    //         draft の一部 item を取りこぼして書く、のどちらも例外なしに通る (静かに間違う)
+    await fc.assert(
+      fc.asyncProperty(arbExtractedItems, async (items) => {
+        const { caller, problemRepo } = makeCallerWithRepos();
+
+        const result = await caller.consultation.extract({ sessionId: "s1", draft: { items } });
+
+        expect(extractAiAgent).not.toHaveBeenCalled();
+        expect(result.newProblemCount).toBe(items.filter((i) => i.grouping.kind === "new").length);
+        expect(result.updatedProblemCount).toBe(
+          items.filter((i) => i.grouping.kind === "existing").length,
+        );
+        const storedMentionIds = (await problemRepo.list()).flatMap((p) =>
+          p.mentions.map((m) => m.id),
+        );
+        for (const item of items) {
+          expect(storedMentionIds).toContain(item.mention.id);
+        }
+      }),
+    );
+  });
+
+  it("appends a draft 'existing' item to the stored problem (🔁 再出現の確定)", async () => {
+    // 無いと: draft 経由の確定だけ既存への追記 (mentionCount / lastMentionedAt 更新・
+    //         再燃 reopen) を通らず、再抽出経路と挙動が割れる退行が静かに通る
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(
+      makeProblem({ status: "resolved", resolvedAt: "2026-01-15T00:00:00.000Z" }),
+    );
+
+    await caller.consultation.extract({
+      sessionId: "s2",
+      draft: {
+        items: [
+          {
+            mention: makeMention({
+              id: "men-2",
+              sessionId: "s2",
+              createdAt: "2026-02-01T00:00:00.000Z",
+            }),
+            grouping: {
+              kind: "existing",
+              problemId: "prob-1",
+              problemTitle: "転職の迷い",
+              problemTheme: "仕事・キャリア",
+              isRecurrence: true,
+              mentionCount: 2,
+              reignited: true,
+              groupingConfidence: 0.9,
+            },
+          },
+        ],
+      },
+    });
+
+    const problem = await caller.problem.get({ id: "prob-1" });
+    expect(problem.mentions).toHaveLength(2);
+    expect(problem.mentionCount).toBe(2);
+    expect(problem.status).toBe("open"); // 再燃で open に戻る (UC-03)
+    expect(problem.lastMentionedAt).toBe("2026-02-01T00:00:00.000Z");
   });
 });
 
