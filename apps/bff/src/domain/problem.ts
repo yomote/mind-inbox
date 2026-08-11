@@ -16,10 +16,24 @@ export function dedupe(values: string[]): string[] {
 export function withDerived(problem: Problem): Problem {
   const mentionCount = problem.mentions.length;
   const lastMentionedAt = problem.mentions.reduce(
-    (max, m) => (m.createdAt > max ? m.createdAt : max),
+    (max, m) => (isLater(m.createdAt, max) ? m.createdAt : max),
     problem.mentions[0]?.createdAt ?? problem.lastMentionedAt,
   );
   return { ...problem, mentionCount, lastMentionedAt };
+}
+
+/**
+ * ISO 8601 文字列を時刻として比較する（a が b より後なら true）。
+ * 辞書順比較はタイムゾーンオフセット混在（"+09:00" と "Z" 等）で時系列と
+ * 食い違うため、epoch へ正規化して比べる（PR #274 Codex 指摘）。
+ * どちらかが時刻として読めない文字列のときだけ、従来の辞書順に落とす
+ * （壊れた値で NaN 比較が常に false になり「最初の値が勝ち続ける」のを防ぐ）。
+ */
+function isLater(a: string, b: string): boolean {
+  const ta = Date.parse(a);
+  const tb = Date.parse(b);
+  if (Number.isNaN(ta) || Number.isNaN(tb)) return a > b;
+  return ta > tb;
 }
 
 /**

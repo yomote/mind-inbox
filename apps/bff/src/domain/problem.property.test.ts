@@ -139,7 +139,7 @@ describe("[単体] appendMention (property)", () => {
         ([existing, mention]) => {
           const updated = appendMention(existing, mention);
           const maxCreatedAt = updated.mentions.reduce(
-            (max, m) => (m.createdAt > max ? m.createdAt : max),
+            (max, m) => (Date.parse(m.createdAt) > Date.parse(max) ? m.createdAt : max),
             updated.mentions[0].createdAt,
           );
           expect(updated.lastMentionedAt).toBe(maxCreatedAt);
@@ -203,6 +203,22 @@ describe("[単体] mergeProblems (property)", () => {
   });
 });
 
+describe("[単体] appendMention — タイムゾーン混在", () => {
+  it("オフセット表記が混在しても epoch で比較する (辞書順だと +09:00 が Z に勝ってしまう)", () => {
+    // PR #274 Codex 指摘の反例そのまま: 10:00+09:00 = 01:00Z < 02:00Z なのに
+    // 辞書順では "2026-01-01T10:00" > "2026-01-01T02:00" となり古い方が最大に残る
+    const seed = fc.sample(
+      fc.tuple(arbProblem(anyIso), arbMention(anyIso)),
+      { numRuns: 1, seed: 42 },
+    )[0];
+    const older = { ...seed[1], id: "m-old", createdAt: "2026-01-01T10:00:00+09:00" };
+    const newer = { ...seed[1], id: "m-new", createdAt: "2026-01-01T02:00:00.000Z" };
+    const problem = withDerived({ ...seed[0], mentions: [older] });
+    const updated = appendMention(problem, newer);
+    expect(updated.lastMentionedAt).toBe(newer.createdAt);
+  });
+});
+
 describe("[単体] withDerived (property)", () => {
   it("lastMentionedAt は mentions の最大 createdAt、mentionCount は件数に一致する", () => {
     fc.assert(
@@ -210,7 +226,7 @@ describe("[単体] withDerived (property)", () => {
         const derived = withDerived(problem);
         expect(derived.mentionCount).toBe(problem.mentions.length);
         const maxCreatedAt = problem.mentions.reduce(
-          (max, m) => (m.createdAt > max ? m.createdAt : max),
+          (max, m) => (Date.parse(m.createdAt) > Date.parse(max) ? m.createdAt : max),
           problem.mentions[0].createdAt,
         );
         expect(derived.lastMentionedAt).toBe(maxCreatedAt);
