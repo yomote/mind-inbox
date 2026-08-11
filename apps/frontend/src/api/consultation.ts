@@ -4,6 +4,7 @@ import { trpc } from "../trpc/client";
 import { chatStreamFetch, ttsPrefetchFetch, useMock } from "./http";
 import { parseSseJsonStream } from "./sse";
 import { appendStreamingReply, beginStreamingReply, clearStreamingReply } from "./streamingReply";
+import { reportStubbedResponse } from "./stubStatus";
 
 const voicevoxSpeaker = Number(import.meta.env.VITE_VOICEVOX_SPEAKER || "3");
 
@@ -14,7 +15,9 @@ export async function startNewConsultation(concern: string): Promise<Consultatio
   // 出てしまう (アプリ内遷移ではリロードが挟まらないので実際に踏む)。
   clearStreamingReply();
   if (useMock) return mock.startNewConsultation(concern);
-  const { session } = await trpc.consultation.start.mutate({ concern });
+  const { session, stubbed } = await trpc.consultation.start.mutate({ concern });
+  // 空 concern 開始 (既定) は AI を呼ばないので stubbed は付かない = バナー状態は変えない。
+  if (stubbed !== undefined) reportStubbedResponse(stubbed);
   return session;
 }
 
@@ -31,6 +34,8 @@ type ChatStreamEvent =
         requires_approval?: boolean;
         approval_request_id?: string | null;
         citations?: string[];
+        /** stub 判別フラグ (#146)。BFF が合成する stub ストリームにだけ現れる。 */
+        stubbed?: boolean;
       };
     }
   | { type: "error"; message: string };
@@ -57,6 +62,7 @@ function asChatStreamEvent(raw: unknown): ChatStreamEvent | null {
           citations: Array.isArray(response.citations)
             ? response.citations.filter((c): c is string => typeof c === "string")
             : undefined,
+          stubbed: response.stubbed === true,
         },
       };
     }
@@ -122,6 +128,8 @@ async function sendMessageStreaming(
       prefetchSentences(accumulated);
     } else if (event.type === "done") {
       finalReply = event.response.reply;
+      // stub 応答の可視化 (#146): 実応答 (フラグ無し) なら下ろす。
+      reportStubbedResponse(event.response.stubbed);
     } else {
       throw new Error(`chat stream error event: ${event.message}`);
     }
@@ -167,6 +175,8 @@ export async function sendMessage(sessionId: string, text: string): Promise<Chat
       sessionId,
       message: text,
     });
+    // stub 応答の可視化 (#146)。ストリーミング不能時のフォールバック経路でも見落とさない。
+    reportStubbedResponse(res.stubbed);
     return {
       id: messageId,
       role: "assistant",

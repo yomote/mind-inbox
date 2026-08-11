@@ -4,17 +4,18 @@ import { SessionScreen } from "../../components/session/SessionScreen";
 const previewSession = {
   id: "preview-session",
   title: "仕事の優先順位を整理したい",
+  // AI の挨拶 (初手) は無い (#241 / §3.1) — 会話はユーザーの発話から始まる。
   messages: [
-    {
-      id: "a-1",
-      role: "assistant" as const,
-      text: "今日はどんなことが気になっていますか?思いつくままで大丈夫です。",
-      createdAt: new Date().toISOString(),
-    },
     {
       id: "u-1",
       role: "user" as const,
       text: "やることが多くて、何から手をつけるか決められません。",
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: "a-1",
+      role: "assistant" as const,
+      text: "受け止めました。特に気持ちが動いた場面を1つ教えてください。",
       createdAt: new Date().toISOString(),
     },
   ],

@@ -24,6 +24,8 @@ import { useTextToSpeech } from "./voice/useTextToSpeech";
 import { useConsultation } from "./consultation/useConsultation";
 import { useEnvStatus } from "./envstatus/useEnvStatus";
 import { EnvStatusBanner } from "./envstatus/EnvStatusBanner";
+import { StubResponseBanner } from "./components/StubResponseBanner";
+import { resetStubbedResponse } from "./api/stubStatus";
 import type { PaletteMode } from "@mui/material";
 import { AppRouter, ROUTE_PATHS } from "./Router";
 import type { AppRoute, AuthStatus } from "./Router";
@@ -174,6 +176,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const handleLogout = React.useCallback(() => {
     resetTts();
     resetConsultation();
+    resetStubbedResponse();
     setAuthStatus("anonymous");
     navigate(ROUTE_PATHS.onboarding, { replace: true });
     // standalone（dev / mock デモ）と認証無効ビルドはサインアウト先が無いのでリダイレクトしない。
@@ -305,6 +308,8 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
       <Toolbar />
       <EnvStatusBanner status={envStatus} />
+      {/* BFF が stub 応答のときの警告 (#146)。api 層が立てるフラグを購読するだけ。 */}
+      <StubResponseBanner />
       <Container maxWidth="md" sx={{ py: 3 }}>
         <Stack spacing={2}>
           {authStatus === "loading" ? (
