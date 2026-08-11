@@ -167,6 +167,31 @@ describe("[単体] mockApi.commitPreview — 表示中の下書きをそのま�
     expect(career?.mentions.at(-1)?.excerpt).toBe(drafts[0].mention.excerpt);
   });
 
+  // 無いと何が静かに通るか: 件数を item 数で数えると、同じ Problem に複数の Mention が
+  // 寄ったときに「既存に追加 2 件」と実際より多い Problem 数を表示する。真実は ai-agent
+  // (`updated_ids` の distinct 件数) と BFF (#286) で、mock がズレると UI の数字だけ嘘になる。
+  it("件数は Problem 単位 (同じ Problem に寄った複数 Mention は 1 件と数える)", async () => {
+    const base = (await previewExtraction("s-count", conversation(4))).items;
+    const existing = base.find((i) => i.grouping.kind === "existing")!;
+    const created = base.find((i) => i.grouping.kind === "new")!;
+    // 同じ problemId を持つ Mention を 2 件ずつに増やす (別々の Mention / 同じ Problem)。
+    const drafts = [
+      existing,
+      { ...existing, mention: { ...existing.mention, id: "m-dup-existing" } },
+      created,
+      { ...created, mention: { ...created.mention, id: "m-dup-new" } },
+    ];
+
+    const committed = await commitPreview("s-count", drafts);
+
+    expect(committed.items).toHaveLength(4);
+    expect(committed.updatedProblemCount).toBe(1);
+    expect(committed.newProblemCount).toBe(1);
+    // 実態とも一致する: 新規 Problem は 1 つしか増えない。
+    const after = await loadProblems();
+    expect(after.filter((p) => p.id === created.grouping.problemId)).toHaveLength(1);
+  });
+
   // 無いと何が静かに通るか: 新規下書きの確定が下書きと違う内容 (タイトル / 引用) で
   // Problem を起こしても気づけない。「あなたがこう言ったやつ」の来歴が壊れる。
   it("新規 + 既存の下書きを確定すると、下書きの内容どおりに書かれる", async () => {

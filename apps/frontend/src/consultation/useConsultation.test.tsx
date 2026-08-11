@@ -424,6 +424,61 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
     expect(result.current.preview).toBeNull();
   });
 
+  it("更新中に確定しても、保存されるのは押した時点の表示内容 (PR #282 再レビュー P1)", async () => {
+    // 無いと: 確定 (400ms) の最中に飛行中の更新 (600ms) が返ると、保存したのは古い内容
+    //         なのに画面だけ新しい内容に差し替わる。レビュー画面には保存された古い内容が
+    //         出るので、ユーザーが最後に見た右ペインと保存結果が食い違う (D1/D3 が再び破れる)。
+    vi.mocked(startNewConsultation).mockResolvedValue(session());
+    const shown = {
+      sessionId: "s1",
+      items: [draftItem],
+      newProblemCount: 0,
+      updatedProblemCount: 1,
+    };
+    vi.mocked(previewExtraction).mockResolvedValue(shown);
+    vi.mocked(commitPreview).mockImplementation(async (_id, drafts) => ({
+      sessionId: "s1",
+      items: drafts,
+      newProblemCount: 0,
+      updatedProblemCount: 1,
+    }));
+    const { result } = setup();
+    await act(async () => {
+      await result.current.startConsultation();
+    });
+    await sendTimes(result, ["1 回目", "2 回目"]);
+    await waitFor(() => expect(result.current.preview).toEqual(shown));
+
+    // 「今すぐ整理」を走らせ、応答が返る前に確定する。
+    let resolveLate: ((value: never) => void) | undefined;
+    // 更新後は 2 件 (押した時点は 1 件) — 保存内容と表示が食い違えば検出できる差分。
+    const late = {
+      sessionId: "s1",
+      items: [draftItem, { mention: { id: "m-late" }, grouping: { kind: "new", problemId: "p2" } }],
+      newProblemCount: 1,
+      updatedProblemCount: 1,
+    } as never;
+    vi.mocked(previewExtraction).mockImplementation(
+      () => new Promise((resolve) => (resolveLate = resolve)),
+    );
+    act(() => {
+      result.current.refreshPreview();
+    });
+    await act(async () => {
+      await result.current.extract();
+    });
+
+    // 確定に渡ったのは押した時点のスナップショット。
+    expect(commitPreview).toHaveBeenCalledWith("s1", shown.items);
+    expect(result.current.extraction?.items).toEqual(shown.items);
+
+    // 遅れて返った更新は表示にも反映しない (確定済みの下書きは揮発したまま)。
+    await act(async () => {
+      resolveLate?.(late);
+    });
+    expect(result.current.preview).toBeNull();
+  });
+
   it("下書きが無い間は確定できない (ボタン disabled の二重ガード)", async () => {
     // 無いと: 「この内容」が存在しないのに確定が走り、空の確定 or 再抽出相当の
     //         別内容が保存されうる。

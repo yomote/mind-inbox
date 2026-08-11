@@ -64,6 +64,18 @@ export async function sendMessage(_sessionId: string, text: string): Promise<Cha
 const daysAgo = (n: number) => new Date(Date.now() - 1000 * 60 * 60 * 24 * n).toISOString();
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
+/**
+ * ExtractionResult の件数は **Problem 単位** (Mention 単位ではない)。
+ *
+ * 1 セッションで同じ Problem に複数の Mention が寄ることがあり、item 数で数えると
+ * 「既存に追加 2 件」のように実際より多い Problem 数を表示してしまう。真実は
+ * ai-agent (`extractor.py` は `updated_ids` の distinct 件数を返す) と BFF (#286) で、
+ * mock もそれに揃える。新規側も distinct にするのは、重複 id の materialize が
+ * Problem を 1 つしか作らないため distinct が実態と一致するから。
+ */
+const countProblems = (items: ExtractionResult["items"], kind: "new" | "existing") =>
+  new Set(items.filter((i) => i.grouping.kind === kind).map((i) => i.grouping.problemId)).size;
+
 function makeMention(input: {
   id: string;
   problemId: string;
@@ -533,8 +545,8 @@ export async function previewExtraction(
   return {
     sessionId,
     items,
-    newProblemCount: items.filter((i) => i.grouping.kind === "new").length,
-    updatedProblemCount: items.filter((i) => i.grouping.kind === "existing").length,
+    newProblemCount: countProblems(items, "new"),
+    updatedProblemCount: countProblems(items, "existing"),
   };
 }
 
@@ -556,7 +568,10 @@ export async function commitPreview(
   await wait(400);
 
   const items: ExtractionResult["items"] = drafts.map(({ mention, grouping }) => {
-    const existing = grouping.kind === "existing" ? getProblem(grouping.problemId) : undefined;
+    // kind を問わず problemId で引く (BFF の materialize と同じ意味論): 同じ id を持つ
+    // 下書きが複数あっても Problem は 1 つで、2 件目以降は Mention の追記になる。
+    // ここが id を見ずに新規を作ると、distinct 件数 (countProblems) と実態がズレる。
+    const existing = getProblem(grouping.problemId);
     if (existing) {
       // 既存 Problem への再出現: 下書きの Mention をそのまま追記する。
       existing.mentions.push({ ...clone(mention), problemId: existing.id });
@@ -590,8 +605,8 @@ export async function commitPreview(
   return {
     sessionId,
     items,
-    newProblemCount: items.filter((i) => i.grouping.kind === "new").length,
-    updatedProblemCount: items.filter((i) => i.grouping.kind === "existing").length,
+    newProblemCount: countProblems(items, "new"),
+    updatedProblemCount: countProblems(items, "existing"),
   };
 }
 

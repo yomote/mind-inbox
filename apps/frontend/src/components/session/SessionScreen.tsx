@@ -61,14 +61,22 @@ export function SessionScreen({
   // md 以上では両ペインを常時表示し、タブ UI 自体を出さない。
   const [activeTab, setActiveTab] = React.useState<"dialogue" | "preview">("dialogue");
   const previewCount = preview?.items.length ?? 0;
-  // 対話タブを見ている間に下書きが更新されたらバッジで知らせる (D4)。
-  // 「見た」の基準はプレビュータブを開いたときの件数。
-  const [seenPreviewCount, setSeenPreviewCount] = React.useState(0);
-  const hasUnseenPreview = activeTab !== "preview" && previewCount > seenPreviewCount;
+  // 対話タブを見ている間に下書きが**更新されたら**バッジで知らせる (D4 / §5.8)。
+  //
+  // 「見た」の基準は**更新そのもの** (= preview オブジェクトの世代) であって件数ではない。
+  // 件数比較にすると「件数据え置きで中身だけ変わった更新」(カードの statement や
+  // 回数が変わる / 1 件が別の困りごとに差し替わる) が通知されない (PR #282 再レビュー P2-b)。
+  const [seenPreview, setSeenPreview] = React.useState<ExtractionResult | null>(null);
+  const hasUnseenPreview = activeTab !== "preview" && preview !== null && preview !== seenPreview;
+
+  // プレビュータブを開いている間の更新は、その場で見えているので既読にする。
+  React.useEffect(() => {
+    if (activeTab === "preview") setSeenPreview(preview);
+  }, [activeTab, preview]);
 
   const handleTabChange = (_: React.SyntheticEvent, next: "dialogue" | "preview") => {
     setActiveTab(next);
-    if (next === "preview") setSeenPreviewCount(previewCount);
+    if (next === "preview") setSeenPreview(preview);
   };
 
   const dialoguePane = (
@@ -122,6 +130,9 @@ export function SessionScreen({
         <Tab value="dialogue" label="対話" />
         <Tab
           value="preview"
+          data-testid="preview-tab"
+          // 未読状態の機械検証点 (§5.8)。E2E / 単体が「更新の通知が出ているか」を読める。
+          data-preview-unseen={hasUnseenPreview ? "true" : "false"}
           label={
             <Badge color="secondary" variant="dot" invisible={!hasUnseenPreview}>
               整理中 {previewCount}

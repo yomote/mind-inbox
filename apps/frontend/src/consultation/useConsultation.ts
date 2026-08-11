@@ -148,6 +148,21 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     setPreviewStatus("idle");
   }, []);
 
+  /**
+   * 表示中の下書きを固定する (PR #282 再レビュー P1)。
+   *
+   * 確定は「今画面に出ている内容」を保存する操作なので、確定の最中に飛行中の更新が
+   * 返ってきて表示だけ差し替わると、**保存した内容と画面の内容がずれる**
+   * (preview 600ms / commit 400ms で実際に起きる)。確定開始時に世代を進めて
+   * 飛行中の応答を捨て、表示はそのまま (= 保存する内容と一致) に保つ。
+   * `invalidatePreview` と違い**下書きは消さない** — 確定が失敗しても画面は変わらない。
+   */
+  const freezePreview = React.useCallback(() => {
+    previewGenerationRef.current += 1;
+    // 破棄した更新のスピナーを残さない (更新は起きなかったことになる)。
+    setPreviewStatus("idle");
+  }, []);
+
   // loading は多重実行ガードにだけ使うので、ハンドラの identity を安定させるため ref でも持つ。
   const loadingRef = React.useRef(false);
   const setBusy = React.useCallback((next: boolean) => {
@@ -289,8 +304,12 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     if (previewSupported) {
       // 下書きが無い間はボタンが disabled (dialogue-session.mdx §5.8)。二重ガード。
       if (!preview) return;
+      // 確定するのは**押した時点で画面に出ている内容**。飛行中の更新はここで捨て、
+      // 保存対象をスナップショットとして固定する (PR #282 再レビュー P1)。
+      const snapshot = preview;
+      freezePreview();
       const outcome = await runAction(FAILURE_MESSAGE.commitPreview, () =>
-        commitPreview(session.id, preview.items),
+        commitPreview(session.id, snapshot.items),
       );
       if (!outcome.ok) return;
 
@@ -312,7 +331,7 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
 
     setExtraction(outcome.value);
     transition("extractReview");
-  }, [invalidatePreview, preview, runAction, session, transition]);
+  }, [freezePreview, invalidatePreview, preview, runAction, session, transition]);
 
   const openProblemList = React.useCallback(async () => {
     const outcome = await runAction(FAILURE_MESSAGE.openProblemList, () => loadProblems());
