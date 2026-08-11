@@ -50,8 +50,16 @@ elif "labels=ci-failure" in url:
 elif "labels=P1" in url:
     emit([{"n": 42, "t": "次の候補になる Issue", "c": "2099-01-01T00:00:00Z",
            "labels": ["P1"], "pr": False}])
+elif "/jobs" in url:
+    # 実デプロイの痕跡 (deploy.yml の Provision ステップ完走) — /runs より先に
+    # 引っ掛けること (URL は .../actions/runs/<id>/jobs で両方に部分一致する)
+    emit({"steps": [{"n": "Provision + deploy (up)", "c": "success"}]})
+elif "/files" in url:
+    # --paginate + 1 行 1 値 (jq .[].filename) — 配列ではなく行で返す
+    print("apps/frontend/src/App.tsx")
+    print("docs/x.md")
 elif "/runs" in url:
-    emit([{"c": "success", "s": "completed", "t": "2099-01-01T00:00:00Z",
+    emit([{"id": 1, "c": "success", "s": "completed", "t": "2099-01-01T00:00:00Z",
            "sha": "abc1234def5678", "e": "push", "u": "https://example.test/run"}])
 elif "needs-human" in url or "pulls" in url:
     emit([])

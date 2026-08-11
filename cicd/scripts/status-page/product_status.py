@@ -55,36 +55,88 @@ def pick_milestone(milestones: object) -> dict | None:
     return ok[0] if ok else None
 
 
-def dev_state(runs: object, deploy_issue: int | None = None) -> dict:
+# deploy.yml のステップ名 (実デプロイ / 撤収の痕跡)。名前を変えたらここも追随すること
+DEPLOY_STEP = "Provision + deploy (up)"
+TEARDOWN_STEP = "Tear down (cleanup-env)"
+# 実デプロイの痕跡を steps で確認する成功 run の上限 (1 run = 1 API 呼び出し)。
+# 自動デプロイ未解禁などで skip 成功が延々続く場合に API を叩き続けないための箍
+MAX_STEP_CHECKS = 6
+
+
+def dev_state(runs: object, deploy_issue: int | None = None, run_steps=None) -> dict:
     """deploy.yml の run 履歴から「dev がどの commit の状態か」を判定する。
 
-    runs: 新しい順の [{c: conclusion, s: status, t: created_at, sha, e: event, u}]。
+    runs: 新しい順の [{id, c: conclusion, s: status, t: created_at, sha, e: event, u}]。
+    run_steps: run dict → {"deployed": bool, "torn_down": bool} | None (取得失敗)。
+
+    conclusion == success を信用しない理由 (PR #281 Codex P2):
+        deploy.yml には **run が success でも実デプロイが走っていない経路** がある —
+        push の guard skip (OIDC 未設定 / AUTO_DEPLOY_ENABLED 未設定) と、
+        workflow_dispatch の down (撤収)。全 completed run を候補にすると、
+        dev が古いまま / 撤収済みでも「最新の main が反映済み」と出てしまう。
+        そこで run の jobs API から「Provision + deploy (up)」/
+        「Tear down (cleanup-env)」ステップの完走を確認して判定する。
+
+    判定の限界 (API から取れる範囲の最善):
+      - workflow_dispatch の inputs (up/down) は runs API に出ない → steps で識別する
+      - run_steps 未指定 (None) のときは「push の成功 run = デプロイ」と近似し、
+        workflow_dispatch はデプロイとも撤収とも数えない (最小の近似)
+      - run が failure でも provision までは完走している (smoke / golden-path で
+        落ちた) 場合、dev の実体は更新されている可能性があるが、「実環境で通る
+        ところまで確かめられた状態」を dev の状態と定義し、成功 run だけを
+        反映済みとみなす (保守側に倒す)
+
     返り値:
-      fetched      run 履歴が読めたか (False なら以降のキーは無い)
-      ok           直近の完了 run が緑か (完了 run が無ければ None)
-      last_success 最後に成功した run ({t, sha, u} を含む dict) | None
-      behind       最後の成功より後に積まれた push run の数 (= 未反映マージ数)
-      issue        deploy の ci-failure Issue 番号 (open のものがあれば)
+      fetched       run 履歴が読めたか (False なら以降のキーは無い)
+      ok            直近の完了 **push** run が緑か (無ければ None)
+      last_success  実デプロイが完走した最後の run | None
+      down          last_success より新しい撤収 (down) run | None
+      verify_failed 実デプロイの痕跡確認 (jobs API) に失敗したか
+      behind        last_success より後に積まれた push run の数 (= 未反映マージ数)
+      issue         deploy の ci-failure Issue 番号 (open のものがあれば)
     """
     if not isinstance(runs, list):
         return {"fetched": False}
     done = [r for r in runs if isinstance(r, dict) and r.get("s") == "completed"]
-    latest = done[0] if done else None
-    last_success = next((r for r in done if r.get("c") == "success"), None)
+    pushes = [r for r in done if r.get("e") == "push"]
+    latest_push = pushes[0] if pushes else None
+
+    def _default_steps(r: dict) -> dict:
+        return {"deployed": r.get("e") == "push", "torn_down": False}
+
+    check = run_steps or _default_steps
+    anchor, down, verify_failed = None, None, False
+    checked = 0
+    for r in done:
+        if r.get("c") != "success" or checked >= MAX_STEP_CHECKS:
+            continue
+        checked += 1
+        info = check(r)
+        if not isinstance(info, dict):
+            verify_failed = True
+            break
+        if info.get("torn_down"):
+            down = r
+            break
+        if info.get("deployed"):
+            anchor = r
+            break
     behind = 0
-    if last_success is not None:
+    if anchor is not None:
         # ISO 8601 (Z 固定) は文字列比較で時刻順になる
         behind = sum(
             1
             for r in runs
             if isinstance(r, dict)
             and r.get("e") == "push"
-            and (r.get("t") or "") > (last_success.get("t") or "")
+            and (r.get("t") or "") > (anchor.get("t") or "")
         )
     return {
         "fetched": True,
-        "ok": (latest.get("c") == "success") if latest else None,
-        "last_success": last_success,
+        "ok": (latest_push.get("c") == "success") if latest_push else None,
+        "last_success": anchor,
+        "down": down,
+        "verify_failed": verify_failed,
         "behind": behind,
         "issue": deploy_issue,
     }
@@ -140,9 +192,13 @@ def next_candidates(issues: object, limit: int = 5) -> list | None:
 # --- 収集 ---------------------------------------------------------------
 
 
-def collect(gh) -> dict:
+def collect(gh, gh_lines) -> dict:
     """GitHub の実データを取る。個々の取得失敗は None のまま返し、描画側が
-    「(未検証: …)」にする — 1 箇所の失敗でページごと落とさない。"""
+    「(未検証: …)」にする — 1 箇所の失敗でページごと落とさない。
+
+    gh: build.gh (単発 JSON)。gh_lines: build.gh_lines (--paginate の 1 行 1 値
+    出力。--paginate + --jq はページごとに jq を適用するため、配列で受けると
+    2 ページ目以降が壊れる — build.gh_lines の docstring 参照)。"""
     milestones = gh(
         "api",
         "repos/{owner}/{repo}/milestones?state=open&per_page=20",
@@ -163,9 +219,36 @@ def collect(gh) -> dict:
         "api",
         "repos/{owner}/{repo}/actions/workflows/deploy.yml/runs?branch=main&per_page=30",
         "--jq",
-        "[.workflow_runs[] | {c: .conclusion, s: .status, t: .created_at,"
+        "[.workflow_runs[] | {id: .id, c: .conclusion, s: .status, t: .created_at,"
         " sha: .head_sha, e: .event, u: .html_url}]",
     )
+
+    def _run_steps(run: dict) -> dict | None:
+        """run の jobs API から実デプロイ / 撤収ステップの完走を確認する。
+
+        deploy.yml は run success でも実デプロイが走らない経路 (guard skip / down)
+        を持つため、conclusion では判定できない (dev_state の docstring 参照)。"""
+        rid = run.get("id")
+        if rid is None:
+            return None
+        got = gh(
+            "api",
+            f"repos/{{owner}}/{{repo}}/actions/runs/{rid}/jobs?per_page=30",
+            "--jq",
+            "{steps: [.jobs[].steps[]? | {n: .name, c: .conclusion}]}",
+        )
+        if not isinstance(got, dict) or not isinstance(got.get("steps"), list):
+            return None
+        succeeded = {
+            s.get("n")
+            for s in got["steps"]
+            if isinstance(s, dict) and s.get("c") == "success"
+        }
+        return {
+            "deployed": DEPLOY_STEP in succeeded,
+            "torn_down": TEARDOWN_STEP in succeeded,
+        }
+
     ci_fail = gh(
         "api",
         "repos/{owner}/{repo}/issues?state=open&labels=ci-failure&per_page=50",
@@ -191,11 +274,15 @@ def collect(gh) -> dict:
     )
     if isinstance(prs, list):
         for p in prs:
-            p["files"] = gh(
+            # files は 100 件を超えうる (1 ページ目だけ見ると apps/ が 101 件目
+            # 以降のとき「工場」に静かに誤分類される — PR #281 Codex P2)。
+            # --paginate + 1 行 1 値で全ページを結合する
+            p["files"] = gh_lines(
                 "api",
+                "--paginate",
                 f"repos/{{owner}}/{{repo}}/pulls/{p['n']}/files?per_page=100",
                 "--jq",
-                "[.[].filename]",
+                ".[].filename",
             )
             p["gate"] = gate_mark(
                 gh(
@@ -219,7 +306,7 @@ def collect(gh) -> dict:
         "milestones": milestones,
         "goal": goal,
         "goal_items": goal_items,
-        "dev": dev_state(runs, deploy_issue),
+        "dev": dev_state(runs, deploy_issue, _run_steps),
         "prs": prs,
         "p1": p1,
     }
@@ -278,11 +365,30 @@ def _goal_html(data: dict) -> str:
 def _dev_html(dev: dict) -> str:
     if not dev.get("fetched"):
         return "<p>(未検証: deploy の run 履歴を取得できませんでした)</p>"
+    if dev.get("down") is not None:
+        # 撤収 (down) が最後のデプロイより新しい — 「反映済み」と読ませない
+        return (
+            f'<p class="devwarn">⚠️ <strong>dev は撤収されています</strong>'
+            f" ({_fmt_jst(dev['down'].get('t'))} JST の down 実行以降、環境がありません)</p>"
+        )
+    if dev.get("verify_failed"):
+        return "<p>(未検証: 実デプロイの痕跡 (run の jobs) を取得できませんでした)</p>"
     last = dev.get("last_success")
     behind = dev.get("behind", 0)
     issue = dev.get("issue")
     if dev.get("ok") is None:
-        return "<p>完了した deploy がまだありません</p>"
+        return "<p>完了した deploy (main への push) がまだありません</p>"
+    state = None
+    if last is not None:
+        tail = (
+            f" (以降 {behind} 本のマージが未反映)"
+            if behind
+            else " (最新の main が反映済み)"
+        )
+        state = (
+            f"<p>dev は {_fmt_jst(last['t'])} JST の commit "
+            f"<code>{html.escape((last.get('sha') or '')[:7])}</code> の状態{tail}</p>"
+        )
     if not dev["ok"]:
         since = _fmt_jst(last["t"]) + " JST" if last else "—"
         ref = f" — {_issue_link(issue)}" if issue else ""
@@ -290,23 +396,15 @@ def _dev_html(dev: dict) -> str:
             f'<p class="devwarn">⚠️ <strong>{since} から更新が届いていない</strong>'
             f" (deploy 赤{ref})</p>"
         )
-        if last is None:
-            return warn + "<p>成功した deploy がまだ 1 回もありません</p>"
-        state = (
-            f"<p>dev は {_fmt_jst(last['t'])} JST の commit "
-            f"<code>{html.escape((last.get('sha') or '')[:7])}</code> の状態"
-            f" (以降 {behind} 本のマージが未反映)</p>"
+        return warn + (state or "<p>実デプロイが完走した run が見つかりません</p>")
+    if state is None:
+        # run は緑なのに実デプロイの痕跡が無い = guard skip (自動デプロイ未解禁 /
+        # OIDC 未設定) が続いている。「反映済み」と読ませない
+        return (
+            "<p>直近の成功 run に実デプロイの痕跡がありません"
+            " (自動デプロイ未解禁 / guard skip の可能性 — dev は古いままかもしれません)</p>"
         )
-        return warn + state
-    tail = (
-        f" (以降 {behind} 本のマージが未反映)"
-        if behind
-        else " (最新の main が反映済み)"
-    )
-    return (
-        f"<p>dev は {_fmt_jst(last['t'])} JST の commit "
-        f"<code>{html.escape((last.get('sha') or '')[:7])}</code> の状態{tail}</p>"
-    )
+    return state
 
 
 def _pr_items(prs: list, note: str = "") -> str:
@@ -335,7 +433,8 @@ def _wip_html(prs: object, all_prs: object = None) -> str:
     )
     if unknown:
         cols += "<ul>" + _pr_items(unknown, " (未検証: 変更ファイル不明)") + "</ul>"
-    # main 向け以外 (リリース PR 等) を黙って落とさない
+    # main 向け以外 (リリース PR 等) を黙って落とさない。全 PR 一覧の取得だけが
+    # 失敗した場合も「main 向け以外は無い」と読ませない (PR #281 Codex P2)
     if isinstance(all_prs, list):
         seen = {p.get("n") for p in prs}
         others = [p for p in all_prs if p.get("n") not in seen]
@@ -344,6 +443,11 @@ def _wip_html(prs: object, all_prs: object = None) -> str:
                 f"{_pr_link(p['n'])} {html.escape(p.get('t') or '')}" for p in others
             )
             cols += f'<p class="sub">main 向け以外の open PR: {links}</p>'
+    else:
+        cols += (
+            '<p class="sub">(未検証: 全 open PR の一覧を取得できませんでした —'
+            " main 向け以外の PR の有無は不明)</p>"
+        )
     return cols
 
 

@@ -638,7 +638,7 @@ def build(out_dir: pathlib.Path) -> int:
 
     # プロダクトの現在地 (Issue #280) — 「あなたの番」「開いたままの PR」も
     # このセクションに畳んだ (needs-human / Proposed ADR は pend から渡す)
-    product = product_status.render(product_status.collect(gh), pend)
+    product = product_status.render(product_status.collect(gh, gh_lines), pend)
 
     page = TEMPLATE.format(
         now=now,
