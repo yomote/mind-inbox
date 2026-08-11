@@ -65,13 +65,18 @@ const daysAgo = (n: number) => new Date(Date.now() - 1000 * 60 * 60 * 24 * n).to
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 /**
- * ExtractionResult の件数は **Problem 単位** (Mention 単位ではない)。
+ * ExtractionResult の件数は **実際の書き込み実績を Problem 単位で** 数える。
  *
- * 1 セッションで同じ Problem に複数の Mention が寄ることがあり、item 数で数えると
- * 「既存に追加 2 件」のように実際より多い Problem 数を表示してしまう。真実は
- * ai-agent (`extractor.py` は `updated_ids` の distinct 件数を返す) と BFF (#286) で、
- * mock もそれに揃える。新規側も distinct にするのは、重複 id の materialize が
- * Problem を 1 つしか作らないため distinct が実態と一致するから。
+ * 2 つのズレをここで潰している (BFF #283 と同じ意味論 / ai-agent `extractor.py` に合わせる):
+ *
+ * 1. **item 数ではなく problemId の異なり数** — 1 セッションで同じ Problem に複数の
+ *    Mention が寄ることがあり、item 数だと「既存に追加 2 件」と過大表示になる
+ *    (ai-agent も `updated_problem_count=len(updated_ids)` と集合で数える)
+ * 2. **申告 (下書きの grouping.kind) ではなく実績** — preview 後・確定前に対象 Problem が
+ *    dismiss / merge で消えていると、確定は「既存に追加」ではなく新規作成になる。
+ *    申告のまま数えると「実際は新規作成なのに新規 0 / 既存に追加 1」と表示される
+ *
+ * `commitPreview` は返す items の grouping を実績に正規化するので、ここはそれを数えるだけ。
  */
 const countProblems = (items: ExtractionResult["items"], kind: "new" | "existing") =>
   new Set(items.filter((i) => i.grouping.kind === kind).map((i) => i.grouping.problemId)).size;
@@ -567,6 +572,11 @@ export async function commitPreview(
 ): Promise<ExtractionResult> {
   await wait(400);
 
+  // このバッチで新しく起こした Problem。あとから同じ Problem へ寄る Mention が来ても
+  // 「既存に追加」ではなく新規の一部として数えるために覚えておく (BFF #283 と同じ) —
+  // でないと 1 つの Problem が「新規 1 件」かつ「既存に追加 1 件」に二重計上される。
+  const createdHere = new Set<string>();
+
   const items: ExtractionResult["items"] = drafts.map(({ mention, grouping }) => {
     // kind を問わず problemId で引く (BFF の materialize と同じ意味論): 同じ id を持つ
     // 下書きが複数あっても Problem は 1 つで、2 件目以降は Mention の追記になる。
@@ -578,11 +588,18 @@ export async function commitPreview(
       Object.assign(existing, deriveProblemDates({ ...existing, status: "open" }));
       return {
         mention: clone(mention),
-        grouping: { ...clone(grouping), mentionCount: existing.mentionCount },
+        grouping: {
+          ...clone(grouping),
+          // 実績に正規化する: このバッチで起こした Problem への追記は "new" のまま。
+          kind: createdHere.has(existing.id) || grouping.kind === "new" ? "new" : "existing",
+          mentionCount: existing.mentionCount,
+        },
       };
     }
 
-    // 新規 (または確定までの間に既存が消えていた場合): 下書きの内容から Problem を起こす。
+    // 新規、**または確定までの間に既存が消えていた場合** (preview 後に dismiss / merge された)。
+    // 取りこぼさず新規として作り、実績も "new" に正規化する — 申告 (grouping.kind) のまま
+    // 数えると「実際は新規作成なのに『既存に追加 1 件』」とレビュー画面に出る (BFF #283)。
     const problem = deriveProblemDates({
       id: grouping.problemId,
       title: grouping.problemTitle,
@@ -599,9 +616,14 @@ export async function commitPreview(
       shelvedAt: null,
     });
     problemStore = [problem, ...problemStore];
-    return { mention: clone(mention), grouping: clone(grouping) };
+    createdHere.add(problem.id);
+    return {
+      mention: clone(mention),
+      grouping: { ...clone(grouping), kind: "new", mentionCount: 1, isRecurrence: false },
+    };
   });
 
+  // 件数は**実際の書き込み実績**から数える (正規化済みの items がその実績)。
   return {
     sessionId,
     items,

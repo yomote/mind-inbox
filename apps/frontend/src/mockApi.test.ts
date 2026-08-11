@@ -192,6 +192,55 @@ describe("[単体] mockApi.commitPreview — 表示中の下書きをそのま�
     expect(after.filter((p) => p.id === created.grouping.problemId)).toHaveLength(1);
   });
 
+  // 無いと何が静かに通るか: preview 後・確定前に対象 Problem が dismiss / merge で消えると、
+  // 確定は「既存に追加」ではなく新規作成になる。にもかかわらず申告 (下書きの grouping.kind) を
+  // 数えると、実際は新規を作ったのにレビュー画面へ「新規 0 / 既存に追加 1」と出て、カードも
+  // 「既存に追加」バッジのままになる。例外は出ないので、テストが無ければ静かに通る (BFF #283 と同じ穴)。
+  it("確定前に既存 Problem が消えていたら、新規作成の実績として数え・表示する", async () => {
+    const drafts = (await previewExtraction("s-gone", conversation(2))).items;
+    expect(drafts[0].grouping.kind).toBe("existing");
+    expect(drafts[0].grouping.problemId).toBe("p-career");
+
+    // 確定前に対象が消える (別画面での却下 / 統合と同じ状況)。
+    await triageProblem({ action: "dismiss", problemId: "p-career" });
+    expect(await loadProblem("p-career")).toBeNull();
+
+    const committed = await commitPreview("s-gone", drafts);
+
+    expect(committed.newProblemCount).toBe(1);
+    expect(committed.updatedProblemCount).toBe(0);
+    expect(committed.items[0].grouping.kind).toBe("new");
+    // Mention は取りこぼさず、新しい Problem として残る。
+    const revived = await loadProblem("p-career");
+    expect(revived?.mentions).toHaveLength(1);
+    expect(revived?.mentions[0].excerpt).toBe(drafts[0].mention.excerpt);
+  });
+
+  // 無いと何が静かに通るか: 消えた既存 Problem を新規として作り直した後、**同じバッチの
+  // 後続 Mention が同じ id に寄る**と「もう store にある」ので既存扱いになり、1 つの
+  // Problem が「新規 1 件」かつ「既存に追加 1 件」に二重計上される
+  // (BFF #283 が createdHere で塞いだのと同じ穴。合計だけ見ると 2 件に増えて見える)。
+  it("同一バッチで作り直した Problem への追記は新規のまま数える (二重計上しない)", async () => {
+    const base = (await previewExtraction("s-batch", conversation(2))).items;
+    const existing = base[0];
+    expect(existing.grouping.kind).toBe("existing");
+    // 同じ既存 Problem に 2 つの Mention が寄った下書き。
+    const drafts = [
+      existing,
+      { ...existing, mention: { ...existing.mention, id: "m-same-batch" } },
+    ];
+    // 確定前に対象が消える → 1 件目は新規作成にフォールバックし、2 件目はそこへ寄る。
+    await triageProblem({ action: "dismiss", problemId: existing.grouping.problemId });
+
+    const committed = await commitPreview("s-batch", drafts);
+
+    expect(committed.newProblemCount).toBe(1);
+    expect(committed.updatedProblemCount).toBe(0);
+    expect(committed.items.every((i) => i.grouping.kind === "new")).toBe(true);
+    const problem = await loadProblem(existing.grouping.problemId);
+    expect(problem?.mentionCount).toBe(2);
+  });
+
   // 無いと何が静かに通るか: 新規下書きの確定が下書きと違う内容 (タイトル / 引用) で
   // Problem を起こしても気づけない。「あなたがこう言ったやつ」の来歴が壊れる。
   it("新規 + 既存の下書きを確定すると、下書きの内容どおりに書かれる", async () => {
