@@ -341,12 +341,72 @@ def should_notify_again(
     advisory の「1 PR 1 回きり」(still_unposted) と違い、ストール通知は状態が
     続く限り再通知したい — ただし 30 分毎の sweep がそのまま吠えると 1 日
     48 連投になるため、**最後の通知から cooldown_hours は黙る** (Issue #253)。
+    comments の各要素は先頭 2 つが (本文, created_at) ならよい (login 付きの
+    3 要素も受ける)。
     """
-    posted_times = [created_at for body, created_at in comments if marker in body]
+    posted_times = [c[1] for c in comments if marker in c[0]]
     last = latest_iso(posted_times)  # type: ignore[arg-type]
     if last is None:
         return True
     return minutes_between(last, now_iso) >= cooldown_hours * 60.0
+
+
+def is_bot_login(login: str) -> bool:
+    """GitHub App の投稿者か (github-actions[bot] / chatgpt-codex-connector[bot] 等)。"""
+    return (login or "").endswith("[bot]")
+
+
+def should_notify_human_stall(
+    updated_at: str,
+    comments: list[tuple[str, str, str]],
+    now_iso: str,
+    stall_hours: float = HUMAN_STALL_HOURS,
+    cooldown_hours: float = RENOTIFY_COOLDOWN_HOURS,
+) -> tuple[bool, str]:
+    """needs-human Issue の停滞通知を出すべきか (出すか, 理由)。
+
+    comments は (本文, created_at, 投稿者 login) の列。
+
+    停滞時計から**自分の通知コメントを除外する**のが要 (Codex P2 / PR #258):
+    初回通知の投稿自体が Issue の updated_at を現在へ進めるため、素朴に
+    updated_at で 48h を測ると次回以降の sweep で必ず「停滞していない」に
+    倒れ、本文で約束している 24h 後の再通知が永久に起きない。判定を分岐する:
+
+    - マーカー無し (未通知): updated_at で 48h 停滞を判定 (従来どおり)
+    - マーカー有り: updated_at は自分の通知で汚れているので見ない。
+      最後の通知から cooldown_hours (24h) 経過していて、かつ通知の後に
+      **人間の反応が無い** (bot 以外のコメントが無い) なら再通知する。
+      人間の反応があれば時計はそこから測り直し、反応からさらに stall_hours
+      停滞したら再通知する (反応 1 回で永久に沈黙しない)。
+      bot のコメント (自分の通知・Codex 等) は人間の反応に数えない —
+      自分の通知を反応と誤認すると、やはり再通知が永久に止まる。
+    """
+    last_marker = latest_iso(
+        [t for body, t, _login in comments if HUMAN_STALL_MARKER in body]
+    )
+    if last_marker is None:
+        if is_stale(updated_at, now_iso, stall_hours):
+            return (True, f"{stall_hours:.0f}h 停滞 (初回通知)")
+        return (False, "停滞していない")
+    if not is_stale(last_marker, now_iso, cooldown_hours):
+        return (False, f"前回通知から {cooldown_hours:.0f}h 未満 (クールダウン)")
+    last_human = latest_iso(
+        [
+            t
+            for body, t, login in comments
+            if HUMAN_STALL_MARKER not in body
+            and not is_bot_login(login)
+            and minutes_between(last_marker, t) > 0
+        ]
+    )
+    if last_human is None:
+        return (
+            True,
+            f"前回通知から {cooldown_hours:.0f}h 経過・人間の反応なし (再通知)",
+        )
+    if is_stale(last_human, now_iso, stall_hours):
+        return (True, f"人間の反応の後さらに {stall_hours:.0f}h 停滞 (再通知)")
+    return (False, "通知後に人間の反応あり")
 
 
 def is_proposed_adr(text: str) -> bool:
@@ -684,11 +744,16 @@ def maybe_post_advisories(
             )
 
 
-def fetch_comments_with_times(repo: str, number: int) -> list[tuple[str, str]]:
-    """(本文, created_at) の列。時限系通知のクールダウン判定 (should_notify_again) 用。"""
+def fetch_comments_with_times(repo: str, number: int) -> list[tuple[str, str, str]]:
+    """(本文, created_at, 投稿者 login) の列。時限系通知のクールダウン判定と
+    人間の反応検出 (should_notify_again / should_notify_human_stall) 用。"""
     comments = gh("api", f"repos/{repo}/issues/{number}/comments", "--paginate")
     return [
-        ((c.get("body") or ""), (c.get("created_at") or ""))  # type: ignore[union-attr]
+        (
+            (c.get("body") or ""),  # type: ignore[union-attr]
+            (c.get("created_at") or ""),  # type: ignore[union-attr]
+            ((c.get("user") or {}).get("login", "")),  # type: ignore[union-attr]
+        )
         for c in comments
     ]
 
@@ -958,7 +1023,13 @@ def notify_stale_proposed_adrs(
         comments = fetch_comments_with_times(repo, number)
         # Issue 本文のマーカーは起票時刻の証拠にならないので、本文の created_at も
         # クールダウンに数える (起票直後の sweep がコメントを重ねるのを防ぐ)
-        comments.append((tracker.get("body") or "", tracker.get("created_at") or ""))
+        comments.append(
+            (
+                tracker.get("body") or "",
+                tracker.get("created_at") or "",
+                ((tracker.get("user") or {}).get("login", "")),
+            )
+        )
         if should_notify_again(ADR_STALL_MARKER, comments, now_iso):
             post_comment(repo, number, body)
             print(f"#{number}: Proposed ADR 停滞の再通知を投稿した ({len(stale)} 件)")
@@ -1002,10 +1073,22 @@ def sweep_human_queue(repo: str, now_iso: str) -> None:
     )
     for issue in human_queue_issues(open_needs_human):  # type: ignore[arg-type]
         number = issue["number"]
-        if not is_stale(issue.get("updated_at") or now_iso, now_iso, HUMAN_STALL_HOURS):
+        # 停滞判定は should_notify_human_stall に集約 — 自分の通知が updated_at を
+        # 進めるため、updated_at の 48h だけで判定すると初回通知後に再通知が
+        # 永久に止まる (Codex P2 / PR #258)。updated_at はコメント取得を省く安い
+        # スクリーニングにだけ使う: どの通知パターンでも「通知してよい状態」は
+        # 直近 24h (クールダウン) に一切の活動が無いことを含意する (通知・人間の
+        # 反応のどちらも updated_at を進めるため)。
+        if not is_stale(
+            issue.get("updated_at") or now_iso, now_iso, RENOTIFY_COOLDOWN_HOURS
+        ):
             continue
         comments = fetch_comments_with_times(repo, number)
-        if not should_notify_again(HUMAN_STALL_MARKER, comments, now_iso):
+        notify, reason = should_notify_human_stall(
+            issue.get("updated_at") or now_iso, comments, now_iso
+        )
+        if not notify:
+            print(f"#{number}: needs-human 停滞通知なし — {reason}")
             continue
         post_comment(
             repo,

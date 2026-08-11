@@ -10,6 +10,7 @@ import subprocess
 import check
 from check import (
     CODEX_RETRIGGER_MARKER,
+    HUMAN_STALL_MARKER,
     MERGE_STALL_HOURS,
     MERGE_STALL_MARKER,
     all_check_runs_green,
@@ -19,6 +20,7 @@ from check import (
     decide,
     has_pm_accept,
     human_queue_issues,
+    is_bot_login,
     is_code_pr,
     is_codex_review_result,
     is_proposed_adr,
@@ -33,6 +35,7 @@ from check import (
     sensitive_paths,
     should_execute_merge,
     should_notify_again,
+    should_notify_human_stall,
     should_request_security_review,
     should_retrigger_codex,
     still_unposted,
@@ -467,6 +470,72 @@ def test_l1_時限系の再通知は24hクールダウンで抑止される() ->
     assert not should_notify_again(MERGE_STALL_MARKER, old + recent, now)
     # マーカー無しコメントはクールダウンに数えない
     assert should_notify_again(MERGE_STALL_MARKER, [("普通のコメント", now)], now)
+
+
+def test_l1_needs_human停滞は初回通知後も48h条件で沈黙しない() -> None:
+    """Codex P2 (PR #258): 初回通知の投稿自体が Issue の updated_at を現在へ進める。
+
+    無いと何が静かに通るか: updated_at の 48h 判定だけだと、初回通知の直後から
+    「停滞していない」扱いに戻り、本文で約束している 24h 後の再通知が永久に
+    起きない — 通知は 1 回きりになり、人間が見落としたらそのまま沈む。
+    """
+    now = "2026-08-11T12:00:00Z"
+    bot = "github-actions[bot]"
+    notice = (f"{HUMAN_STALL_MARKER}\n⏰ 停滞", "2026-08-10T10:00:00Z", bot)  # 26h 前
+    # 通知が updated_at を進めた状態 (26h 前 = 48h 未満) でも、マーカー優先で再通知
+    notify, reason = should_notify_human_stall("2026-08-10T10:00:00Z", [notice], now)
+    assert notify and "再通知" in reason
+    # 24h 未満は再通知しない (クールダウン)
+    recent_notice = (f"{HUMAN_STALL_MARKER}\n⏰ 停滞", "2026-08-11T00:00:00Z", bot)
+    notify, reason = should_notify_human_stall(
+        "2026-08-11T00:00:00Z", [recent_notice], now
+    )
+    assert not notify and "クールダウン" in reason
+    # マーカー無し (未通知) は従来どおり updated_at の 48h 判定
+    assert should_notify_human_stall("2026-08-09T00:00:00Z", [], now)[0]
+    assert not should_notify_human_stall("2026-08-10T00:00:00Z", [], now)[0]
+
+
+def test_l1_needs_human停滞は人間が反応したら再通知しない() -> None:
+    """無いと何が静かに通るか: 反応を見ないと「PO が答えたのに 24h ごとに
+    メンションが飛び続ける」狼少年化。逆に bot の投稿 (自分の通知・Codex) を
+    反応と数えると、再通知がやはり永久に止まる (P2 と同じ沈黙が別経路で再発)。"""
+    now = "2026-08-11T12:00:00Z"
+    bot = "github-actions[bot]"
+    notice = (f"{HUMAN_STALL_MARKER}\n⏰ 停滞", "2026-08-10T10:00:00Z", bot)  # 26h 前
+    human_reply = ("対応中です", "2026-08-10T12:00:00Z", "yomote")  # 通知の後
+    notify, reason = should_notify_human_stall(
+        "2026-08-10T12:00:00Z", [notice, human_reply], now
+    )
+    assert not notify and "反応あり" in reason
+    # bot のコメントは人間の反応に数えない → 再通知は止まらない
+    bot_reply = (
+        "Codex Review: ...",
+        "2026-08-10T12:00:00Z",
+        "chatgpt-codex-connector[bot]",
+    )
+    assert should_notify_human_stall("2026-08-10T12:00:00Z", [notice, bot_reply], now)[
+        0
+    ]
+    # 通知より前の人間コメントは「反応」ではない (それ自体が停滞の一部)
+    old_comment = ("あとで見る", "2026-08-01T00:00:00Z", "yomote")
+    assert should_notify_human_stall(
+        "2026-08-10T10:00:00Z", [old_comment, notice], now
+    )[0]
+    # 人間の反応からさらに 48h 停滞したら再通知する (反応 1 回で永久に沈黙しない)
+    stale_reply = ("対応中です", "2026-08-09T00:00:00Z", "yomote")
+    stale_notice = (f"{HUMAN_STALL_MARKER}\n⏰ 停滞", "2026-08-08T00:00:00Z", bot)
+    notify, reason = should_notify_human_stall(
+        "2026-08-09T00:00:00Z", [stale_notice, stale_reply], now
+    )
+    assert notify and "48h 停滞" in reason
+
+
+def test_l1_bot判定はloginの接尾辞で見る() -> None:
+    assert is_bot_login("github-actions[bot]")
+    assert is_bot_login("chatgpt-codex-connector[bot]")
+    assert not is_bot_login("yomote")
+    assert not is_bot_login("")
 
 
 def test_l1_proposed_adrの判定はstatus行だけを見る() -> None:
