@@ -1269,6 +1269,57 @@ def sweep_human_queue(repo: str, now_iso: str) -> None:
         print("Proposed ADR の 48h 停滞なし")
 
 
+def sweep_one_pr(repo: str, pr: dict, now_iso: str) -> None:
+    """sweep の PR 1 件分: マージ執行 + ストール検知 + advisory。"""
+    number = pr["number"]
+    # --- マージ執行 + ストール検知 (auto-merge 武装済み + review-gate 🟢 のみ) ---
+    armed, skip_reason = should_execute_merge(pr)
+    if armed:
+        head_sha = pr["head"]["sha"]
+        combined = gh("api", f"repos/{repo}/commits/{head_sha}/status")
+        gate_success = review_gate_success_at(combined.get("statuses") or [])  # type: ignore[union-attr]
+        if gate_success is None:
+            print(f"#{number}: review-gate が success でない — マージ試行せず")
+        else:
+            # 保存済み success を信じず門をフル再評価してからマージ (Codex P1)
+            merged = reverify_and_merge(
+                repo, number, head_sha, datetime.now(timezone.utc).isoformat()
+            )
+            if merged:
+                return  # マージ済み PR に advisory はもう要らない
+            # 再評価で failure に訂正された場合、stall 判定は combined status を
+            # 見るので自然に発火しない (全緑 + 未マージだけが stall)
+            maybe_report_merge_stall(repo, number, head_sha, gate_success, now_iso)
+    else:
+        print(f"#{number}: マージ執行の対象外 — {skip_reason}")
+    comment_bodies = fetch_comment_bodies(repo, number)
+    # 両マーカー投稿済みならこの PR にやることは無い — files 取得を省く
+    if not still_unposted(
+        CODEX_RETRIGGER_MARKER, comment_bodies
+    ) and not still_unposted(SECURITY_RETRIGGER_MARKER, comment_bodies):
+        print(f"#{number}: 両 advisory 投稿済み — skip")
+        return
+    files = gh("api", f"repos/{repo}/pulls/{number}/files", "--paginate")
+    changed_paths = [f["filename"] for f in files]  # type: ignore[union-attr]
+    code_pr = is_code_pr(changed_paths)
+    codex_present = (
+        fetch_codex_present(
+            repo, number, os.environ.get("CODEX_LOGIN_PATTERN", "codex")
+        )
+        if (code_pr and still_unposted(CODEX_RETRIGGER_MARKER, comment_bodies))
+        else False
+    )
+    maybe_post_advisories(
+        repo=repo,
+        number=number,
+        pr=pr,
+        changed_paths=changed_paths,
+        comment_bodies=comment_bodies,
+        code_pr=code_pr,
+        codex_present=codex_present,
+    )
+
+
 def run_advisory_sweep(repo: str) -> int:
     """open PR (base=main) に advisory とマージ執行・ストール検知を適用する。
 
@@ -1284,6 +1335,13 @@ def run_advisory_sweep(repo: str) -> int:
     「最悪 30 分でマージされる」下限保証を持つ。あわせて機械判定できる
     ストール (全 check 🟢 のまま 2h / needs-human・Proposed ADR の 48h) を通知する。
     API 呼び出しは open PR 数に比例 (PR あたり最大 6 往復 + 投稿)。
+
+    **失敗の隔離は「PR 1 件」「フェーズ 1 つ」単位** (Codex P2 / PR #258):
+    1 つの PR で API が失敗し続けても残りの PR と後続フェーズ
+    (sweep_merged_followups / sweep_human_queue) は必ず実行する — ここで
+    sweep 全体が中断し続けると、補償対象が 24h lookback を外れて build/deploy
+    の欠落が永久に残る。失敗は握りつぶさない — 1 件でもあれば非ゼロ exit で
+    run を赤にする (watchers.json の review-gate watcher が拾う)。
     """
     now_iso = datetime.now(timezone.utc).isoformat()
     prs = gh(
@@ -1291,58 +1349,31 @@ def run_advisory_sweep(repo: str) -> int:
     )
     targets = sweep_targets(prs)  # type: ignore[arg-type]
     print(f"advisory sweep: open PR {len(prs)} 件中 対象 {len(targets)} 件")  # type: ignore[arg-type]
+    failures = 0
     for pr in targets:
-        number = pr["number"]
-        # --- マージ執行 + ストール検知 (auto-merge 武装済み + review-gate 🟢 のみ) ---
-        armed, skip_reason = should_execute_merge(pr)
-        if armed:
-            head_sha = pr["head"]["sha"]
-            combined = gh("api", f"repos/{repo}/commits/{head_sha}/status")
-            gate_success = review_gate_success_at(combined.get("statuses") or [])  # type: ignore[union-attr]
-            if gate_success is None:
-                print(f"#{number}: review-gate が success でない — マージ試行せず")
-            else:
-                # 保存済み success を信じず門をフル再評価してからマージ (Codex P1)
-                merged = reverify_and_merge(
-                    repo, number, head_sha, datetime.now(timezone.utc).isoformat()
-                )
-                if merged:
-                    continue  # マージ済み PR に advisory はもう要らない
-                # 再評価で failure に訂正された場合、stall 判定は combined status を
-                # 見るので自然に発火しない (全緑 + 未マージだけが stall)
-                maybe_report_merge_stall(repo, number, head_sha, gate_success, now_iso)
-        else:
-            print(f"#{number}: マージ執行の対象外 — {skip_reason}")
-        comment_bodies = fetch_comment_bodies(repo, number)
-        # 両マーカー投稿済みならこの PR にやることは無い — files 取得を省く
-        if not still_unposted(
-            CODEX_RETRIGGER_MARKER, comment_bodies
-        ) and not still_unposted(SECURITY_RETRIGGER_MARKER, comment_bodies):
-            print(f"#{number}: 両 advisory 投稿済み — skip")
-            continue
-        files = gh("api", f"repos/{repo}/pulls/{number}/files", "--paginate")
-        changed_paths = [f["filename"] for f in files]  # type: ignore[union-attr]
-        code_pr = is_code_pr(changed_paths)
-        codex_present = (
-            fetch_codex_present(
-                repo, number, os.environ.get("CODEX_LOGIN_PATTERN", "codex")
+        try:
+            sweep_one_pr(repo, pr, now_iso)
+        except Exception as e:  # noqa: BLE001 — 隔離が目的。失敗は exit code で顕在化する
+            failures += 1
+            print(
+                f"#{pr.get('number')}: sweep 処理に失敗 — この PR を skip して続行: {e!r}"
             )
-            if (code_pr and still_unposted(CODEX_RETRIGGER_MARKER, comment_bodies))
-            else False
-        )
-        maybe_post_advisories(
-            repo=repo,
-            number=number,
-            pr=pr,
-            changed_paths=changed_paths,
-            comment_bodies=comment_bodies,
-            code_pr=code_pr,
-            codex_present=codex_present,
-        )
-    followups_ok = sweep_merged_followups(repo, now_iso)
-    sweep_human_queue(repo, now_iso)
-    # 補償 dispatch の失敗は残りの処理を止めないが、run は赤にして隠さない
-    return 0 if followups_ok else 1
+    try:
+        if not sweep_merged_followups(repo, now_iso):
+            failures += 1
+    except Exception as e:  # noqa: BLE001
+        failures += 1
+        print(f"merged followup sweep が失敗 — 他フェーズは続行: {e!r}")
+    try:
+        sweep_human_queue(repo, now_iso)
+    except Exception as e:  # noqa: BLE001
+        failures += 1
+        print(f"human queue sweep が失敗 — {e!r}")
+    if failures:
+        # 続行はするが成功と偽らない — run を赤にして「できなかったこと」を残す
+        print(f"sweep: {failures} 件の失敗あり — run を失敗にする")
+        return 1
+    return 0
 
 
 def post_status(repo: str, sha: str, state: str, description: str) -> None:

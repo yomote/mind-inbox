@@ -456,6 +456,51 @@ def test_l1_sweepはpm_acceptが消えたprをマージしない(monkeypatch) ->
     assert merged and followups == [["docs/x.md"]]
 
 
+def test_l1_sweepは1件のpr失敗で全体を中断しない(monkeypatch) -> None:
+    """Codex P2 (PR #258): PR ループに例外の隔離が無いと、1 つの PR で API が
+    失敗し続けるだけで sweep がそこで毎回終了する。
+
+    無いと何が静かに通るか: 後続の sweep_merged_followups / sweep_human_queue が
+    毎回スキップされ、その間に補償対象が 24h lookback を外れて build/deploy の
+    欠落が**永久に残る** (マージ済み PR 側には何の異常も見えない)。逆に失敗を
+    握りつぶして exit 0 にすると、壊れた sweep が緑のまま回り続ける。
+    """
+    processed: list[int] = []
+    phases: list[str] = []
+
+    def fake_gh(*args):
+        joined = " ".join(args)
+        if "pulls?state=open" in joined:
+            return [
+                {"number": 1, "state": "open", "draft": False, "base": {"ref": "main"}},
+                {"number": 2, "state": "open", "draft": False, "base": {"ref": "main"}},
+            ]
+        raise AssertionError(f"想定外の gh 呼び出し: {joined}")
+
+    def fake_sweep_one_pr(repo, pr, now_iso):
+        if pr["number"] == 1:
+            raise subprocess.CalledProcessError(1, ["gh"], stderr="HTTP 500")
+        processed.append(pr["number"])
+
+    monkeypatch.setattr(check, "gh", fake_gh)
+    monkeypatch.setattr(check, "sweep_one_pr", fake_sweep_one_pr)
+    monkeypatch.setattr(
+        check,
+        "sweep_merged_followups",
+        lambda repo, now_iso: phases.append("followups") or True,
+    )
+    monkeypatch.setattr(
+        check, "sweep_human_queue", lambda repo, now_iso: phases.append("human")
+    )
+    exit_code = check.run_advisory_sweep("o/r")
+    assert processed == [2], "1 件目の失敗後も 2 件目は処理される"
+    assert phases == ["followups", "human"], "後続フェーズは必ず実行される"
+    assert exit_code != 0, "失敗は握りつぶさず run を赤にする"
+    # 全部成功なら exit 0 (失敗フラグの誤爆で常時赤にならないことも固定)
+    monkeypatch.setattr(check, "sweep_one_pr", lambda repo, pr, now_iso: None)
+    assert check.run_advisory_sweep("o/r") == 0
+
+
 def test_l1_補償対象ページの打ち切りはlookbackで判定する() -> None:
     """Codex P2 (PR #258): closed PR の取得が 1 ページ固定だと、24h に 30 件超の
     close や古い closed PR のコメント更新で lookback 内のマージがページ外へ
