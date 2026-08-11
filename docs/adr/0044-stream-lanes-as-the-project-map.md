@@ -84,7 +84,7 @@ ADR 0011 の核 (**実行状態の真実は GitHub Issues** / board に設計を
 - 「Projects v2 board を実行ダッシュボードにする」→「**status ページの戦況図セクション (実データから自動生成) を実行ダッシュボードにする**」
 - Projects board の再建は行わない。既存 board は Close (Delete しない — 0011 の Rollback 方針どおり履歴を残す)
 - Runbook `github-projects-setup.md` は「歴史的経緯」として残し、冒頭に本 ADR への参照を置く
-- **board を現役として指している他の Accepted ADR にも注記する** — [ADR 0020](0020-hitl-choice-format-and-needs-human-queue.md) の Positive Consequences は needs-human が「`/status` と board の両方から見える」と規定している。ADR 本文は不変とし、Status 行に「board 側は 0044 で退役 (可視面は `/status` と status ページ)」と注記する。**0020 だけを読んだ運用者に board が現役に見える経路を塞ぐ**
+- **board を現役として指している他の Accepted ADR にも注記する** — [ADR 0020](0020-hitl-choice-format-and-needs-human-queue.md) の Positive Consequences は needs-human が「`/status` と board の両方から見える」と規定している。ADR 本文は不変とし、Status 行に「board 側は 0044 で退役 (現行の可視面は `/status`。status ページへの描画は #289 待ち)」と注記する。**0020 だけを読んだ運用者に board が現役に見える経路を塞ぐ**
 - **描画が入るまでの過渡期を明示する** — 戦況図セクションの実装 (#289) が入るまで、status ページには 5 レーンが描かれない。それまでは各所の記述を「予定」と明記し、**board 退役後にリンクを開いた PO が従来の自動化監視ページしか得られない**状態を「そう書いてある」状態にする (黙って断定しない)
 
 ## Consequences
