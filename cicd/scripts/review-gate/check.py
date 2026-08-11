@@ -271,18 +271,23 @@ def maybe_post_advisories(
             minutes_since_last_push=elapsed,
             threshold_minutes=threshold,
         ):
+            # bot (github-actions) からの生メンションに Codex は応答しない —
+            # 「To use Codex here, create a Codex account…」の定型返信が返るだけ
+            # (2026-08-11 PR #238 で実測)。メンションはバッククォートで殺し、
+            # 実際の投稿は接続済みユーザー (PM セッションの MCP 経由 = PO アカウント)
+            # に依頼する形にする。PM は自 PR の webhook でこのコメントを受け取る。
             post_comment(
                 repo,
                 number,
-                f"{CODEX_RETRIGGER_MARKER}\n@codex review\n\n"
-                f"(自動再トリガー — コード PR に Codex レビューが {threshold:.0f} 分以上"
-                "付いていないため。自動レビューのトリガーは欠落してもリトライされない"
-                " (2026-08-10 PR #231 で 11 時間沈黙した実測)。ADR 0038 /"
-                " この投稿自体は review-gate の合否条件ではない)",
+                f"{CODEX_RETRIGGER_MARKER}\n"
+                f"⏳ **Codex レビューが {threshold:.0f} 分以上未着です** (コード PR)。"
+                "自動レビューのトリガーは欠落してもリトライされない"
+                " (2026-08-10 PR #231 で 11 時間沈黙した実測) ため、"
+                "**接続済みアカウントから `@codex review` を投稿してください**"
+                " (bot からのメンションは Codex に無視される — ADR 0038 実測)。"
+                " この投稿自体は review-gate の合否条件ではない。",
             )
-            print(
-                f"advisory: @codex review を自動再トリガーした (未着 {elapsed:.0f} 分)"
-            )
+            print(f"advisory: Codex 未着 ({elapsed:.0f} 分) の再トリガー依頼を投稿した")
     sensitive = sensitive_paths(changed_paths)
     if should_request_security_review(
         draft=draft,
@@ -295,13 +300,14 @@ def maybe_post_advisories(
         post_comment(
             repo,
             number,
-            f"{SECURITY_RETRIGGER_MARKER}\n@codex security review\n\n"
-            "この PR は敏感パス (IaC / CI 定義 / 認証・トークン・CORS 関連 / 設定実体) に"
-            "触れているため security review を自動指名しています (advisory —"
-            " review-gate の合否条件ではない / ADR 0038)。対象:\n" + listed,
+            f"{SECURITY_RETRIGGER_MARKER}\n"
+            "🔒 **敏感パスに触れる PR です — security review を推奨します。**"
+            "接続済みアカウントから `@codex security review` を投稿してください"
+            " (bot からのメンションは Codex に無視される — ADR 0038 実測)。"
+            " advisory であり review-gate の合否条件ではない。対象:\n" + listed,
         )
         print(
-            f"advisory: 敏感パス {len(sensitive)} 件 → @codex security review を自動指名した"
+            f"advisory: 敏感パス {len(sensitive)} 件 → security review 依頼を投稿した"
         )
 
 

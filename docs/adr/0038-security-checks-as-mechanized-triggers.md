@@ -55,7 +55,7 @@ Technical Story: 2026-08-11 の PM セッション対話。セキュリティ検
 ### Negative Consequences
 
 - **検出はするが判定はしない** — audit 系の findings は到達可能性を見ていない (dev 依存も同じ桁)。severity 判定と対処優先度は人 (rubric S7) に残る。初回実測は 104 件で、トリアージの宿題が最初から積まれる
-- **`@codex ...` を github-actions bot が投稿して Codex が応答するかは未実測** — bot 投稿のメンションを無視する連携は珍しくない。最初の発火で実測し、応答しなければ投稿主体の変更 (PAT 等) を別途判断する (長期クレデンシャルの driver と衝突するため PO 裁定)
+- **bot 投稿のメンションに Codex は応答しない (2026-08-11 PR #238 で実測済み)** — github-actions bot の `@codex security review` に「To use Codex here, create a Codex account…」の定型返信が返った。よって bot コメントは**検知と依頼** (「接続済みアカウントから `@codex review` を投稿せよ」/ メンションはバッククォートで殺す) に徹し、実投稿は PM セッション (MCP 経由 = 接続済みアカウント) が行う。PAT で bot を接続済みにする案は長期クレデンシャルの driver と衝突するため不採用
 - 敏感パス判定はパス名の近似 — `apps/bff/src/` 配下の認証関連ファイルが auth/token/cors を含まない名前だと素通りする
 - 週次 cron は月曜朝に debt-check と近接し、Issue が同時に 2 本動く
 
@@ -72,7 +72,7 @@ Technical Story: 2026-08-11 の PM セッション対話。セキュリティ検
 2. Codex レビュー未着のコード PR で 10 分経過後に `@codex review` コメントが 1 回だけ付き、再評価が走っても 2 本目が付かない
 3. 敏感パスに触れる PR に `@codex security review` が自動で付き、**review-gate の合否はそれと無関係に判定される**
 4. 状況ページに security-sweep の行が出て 🟢/🔴 で判定できる
-5. bot 投稿の `@codex ...` に Codex が実際に応答する (未実測 — 最初の発火で確認)
+5. ~~bot 投稿の `@codex ...` に Codex が実際に応答する~~ → **実測で否定** (2026-08-11 PR #238 / 上記のとおり設計を「検知 + 依頼」に変更)。代替の検証: 未着 10 分で依頼コメントが 1 回だけ立ち、PM がそれを受けて投稿した `@codex review` にレビューが付く
 
 ## Links
 
