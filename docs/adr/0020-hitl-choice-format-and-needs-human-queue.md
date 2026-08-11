@@ -1,6 +1,6 @@
 # 0020. 人間の確認は選択肢形式で出し、人間宿題は needs-human キューに一元化する
 
-- Status: Accepted (debrief #3, 2026-08-08)
+- Status: Accepted (debrief #3, 2026-08-08) — 一部改訂: Positive Consequences の「`/status` と board の両方から見える」のうち **board 側は [ADR 0044](0044-stream-lanes-as-the-project-map.md) で退役** (2026-08-11)。現行の可視面は `/status` (status ページへの戦況図の描画は #289 待ち)。**選択肢形式・needs-human キューという本 ADR の核は不変**で、あわせて 0044 D3 が「1 回 3 件・レーン文脈つき」の量的規律を追加
 - Date: 2026-08-07
 - Deciders: omoteforlab
 - Consulted: —

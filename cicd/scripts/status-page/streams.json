@@ -1,0 +1,45 @@
+{
+  "_comment": "戦況図 (プロジェクトの地図) のレーン定義。ADR 0044 が正典。これは台帳ではなく地図の定義であり、状態 (進捗・担当・件数) は一切書かない — 状態は GitHub の実データから毎回生成する。レーンの追加・改名は PR で行い、数週間単位でしか変えない。",
+  "_classification_rule": "その Issue が閉じたとき、変わるのは『プロダクトの挙動』か『改善を回す機械』か。迷ったら product に倒す。",
+  "_label_prefix": "stream:",
+  "streams": [
+    {
+      "key": "product",
+      "name": "プロダクト本流",
+      "goal": "ユーザーが触れるものを前に進める",
+      "includes": "v2 MAF 移行 (M1〜M3)、機能追加、ドメインモデル、UX の機能改善 (読み上げ設定・2 ペイン化など)"
+    },
+    {
+      "key": "improve-loop",
+      "name": "改善ループ (機械)",
+      "goal": "UX の観測・採点・改善提案を無人で回せる状態にする",
+      "includes": "UX プローブ、採点 judge、A/B、観測データの蓄積基盤。プロダクトの挙動そのものを変える作業は product へ"
+    },
+    {
+      "key": "concept",
+      "name": "コンセプト・最上流設計",
+      "goal": "何を作るのかの北極星を定める",
+      "includes": "コンセプト v2 の練り直し、プロダクト戦略、価値仮説の再定義。個別機能の design-gate 待ちは product に置き『詰まり』として表示する"
+    },
+    {
+      "key": "factory",
+      "name": "工場 (開発する機械)",
+      "goal": "壊れずに作り続けられる状態を保つ",
+      "includes": "CI、review-gate、マージ機構、PM 機構、テスト基盤、docs 基盤、開発環境の再現性",
+      "maintenance_mode_condition": "watchers 全緑が 7 日連続 + 受け入れ済み PR の無人マージ完遂が 1 週間実証されたら、新規投資を止めて修理のみとする (ADR 0044 D4)"
+    },
+    {
+      "key": "infra",
+      "name": "実行環境",
+      "goal": "dev / prod が動き、コストが読める状態を保つ",
+      "includes": "Azure リソース、deploy、IaC、コスト、セキュリティ、認証の門、デプロイ手順の Runbook"
+    }
+  ],
+  "decision_batch": {
+    "_comment": "PO 裁定の出し方 (ADR 0044 D3)。/status・当番ダイジェスト・窓口 PM の冒頭『🙋 あなたの番』に適用する。",
+    "max_items": 3,
+    "selection_rule": "レーンを止めているものを優先。単純な古い順・P1 順ではない",
+    "item_format": "どのレーンが止まっていて、通すには何の裁定が要るか。推奨は X、先送りすると Y が止まったまま",
+    "remainder_display": "残りは件数だけ『寝かせ中 n 件』と明示する (隠さない・押し付けない)。PO はいつでも全量を要求できる"
+  }
+}
