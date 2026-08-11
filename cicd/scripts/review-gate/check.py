@@ -392,21 +392,48 @@ def runs_since(runs: list[dict], since_iso: str) -> list[dict]:
     ]
 
 
-def build_satisfied(build_runs_since_merge: list[dict]) -> tuple[bool, str]:
-    """image build を待つ deploy を出してよいか (進んでよいか, 状態説明)。
+def earliest_iso(timestamps: list[str | None]) -> str | None:
+    """ISO 8601 時刻列の最古を返す (None / 空文字は無視)。"""
+    present = [t for t in timestamps if t]
+    if not present:
+        return None
+    return min(present, key=lambda t: datetime.fromisoformat(t.replace("Z", "+00:00")))
 
-    completed が 1 本でもあれば進む — conclusion は問わない (push 経路と同じ:
-    build 失敗時の deploy は「直近の成功 image で続行 + warning」が deploy.yml の
-    既定で、deploy を止めると build の赤とは別の停止が増えるだけ)。
-    進行中しか無ければ待つ — ここで deploy を出すと deploy.yml の IMAGE_TAG
-    解決が「当該 SHA の run 無し → 直近の成功 run」に落ち、**古い image を
-    正常デプロイして smoke も通る** (Codex P1 / PR #258 の静かな劣化)。
+
+def deploy_gate_anchor(
+    merged_at: str, needs_build: bool, build_runs_since_merge: list[dict]
+) -> tuple[str | None, str]:
+    """deploy 済み判定の基準時刻 (anchor, 状態説明) を返す。None = まだ出さない。
+
+    - image 変更なしの PR: anchor = merged_at (マージ以降の deploy run が補償)
+    - image 変更ありの PR: anchor = **対象 build の完了時刻** (merged_at 以降に
+      completed になった最初の build run の updated_at)。merged_at 基準にすると、
+      並行マージで「A の build 進行中に image 変更なしの B が deploy を出す」とき
+      B の deploy (古い image) を A の補償と誤認し、**A の build 完了後の deploy が
+      永久に出ない** (Codex P1 再指摘 / PR #258)。build と deploy の順序を
+      anchor で直接結び付ける。
+    - build が未起動 / 進行中なら anchor 無し — deploy を出すと deploy.yml の
+      IMAGE_TAG 解決が「当該 SHA の run 無し → 直近の成功 run」に落ち、古い
+      image を正常デプロイして smoke も通ってしまう (静かな劣化)。
+      completed の conclusion は問わない (push 経路と同じ: build 失敗時の deploy は
+      「直近の成功 image で続行 + warning」が deploy.yml の既定)。
     """
+    if not needs_build:
+        return (merged_at, "image 変更なし (merged_at 基準)")
     if not build_runs_since_merge:
-        return (False, "build run が未起動")
-    if any(r.get("status") == "completed" for r in build_runs_since_merge):
-        return (True, "build 完了")
-    return (False, "build 進行中")
+        return (None, "build run が未起動")
+    completed_at = earliest_iso(
+        [
+            # updated_at ≈ 完了時刻 (無ければ created_at で近似 — 遅い側に倒れ
+            # ないよう欠落時も run 自体は completed であることを status で確認済み)
+            r.get("updated_at") or r.get("created_at")
+            for r in build_runs_since_merge
+            if r.get("status") == "completed"
+        ]
+    )
+    if completed_at is None:
+        return (None, "build 進行中")
+    return (completed_at, "build 完了")
 
 
 def recently_merged(
@@ -756,11 +783,16 @@ def ensure_merge_followup(repo: str, merged_at: str, changed_paths: list[str]) -
       run 無し → 直近の成功 run」に落ち、古い image を正常デプロイして smoke も
       通ってしまう。完了待ちの poll はしない — runner を数十分保持する代わりに
       次の sweep (≤30 分後) に譲る (マージの下限保証と同じ粒度)
+    - deploy 済み判定の基準は deploy_gate_anchor — image 変更ありの PR は
+      「**build 完了時刻より後**に作成された deploy run」だけを補償済みと数える
+      (並行マージで build 進行中に出た他 PR の deploy を誤認しない — Codex P1 再指摘)
     - deploy は AUTO_DEPLOY_ENABLED=true のときだけ (push 経路と同じゲートを尊重。
       dispatch の action=up は本来ゲート対象外なので、ここで見ないと未解禁のまま
       公開 URL へ自動デプロイしてしまう)
     """
-    if needs_image_build(changed_paths):
+    needs_build = needs_image_build(changed_paths)
+    build_runs: list[dict] = []
+    if needs_build:
         build_runs = runs_since(
             fetch_workflow_runs(repo, "build-images.yml"), merged_at
         )
@@ -768,17 +800,17 @@ def ensure_merge_followup(repo: str, merged_at: str, changed_paths: list[str]) -
             dispatch_workflow(repo, "build-images.yml")
             print("deploy は build 完了後の sweep が出す (古い image の据え置き防止)")
             return
-        ok, state = build_satisfied(build_runs)
-        if not ok:
-            print(f"{state} — deploy は次の sweep に譲る")
-            return
+    anchor, state = deploy_gate_anchor(merged_at, needs_build, build_runs)
+    if anchor is None:
+        print(f"{state} — deploy は次の sweep に譲る")
+        return
     if (os.environ.get("AUTO_DEPLOY_ENABLED", "") or "").lower() != "true":
         print(
             "AUTO_DEPLOY_ENABLED != true — deploy の dispatch はしない (push 経路と同じゲート)"
         )
         return
-    if runs_since(fetch_workflow_runs(repo, "deploy.yml"), merged_at):
-        print("deploy run が既にある — 打ち直さない (冪等)")
+    if runs_since(fetch_workflow_runs(repo, "deploy.yml"), anchor):
+        print(f"deploy run が既にある ({state} 後) — 打ち直さない (冪等)")
         return
     dispatch_workflow(
         repo, "deploy.yml", {"action": "up", "environment": "dev", "voicevox": "cpu"}

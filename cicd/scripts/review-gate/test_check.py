@@ -13,8 +13,9 @@ from check import (
     MERGE_STALL_HOURS,
     MERGE_STALL_MARKER,
     all_check_runs_green,
-    build_satisfied,
     codex_present_in,
+    deploy_gate_anchor,
+    earliest_iso,
     decide,
     has_pm_accept,
     human_queue_issues,
@@ -510,31 +511,78 @@ def test_l1_runs_sinceはmerged_at以降のmainのrunだけ数える() -> None:
     assert runs_since([], merged_at) == []
 
 
-def test_l1_deployはbuild完了runを確認するまで出さない() -> None:
+def test_l1_deployのanchorはbuild完了時刻に結び付く() -> None:
     """Codex P1 (PR #258): build 完了前に deploy を出すと、deploy.yml の
     IMAGE_TAG 解決が「当該 SHA の run 無し → 直近の成功 run」に落ちる。
 
     無いと何が静かに通るか: **古い image が正常デプロイされ smoke も通る**
     (全部緑のまま dev に新コードが載らない静かな劣化)。
     """
-    ok, reason = build_satisfied([])
-    assert not ok and "未起動" in reason
-    ok, reason = build_satisfied([{"status": "in_progress", "conclusion": None}])
-    assert not ok and "進行中" in reason
-    ok, _ = build_satisfied([{"status": "completed", "conclusion": "success"}])
-    assert ok
+    merged_at = "2026-08-11T12:00:00Z"
+    # image 変更なし → merged_at 基準 (build を待つ理由が無い)
+    anchor, _ = deploy_gate_anchor(merged_at, False, [])
+    assert anchor == merged_at
+    # build 未起動 / 進行中 → anchor 無し (deploy はまだ出さない)
+    anchor, reason = deploy_gate_anchor(merged_at, True, [])
+    assert anchor is None and "未起動" in reason
+    anchor, reason = deploy_gate_anchor(
+        merged_at, True, [{"status": "in_progress", "conclusion": None}]
+    )
+    assert anchor is None and "進行中" in reason
+    # 完了 → anchor = build の完了時刻 (updated_at)。merged_at ではない
+    done = {
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-08-11T12:01:00Z",
+        "updated_at": "2026-08-11T12:10:00Z",
+    }
+    anchor, _ = deploy_gate_anchor(merged_at, True, [done])
+    assert anchor == "2026-08-11T12:10:00Z"
     # 失敗完了でも deploy へ進む — push 経路と同じ (deploy.yml が直近成功 image で
     # 続行 + warning。build の赤は build-images 側で見える)
-    ok, _ = build_satisfied([{"status": "completed", "conclusion": "failure"}])
-    assert ok
-    # 進行中と完了が混在していれば完了を採る
-    ok, _ = build_satisfied(
-        [
-            {"status": "in_progress", "conclusion": None},
-            {"status": "completed", "conclusion": "success"},
-        ]
+    anchor, _ = deploy_gate_anchor(merged_at, True, [{**done, "conclusion": "failure"}])
+    assert anchor is not None
+    # 進行中と完了が混在していれば最初の完了時刻を採る
+    later = {**done, "updated_at": "2026-08-11T12:30:00Z"}
+    anchor, _ = deploy_gate_anchor(
+        merged_at, True, [{"status": "in_progress"}, later, done]
     )
-    assert ok
+    assert anchor == "2026-08-11T12:10:00Z"
+
+
+def test_l1_並行マージでbuild前のdeployを補償済みと誤認しない() -> None:
+    """Codex P1 再指摘 (PR #258): image 変更ありの A の build 進行中に、image 変更
+    なしの B がマージされ deploy を出すシナリオ。
+
+    無いと何が静かに通るか: merged_at 基準の deploy 済み判定だと、B の deploy
+    (A の build 完了前 = 古い image) を A の補償と誤認し、**A の build 完了後の
+    deploy が永久に出ない** — dev に A の image が載らないまま全部緑が続く。
+    """
+    a_merged = "2026-08-11T12:00:00Z"
+    a_build_done = {
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-08-11T12:01:00Z",
+        "updated_at": "2026-08-11T12:10:00Z",
+    }
+    # B (image 変更なし) の deploy は A の build 完了 (12:10) より前の 12:05 に走った
+    b_deploy = {"head_branch": "main", "created_at": "2026-08-11T12:05:00Z"}
+    anchor, _ = deploy_gate_anchor(a_merged, True, [a_build_done])
+    assert anchor == "2026-08-11T12:10:00Z"
+    # anchor 基準では B の deploy は「補償済み」に数えない → A の deploy が出る
+    assert runs_since([b_deploy], anchor) == []
+    # 旧実装 (merged_at 基準) では誤認していたことの固定
+    assert runs_since([b_deploy], a_merged) == [b_deploy]
+    # build 完了後の deploy (12:15) が現れれば補償済みになる
+    after = {"head_branch": "main", "created_at": "2026-08-11T12:15:00Z"}
+    assert runs_since([b_deploy, after], anchor) == [after]
+
+
+def test_l1_earliest_isoは最古時刻を返しnoneと空を無視する() -> None:
+    assert earliest_iso(["2026-08-11T02:00:00Z", "2026-08-11T00:00:00Z", None, ""]) == (
+        "2026-08-11T00:00:00Z"
+    )
+    assert earliest_iso([None, ""]) is None
 
 
 def test_l1_補償の再試行対象はlookback内にマージされたprだけ() -> None:
