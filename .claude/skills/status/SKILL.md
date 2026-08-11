@@ -22,7 +22,8 @@ Mind Inbox の「今どこまで進み・次に何をやるか」を **GitHub �
 - **数字を主役に**。「Open 数 / レーン別残件 / 未分類 / 次アクション」を必ず出す。散文で埋めない。
 - **裁定は最重要 3 件まで**（ADR 0044 D3）。残りは件数だけ出す。全部並べるのは PO への押し付け。
 - **次の一手を1つ名指す**。レポートは眺めるためでなく動くために出す。
-- **status ページと役割を分ける**。ページ = PO がいつでも開ける定点（自動生成）/ この skill = 聞かれた時に会話で出す要約。**同じ真実（GitHub + stream ラベル）を見る**ので食い違わない。
+- **status ページと役割を分ける**。ページ = PO がいつでも開ける定点（自動生成）/ この skill = 聞かれた時に会話で出す要約。将来は**同じ真実（GitHub + stream ラベル）を見る**ので食い違わない。
+  - **ただし #289 が入るまで、戦況図を出せるのはこの skill だけ** — 現在の `build.py` は `streams.json` を読まず、ページには自動化の生死しか出ない。**「ページを見れば戦況図がある」と案内しない**（PO がリンクを開いて空振りする）。
 
 ---
 
@@ -136,7 +137,7 @@ user が「HTML で」「レポートにまとめて」「見れる形で」等�
 - 出し方: Artifact ツールが使える環境ではそれで公開 (chart を描く前に dataviz / artifact-design skill を読む)。使えなければ HTML ファイルを書いて user に渡す
 - HTML の中にも「数字整合チェック」(Open 総数 = 全レーン + 未分類) の結果を小さく出す (レポートの信頼性表示)
 
-> **常設の定点は status ページ** (<https://yomote.github.io/mind-inbox/status/>)。単発の HTML を量産しない — 都度生成のスナップショットは自動更新されず腐る (ADR 0011 / 0044)。この HTML モードはプレゼン等の単発用途に限る。
+> **単発の HTML を量産しない** — 都度生成のスナップショットは自動更新されず腐る (ADR 0011 / 0044)。この HTML モードはプレゼン等の単発用途に限る。常設の定点は status ページだが、**戦況図が載るのは #289 の実装後**（それまで同ページは自動化の生死のみ）。
 
 ---
 
@@ -162,4 +163,4 @@ user が「HTML で」「レポートにまとめて」「見れる形で」等�
 - ADR 0043（PM 自走モード — 週次目標・日次ダイジェスト）: **PR #284 で審議中。マージされるまで `docs/adr/` に無い** — 「今週の目標」「dev 到達」の扱いは本 skill の記述を正とする
 - ADR 0011（実行状態 = GitHub Issues が真実）: `docs/adr/0011-github-projects-as-execution-dashboard.md`
 - レーン定義: `cicd/scripts/status-page/streams.json`
-- 常設の定点: <https://yomote.github.io/mind-inbox/status/>（Runbook: `docs/runbooks/status-page.md`）
+- status ページ: <https://yomote.github.io/mind-inbox/status/>（現在は**自動化の生死のみ**。戦況図の描画は #289 / Runbook: `docs/runbooks/status-page.md`）
