@@ -19,6 +19,7 @@ import {
   type RecognitionHandlers,
   type RunningRecognition,
 } from "./azureSpeech";
+import { PlaybackEchoGate } from "./echoGate";
 import { TranscriptStitcher } from "./stitcher";
 
 export type VoiceEngineKind = "azure" | "browser";
@@ -45,6 +46,11 @@ export type VoiceInput = {
    * 見えるようにするためのフラグ。
    */
   degraded: boolean;
+  /**
+   * TTS 再生中で認識結果を破棄している状態 (#228)。エンジンは動き続けているが、
+   * この間の発話 (合成音声もユーザーも) は入力欄に入らない。UI はこれを見せる。
+   */
+  muted: boolean;
   interimTranscript: string;
   /** 認識開始からの経過秒。録音状態の可視化に使う。 */
   elapsedSec: number;
@@ -61,11 +67,23 @@ function speechRecognitionCtor(): SpeechRecognitionConstructor | undefined {
   return window.SpeechRecognition || window.webkitSpeechRecognition;
 }
 
+export type VoiceInputOptions = {
+  /**
+   * TTS (ずんだもん / ブラウザ読み上げ) が実際に音を出しているか (#228)。
+   * true の間に届いた認識結果は破棄する — スピーカーの合成音声をユーザー発話として
+   * 拾ってしまうエコーを防ぐ。false に戻ると自動で認識結果が流れ始める。
+   */
+  ttsPlaying?: boolean;
+};
+
 /**
  * @param appendText 確定した認識テキストを受け取り入力欄へ追記するコールバック。
  *                   identity が変わっても認識は継続する (ref 経由で常に最新を呼ぶ)。
  */
-export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
+export function useVoiceInput(
+  appendText: (text: string) => void,
+  { ttsPlaying = false }: VoiceInputOptions = {},
+): VoiceInput {
   const [listening, setListening] = React.useState(false);
   const [phase, setPhase] = React.useState<VoiceInputPhase>("idle");
   const [azureReady, setAzureReady] = React.useState(false);
@@ -99,6 +117,34 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
       onCommit: (text) => appendRef.current(text),
       onInterim: (text) => setInterimTranscript(text),
     });
+  }, []);
+
+  // TTS 再生中のエコーを堰き止める門 (#228)。stitcher と同じく mount effect で生成する。
+  const gateRef = React.useRef<PlaybackEchoGate | null>(null);
+  React.useEffect(() => {
+    gateRef.current ??= new PlaybackEchoGate();
+  }, []);
+
+  // TTS の再生開始 / 終了を門へ伝える。再生開始時点で残っている未確定 interim は
+  // **ユーザー発話** (再生前に聞いたもの) なので、破棄せず確定させてから門を閉じる。
+  React.useEffect(() => {
+    const gate = (gateRef.current ??= new PlaybackEchoGate());
+    if (ttsPlaying) stitcherRef.current?.flush();
+    gate.setPlaying(ttsPlaying, Date.now());
+  }, [ttsPlaying]);
+
+  /**
+   * 認識結果の配達口。**両エンジン (Azure / Web Speech) がここを通る**ことで、
+   * TTS 再生中の結果破棄 (#228) がどの経路でも同じに効く。
+   * 空 interim は「表示クリア」なので門に関わらず通す (汚染扱いにしない)。
+   */
+  const deliverFinal = React.useCallback((text: string) => {
+    if (gateRef.current?.acceptFinal(Date.now()) === false) return;
+    stitcherRef.current?.handleFinal(text);
+  }, []);
+  const deliverInterim = React.useCallback((text: string) => {
+    if (text.trim() && gateRef.current?.acceptInterim(Date.now()) === false) return;
+    stitcherRef.current?.handleInterim(text);
   }, []);
 
   // 「BFF があるなら使えるはず」ではなく**実際に開始できるエンジンがあるか**で決める。
@@ -154,6 +200,8 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
     shouldListenRef.current = false;
     sessionSeqRef.current += 1;
     stopEngines();
+    // エンジンを止めた = 追跡中の (汚染) セグメントごと消えた (#228)。
+    gateRef.current?.resetSegment();
     // ユーザー停止時点の未確定 interim も捨てない (冪等なので onend との重複は無害)。
     stitcherRef.current?.flush();
     setListening(false);
@@ -196,9 +244,9 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
           }
         }
         if (finalText.trim()) {
-          stitcherRef.current?.handleFinal(finalText);
+          deliverFinal(finalText);
         }
-        stitcherRef.current?.handleInterim(interimText);
+        deliverInterim(interimText);
       };
 
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
@@ -249,13 +297,13 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
     }
     setEngine("browser");
     setPhase("listening");
-  }, []);
+  }, [deliverFinal, deliverInterim]);
 
   /** Azure 認識のイベント配線。同期経路 / 非同期経路のどちらからも同じものを使う。 */
   const azureHandlers = React.useMemo<RecognitionHandlers>(
     () => ({
-      onFinal: (text) => stitcherRef.current?.handleFinal(text),
-      onInterim: (text) => stitcherRef.current?.handleInterim(text),
+      onFinal: (text) => deliverFinal(text),
+      onInterim: (text) => deliverInterim(text),
       onFatal: (message) => {
         // Azure が途中で継続不能になったら (ネットワーク断・無料枠停止 等)、
         // 発話を失わないよう Web Speech に切り替えて続行を試みる。
@@ -278,9 +326,8 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
         }
       },
     }),
-    [startBrowserEngine],
+    [deliverFinal, deliverInterim, startBrowserEngine],
   );
-
 
   const start = React.useCallback(() => {
     if (shouldListenRef.current) return;
@@ -382,6 +429,7 @@ export function useVoiceInput(appendText: (text: string) => void): VoiceInput {
     phase,
     engine,
     degraded,
+    muted: listening && ttsPlaying,
     interimTranscript,
     elapsedSec,
     error,

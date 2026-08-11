@@ -1,13 +1,13 @@
 ---
 name: テスト追加 / 変更
 about: 新規テスト追加、既存テスト改善、テスト戦略の変更
-title: "[test][L?] "
+title: "[test][層?] "
 labels: testing
 ---
 
 ## レイヤ
 
-<!-- L0 contract / L1 unit / L2 service / L3 e2e / L4 smoke -->
+<!-- 契約 / 単体 / スモーク / E2E (strategy.md §2 の 4 層。旧 L0〜L4 の読み替えは §6.1) -->
 
 ## このテストが無いと何が静かに通るか
 
@@ -15,7 +15,7 @@ labels: testing
 
 ## 対象
 
-<!-- 関数 / mutation / endpoint / シナリオ -->
+<!-- 関数 / mutation / endpoint / シナリオ。単体なら「例ではなく性質 (プロパティ) で書けるか」も検討 (§3) -->
 
 ## あえてテストしないこと / 書かない理由
 

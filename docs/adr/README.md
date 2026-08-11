@@ -112,3 +112,6 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0035](0035-role-split-across-agents-and-actions.md) — 開発ループの役割を分け、それぞれを「生死が見える場所」に置く (実装 Claude / レビュー Codex / 監視 Actions)
 - [0036](0036-merge-gate-as-required-check-and-pm-cadence.md) — マージの門を required check (review-gate) で機構化し、PM の運転リズムを定める
 - [0037](0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md) — 定期評価を「機械計測 = Actions」と「LLM 採点 = PM tick」に分ける (ADR 0035 D1 の残作業)
+- [0038](0038-security-checks-as-mechanized-triggers.md) — セキュリティ検査のトリガーを人の判断から機構へ移す (週次 sweep / PR 自動指名 / リリース judge) — **Proposed**
+- [0039](0039-dialogue-live-preview-and-character.md) — 対話画面を「キャラと話すと右で困りごとが形になる」構成にする (読み取り専用プレビュー + 独自マスコット)
+- [0040](0040-project-continuity-three-layers.md) — プロジェクト継続性を 3 層 (機構化された完遂 / 当番 PM / 窓口 PM) で保証する — **Proposed**
