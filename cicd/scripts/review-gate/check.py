@@ -587,11 +587,44 @@ def decide(
 # ---- ここから下は GitHub との入出力 (テスト対象は上の純粋ロジック) ----
 
 
+def parse_gh_json(text: str) -> object:
+    """gh の stdout を JSON として読む (`gh api --paginate` 対応の純関数)。
+
+    --paginate は複数ページのとき**トップレベルの JSON 値を連続出力**する
+    (`[...][...]` — ページごとに 1 配列)。素朴な json.loads は 2 ページ目の
+    先頭で `Extra data` になり、コメント 100 件超の Issue が 1 つあるだけで
+    schedule sweep 全体が毎回中断する (Codex P2-a / PR #258)。連続する JSON 値を
+    raw_decode で全部読み、**すべて配列なら 1 本に連結**して返す (このリポジトリの
+    --paginate は配列を返す endpoint のみ)。配列以外が混ざる複数値は黙って
+    間違った形で返さず ValueError にする。
+    """
+    text = text.strip()
+    if not text:
+        return {}
+    decoder = json.JSONDecoder()
+    values: list[object] = []
+    idx = 0
+    while idx < len(text):
+        value, end = decoder.raw_decode(text, idx)
+        values.append(value)
+        idx = end
+        while idx < len(text) and text[idx] in " \t\r\n":
+            idx += 1
+    if len(values) == 1:
+        return values[0]
+    if all(isinstance(v, list) for v in values):
+        return [item for page in values for item in page]  # type: ignore[union-attr]
+    raise ValueError(
+        "gh の出力に配列以外の JSON 値が複数含まれる — "
+        "--paginate はこのコードでは配列 endpoint 専用 (object を返す endpoint に付けない)"
+    )
+
+
 def gh(*args: str) -> object:
     out = subprocess.run(
         ["gh", *args], capture_output=True, text=True, timeout=60, check=True
     )
-    return json.loads(out.stdout) if out.stdout.strip() else {}
+    return parse_gh_json(out.stdout)
 
 
 def fetch_unresolved_threads(owner: str, name: str, number: int) -> int:
@@ -1088,16 +1121,11 @@ def sweep_human_queue(repo: str, now_iso: str) -> None:
     )
     for issue in human_queue_issues(open_needs_human):  # type: ignore[arg-type]
         number = issue["number"]
-        # 停滞判定は should_notify_human_stall に集約 — 自分の通知が updated_at を
-        # 進めるため、updated_at の 48h だけで判定すると初回通知後に再通知が
-        # 永久に止まる (Codex P2 / PR #258)。updated_at はコメント取得を省く安い
-        # スクリーニングにだけ使う: どの通知パターンでも「通知してよい状態」は
-        # 直近 24h (クールダウン) に一切の活動が無いことを含意する (通知・人間の
-        # 反応のどちらも updated_at を進めるため)。
-        if not is_stale(
-            issue.get("updated_at") or now_iso, now_iso, RENOTIFY_COOLDOWN_HOURS
-        ):
-            continue
+        # 事前フィルタは置かない (Codex P2-b / PR #258): updated_at の 24h
+        # スクリーニングは投稿者を見ないため、cooldown 明け直前に bot (Codex 等)
+        # がコメントすると再通知がさらに 24h 遅れ、bot の定期投稿が続くと永久に
+        # 発火しない。needs-human Issue は高々数十件で、全件コメントを取って
+        # should_notify_human_stall (唯一の判定) に通すコストは許容範囲。
         comments = fetch_comments_with_times(repo, number)
         notify, reason = should_notify_human_stall(
             issue.get("updated_at") or now_iso, comments, now_iso

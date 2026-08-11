@@ -29,6 +29,7 @@ from check import (
     merge_failure_reason,
     minutes_between,
     needs_image_build,
+    parse_gh_json,
     recently_merged,
     review_gate_success_at,
     runs_since,
@@ -574,6 +575,74 @@ def test_l1_needs_human停滞はコメント以外の人間更新も時計に入
     )
     notify, _ = should_notify_human_stall("2026-08-10T06:00:00Z", [notice, codex], now)
     assert notify
+
+
+def test_l1_paginateの複数ページ連続jsonをパースできる() -> None:
+    """Codex P2-a (PR #258): `gh api --paginate` は複数ページのときトップレベルの
+    JSON 配列を連続出力する (`[...][...]`)。
+
+    無いと何が静かに通るか: 素朴な json.loads は 2 ページ目の先頭で Extra data に
+    なり、コメント 100 件超の Issue / PR が 1 つあるだけで schedule sweep 全体が
+    毎回中断する — マージ再試行もストール通知も止まり、run の赤だけが残る。
+    """
+    two_pages = '[{"n": 1}, {"n": 2}]\n[{"n": 3}]'
+    assert parse_gh_json(two_pages) == [{"n": 1}, {"n": 2}, {"n": 3}]
+    # 1 ページ (従来ケース) は形を変えない
+    assert parse_gh_json('[{"n": 1}]') == [{"n": 1}]
+    assert parse_gh_json('{"total_count": 1}') == {"total_count": 1}
+    assert parse_gh_json("") == {}
+    assert parse_gh_json("  \n") == {}
+    # 配列以外の複数値は黙って壊れた形で返さない (--paginate は配列 endpoint 専用)
+    import pytest
+
+    with pytest.raises(ValueError):
+        parse_gh_json('{"a": 1}\n{"b": 2}')
+
+
+def test_l1_needs_human停滞のsweepはbotコメントの更新で沈黙しない(
+    monkeypatch,
+) -> None:
+    """Codex P2-b (PR #258): 旧実装は updated_at の 24h 事前フィルタが投稿者を
+    見ずスキップしていた。
+
+    無いと何が静かに通るか: cooldown 明け直前に bot (Codex 等) がコメントすると
+    再通知がさらに 24h 遅れ、bot の定期投稿が続くと永久に発火しない — 人間には
+    「通知が来ないだけ」で、needs-human キューが静かに沈む。
+    """
+    now = "2026-08-11T12:00:00Z"
+    issue = {  # bot コメントが 1h 前に updated_at を進めている (旧フィルタなら skip)
+        "number": 5,
+        "updated_at": "2026-08-11T11:00:00Z",
+    }
+    comments = [
+        {  # 前回通知 (25h 前 — クールダウン明け)
+            "body": f"{HUMAN_STALL_MARKER}\n⏰ 停滞",
+            "created_at": "2026-08-10T11:00:00Z",
+            "user": {"login": "github-actions[bot]"},
+        },
+        {  # bot の定期投稿 (1h 前)。人間の反応ではない
+            "body": "Codex Review: ...",
+            "created_at": "2026-08-11T11:00:00Z",
+            "user": {"login": "chatgpt-codex-connector[bot]"},
+        },
+    ]
+    posted: list[tuple] = []
+
+    def fake_gh(*args):
+        joined = " ".join(args)
+        if "-f" in args:  # post_comment
+            posted.append(args)
+            return {}
+        if "state=open" in joined:
+            return [issue]
+        if "/comments" in joined:
+            return comments
+        raise AssertionError(f"想定外の gh 呼び出し: {joined}")
+
+    monkeypatch.setattr(check, "gh", fake_gh)
+    monkeypatch.setattr(check, "local_proposed_adrs", lambda: [])
+    check.sweep_human_queue("o/r", now)
+    assert len(posted) == 1, "通知から 24h 経過 + 人間反応なし → 再通知される"
 
 
 def test_l1_bot判定はloginの接尾辞で見る() -> None:
