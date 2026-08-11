@@ -190,6 +190,8 @@ paths:
                   updatedProblemCount:
                     type: integer
                     minimum: 0
+                  stubbed:
+                    type: boolean
                 required:
                   - sessionId
                   - items
@@ -251,6 +253,8 @@ paths:
                     type: array
                     items:
                       type: string
+                  stubbed:
+                    type: boolean
                 required:
                   - reply
                   - requiresApproval
@@ -322,6 +326,8 @@ paths:
                       - title
                       - messages
                     additionalProperties: false
+                  stubbed:
+                    type: boolean
                 required:
                   - session
                 additionalProperties: false

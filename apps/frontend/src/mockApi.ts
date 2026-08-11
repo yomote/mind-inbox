@@ -25,15 +25,9 @@ export async function startNewConsultation(concern: string): Promise<Consultatio
     // タイトルは最初の発話から自動生成する方針。開始時は仮の見出しのみ。
     // 開始時の見出しは BFF の deriveTitle と同じ「相談セッション」(最初の発話で自動リネーム)。
     title: concern || "相談セッション",
-    messages: [
-      {
-        id: uid(),
-        role: "assistant",
-        // 受け止めトーンの初手 (dialogue-session.mdx「開始直後の挙動」)。BFF の EMPTY_START_OPENER と揃える。
-        text: "今日はどんなことが気になっていますか?思いつくままで大丈夫です。",
-        createdAt: nowText(),
-      },
-    ],
+    // AI の挨拶 (初手) は出さない (#241 / dialogue-session.mdx §3.1)。
+    // 会話は空で始まり、マスコットの待機表現が「聞く準備ができている」ことを示す。
+    messages: [],
   };
 }
 
