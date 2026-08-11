@@ -71,11 +71,13 @@ artifact を併存させる理由は変わらず — 人間が障害調査で生
    git fetch origin data/ux-observations
    mkdir -p /tmp/ux-probe
    git show "$(git rev-parse FETCH_HEAD):probes/$(date -u +%Y-%m).jsonl" \
-     | tail -1 | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["record"], ensure_ascii=False))' \
+     | python3 -c 'import json,sys; rows = [json.loads(l) for l in sys.stdin if l.strip()]; latest = max((r for r in rows if r.get("kind") == "ux-probe-record"), key=lambda r: r["recordedAt"]); print(json.dumps(latest["record"], ensure_ascii=False))' \
      > /tmp/ux-probe/probe.json
    PROBE_JSON="$(cicd/scripts/ux-probe/inspect-probe-artifact.py /tmp/ux-probe)"
    ```
 
+   末尾行 = 最新とは限らない (過去データ移行が古い観測を後から追記しうる) ので、
+   **`recordedAt` が最大の行**を選ぶ (上のワンライナーがそれ)。
    月初 (当月ファイルがまだ無い朝) は前月の `probes/YYYY-MM.jsonl` を読む。
    `inspect-probe-artifact.py` の終了コード: `3` = 記録が無い / `4` = turns 0 件 /
    `1` = 記録が壊れている。`3` と `4` は「採点する材料がない」ので、その朝は採点を
