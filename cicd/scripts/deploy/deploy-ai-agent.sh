@@ -163,12 +163,40 @@ _assign_role() {
   echo "  $label: assigned."
 }
 
+# OpenAI アカウントのスコープ解決 (_assign_role と同じ規律 / PR #279 Codex P2)。
+# show の失敗を空 ID に潰すと、AuthorizationFailed や一時的な API エラーでも
+# 「ロール未付与のまま provision 緑」になる。skip してよいのは**本物の NotFound**
+# (= enableOpenAi=false 環境でアカウントが存在しない正常系) だけ。
+# 挙動: 成功 → OPENAI_ID に resource ID / NotFound → OPENAI_ID を空にして 0 を返す
+# (呼び出し元が情報ログを出して skip) / それ以外の失敗 → stderr 全文を出して非ゼロ
+# (set -euo pipefail で provision → deploy job まで伝播)。
+_resolve_openai_id() {
+  local err_file out err
+  err_file="$(mktemp)"
+  if out="$(az cognitiveservices account show -g "$RG" -n "$OPENAI_ACCOUNT_NAME" \
+    --query id -o tsv 2>"$err_file")"; then
+    rm -f "$err_file"
+    OPENAI_ID="$out"
+    return 0
+  fi
+  err="$(cat "$err_file")"
+  rm -f "$err_file"
+  # az の NotFound は "(ResourceNotFound) ... was not found." の形。ここだけが正常系。
+  if grep -qiE "NotFound|was not found|could not be found" <<<"$err"; then
+    OPENAI_ID=""
+    return 0
+  fi
+  echo "ERROR: failed to resolve OpenAI account '$OPENAI_ACCOUNT_NAME' (not a NotFound — refusing to continue without the role):" >&2
+  printf '%s\n' "$err" >&2
+  return 1
+}
+
 if [[ -n "$OPENAI_ACCOUNT_NAME" ]]; then
-  OPENAI_ID="$(az cognitiveservices account show -g "$RG" -n "$OPENAI_ACCOUNT_NAME" --query id -o tsv 2>/dev/null || true)"
+  _resolve_openai_id # NotFound 以外の失敗はここで止まる (伝播の理由は関数コメント)
   if [[ -n "$OPENAI_ID" ]]; then
     _assign_role "$ROLE_OPENAI_USER" "$OPENAI_ID" "Cognitive Services OpenAI User"
   else
-    echo "  WARNING: OpenAI account '$OPENAI_ACCOUNT_NAME' not found. Skipping OpenAI role." >&2
+    echo "  INFO: OpenAI account '$OPENAI_ACCOUNT_NAME' not found (normal when enableOpenAi=false). Skipping OpenAI role." >&2
   fi
 fi
 
