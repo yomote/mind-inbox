@@ -1429,6 +1429,12 @@ def post_status(repo: str, sha: str, state: str, description: str) -> None:
 
 def main() -> int:
     repo = os.environ["GITHUB_REPOSITORY"]
+    if len(sys.argv) < 2 or not sys.argv[1].strip():
+        # イベント payload から PR 番号を解決できなかった (yml の式の取り漏れ等 —
+        # Codex P1-b: pull_request_review には issue.number が無い)。int("") の
+        # スタックトレースではなく、何が起きたかをログに残して赤にする
+        print("::error::PR 番号が渡されていない — イベント payload の解決式を確認")
+        return 1
     if sys.argv[1] == "--advisory-sweep":
         return run_advisory_sweep(repo)
     number = int(sys.argv[1])

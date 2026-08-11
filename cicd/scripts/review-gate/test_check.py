@@ -639,6 +639,26 @@ def test_l1_pull_request経路のrunはマージを執行しない(monkeypatch) 
     assert calls == ["merge"]
 
 
+def test_l1_pr番号が空のときは明示エラーで落ちる(monkeypatch) -> None:
+    """Codex P1-b (PR #258): pull_request_review の payload には issue.number が
+    無く、yml の解決式を誤ると check.py に空文字が渡る。
+
+    無いと何が静かに通るか: `int("")` の ValueError スタックトレースで落ち、
+    「レビューの追加・取り消しが gate に反映されない」原因がログから読めない —
+    取り消し後も緑 status が最大 30 分残る失敗を診断できない。
+    """
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setattr(
+        check,
+        "gh",
+        lambda *a: (_ for _ in ()).throw(AssertionError("番号なしで API を叩いた")),
+    )
+    monkeypatch.setattr(check.sys, "argv", ["check.py", ""])
+    assert check.main() == 1
+    monkeypatch.setattr(check.sys, "argv", ["check.py"])
+    assert check.main() == 1
+
+
 def test_l1_マージ失敗の翻訳は405と409を正常系として区別する() -> None:
     """無いと何が静かに通るか: 405/409 (他 check 未完・base 遅れ) を想定外扱いに
     すると sweep が 30 分毎にノイズを吐く。逆に全部を正常系に丸めると
