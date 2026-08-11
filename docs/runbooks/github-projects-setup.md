@@ -1,4 +1,10 @@
-# GitHub Projects (実行ダッシュボード) セットアップ
+# GitHub Projects (実行ダッシュボード) セットアップ — **退役 / 歴史的経緯**
+
+> ⚠️ **この Runbook は現役ではない**。2026-08-11 の [ADR 0044](../adr/0044-stream-lanes-as-the-project-map.md) D5 で、実行ダッシュボードの**描画面は Projects board から status ページの戦況図に移行**した (board の維持が web UI 手作業で、実測で open Issue 42 件のフィールド値が 0 件 = 静かに死んでいたため)。
+>
+> - 現行の地図: Issue の `stream:*` ラベル + [`cicd/scripts/status-page/streams.json`](../../cicd/scripts/status-page/streams.json) → [status ページ](https://yomote.github.io/mind-inbox/status/) ([Runbook](status-page.md))
+> - **board を再建しないこと**。ADR 0011 の核 (実行状態の真実は GitHub Issues / board に設計を書かない) は ADR 0044 でも維持されている
+> - 以下は当時の手順の記録として残す
 
 ## Trigger
 
