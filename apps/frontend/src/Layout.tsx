@@ -293,7 +293,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
           >
             <Box
               component="img"
-              src={`${import.meta.env.BASE_URL}fabicon.png`}
+              src={`${import.meta.env.BASE_URL}favicon.png`}
               alt=""
               sx={{ width: 28, height: 28, borderRadius: 1 }}
             />
