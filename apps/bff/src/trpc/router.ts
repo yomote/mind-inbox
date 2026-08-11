@@ -28,6 +28,7 @@ import {
   ProblemSchema,
   ProblemStatusSchema,
   ThemeSchema,
+  type ExtractedItem,
   type ExtractionResult,
   type Problem,
   type TriageAction,
@@ -154,6 +155,29 @@ async function runExtraction(
     }
     throw err;
   }
+}
+
+/**
+ * 抽出結果の「新規 N 件 / 既存に追加 N 件」を **Problem の件数**として数える (#283)。
+ *
+ * **item 数ではなく problemId の異なり数**で数える。同じ Dump 内で同じ既存 Problem に
+ * 複数の Mention が寄ることがあり (ai-agent の `extractor.py` は `running_count` で
+ * 累積させる正規の経路)、item をそのまま数えると 1 件しか更新していないのに
+ * 「既存に追加 2 件」と過大表示される。ai-agent 側も `updated_problem_count=len(updated_ids)`
+ * と集合で数えており、その意味論に合わせる。
+ *
+ * new 側は ai-agent では item ごとに新しい uuid を振るので重複しないが、ここは
+ * クライアントから来た下書きを数える場所なので、同じ数え方 (異なり数) に揃える —
+ * 重複 id の new が来ても `materializeExtraction` は 1 つの Problem しか作らないため、
+ * 異なり数の方が「実際に書かれた件数」と一致する。
+ */
+function countProblems(items: ExtractedItem[]): {
+  newProblemCount: number;
+  updatedProblemCount: number;
+} {
+  const ids = (kind: "new" | "existing") =>
+    new Set(items.filter((i) => i.grouping.kind === kind).map((i) => i.grouping.problemId)).size;
+  return { newProblemCount: ids("new"), updatedProblemCount: ids("existing") };
 }
 
 // ---- triage ----------------------------------------------------------------
@@ -437,14 +461,12 @@ const consultationRouter = router({
           (input.draft ? ` draft=${input.draft.items.length}` : ""),
       );
       const result = input.draft
-        ? // 再抽出しない: 下書きをそのまま確定する。counts は items から導出
-          // (クライアント申告に頼らない — mockApi.previewExtraction と同じ導出)。
+        ? // 再抽出しない: 下書きをそのまま確定する。counts は items から導出する
+          // (クライアント申告に頼らない)。
           {
             sessionId: input.sessionId,
             items: input.draft.items,
-            newProblemCount: input.draft.items.filter((i) => i.grouping.kind === "new").length,
-            updatedProblemCount: input.draft.items.filter((i) => i.grouping.kind === "existing")
-              .length,
+            ...countProblems(input.draft.items),
           }
         : await runExtraction(
             "consultation.extract",

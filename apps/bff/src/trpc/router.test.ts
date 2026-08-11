@@ -583,24 +583,51 @@ const arbGrouping = fc.record({
 });
 
 /**
- * ExtractedItem[]。mention.id / grouping.problemId は index で一意化する
- * (shrink で同値に潰れると「同 id の new が上書き合戦する」別問題を踏んで flaky になる)。
+ * ExtractedItem[]。**mention.id は一意・problemId は existing 側だけ重複しうる**形にする
+ * (これが ai-agent の実際の出力形。仕様は `apps/services/ai-agent/app/extractor.py`):
+ *
+ *   - Mention は 1 件ずつ新しい uuid を持つ (観測は常に別物)
+ *   - `existing` は**同じ Dump 内で同じ既存 Problem に複数の Mention が寄りうる**
+ *     (extractor.py が `running_count` で言及回数を累積させる正規の経路)。
+ *     だから problemId の重複を生成に混ぜないと「件数を item 数で数える」バグを踏めない
+ *   - `new` は item ごとに `uuid4()` を振るので problemId が衝突しない。ここでも一意に保つ
+ *     (同 id の new を混ぜると `materializeExtraction` の上書き合戦という別問題を踏む)
  */
 const arbExtractedItems: fc.Arbitrary<ExtractedItem[]> = fc
-  .array(fc.record({ mention: arbDraftMention, grouping: arbGrouping }), { maxLength: 4 })
+  .array(
+    fc.record({
+      mention: arbDraftMention,
+      grouping: arbGrouping,
+      // 既存 Problem は小さなプールから引く → 重複が自然に出る
+      existingSlot: fc.integer({ min: 0, max: 1 }),
+    }),
+    { maxLength: 4 },
+  )
   .map((items) =>
     items.map((item, i) => ({
       mention: { ...item.mention, id: `men-${i}-${item.mention.id}` },
-      grouping: { ...item.grouping, problemId: `prob-${i}-${item.grouping.problemId}` },
+      grouping: {
+        ...item.grouping,
+        problemId:
+          item.grouping.kind === "existing"
+            ? `prob-existing-${item.existingSlot}`
+            : `prob-new-${i}-${item.grouping.problemId}`,
+      },
     })),
   );
+
+/** 期待値は「Problem の異なり数」— item 数ではない (#283 の Codex P2)。 */
+function distinctProblemCount(items: ExtractedItem[], kind: "new" | "existing"): number {
+  return new Set(items.filter((i) => i.grouping.kind === kind).map((i) => i.grouping.problemId))
+    .size;
+}
 
 function extractionOf(items: ExtractedItem[]): ExtractionResult {
   return {
     sessionId: "s1",
     items,
-    newProblemCount: items.filter((i) => i.grouping.kind === "new").length,
-    updatedProblemCount: items.filter((i) => i.grouping.kind === "existing").length,
+    newProblemCount: distinctProblemCount(items, "new"),
+    updatedProblemCount: distinctProblemCount(items, "existing"),
   };
 }
 
@@ -715,9 +742,13 @@ describe("[単体] consultation.extract — draft commit (#283 / ADR 0039 D1/D3)
     expect(problem.mentions.map((m) => m.id)).toEqual(["men-1"]);
   });
 
-  it("derives counts from draft items and persists every draft mention", async () => {
-    // 無いと: newProblemCount / updatedProblemCount をクライアント申告のまま返す・
-    //         draft の一部 item を取りこぼして書く、のどちらも例外なしに通る (静かに間違う)
+  it("counts distinct problems (not items) and persists every draft mention", async () => {
+    // 無いと: (1) newProblemCount / updatedProblemCount をクライアント申告のまま返す
+    //         (2) **同じ既存 Problem に寄った複数 Mention を件数として重複カウントする**
+    //             — 1 件しか更新していないのに「既存に追加 2 件」と過大表示される (#283 Codex P2)。
+    //         (3) draft の一部 item を取りこぼして書く。いずれも例外なしに通る (静かに間違う)。
+    // 期待値の出どころ: ai-agent の `extractor.py` が `updated_problem_count=len(updated_ids)`
+    // と **problemId の集合**で数えている。BFF の確定側もその意味論に一致させる。
     await fc.assert(
       fc.asyncProperty(arbExtractedItems, async (items) => {
         const { caller, problemRepo } = makeCallerWithRepos();
@@ -725,10 +756,9 @@ describe("[単体] consultation.extract — draft commit (#283 / ADR 0039 D1/D3)
         const result = await caller.consultation.extract({ sessionId: "s1", draft: { items } });
 
         expect(extractAiAgent).not.toHaveBeenCalled();
-        expect(result.newProblemCount).toBe(items.filter((i) => i.grouping.kind === "new").length);
-        expect(result.updatedProblemCount).toBe(
-          items.filter((i) => i.grouping.kind === "existing").length,
-        );
+        expect(result.newProblemCount).toBe(distinctProblemCount(items, "new"));
+        expect(result.updatedProblemCount).toBe(distinctProblemCount(items, "existing"));
+        // 件数は Problem 単位でも、**Mention は 1 件も落とさない** (寄せた分は追記される)
         const storedMentionIds = (await problemRepo.list()).flatMap((p) =>
           p.mentions.map((m) => m.id),
         );
@@ -737,6 +767,44 @@ describe("[単体] consultation.extract — draft commit (#283 / ADR 0039 D1/D3)
         }
       }),
     );
+  });
+
+  it("counts one updated problem when several mentions land on the same existing problem", async () => {
+    // プロパティ側は「異なり数」を性質として固定するが、過大表示そのものは
+    // 具体例で 1 つ釘を刺しておく (回帰時にどう壊れたかがログで即読めるように)。
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem());
+
+    const sameProblemGrouping = {
+      kind: "existing" as const,
+      problemId: "prob-1",
+      problemTitle: "転職の迷い",
+      problemTheme: "仕事・キャリア" as const,
+      isRecurrence: true,
+      reignited: false,
+      groupingConfidence: 0.9,
+    };
+    const result = await caller.consultation.extract({
+      sessionId: "s2",
+      draft: {
+        items: [
+          {
+            mention: makeMention({ id: "men-a", createdAt: "2026-02-01T00:00:00.000Z" }),
+            grouping: { ...sameProblemGrouping, mentionCount: 2 },
+          },
+          {
+            mention: makeMention({ id: "men-b", createdAt: "2026-02-02T00:00:00.000Z" }),
+            grouping: { ...sameProblemGrouping, mentionCount: 3 },
+          },
+        ],
+      },
+    });
+
+    expect(result.updatedProblemCount).toBe(1); // 2 件の Mention が寄っても Problem は 1 件
+    expect(result.newProblemCount).toBe(0);
+    const problem = await caller.problem.get({ id: "prob-1" });
+    expect(problem.mentions.map((m) => m.id)).toEqual(["men-1", "men-a", "men-b"]);
+    expect(problem.mentionCount).toBe(3);
   });
 
   it("appends a draft 'existing' item to the stored problem (🔁 再出現の確定)", async () => {
