@@ -58,6 +58,9 @@
 - 「以降 N 本のマージが未反映」は deploy.yml の **push イベントの run** で数える (手動の up/down は数えない)
 - **run の緑 ≠ デプロイした**。deploy.yml は run success でも実デプロイが走らない経路 (guard skip = OIDC 未設定 / `AUTO_DEPLOY_ENABLED` 未設定、手動 `down` = 撤収) を持つ。そこで run の jobs API から `Provision + deploy (up)` の痕跡を見て、**2 つを別々に**決める — 「dev に載っている commit」= 同ステップが **success で完走**した最後の成功 run / 「直近のデプロイが通ったか」= 同ステップが **走った (success or failure)** 最新の push run の結果。後者を分けないと、**失敗の次の push が guard skip で緑になった瞬間に ⚠️ と ci-failure Issue へのリンクが消える**
   - 撤収が最後なら「⚠️ dev は撤収されています」、guard skip だけが続くなら「実デプロイの痕跡がありません」— いずれも「反映済み」とも「赤」とも書かない
+  - **「デプロイ経路に入った」痕跡は deploy.yml の no-op marker step が持つ** (`デプロイ経路に入った (marker)` — guard 通過直後・Azure login より前)。Azure login や IMAGE_TAG 解決で落ちると `Provision + deploy (up)` は skipped になり、marker が無いと「試みて失敗した」と「そもそも走らなかった」を区別できない (deploy が赤なのにページだけ緑になる)
+  - **`deploy.yml` のステップ名を変えたら `product_status.py` の `DEPLOY_STEP` / `TEARDOWN_STEP` / `MARKER_STEP` を追随させる** (deploy.yml 側にも同じ注意をコメントで置いてある)
+  - 赤は保守側に保持する — 失敗した push があり、それより新しい「デプロイできた痕跡」が無い間は、guard skip の緑が何本続いても ⚠️ を消さない (jobs API を追加で叩かず、取得済み run だけで判定)
   - deploy.yml の該当ステップ名を変えたら `product_status.py` の `DEPLOY_STEP` / `TEARDOWN_STEP` も直すこと
 
 ## 記号の読み方

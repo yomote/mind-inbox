@@ -44,6 +44,31 @@ def _fmt_due(iso: str | None) -> str:
 # --- 判定 (純関数。テストはここを直接叩く) -------------------------------
 
 
+def parse_steps(steps: object) -> dict | None:
+    """run の steps 一覧 → {"deployed", "attempted", "torn_down"}。
+
+    deployed  = デプロイ処理が **success で完走**した (= dev にこれが載る)
+    attempted = **デプロイ経路に入った** (marker が success)。marker より後の
+                どこで落ちても True になるので、「試みたが失敗した」を取りこぼさない。
+                marker の無い過去の run 向けに DEPLOY_STEP が走った (success /
+                failure) 場合も True にする (後方互換のフォールバック)
+    torn_down = 撤収 (down) が完走した
+    """
+    if not isinstance(steps, list):
+        return None
+    by_name: dict = {}
+    for s in steps:
+        # 同名ステップが複数あるときは最初の 1 つ (deploy.yml は同名を持たない)
+        if isinstance(s, dict) and s.get("n") not in by_name:
+            by_name[s.get("n")] = s.get("c")
+    deploy_ran = by_name.get(DEPLOY_STEP) in ("success", "failure")
+    return {
+        "deployed": by_name.get(DEPLOY_STEP) == "success",
+        "attempted": by_name.get(MARKER_STEP) == "success" or deploy_ran,
+        "torn_down": by_name.get(TEARDOWN_STEP) == "success",
+    }
+
+
 def pick_milestone(milestones: object) -> dict | None:
     """open milestone から「期限が直近」の 1 件を選ぶ。期限なしは期限ありの後ろ。"""
     if not isinstance(milestones, list):
@@ -55,9 +80,15 @@ def pick_milestone(milestones: object) -> dict | None:
     return ok[0] if ok else None
 
 
-# deploy.yml のステップ名 (実デプロイ / 撤収の痕跡)。名前を変えたらここも追随すること
+# deploy.yml のステップ名 (実デプロイ / 撤収 / 経路突入の痕跡)。
+# **名前を変えたらここも追随すること** (deploy.yml 側にもその旨のコメントがある)。
 DEPLOY_STEP = "Provision + deploy (up)"
 TEARDOWN_STEP = "Tear down (cleanup-env)"
+# guard を通過して「デプロイ経路に入った」ことだけを記録する no-op ステップ。
+# Azure login や IMAGE_TAG 解決で落ちると DEPLOY_STEP は skipped になるため、
+# DEPLOY_STEP だけでは「試みたが失敗した」と「そもそも走らなかった」が区別できない
+# (PR #281 Codex P2-b)。marker は失敗し得る処理より**前**に置いてある。
+MARKER_STEP = "デプロイ経路に入った (marker)"
 # 実デプロイの痕跡を steps で確認する run の上限 (1 run = 1 API 呼び出し)。
 # 自動デプロイ未解禁などで skip が延々続く場合に API を叩き続けないための箍。
 # 「今 dev に載っている commit」を探す成功 run 側 (ANCHOR) と、「直近のデプロイが
@@ -96,7 +127,10 @@ def dev_state(runs: object, deploy_issue: int | None = None, run_steps=None) -> 
         ところまで確かめられた状態」を dev の状態と定義し、成功 run だけを
         反映済みとみなす (保守側に倒す)
       - 痕跡を確認できないまま予算 (MAX_*_CHECKS) を使い切ったら、
-        **緑とも赤とも断定しない** (ok=None / anchor=None = 未検証側に倒す)
+        **緑とも赤とも断定しない** (ok=None / anchor=None = 未検証側に倒す)。
+        ただし **赤の保持だけは例外** — 失敗した push があり、それより新しい
+        「デプロイできた痕跡」が無いなら ok=False のままにする (下の (3))。
+        隠す側 (緑・無表示) には倒さない
 
     返り値:
       fetched       run 履歴が読めたか (False なら以降のキーは無い)
@@ -138,13 +172,13 @@ def dev_state(runs: object, deploy_issue: int | None = None, run_steps=None) -> 
 
     # (1) 直近に**デプロイを試みた** push の結果 = ok。guard skip の緑は読み飛ばす —
     # 飛ばさないと、失敗の次の push が skip されただけで赤警告が消える
-    ok = None
+    ok, ok_run = None, None
     for r in pushes[:MAX_OK_CHECKS]:
         info = info_for(r)
         if info is None:
             break
         if info.get("attempted", info.get("deployed")):
-            ok = r.get("c") == "success"
+            ok, ok_run = r.get("c") == "success", r
             break
 
     # (2) 今 dev に載っている commit = 実デプロイが完走した最後の成功 run
@@ -166,6 +200,24 @@ def dev_state(runs: object, deploy_issue: int | None = None, run_steps=None) -> 
         if info.get("deployed"):
             anchor = r
             break
+    # (3) 赤の保持 (PR #281 Codex P2-a)。guard skip の成功 push が予算 (MAX_OK_CHECKS)
+    # より多く続くと (1) が届かず ok=None になり、⚠️ と ci-failure Issue が消える。
+    # **jobs API を追加で叩かず**、取得済みの run だけで保守側に倒す:
+    #   「失敗した push があり、それより新しい『デプロイできた痕跡』が無いなら赤のまま」
+    # 痕跡 = ok を決めた成功 run / 実デプロイが完走した run (anchor)。
+    if ok is not False:
+        failed_push = next((r for r in pushes if r.get("c") == "failure"), None)
+        if failed_push is not None:
+            good_times = [
+                r.get("t") or ""
+                for r in (ok_run if ok else None, anchor)
+                if isinstance(r, dict)
+            ]
+            newest_good = max(good_times) if good_times else ""
+            # ISO 8601 (Z 固定) は文字列比較で時刻順になる
+            if (failed_push.get("t") or "") > newest_good:
+                ok = False
+
     behind = 0
     if anchor is not None:
         # ISO 8601 (Z 固定) は文字列比較で時刻順になる
@@ -271,15 +323,10 @@ def collect(gh, gh_lines, gh_objects) -> dict:
     )
 
     def _run_steps(run: dict) -> dict | None:
-        """run の jobs API から実デプロイ / 撤収ステップの痕跡を確認する。
+        """run の jobs API から steps を取り、`parse_steps` で痕跡に畳む。
 
         deploy.yml は run success でも実デプロイが走らない経路 (guard skip / down)
         を持つため、conclusion では判定できない (dev_state の docstring 参照)。
-
-        deployed  = デプロイ処理が **success** で完走した (= dev にこれが載る)
-        attempted = デプロイ処理が **走った** (success / failure。skip でも未実行でもない)
-                    → 「直近のデプロイが通ったか」はこちらで判定する。走った run の
-                    結果だけを見ないと、失敗の次の push が skip されただけで赤が消える
         """
         rid = run.get("id")
         if rid is None:
@@ -290,17 +337,9 @@ def collect(gh, gh_lines, gh_objects) -> dict:
             "--jq",
             "{steps: [.jobs[].steps[]? | {n: .name, c: .conclusion}]}",
         )
-        if not isinstance(got, dict) or not isinstance(got.get("steps"), list):
+        if not isinstance(got, dict):
             return None
-        by_name: dict = {}
-        for s in got["steps"]:
-            if isinstance(s, dict) and s.get("n") not in by_name:
-                by_name[s.get("n")] = s.get("c")
-        return {
-            "deployed": by_name.get(DEPLOY_STEP) == "success",
-            "attempted": by_name.get(DEPLOY_STEP) in ("success", "failure"),
-            "torn_down": by_name.get(TEARDOWN_STEP) == "success",
-        }
+        return parse_steps(got.get("steps"))
 
     ci_fail = gh(
         "api",

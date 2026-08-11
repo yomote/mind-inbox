@@ -8,11 +8,15 @@
 """
 
 from product_status import (
+    DEPLOY_STEP,
+    MARKER_STEP,
+    TEARDOWN_STEP,
     classify_prs,
     collect,
     dev_state,
     gate_mark,
     next_candidates,
+    parse_steps,
     pick_milestone,
     render,
 )
@@ -99,6 +103,94 @@ def test_単体_guard_skipの緑で直前のdeploy失敗を隠さない():
     assert "更新が届いていない" in html
     assert "#262" in html
     assert "feed567" in html  # 載っているのは最後に完走した commit
+
+
+def test_単体_guard_skipが5本続いても直前の失敗を保持する():
+    """skip の緑が予算 (MAX_OK_CHECKS) より多く続いても赤を消さない。
+
+    無いと何が静かに通るか:
+        「直近にデプロイを試みた push」を探す走査は API 予算で打ち切るため、
+        失敗のあと guard skip の緑が 3 本以上積まれると失敗が窓から外れ、
+        ⚠️・deploy 赤・Issue リンクが**もう一度**消える (PR #281 Codex P2-a)。
+    """
+    skips = [
+        _run("success", "completed", f"2099-01-1{i}T00:00:00Z", rid=100 + i)
+        for i in (5, 4, 3, 2, 1)  # 新しい順に 5 本
+    ]
+    failed = _run("failure", "completed", "2099-01-05T00:00:00Z", rid=110)
+    deployed = _run(
+        "success", "completed", "2099-01-01T00:00:00Z", sha="feed5678abcd", rid=111
+    )
+    steps = {
+        **{100 + i: {"deployed": False, "attempted": False} for i in (5, 4, 3, 2, 1)},
+        110: {"deployed": False, "attempted": True},
+        111: {"deployed": True, "attempted": True},
+    }
+    dev = dev_state(
+        [*skips, failed, deployed], deploy_issue=262, run_steps=lambda r: steps[r["id"]]
+    )
+    assert dev["ok"] is False, "skip が続いた分だけ失敗が窓から外れて赤が消えている"
+    html = render({"dev": dev}, _PEND)
+    assert "⚠️" in html
+    assert "#262" in html
+
+
+def test_単体_成功デプロイより古い失敗は赤にしない():
+    """赤の保持は「その後デプロイできていない」ときだけ (誤検知を持ち込まない)。"""
+    skip = _run("success", "completed", "2099-01-09T00:00:00Z", rid=120)
+    deployed = _run("success", "completed", "2099-01-05T00:00:00Z", rid=121)
+    old_fail = _run("failure", "completed", "2099-01-01T00:00:00Z", rid=122)
+    steps = {
+        120: {"deployed": False, "attempted": False},
+        121: {"deployed": True, "attempted": True},
+        122: {"deployed": False, "attempted": True},
+    }
+    dev = dev_state([skip, deployed, old_fail], run_steps=lambda r: steps[r["id"]])
+    assert dev["ok"] is not False, "復旧済みの古い失敗で赤を出している"
+    assert "⚠️" not in render({"dev": dev}, _PEND)
+
+
+def test_単体_Provision前に落ちた失敗も試行済みとして扱う():
+    """Azure login / IMAGE_TAG 解決で落ちると Provision は skipped になる。
+
+    無いと何が静かに通るか:
+        DEPLOY_STEP だけで「試みたか」を見ると、この失敗は「そもそも走らなかった」
+        と同じ扱いになり、さらに古い成功 run が選ばれて ok=True。**deploy は赤で
+        Issue も立っているのに、状況ページだけ緑**になる (PR #281 Codex P2-b)。
+        marker (guard 通過直後の no-op) が痕跡を残すので区別できる。
+    """
+    info = parse_steps(
+        [
+            {"n": MARKER_STEP, "c": "success"},  # 経路には入った
+            {"n": "Azure login (OIDC, no stored secret)", "c": "failure"},
+            {"n": DEPLOY_STEP, "c": "skipped"},  # ここまで来ていない
+            {"n": TEARDOWN_STEP, "c": "skipped"},
+        ]
+    )
+    assert info == {"deployed": False, "attempted": True, "torn_down": False}
+
+    broken = _run("failure", "completed", "2099-01-09T00:00:00Z", rid=130)
+    old_ok = _run("success", "completed", "2099-01-01T00:00:00Z", rid=131)
+    dev = dev_state(
+        [broken, old_ok],
+        deploy_issue=262,
+        run_steps=lambda r: (
+            info if r["id"] == 130 else {"deployed": True, "attempted": True}
+        ),
+    )
+    assert dev["ok"] is False
+    html = render({"dev": dev}, _PEND)
+    assert "⚠️" in html
+    assert "#262" in html
+
+
+def test_単体_marker無しの過去runはDEPLOY_STEPで試行を判定する():
+    """marker を足す前の run が「試みていない」に化けないこと (後方互換)。"""
+    assert parse_steps([{"n": DEPLOY_STEP, "c": "failure"}])["attempted"] is True
+    assert parse_steps([{"n": DEPLOY_STEP, "c": "success"}])["deployed"] is True
+    # guard skip: marker も DEPLOY_STEP も走っていない
+    assert parse_steps([{"n": DEPLOY_STEP, "c": "skipped"}])["attempted"] is False
+    assert parse_steps("not a list") is None  # 取得失敗は None (未検証)
 
 
 def test_単体_デプロイを試みたpushが見つからないときは緑とも赤とも書かない():
