@@ -145,12 +145,17 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   // 相談フロー (consultation) と読み上げ (tts) は互いを知らないので、「どのタップが音声の
   // 起点になるか」を知っている Layout がここで束ねる (#141 のレビュー指摘: 分離で配線が消えた)。
   const startConsultationWithAudio = React.useCallback(() => {
-    unlock();
     // 前セッションの読み上げを新しい相談に持ち込まない (#146 レビュー / dialogue-session.mdx
     // §5.6): 再生中にホームへ戻って開始すると、旧セッションの音声が鳴り続け、メッセージ
     // 0 件の新セッションのマスコットが speaking のまま表示される。開始タップで止める
     // (ttsStatus も idle に戻る)。
+    //
+    // **順序は stop → unlock 固定**: stop() は speechSynthesis.cancel() を呼ぶので、
+    // 逆順だと unlock() が enqueue した無音発話 (iOS / ブラウザ読み上げの解錠) を打ち消す。
+    // unlock は解錠済みマーク (ref) で 2 回目以降 no-op になるため、「マークだけ立って
+    // 実際は解錠されていない」状態になり、最初の読み上げが無音になりうる。
     stopTts();
+    unlock();
     return startConsultation();
   }, [startConsultation, stopTts, unlock]);
 

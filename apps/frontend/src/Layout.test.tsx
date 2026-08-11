@@ -48,15 +48,20 @@ import { Layout } from "./Layout";
  *
  * `autoEnd: false` を渡すと onend を呼ばない = 発話が「再生中のまま」になり、
  * 再生中の画面遷移・停止の配線を検証できる。
+ * `events` は speak / cancel の時系列 — cancel が解錠発話を打ち消していないかを見る用。
  */
 function speechSynthesisSpy({ autoEnd = true }: { autoEnd?: boolean } = {}) {
   const spoken: { text: string; volume: number }[] = [];
+  const events: Array<{ kind: "speak"; volume: number } | { kind: "cancel" }> = [];
   vi.stubGlobal("speechSynthesis", {
     speak: (u: { text: string; volume: number; onend?: (() => void) | null }) => {
       spoken.push({ text: u.text, volume: u.volume });
+      events.push({ kind: "speak", volume: u.volume });
       if (autoEnd) u.onend?.();
     },
-    cancel: vi.fn(),
+    cancel: () => {
+      events.push({ kind: "cancel" });
+    },
     getVoices: () => [],
   });
   vi.stubGlobal(
@@ -74,7 +79,7 @@ function speechSynthesisSpy({ autoEnd = true }: { autoEnd?: boolean } = {}) {
       }
     },
   );
-  return spoken;
+  return { spoken, events };
 }
 
 const renderLayout = () =>
@@ -98,7 +103,7 @@ describe("[L2] Layout — 音声解錠 (iOS) の配線", () => {
     //         再生されないので E2E でも気づけない — 配線の有無をここで固定する。
     //         解錠は冪等 (最初のジェスチャ 1 回) なので、3 つの呼び出し口
     //         (相談開始 / 送信 / 読み上げトグル) は同じガードを共有する
-    const spoken = speechSynthesisSpy();
+    const { spoken } = speechSynthesisSpy();
     renderLayout();
 
     await userEvent.click(await screen.findByRole("button", { name: "新しい相談を始める" }));
@@ -108,7 +113,7 @@ describe("[L2] Layout — 音声解錠 (iOS) の配線", () => {
 
   it("解錠は 1 度きり (2 回目以降のタップで無駄な発話をしない)", async () => {
     // 無いと: タップのたびに空の utterance が積まれ、読み上げの頭が欠ける
-    const spoken = speechSynthesisSpy();
+    const { spoken } = speechSynthesisSpy();
     renderLayout();
 
     await userEvent.click(await screen.findByRole("button", { name: "新しい相談を始める" }));
@@ -140,5 +145,31 @@ describe("[L2] Layout — 新しい相談の開始で読み上げを止める (#
 
     // 開始タップで読み上げが止まり、「読み上げ中」表示 (= ttsStatus playing) が消える
     await waitFor(() => expect(screen.queryByTestId("tts-status")).toBeNull());
+  });
+
+  it("開始時の stop が解錠の無音発話を打ち消さない (stop → unlock の順)", async () => {
+    // 無いと: unlock() が無音発話を enqueue して解錠済みマーク (ref) を立てた直後に、
+    // stop() の speechSynthesis.cancel() がその発話を取り消す。マークにより以降の
+    // unlock() は no-op なので「解錠済みのはずが実際は解錠されていない」状態に固定され、
+    // iOS / ブラウザフォールバック環境で最初の読み上げが無音になる退行が静かに通る。
+    const { events } = speechSynthesisSpy();
+    renderLayout();
+
+    await userEvent.click(await screen.findByRole("button", { name: "新しい相談を始める" }));
+
+    // 解錠の無音発話 (volume 0) は開始タップの同期処理で enqueue される
+    const unlockIndex = events.findIndex((e) => e.kind === "speak" && e.volume === 0);
+    expect(unlockIndex).toBeGreaterThanOrEqual(0);
+    // 停止 (cancel) は解錠発話より**前** — 後に来ると解錠発話がキューから消される。
+    // (後続の自動読み上げ (speakWithBrowser) 内の cancel は実発話が直後に続くので対象外 —
+    //  ここで見るのは開始タップの同期区間 = 解錠発話までの並びだけ)
+    const cancelsBeforeUnlockOrNever = events
+      .slice(0, unlockIndex)
+      .filter((e) => e.kind === "cancel").length;
+    const cancelsTotalInGesture = events
+      .slice(0, unlockIndex + 1)
+      .filter((e) => e.kind === "cancel").length;
+    expect(cancelsTotalInGesture).toBe(cancelsBeforeUnlockOrNever); // 同期区間の cancel は全て解錠前
+    expect(cancelsBeforeUnlockOrNever).toBeGreaterThanOrEqual(1); // stop は呼ばれている (P2-4 の配線)
   });
 });
