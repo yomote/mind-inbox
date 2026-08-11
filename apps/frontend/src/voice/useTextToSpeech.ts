@@ -338,6 +338,12 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
       let sentences: string[] = [text];
       try {
         const res = await ttsPlanFetch(text, speaker);
+        // 非同期境界の後は、**publish (再生開始 / error / outputMode の set) の前に必ず世代を
+        // 確認する**。plan の往復中に stop() された (新しい相談の開始等) のにここで
+        // フォールバックすると、停止済みの旧応答のブラウザ読み上げと劣化警告が
+        // 新しい空セッションで復活する。ループ内の各フォールバックは既に確認している —
+        // ここ (204 分岐) だけ確認より先に publish していた。
+        if (isStale()) return;
         if (res.status === 204) {
           // VOICEVOX 未構成。合成しても無駄なのでここでフォールバックする。
           speakWithBrowser(text, MSG_SYNTH_STUB);
