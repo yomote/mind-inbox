@@ -24,7 +24,9 @@
 #   (有効化 = PM の受け入れ意思表示。needs-human ラベル / base≠main は除外)。
 #   405/409 は黙ってスキップし、schedule sweep が 30 分毎に再試行する (下限保証)。
 #   同じ連鎖抑止でマージ push は build-images / deploy の push トリガーも起動しない
-#   ため、マージ後に workflow_dispatch (GITHUB_TOKEN の例外) で補償する。
+#   ため、マージ後に workflow_dispatch (GITHUB_TOKEN の例外) で補償する。deploy は
+#   build 完了の run を確認してから出す (古い image の据え置き防止)。補償は冪等
+#   (run 存在確認) で、失敗は sweep が直近 24h のマージ分を打ち直す。
 #   sweep はストール検知も行う: 全 check 🟢 + auto-merge 有効のまま 2h 未マージ →
 #   PR にコメント / needs-human Issue・Proposed ADR の 48h 停滞 → @yomote へ通知
 #   (再通知は 24h クールダウン)。

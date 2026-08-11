@@ -13,6 +13,7 @@ from check import (
     MERGE_STALL_HOURS,
     MERGE_STALL_MARKER,
     all_check_runs_green,
+    build_satisfied,
     codex_present_in,
     decide,
     has_pm_accept,
@@ -25,7 +26,9 @@ from check import (
     merge_failure_reason,
     minutes_between,
     needs_image_build,
+    recently_merged,
     review_gate_success_at,
+    runs_since,
     sensitive_paths,
     should_execute_merge,
     should_notify_again,
@@ -487,6 +490,67 @@ def test_l1_needs_human停滞の対象はissueだけでprを除く() -> None:
         "pull_request": {"url": "x"},
     }
     assert human_queue_issues([issue, pr]) == [issue]
+
+
+def test_l1_runs_sinceはmerged_at以降のmainのrunだけ数える() -> None:
+    """補償 dispatch の冪等キー (Codex P2 / PR #258)。
+
+    無いと何が静かに通るか: 古い run や別ブランチの run を「補償済み」と数えると
+    dispatch が打たれず image 未ビルド / 反映漏れが残る。逆に絞りすぎると
+    sweep のたびに同じ build/deploy を二重起動し続ける。
+    """
+    merged_at = "2026-08-11T12:00:00Z"
+    after = {"head_branch": "main", "created_at": "2026-08-11T12:05:00Z"}
+    at_merge = {"head_branch": "main", "created_at": merged_at}
+    before = {"head_branch": "main", "created_at": "2026-08-11T11:59:00Z"}
+    other_branch = {"head_branch": "feature", "created_at": "2026-08-11T13:00:00Z"}
+    no_time = {"head_branch": "main"}
+    assert runs_since([after, before, other_branch, no_time], merged_at) == [after]
+    assert runs_since([at_merge], merged_at) == [at_merge], "同時刻は補償済みに数える"
+    assert runs_since([], merged_at) == []
+
+
+def test_l1_deployはbuild完了runを確認するまで出さない() -> None:
+    """Codex P1 (PR #258): build 完了前に deploy を出すと、deploy.yml の
+    IMAGE_TAG 解決が「当該 SHA の run 無し → 直近の成功 run」に落ちる。
+
+    無いと何が静かに通るか: **古い image が正常デプロイされ smoke も通る**
+    (全部緑のまま dev に新コードが載らない静かな劣化)。
+    """
+    ok, reason = build_satisfied([])
+    assert not ok and "未起動" in reason
+    ok, reason = build_satisfied([{"status": "in_progress", "conclusion": None}])
+    assert not ok and "進行中" in reason
+    ok, _ = build_satisfied([{"status": "completed", "conclusion": "success"}])
+    assert ok
+    # 失敗完了でも deploy へ進む — push 経路と同じ (deploy.yml が直近成功 image で
+    # 続行 + warning。build の赤は build-images 側で見える)
+    ok, _ = build_satisfied([{"status": "completed", "conclusion": "failure"}])
+    assert ok
+    # 進行中と完了が混在していれば完了を採る
+    ok, _ = build_satisfied(
+        [
+            {"status": "in_progress", "conclusion": None},
+            {"status": "completed", "conclusion": "success"},
+        ]
+    )
+    assert ok
+
+
+def test_l1_補償の再試行対象はlookback内にマージされたprだけ() -> None:
+    """Codex P2 (PR #258): マージ後の dispatch 失敗は「マージ済みなのでイベント
+    run は即終了 / sweep は open PR しか見ない」ため永久に再試行されなかった。
+
+    無いと何が静かに通るか: 対象選定の退行は「クローズのみの PR や大昔の
+    マージまで毎 sweep 照会し続ける」か「直近マージが漏れて補償が失われた
+    まま」(= P2 が直っていない) に倒れ、どちらも run は緑のまま。
+    """
+    now = "2026-08-11T12:00:00Z"
+    fresh = {"number": 1, "merged_at": "2026-08-11T00:00:00Z"}
+    old = {"number": 2, "merged_at": "2026-08-09T00:00:00Z"}
+    closed_only = {"number": 3, "merged_at": None}
+    assert recently_merged([fresh, old, closed_only], now) == [fresh]
+    assert recently_merged([], now) == []
 
 
 def test_l1_image_buildの補償dispatchはpush触発のpaths写像() -> None:

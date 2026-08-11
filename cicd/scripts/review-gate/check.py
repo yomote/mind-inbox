@@ -50,7 +50,9 @@
     - リリース PR (base ≠ main) / needs-human ラベル付き PR は対象外
     - GITHUB_TOKEN のマージ push は deploy.yml 等の push トリガーも起動しない
       (同じ連鎖抑止) ため、マージ後に workflow_dispatch (GITHUB_TOKEN の例外) で
-      build-images / deploy を明示的に叩いて補償する
+      build-images / deploy を明示的に叩いて補償する。deploy は build (が要るなら)
+      の完了 run を確認してから出す (古い image の据え置き防止)。補償は冪等
+      (run 存在確認が鍵) で、失敗しても sweep が直近マージ分を打ち直す
 
 ストール検知 (同じ sweep 内 / ADR 0040 D1):
     - 全 check 🟢 + auto-merge 有効なのに 2 時間以上未マージ → PR にコメントで記録
@@ -240,6 +242,10 @@ GREEN_CONCLUSIONS = ("success", "neutral", "skipped")
 # GITHUB_TOKEN のマージ push では起動しない push トリガー workflow の補償対象
 IMAGE_BUILD_PREFIXES = ("apps/services/ai-agent/", "apps/services/voicevox/")
 IMAGE_BUILD_WORKFLOW = ".github/workflows/build-images.yml"
+# 補償 dispatch の再試行で遡る時間 (sweep が「最近マージされた PR」を見る幅)。
+# dispatch の一過性失敗を拾い直すのが目的で、これより古い取りこぼしは
+# status page (deploy watcher) と golden-path が異常として見せる
+FOLLOWUP_LOOKBACK_HOURS = 24.0
 # ADR の Status 行 (MADR 形式の「- Status: Proposed」のみ拾う。本文中の引用は拾わない)
 _PROPOSED_STATUS_PATTERN = re.compile(r"(?m)^-\s*Status:\s*Proposed\b")
 
@@ -367,6 +373,57 @@ def needs_image_build(changed_paths: list[str]) -> bool:
         p.startswith(IMAGE_BUILD_PREFIXES) or p == IMAGE_BUILD_WORKFLOW
         for p in changed_paths
     )
+
+
+def runs_since(runs: list[dict], since_iso: str) -> list[dict]:
+    """main の workflow run のうち since_iso 以降に作成されたものを返す。
+
+    補償 dispatch の冪等キー: 「merged_at 以降に run がある = その merge の
+    コードを含む tip で起動済み (push 経路 / 手動 / 過去の補償のいずれでも)」。
+    run は常に main の tip から走るため、後続 merge の run でもこの merge を
+    含んでいる — head_sha の一致は要求しない。
+    """
+    return [
+        r
+        for r in runs
+        if r.get("head_branch") == "main"
+        and r.get("created_at")
+        and minutes_between(since_iso, r["created_at"]) >= 0
+    ]
+
+
+def build_satisfied(build_runs_since_merge: list[dict]) -> tuple[bool, str]:
+    """image build を待つ deploy を出してよいか (進んでよいか, 状態説明)。
+
+    completed が 1 本でもあれば進む — conclusion は問わない (push 経路と同じ:
+    build 失敗時の deploy は「直近の成功 image で続行 + warning」が deploy.yml の
+    既定で、deploy を止めると build の赤とは別の停止が増えるだけ)。
+    進行中しか無ければ待つ — ここで deploy を出すと deploy.yml の IMAGE_TAG
+    解決が「当該 SHA の run 無し → 直近の成功 run」に落ち、**古い image を
+    正常デプロイして smoke も通る** (Codex P1 / PR #258 の静かな劣化)。
+    """
+    if not build_runs_since_merge:
+        return (False, "build run が未起動")
+    if any(r.get("status") == "completed" for r in build_runs_since_merge):
+        return (True, "build 完了")
+    return (False, "build 進行中")
+
+
+def recently_merged(
+    prs: list[dict], now_iso: str, lookback_hours: float = FOLLOWUP_LOOKBACK_HOURS
+) -> list[dict]:
+    """closed PR のうち lookback 内にマージされたものを返す (補償の再試行対象)。
+
+    merged_at が無い closed PR (クローズのみ) は対象外。マージ実行者は
+    問わない — 人間 / auto-merge のマージは push 経路の run が既に存在し、
+    冪等チェック (runs_since) が no-op にする。
+    """
+    return [
+        pr
+        for pr in prs
+        if pr.get("merged_at")
+        and not is_stale(pr["merged_at"], now_iso, lookback_hours)
+    ]
 
 
 @dataclass
@@ -677,30 +734,90 @@ def dispatch_workflow(
     print(f"workflow_dispatch: {workflow} を起動した")
 
 
-def post_merge_followup(repo: str, changed_paths: list[str]) -> None:
+def fetch_workflow_runs(repo: str, workflow: str) -> list[dict]:
+    """workflow の直近 run 一覧 (新しい順)。補償 dispatch の冪等チェック用。"""
+    payload = gh("api", f"repos/{repo}/actions/workflows/{workflow}/runs?per_page=30")
+    return payload.get("workflow_runs") or []  # type: ignore[union-attr]
+
+
+def ensure_merge_followup(repo: str, merged_at: str, changed_paths: list[str]) -> None:
     """GITHUB_TOKEN のマージ push は push トリガー workflow を起動しない —
     まさに #253 の原因と同じ連鎖抑止が、今度はマージの下流 (build-images /
     deploy) で起きる。workflow_dispatch は GITHUB_TOKEN でも起動できる
     (公式の例外) ので、push トリガー相当を明示的に叩いて補償する。
 
-    - build-images: マージした PR が image のソースに触れたときだけ (paths の写像)
-    - deploy: AUTO_DEPLOY_ENABLED=true のときだけ (push 経路と同じゲートを尊重する。
+    **冪等 (何度呼んでも安全)**: dispatch の前に「merged_at 以降の run の存在」を
+    確認する — マージ直後とその後の sweep (sweep_merged_followups) が同じ経路を
+    通り、一過性の dispatch 失敗は最悪 30 分後の sweep が打ち直す (Codex P2)。
+
+    - build-images: PR が image のソースに触れたときだけ (paths の写像)
+    - deploy: **build (が要るなら) の完了 run を確認してから** dispatch する
+      (Codex P1)。build 前に出すと deploy.yml の IMAGE_TAG 解決が「当該 SHA の
+      run 無し → 直近の成功 run」に落ち、古い image を正常デプロイして smoke も
+      通ってしまう。完了待ちの poll はしない — runner を数十分保持する代わりに
+      次の sweep (≤30 分後) に譲る (マージの下限保証と同じ粒度)
+    - deploy は AUTO_DEPLOY_ENABLED=true のときだけ (push 経路と同じゲートを尊重。
       dispatch の action=up は本来ゲート対象外なので、ここで見ないと未解禁のまま
       公開 URL へ自動デプロイしてしまう)
-    dispatch の失敗は隠さない — 例外を上げて run を赤にする (マージ自体は済んでいる)。
     """
     if needs_image_build(changed_paths):
-        dispatch_workflow(repo, "build-images.yml")
-    if (os.environ.get("AUTO_DEPLOY_ENABLED", "") or "").lower() == "true":
-        dispatch_workflow(
-            repo,
-            "deploy.yml",
-            {"action": "up", "environment": "dev", "voicevox": "cpu"},
+        build_runs = runs_since(
+            fetch_workflow_runs(repo, "build-images.yml"), merged_at
         )
-    else:
+        if not build_runs:
+            dispatch_workflow(repo, "build-images.yml")
+            print("deploy は build 完了後の sweep が出す (古い image の据え置き防止)")
+            return
+        ok, state = build_satisfied(build_runs)
+        if not ok:
+            print(f"{state} — deploy は次の sweep に譲る")
+            return
+    if (os.environ.get("AUTO_DEPLOY_ENABLED", "") or "").lower() != "true":
         print(
             "AUTO_DEPLOY_ENABLED != true — deploy の dispatch はしない (push 経路と同じゲート)"
         )
+        return
+    if runs_since(fetch_workflow_runs(repo, "deploy.yml"), merged_at):
+        print("deploy run が既にある — 打ち直さない (冪等)")
+        return
+    dispatch_workflow(
+        repo, "deploy.yml", {"action": "up", "environment": "dev", "voicevox": "cpu"}
+    )
+
+
+def sweep_merged_followups(repo: str, now_iso: str) -> bool:
+    """直近 FOLLOWUP_LOOKBACK_HOURS にマージされた PR の補償 dispatch を打ち直す。
+
+    マージ後の dispatch が一過性エラーで落ちると、その PR はマージ済みのため
+    イベント駆動の run は `merged` skip で終わり、open PR しか見ない advisory
+    sweep も素通りする — 補償が永久に失われる (Codex P2 / PR #258)。closed
+    (merged) PR を lookback 内で見直し、必要な run が無ければ dispatch し直す。
+    冪等性は run 存在確認 (runs_since) が持つ。個別 PR の失敗は残りを止めず、
+    最後に False を返して run を赤にする (できなかったことを隠さない)。
+    """
+    prs = gh(
+        "api",
+        f"repos/{repo}/pulls?state=closed&base=main&sort=updated"
+        "&direction=desc&per_page=30",
+    )
+    targets = recently_merged(prs, now_iso)  # type: ignore[arg-type]
+    print(
+        f"merged followup sweep: 直近 {FOLLOWUP_LOOKBACK_HOURS:.0f}h のマージ {len(targets)} 件"
+    )
+    all_ok = True
+    for pr in targets:
+        number = pr["number"]
+        try:
+            files = gh("api", f"repos/{repo}/pulls/{number}/files", "--paginate")
+            changed_paths = [f["filename"] for f in files]  # type: ignore[union-attr]
+            print(f"#{number}: 補償 dispatch の確認 (merged {pr['merged_at']})")
+            ensure_merge_followup(repo, pr["merged_at"], changed_paths)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            # 1 件の失敗で残りの補償を道連れにしない。ただし成功と偽らない —
+            # 呼び出し元が run を赤にする (次の sweep が再試行する)
+            all_ok = False
+            print(f"#{number}: 補償 dispatch に失敗 — {e}")
+    return all_ok
 
 
 def maybe_execute_merge(
@@ -713,7 +830,10 @@ def maybe_execute_merge(
         return False
     merged, _ = try_merge(repo, number, head_sha)
     if merged:
-        post_merge_followup(repo, changed_paths)
+        # merged_at はこの瞬間 (直後の存在確認が拾うのは既存 run だけで正しい)
+        ensure_merge_followup(
+            repo, datetime.now(timezone.utc).isoformat(), changed_paths
+        )
     return merged
 
 
@@ -918,7 +1038,11 @@ def run_advisory_sweep(repo: str) -> int:
                     files = gh(
                         "api", f"repos/{repo}/pulls/{number}/files", "--paginate"
                     )
-                    post_merge_followup(repo, [f["filename"] for f in files])  # type: ignore[union-attr]
+                    ensure_merge_followup(
+                        repo,
+                        datetime.now(timezone.utc).isoformat(),
+                        [f["filename"] for f in files],  # type: ignore[union-attr]
+                    )
                     continue  # マージ済み PR に advisory はもう要らない
                 maybe_report_merge_stall(repo, number, head_sha, gate_success, now_iso)
         else:
@@ -949,8 +1073,10 @@ def run_advisory_sweep(repo: str) -> int:
             code_pr=code_pr,
             codex_present=codex_present,
         )
+    followups_ok = sweep_merged_followups(repo, now_iso)
     sweep_human_queue(repo, now_iso)
-    return 0
+    # 補償 dispatch の失敗は残りの処理を止めないが、run は赤にして隠さない
+    return 0 if followups_ok else 1
 
 
 def post_status(repo: str, sha: str, state: str, description: str) -> None:
