@@ -25,6 +25,7 @@
 | [`ux-probe-judge.md`](ux-probe-judge.md)                       | UX プローブの記録を採点する / 採点 Routine を運用する                     |
 | [`ops-inspect.md`](ops-inspect.md)                             | サンドボックス外の事実 (Azure の実態 / egress の外) をエージェントが取る  |
 | [`github-projects-setup.md`](github-projects-setup.md)         | GitHub Projects (実行ダッシュボード) をセットアップする                   |
+| [`merge-queue.md`](merge-queue.md)                             | Merge Queue を有効化・運用する / pm-accept 引き継ぎ (review-gate) を読む  |
 
 ## 新しく書くとき
 

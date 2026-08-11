@@ -3,6 +3,10 @@ name: test
 on:
   pull_request:
     branches: [main]
+  # merge queue の一時 branch でも required check を報告する (ADR 0042)。
+  # これが無いと queue に入った PR は test / lint-and-build が永遠に pending で
+  # タイムアウト脱落する。queue 有効化は needs-human #269。
+  merge_group:
   push:
     branches: [main]
 

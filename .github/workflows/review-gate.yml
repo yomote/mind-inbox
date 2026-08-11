@@ -16,6 +16,12 @@
 #   イベント駆動だけだと「push 直後は猶予内 → その後イベントが来ない」で advisory が
 #   発火しないため、schedule (30 分毎) が open PR を advisory sweep する (status は貼らない)。
 #
+# merge_group (ADR 0042): merge queue が作る一時 branch にも同じ判定で status を
+#   貼る (required check は queue では merge group の head SHA を見る)。判定材料
+#   (pm-accept / スレッド / Codex) は head_ref から解決した対象 PR のもの。
+#   PR を解決できないときは failure を貼る (安全側 — 静かに通さない)。
+#   pm-accept は「実装差分が不変の main 追随」なら引き継がれる (check.py / ADR 0042)。
+#
 # 注意: issue_comment / pull_request_review / schedule トリガーは main に入った版で
 #       しか発火しない。コメント後の再評価が要るときは workflow_dispatch で PR 番号を
 #       渡して叩ける。
@@ -25,6 +31,8 @@ name: review-gate
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested] # merge queue (ADR 0042)。queue 有効化は needs-human #269
   issue_comment:
     types: [created, edited]
   pull_request_review:
@@ -38,10 +46,11 @@ on:
         required: true
 
 # 同じ PR への run を直列化する (2 重投稿レースの防御 a / PR #238 P2)。
+# merge_group は head SHA ごとに一意 (group 内の他 PR と混ざらない)。
 # schedule / (番号の取れない) dispatch は run_id で group が一意になり直列化されない —
 # そちらは check.py の投稿直前再フェッチ確認 (防御 b) が塞ぐ。
 concurrency:
-  group: review-gate-${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr || github.run_id }}
+  group: review-gate-${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr || github.event.merge_group.head_sha || github.run_id }}
   cancel-in-progress: false
 
 permissions:
@@ -60,7 +69,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: 判定して commit status を貼る
-        if: github.event_name != 'schedule'
+        if: github.event_name != 'schedule' && github.event_name != 'merge_group'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REVIEW_GATE_REQUIRE_CODEX: ${{ vars.REVIEW_GATE_REQUIRE_CODEX }}
@@ -68,6 +77,17 @@ jobs:
           CODEX_RETRIGGER_MINUTES: ${{ vars.CODEX_RETRIGGER_MINUTES }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
         run: python3 cicd/scripts/review-gate/check.py "$PR_NUMBER"
+
+      # merge queue の一時 branch へ status を貼る (ADR 0042)。判定材料は
+      # head_ref から解決した対象 PR。advisory は投稿しない (PR 側イベントが持つ)。
+      - name: 判定して commit status を貼る (merge_group)
+        if: github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEW_GATE_REQUIRE_CODEX: ${{ vars.REVIEW_GATE_REQUIRE_CODEX }}
+          MERGE_GROUP_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: python3 cicd/scripts/review-gate/check.py --merge-group
 
       # イベントが来ない PR の advisory を拾う (ADR 0038 / PR #238 P1)。
       # open PR (base=main) を列挙して advisory だけ適用。status は貼らない。
