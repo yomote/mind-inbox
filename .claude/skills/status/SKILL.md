@@ -56,7 +56,8 @@ GitHub MCP ツール（`mcp__github__*`。ToolSearch で `select:` して読み�
    > 2. **`Tear down (cleanup-env)` ステップ** — `success` なら「**撤収済み (down)**」で確定 / `failure` なら「**状態不明 (撤収が途中で失敗)**」で確定 (`cleanup-env.sh` は RG 削除後の purge で失敗しうるので、失敗した down を読み飛ばしてはいけない) / **`skipped` なら状態を変えていないので次へ**
    > 3. **`Provision + deploy (up)` ステップ** — `skipped` でなければ、これと `Smoke test（認可と疎通の実測）` の結論で確定。両方 `success` なら「**到達 (その run の commit)**」、いずれか `failure` なら「**未到達 (デプロイ失敗)**」
    > 4. 2・3 のステップがどちらも `skipped` の run (guard で止まったもの) は**環境を変えていないので読み飛ばす**
-   > 5. 走査しても確定しなければ「**未デプロイ (自動デプロイ未解禁 / OIDC 未設定)**」
+   > 5. **上記ステップの結論が `success` / `failure` / `skipped` 以外 (`cancelled` 等) なら「状態不明 (中断)」で走査を止める** — 手動キャンセルや 90 分のジョブタイムアウトが `provision.sh` / RG 削除の途中で起きうるので、**未知の結論を「無かったこと」にして古い run を採用しない**
+   > 6. 走査しても確定しなければ「**未デプロイ (自動デプロイ未解禁 / OIDC 未設定)**」
    >
    > **`down` を run の conclusion で判定しない** — OIDC guard が false のときは `Tear down` も skip されるが run は成功するので、実在する環境を「撤収済み」と誤報する。
    >
@@ -109,6 +110,7 @@ Issue を `stream:*` ラベルでレーンに振り分ける。**レーンは st
   - **人間待ち**: `needs-human` Issue / Proposed ADR が **48 時間**以上停滞（`HUMAN_STALL_HOURS`）
 - **次の一手** — そのレーンの **着手可能な** `P1` を 1 件。**「P1 最古」だけで選ばない**:
   - **除外**: 実装中 (open PR が紐づいている) / `needs-human` で止まっている / 依存 Issue 待ちのもの。これらを次アクションに出すと**重複実装か着手不能な指示**になる
+  - **依存待ちはラベルからは分からない** — `created_at` 順の上位候補 **3 件までを `issue_read` (method: `get` / `get_sub_issues`) で開き、本文・コメントの `blocked by #n` / 未完了の sub-issue を確認**してから選ぶ。**開かずに選んだ候補は「(依存未確認)」と併記する**（確認したふりをしない）
   - 残った候補が複数なら `created_at` (Step 1-1 の fields に含める) の古い順。**候補が 0 件なら「着手可能な P1 なし」と書く**（無理に 1 件ひねり出さない）
 
 **未分類**（`stream:*` が無い open Issue）は番号つきで**必ず**出す。0 件でも「未分類 0 件」と 1 行書く — ラベル運用が崩れたときに静かに腐らせないための生存条件（ADR 0044 D2）。
