@@ -28,7 +28,6 @@ import {
   ProblemSchema,
   ProblemStatusSchema,
   ThemeSchema,
-  type ExtractedItem,
   type ExtractionResult,
   type Problem,
   type TriageAction,
@@ -95,22 +94,40 @@ function nowIso(): string {
  *
  * ルールの本体（追記 / 新規起こし / 再燃）は `../domain/problem.ts` の純粋関数。
  * ここはリポジトリとの往復だけを持つ。
+ *
+ * 戻り値は **実際に行った書き込みの種別** (#283)。grouping の申告ではなくこれを数える —
+ * 「既存に追加」のつもりでも対象が存在しなければ新規作成になるため (下記フォールバック)。
  */
 async function materializeExtraction(
   result: ExtractionResult,
   repo: ProblemRepository,
-): Promise<void> {
+): Promise<MaterializedOutcome[]> {
+  // このバッチで新しく起こした Problem。あとから同じ Problem へ寄る Mention が来ても
+  // 「既存に追加」ではなく新規の一部として数えるために覚えておく
+  // (でないと 1 つの Problem が「新規 1 件」かつ「既存に追加 1 件」に二重計上される)。
+  const createdHere = new Set<string>();
+  const outcomes: MaterializedOutcome[] = [];
+
   for (const { mention, grouping } of result.items) {
     if (grouping.kind === "existing") {
       const existing = await repo.get(grouping.problemId);
       if (existing) {
         await repo.upsert(appendMention(existing, mention));
+        outcomes.push({
+          kind: createdHere.has(grouping.problemId) ? "new" : "existing",
+          problemId: grouping.problemId,
+        });
         continue;
       }
-      // 既存が見つからない（候補集合との齟齬）→ 取りこぼさず新規として作る
+      // 既存が見つからない（候補集合との齟齬 / preview 後・確定前に dismiss 等で消された）
+      // → 取りこぼさず新規として作る。**実績は "new"** としてここで数える
     }
-    await repo.upsert(problemFromMention(mention, grouping));
+    const created = problemFromMention(mention, grouping);
+    await repo.upsert(created);
+    createdHere.add(created.id);
+    outcomes.push({ kind: "new", problemId: created.id });
   }
+  return outcomes;
 }
 
 /**
@@ -157,26 +174,30 @@ async function runExtraction(
   }
 }
 
+/** `materializeExtraction` が実際に行った書き込み 1 件分の実績 (#283)。 */
+type MaterializedOutcome = { kind: "new" | "existing"; problemId: string };
+
 /**
- * 抽出結果の「新規 N 件 / 既存に追加 N 件」を **Problem の件数**として数える (#283)。
+ * 「新規 N 件 / 既存に追加 N 件」を **実際の書き込み実績から Problem 単位で**数える (#283)。
  *
- * **item 数ではなく problemId の異なり数**で数える。同じ Dump 内で同じ既存 Problem に
- * 複数の Mention が寄ることがあり (ai-agent の `extractor.py` は `running_count` で
- * 累積させる正規の経路)、item をそのまま数えると 1 件しか更新していないのに
- * 「既存に追加 2 件」と過大表示される。ai-agent 側も `updated_problem_count=len(updated_ids)`
- * と集合で数えており、その意味論に合わせる。
+ * 2 つのズレをここで潰している:
  *
- * new 側は ai-agent では item ごとに新しい uuid を振るので重複しないが、ここは
- * クライアントから来た下書きを数える場所なので、同じ数え方 (異なり数) に揃える —
- * 重複 id の new が来ても `materializeExtraction` は 1 つの Problem しか作らないため、
- * 異なり数の方が「実際に書かれた件数」と一致する。
+ * 1. **item 数ではなく problemId の異なり数**で数える。同じ Dump 内で同じ既存 Problem に
+ *    複数の Mention が寄ることがあり (ai-agent の `extractor.py` は `running_count` で
+ *    累積させる正規の経路)、item をそのまま数えると 1 件しか更新していないのに
+ *    「既存に追加 2 件」と過大表示される。ai-agent 側も
+ *    `updated_problem_count=len(updated_ids)` と集合で数えており、その意味論に合わせる
+ * 2. **grouping の申告ではなく実績で数える**。preview 後・確定前に対象 Problem が
+ *    dismiss 等で消えていると、`materializeExtraction` は「既存に追加」ではなく
+ *    新規作成にフォールバックする。申告を数えるとレビュー画面に「新規 0 / 既存に追加 1」と
+ *    返り、実際に起きたこと (新規作成) と食い違う
  */
-function countProblems(items: ExtractedItem[]): {
+function countProblems(outcomes: MaterializedOutcome[]): {
   newProblemCount: number;
   updatedProblemCount: number;
 } {
   const ids = (kind: "new" | "existing") =>
-    new Set(items.filter((i) => i.grouping.kind === kind).map((i) => i.grouping.problemId)).size;
+    new Set(outcomes.filter((o) => o.kind === kind).map((o) => o.problemId)).size;
   return { newProblemCount: ids("new"), updatedProblemCount: ids("existing") };
 }
 
@@ -460,13 +481,13 @@ const consultationRouter = router({
         `[consultation.extract] sessionId=${input.sessionId} messages=${input.messages.length}` +
           (input.draft ? ` draft=${input.draft.items.length}` : ""),
       );
-      const result = input.draft
-        ? // 再抽出しない: 下書きをそのまま確定する。counts は items から導出する
-          // (クライアント申告に頼らない)。
-          {
+      // 再抽出しない: draft があれば下書きをそのまま確定する (ADR 0039 D1/D3)。
+      const extracted = input.draft
+        ? {
             sessionId: input.sessionId,
             items: input.draft.items,
-            ...countProblems(input.draft.items),
+            newProblemCount: 0,
+            updatedProblemCount: 0,
           }
         : await runExtraction(
             "consultation.extract",
@@ -474,8 +495,12 @@ const consultationRouter = router({
             input.messages,
             ctx.problemRepo,
           );
-      await materializeExtraction(result, ctx.problemRepo);
-      return result;
+
+      // **counts は書き込み実績から導出する** (#283) — 申告 (grouping.kind / ai-agent の
+      // 数え) ではなく、materializeExtraction が実際に何をしたかを数える。preview 後・
+      // 確定前に対象 Problem が消えていれば「既存に追加」は新規作成に化けるため。
+      const outcomes = await materializeExtraction(extracted, ctx.problemRepo);
+      return { ...extracted, ...countProblems(outcomes) };
     }),
 
   approve: publicProcedure

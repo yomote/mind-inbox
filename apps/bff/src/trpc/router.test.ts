@@ -616,18 +616,39 @@ const arbExtractedItems: fc.Arbitrary<ExtractedItem[]> = fc
     })),
   );
 
-/** 期待値は「Problem の異なり数」— item 数ではない (#283 の Codex P2)。 */
-function distinctProblemCount(items: ExtractedItem[], kind: "new" | "existing"): number {
-  return new Set(items.filter((i) => i.grouping.kind === kind).map((i) => i.grouping.problemId))
-    .size;
+/**
+ * 期待値は「実際に書かれた Problem の異なり数」— item 数ではない (#283 の Codex P2)。
+ *
+ * `knownIds` = 確定時点でリポジトリに実在する Problem。ここに無い id への「既存に追加」は
+ * 実際には新規作成になるので new 側で数える (materializeExtraction のフォールバック)。
+ * バッチ内で先に作られた Problem への追記も、その Problem は新規なので new のまま。
+ */
+function expectedCounts(
+  items: ExtractedItem[],
+  knownIds: Set<string>,
+): { newProblemCount: number; updatedProblemCount: number } {
+  const created = new Set<string>();
+  const updated = new Set<string>();
+  for (const { grouping } of items) {
+    const resolvesToExisting =
+      grouping.kind === "existing" &&
+      knownIds.has(grouping.problemId) &&
+      !created.has(grouping.problemId);
+    if (resolvesToExisting) updated.add(grouping.problemId);
+    else created.add(grouping.problemId);
+  }
+  return { newProblemCount: created.size, updatedProblemCount: updated.size };
 }
 
+/** ai-agent が返す体の ExtractionResult (preview は counts を素通しするだけ)。 */
 function extractionOf(items: ExtractedItem[]): ExtractionResult {
+  const ids = (kind: "new" | "existing") =>
+    new Set(items.filter((i) => i.grouping.kind === kind).map((i) => i.grouping.problemId)).size;
   return {
     sessionId: "s1",
     items,
-    newProblemCount: distinctProblemCount(items, "new"),
-    updatedProblemCount: distinctProblemCount(items, "existing"),
+    newProblemCount: ids("new"),
+    updatedProblemCount: ids("existing"),
   };
 }
 
@@ -752,12 +773,18 @@ describe("[単体] consultation.extract — draft commit (#283 / ADR 0039 D1/D3)
     await fc.assert(
       fc.asyncProperty(arbExtractedItems, async (items) => {
         const { caller, problemRepo } = makeCallerWithRepos();
+        // draft が指す既存 Problem のうち片方だけ実在させる → 実在しない側は
+        // 新規作成にフォールバックするので、実績ベースでないと期待値が合わない
+        await problemRepo.upsert(makeProblem({ id: "prob-existing-0" }));
+        const knownIds = new Set((await problemRepo.list()).map((p) => p.id));
 
         const result = await caller.consultation.extract({ sessionId: "s1", draft: { items } });
 
         expect(extractAiAgent).not.toHaveBeenCalled();
-        expect(result.newProblemCount).toBe(distinctProblemCount(items, "new"));
-        expect(result.updatedProblemCount).toBe(distinctProblemCount(items, "existing"));
+        expect({
+          newProblemCount: result.newProblemCount,
+          updatedProblemCount: result.updatedProblemCount,
+        }).toEqual(expectedCounts(items, knownIds));
         // 件数は Problem 単位でも、**Mention は 1 件も落とさない** (寄せた分は追記される)
         const storedMentionIds = (await problemRepo.list()).flatMap((p) =>
           p.mentions.map((m) => m.id),
@@ -805,6 +832,48 @@ describe("[単体] consultation.extract — draft commit (#283 / ADR 0039 D1/D3)
     const problem = await caller.problem.get({ id: "prob-1" });
     expect(problem.mentions.map((m) => m.id)).toEqual(["men-1", "men-a", "men-b"]);
     expect(problem.mentionCount).toBe(3);
+  });
+
+  it("counts a vanished 'existing' target as new (preview 後・確定前に消された場合)", async () => {
+    // 無いと: preview 時は既存だった Problem が確定前に dismiss / merge で消えていると、
+    //         materializeExtraction は新規作成にフォールバックするのに、counts は draft の
+    //         申告 (existing) をそのまま数え、レビュー画面が「新規 0 / 既存に追加 1」と
+    //         実際に起きたこと (新規作成) と逆の内容を出す (#283 Codex P2)。
+    //         例外は出ず数字だけが嘘になる = 単体テストの入場条件そのもの。
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem()); // prob-1 が居る状態で preview したとみなす
+
+    // 確定前に別経路で消える (別タブのトリアージ等)
+    await caller.problem.triage({ action: "dismiss", problemId: "prob-1" });
+
+    const result = await caller.consultation.extract({
+      sessionId: "s2",
+      draft: {
+        items: [
+          {
+            mention: makeMention({ id: "men-a", createdAt: "2026-02-01T00:00:00.000Z" }),
+            grouping: {
+              kind: "existing", // draft の申告は「既存に追加」
+              problemId: "prob-1",
+              problemTitle: "転職の迷い",
+              problemTheme: "仕事・キャリア",
+              isRecurrence: true,
+              mentionCount: 2,
+              reignited: false,
+              groupingConfidence: 0.9,
+            },
+          },
+        ],
+      },
+    });
+
+    // 実際に起きたのは新規作成 → counts もそう返す
+    expect(result.newProblemCount).toBe(1);
+    expect(result.updatedProblemCount).toBe(0);
+    // Mention は取りこぼさない (フォールバックの本来の目的)
+    const problem = await caller.problem.get({ id: "prob-1" });
+    expect(problem.mentions.map((m) => m.id)).toEqual(["men-a"]);
+    expect(problem.mentionCount).toBe(1);
   });
 
   it("appends a draft 'existing' item to the stored problem (🔁 再出現の確定)", async () => {
