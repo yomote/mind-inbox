@@ -29,6 +29,7 @@ import {
   ProblemSchema,
   ProblemStatusSchema,
   ThemeSchema,
+  type ExtractedItem,
   type ExtractionResult,
   type Problem,
   type TriageAction,
@@ -96,50 +97,59 @@ function nowIso(): string {
  * ルールの本体（追記 / 新規起こし / 再燃）は `../domain/problem.ts` の純粋関数。
  * ここはリポジトリとの往復だけを持つ。
  *
- * 戻り値は **実際に行った書き込みの種別** (#283)。grouping の申告ではなくこれを数える —
- * 「既存に追加」のつもりでも対象が存在しなければ新規作成になるため (下記フォールバック)。
+ * 戻り値は **実際の書き込み実績に正規化した items** (#283)。申告 (下書きの grouping) を
+ * そのまま返すと、「既存に追加」のつもりが新規作成になったケースで件数もカードのバッジも
+ * 実態と食い違う。`mockApi.commitPreview` (ADR 0004 の真実) と同じ正規化をここで行い、
+ * 件数はその正規化済み items から数える。
  */
 async function materializeExtraction(
   result: ExtractionResult,
   repo: ProblemRepository,
-): Promise<MaterializedOutcome[]> {
+): Promise<ExtractedItem[]> {
   // このバッチで新しく起こした Problem。あとから同じ Problem へ寄る Mention が来ても
-  // 「既存に追加」ではなく新規の一部として数えるために覚えておく
+  // 「既存に追加」ではなく新規の一部として扱うために覚えておく
   // (でないと 1 つの Problem が「新規 1 件」かつ「既存に追加 1 件」に二重計上される)。
   const createdHere = new Set<string>();
-  const outcomes: MaterializedOutcome[] = [];
-  /** このバッチで作った Problem への追記は「新規」の一部として数える。 */
-  const outcomeFor = (problemId: string): MaterializedOutcome => ({
-    kind: createdHere.has(problemId) ? "new" : "existing",
-    problemId,
-  });
+  const materialized: ExtractedItem[] = [];
 
   for (const { mention, grouping } of result.items) {
+    // **kind を問わず problemId で引く** (mockApi.commitPreview と同じ意味論): 同じ id の
+    // 下書きが複数あっても Problem は 1 つで、2 件目以降は Mention の追記になる。
     const target = await repo.get(grouping.problemId);
 
-    // **冪等**: 同じ draft を再送しても蓄積データを変えない (#283)。確定応答が失われて
-    // ユーザーが「この内容で確定」を押し直すのは普通に起きるが、Mention は不変・追記専用
-    // (domain_model.md §2.1) なので、同じ Mention ID が既に入っていれば書くことは何も無い。
-    // 無いと同じ Mention が二重に入り mentionCount まで増える (静かなデータ破損)。
-    if (target?.mentions.some((m) => m.id === mention.id)) {
-      outcomes.push(outcomeFor(grouping.problemId));
+    if (target) {
+      // **冪等**: 同じ draft を再送しても蓄積データを変えない (#283)。確定応答が失われて
+      // ユーザーが「この内容で確定」を押し直すのは普通に起きるが、Mention は不変・追記専用
+      // (domain_model.md §2.1) なので、同じ Mention ID が既に入っていれば書くことは何も無い。
+      // 無いと同じ Mention が二重に入り mentionCount まで増える (静かなデータ破損)。
+      const alreadyCommitted = target.mentions.some((m) => m.id === mention.id);
+      const after = alreadyCommitted ? target : appendMention(target, mention);
+      if (!alreadyCommitted) await repo.upsert(after);
+
+      materialized.push({
+        mention,
+        grouping: {
+          ...grouping,
+          // このバッチで起こした Problem への追記は "new" のまま (二重計上を防ぐ)
+          kind: createdHere.has(target.id) || grouping.kind === "new" ? "new" : "existing",
+          mentionCount: after.mentionCount,
+        },
+      });
       continue;
     }
 
-    if (grouping.kind === "existing" && target) {
-      await repo.upsert(appendMention(target, mention));
-      outcomes.push(outcomeFor(grouping.problemId));
-      continue;
-    }
-
-    // new、または existing だが対象が見つからない（候補集合との齟齬 / preview 後・
-    // 確定前に dismiss 等で消された）→ 取りこぼさず新規として作る。**実績は "new"**
+    // 対象が居ない = 新規、**または existing だが確定までの間に消された** (候補集合との
+    // 齟齬 / preview 後に dismiss・merge された)。取りこぼさず新規として作り、
+    // **grouping も実績に正規化する** — 申告のままだと件数もバッジも「既存に追加」と出る。
     const created = problemFromMention(mention, grouping);
     await repo.upsert(created);
     createdHere.add(created.id);
-    outcomes.push({ kind: "new", problemId: created.id });
+    materialized.push({
+      mention,
+      grouping: { ...grouping, kind: "new", mentionCount: 1, isRecurrence: false },
+    });
   }
-  return outcomes;
+  return materialized;
 }
 
 /**
@@ -186,11 +196,10 @@ async function runExtraction(
   }
 }
 
-/** `materializeExtraction` が実際に行った書き込み 1 件分の実績 (#283)。 */
-type MaterializedOutcome = { kind: "new" | "existing"; problemId: string };
-
 /**
  * 「新規 N 件 / 既存に追加 N 件」を **実際の書き込み実績から Problem 単位で**数える (#283)。
+ * 入力は `materializeExtraction` が正規化済みの items (= 実績そのもの)。
+ * `mockApi.ts` の同名関数と同じ数え方 (ADR 0004 — mock が真実)。
  *
  * 2 つのズレをここで潰している:
  *
@@ -204,12 +213,12 @@ type MaterializedOutcome = { kind: "new" | "existing"; problemId: string };
  *    新規作成にフォールバックする。申告を数えるとレビュー画面に「新規 0 / 既存に追加 1」と
  *    返り、実際に起きたこと (新規作成) と食い違う
  */
-function countProblems(outcomes: MaterializedOutcome[]): {
+function countProblems(items: ExtractedItem[]): {
   newProblemCount: number;
   updatedProblemCount: number;
 } {
   const ids = (kind: "new" | "existing") =>
-    new Set(outcomes.filter((o) => o.kind === kind).map((o) => o.problemId)).size;
+    new Set(items.filter((i) => i.grouping.kind === kind).map((i) => i.grouping.problemId)).size;
   return { newProblemCount: ids("new"), updatedProblemCount: ids("existing") };
 }
 
@@ -513,11 +522,12 @@ const consultationRouter = router({
             ctx.problemRepo,
           );
 
-      // **counts は書き込み実績から導出する** (#283) — 申告 (grouping.kind / ai-agent の
-      // 数え) ではなく、materializeExtraction が実際に何をしたかを数える。preview 後・
-      // 確定前に対象 Problem が消えていれば「既存に追加」は新規作成に化けるため。
-      const outcomes = await materializeExtraction(extracted, ctx.problemRepo);
-      return { ...extracted, ...countProblems(outcomes) };
+      // **items も counts も書き込み実績で返す** (#283) — 申告 (grouping.kind / ai-agent の
+      // 数え) ではなく、materializeExtraction が実際に何をしたかに正規化する。preview 後・
+      // 確定前に対象 Problem が消えていれば「既存に追加」は新規作成に化けるため、
+      // 件数だけ直してもカードのバッジが「既存に追加」のままだと画面の中で食い違う。
+      const items = await materializeExtraction(extracted, ctx.problemRepo);
+      return { ...extracted, items, ...countProblems(items) };
     }),
 
   approve: publicProcedure

@@ -790,6 +790,16 @@ describe("[単体] consultation.extract — draft commit (#283 / ADR 0039 D1/D3)
           newProblemCount: result.newProblemCount,
           updatedProblemCount: result.updatedProblemCount,
         }).toEqual(expectedCounts(items, knownIds));
+        // **件数と返却 item は常に同じ実績を指す** — 片方だけ実績ベースにすると、
+        // 「新規 1 件」と出しながらカードのバッジは「🔁 既存に追加」という食い違いが起きる。
+        const idsOf = (kind: "new" | "existing") =>
+          new Set(
+            result.items.filter((i) => i.grouping.kind === kind).map((i) => i.grouping.problemId),
+          ).size;
+        expect({
+          newProblemCount: idsOf("new"),
+          updatedProblemCount: idsOf("existing"),
+        }).toEqual(expectedCounts(items, knownIds));
         // 件数は Problem 単位でも、**Mention は 1 件も落とさない** (寄せた分は追記される)
         const storedMentionIds = (await problemRepo.list()).flatMap((p) =>
           p.mentions.map((m) => m.id),
@@ -913,6 +923,14 @@ describe("[単体] consultation.extract — draft commit (#283 / ADR 0039 D1/D3)
     // 実際に起きたのは新規作成 → counts もそう返す
     expect(result.newProblemCount).toBe(1);
     expect(result.updatedProblemCount).toBe(0);
+    // **返却 item の grouping も実績に正規化する** — 件数だけ直してもカードのバッジが
+    // 「🔁 既存に追加」のままだと、同じ画面の中で件数とバッジが食い違う。
+    // mockApi.commitPreview (ADR 0004 の真実) と同じ正規化に揃えている。
+    expect(result.items[0].grouping).toMatchObject({
+      kind: "new",
+      mentionCount: 1, // 申告の 2 ではなく実績 (作りたての Problem の言及は 1 回)
+      isRecurrence: false, // 「再出現」ではない (寄せ先が消えているので初出)
+    });
     // Mention は取りこぼさない (フォールバックの本来の目的)
     const problem = await caller.problem.get({ id: "prob-1" });
     expect(problem.mentions.map((m) => m.id)).toEqual(["men-a"]);
