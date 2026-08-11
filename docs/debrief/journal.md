@@ -22,6 +22,16 @@
 
 ---
 
+## 2026-08-11 — design-gate (対話画面 UI 改修 / ADR 0039)
+
+- **対象**: [#187](https://github.com/yomote/mind-inbox/issues/187) (2 ペイン化) + [#229](https://github.com/yomote/mind-inbox/issues/229) (キャラ吹き出し・発話待ち表現) + [#146](https://github.com/yomote/mind-inbox/issues/146) (stub バナー同梱)。起案: [ADR 0039](../adr/0039-dialogue-live-preview-and-character.md)
+- **決定**: **ADR 0039 を Accept** (承認 = 実装着手可)。PO の選択: キャラは**独自マスコット** (ずんだもん立ち絵は素材ライセンス確認が要るため回避 / 声は続投)、右ペイン更新は **2 往復ごと + 手動**、モバイルは**タブ切替**。核: preview は**読み取り専用** (BFF に新 procedure / Cosmos に書かない / 下書きは揮発) — 書き込み経路は従来の確定 extract 1 本のまま
+- **学びメモ**: 理解確認 2/2 正答 (下書きの揮発性 / DB の無垢性)。誤解なし — 守るべき資源 (LLM 課金 / Problem データ) を起点に経路図を先に示す進め方が今回も機能した
+- **特記**: 同日に「アイコン・コンポーネントは MUI 優先」の UI 規約化も PO 裁定 (#237 → ui_specs README に共通規約 / PR #239)
+- **持ち越し**: chat 応答への preview 相乗り (1 呼び出し化) は将来の最適化として ADR 0039 に記録のみ
+
+---
+
 ## 2026-08-10 — design-gate (マージの門 review-gate / ADR 0036)
 
 - **対象**: ループエンジニアリング体制の相談から、[ADR 0035](../adr/0035-role-split-across-agents-and-actions.md) の未決事項「レビューを待つ仕組み」の設計へ。起案: [ADR 0036](../adr/0036-merge-gate-as-required-check-and-pm-cadence.md)
