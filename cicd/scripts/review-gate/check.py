@@ -2,7 +2,11 @@
 """マージの門 (review-gate) — PR がマージ可能かを判定して commit status を貼る (ADR 0036)。
 
 使い方:
-    python3 cicd/scripts/review-gate/check.py <pr_number>
+    python3 cicd/scripts/review-gate/check.py <pr_number>    # 門の判定 + advisory
+    python3 cicd/scripts/review-gate/check.py --advisory-sweep
+      # schedule 用: open PR (base=main) を列挙して advisory だけ適用する。
+      # status は貼らない。イベント駆動だけだと「push 直後は猶予内 → その後
+      # イベントが来ない」で advisory が一度も発火しないため (PR #238 P1 指摘)
       要: `gh` が認証済み (Actions では GH_TOKEN を渡す) / GITHUB_REPOSITORY
 
 仕組み:
@@ -18,14 +22,18 @@
        Codex のレビューが付いている (login が CODEX_LOGIN_PATTERN にマッチする投稿)
 
 付随して、合否とは別に advisory のコメントを 2 種類だけ自動投稿する (ADR 0038):
-    A. Codex 自動レビューの再トリガー — コード PR に Codex レビューが
-       CODEX_RETRIGGER_MINUTES (既定 10) 分以上付いていなければ `@codex review` を
-       1 回だけ投稿する (自動トリガーはイベント欠落・枠切れでリトライされない —
-       2026-08-10 の PR #231 で 11 時間沈黙した実測への対処)
-    B. 敏感パスの security review 自動指名 — IaC / workflow / BFF の認証・トークン・
-       CORS 関連等に触れる PR に `@codex security review` を 1 回だけ投稿する。
+    A. Codex 自動レビューの再トリガー依頼 — コード PR に Codex レビューが
+       CODEX_RETRIGGER_MINUTES (既定 10) 分以上付いていなければ「接続済み
+       アカウントから `@codex review` を投稿して」という依頼を 1 回だけ投稿する
+       (自動トリガーはイベント欠落・枠切れでリトライされない — 2026-08-10 の
+       PR #231 で 11 時間沈黙した実測への対処。bot の生メンションは Codex に
+       無視されるため依頼形式 — PR #238 実測)
+    B. 敏感パスの security review 依頼 — IaC / workflow / BFF の認証・トークン・
+       CORS 関連等に触れる PR に `@codex security review` の依頼を 1 回だけ投稿する。
        **どちらも合否条件には入れない** (門を重くしない。入れるかは実測後に PO 判断)。
-    冪等性はコメント本文のマーカー (機械可読) で判定する — 2 重投稿しない。
+    冪等性はコメント本文のマーカー (機械可読) で判定し、投稿直前の再フェッチ確認 +
+    workflow の per-PR concurrency で 2 重投稿を塞ぐ。イベントが来ない PR は
+    schedule の advisory sweep (--advisory-sweep) が拾う。
 
 規律 (status-page / ops-inspect と同じ):
     取れなかったものを「合格」と書かない。取得に失敗したら error status を貼って終わる。
@@ -121,6 +129,34 @@ def should_request_security_review(
 ) -> bool:
     """`@codex security review` を自動投稿すべきか (敏感パスに触れる PR に 1 回だけ)。"""
     return bool(sensitive) and not draft and not marker_posted
+
+
+def still_unposted(marker: str, comment_bodies: list[str]) -> bool:
+    """マーカー付きコメントがまだ無いか。
+
+    初回スクリーニングと**投稿直前の再フェッチ確認** (PR #238 P2 指摘) の両方で使う。
+    近接した 2 つの run が両方「未投稿」と観測すると 2 重投稿になるため、
+    投稿直前に取り直したコメントでもう一度これを通す (workflow 側の per-PR
+    concurrency と併せた二段防御。schedule sweep は PR 単位で直列化できないので
+    こちらが必須の防御になる)。
+    """
+    return all(marker not in body for body in comment_bodies)
+
+
+def sweep_targets(prs: list[dict]) -> list[dict]:
+    """advisory sweep の対象 PR を選ぶ (PR #238 P1 指摘への対処)。
+
+    対象: open / base=main / draft でない。閉じた PR・門の対象外 (base≠main)・
+    draft を機械的に外す — sweep は 30 分毎に回るので、対象選定を誤ると
+    無関係な PR へ毎回 API を叩き続ける。
+    """
+    return [
+        pr
+        for pr in prs
+        if pr.get("state") == "open"
+        and not pr.get("draft")
+        and (pr.get("base") or {}).get("ref") == "main"
+    ]
 
 
 @dataclass
@@ -241,6 +277,27 @@ def post_comment(repo: str, number: int, body: str) -> None:
     gh("api", f"repos/{repo}/issues/{number}/comments", "-f", f"body={body}")
 
 
+def fetch_comment_bodies(repo: str, number: int) -> list[str]:
+    comments = gh("api", f"repos/{repo}/issues/{number}/comments", "--paginate")
+    return [(c.get("body") or "") for c in comments]  # type: ignore[union-attr]
+
+
+def post_advisory_once(repo: str, number: int, marker: str, body: str) -> bool:
+    """投稿直前にコメントを**再フェッチ**してマーカー未投稿を確認してから投稿する。
+
+    近接イベントの 2 run が両方「未投稿」と観測するレース (PR #238 P2 指摘) への
+    二段防御の片翼。event 駆動の run は workflow の per-PR concurrency が直列化するが、
+    schedule sweep の run は PR 単位の group にできないため、この再確認が必須。
+    再フェッチ後〜投稿までの窓は残る (コメント API に条件付き書き込みが無い) が、
+    直列化と併せて実用上の 2 重投稿を塞ぐ。
+    """
+    if not still_unposted(marker, fetch_comment_bodies(repo, number)):
+        print(f"advisory: 再確認で {marker} を検出 — 並行 run が先行したため投稿しない")
+        return False
+    post_comment(repo, number, body)
+    return True
+
+
 def maybe_post_advisories(
     repo: str,
     number: int,
@@ -257,7 +314,7 @@ def maybe_post_advisories(
     threshold = float(
         os.environ.get("CODEX_RETRIGGER_MINUTES", "") or DEFAULT_RETRIGGER_MINUTES
     )
-    retrigger_marker_posted = any(CODEX_RETRIGGER_MARKER in b for b in comment_bodies)
+    retrigger_marker_posted = not still_unposted(CODEX_RETRIGGER_MARKER, comment_bodies)
     # 高い方 (API 1 往復) の取得は、安い条件が揃ったときだけ
     if code_pr and not draft and not codex_present and not retrigger_marker_posted:
         elapsed = minutes_between(
@@ -276,9 +333,10 @@ def maybe_post_advisories(
             # (2026-08-11 PR #238 で実測)。メンションはバッククォートで殺し、
             # 実際の投稿は接続済みユーザー (PM セッションの MCP 経由 = PO アカウント)
             # に依頼する形にする。PM は自 PR の webhook でこのコメントを受け取る。
-            post_comment(
+            posted = post_advisory_once(
                 repo,
                 number,
+                CODEX_RETRIGGER_MARKER,
                 f"{CODEX_RETRIGGER_MARKER}\n"
                 f"⏳ **Codex レビューが {threshold:.0f} 分以上未着です** (コード PR)。"
                 "自動レビューのトリガーは欠落してもリトライされない"
@@ -287,28 +345,79 @@ def maybe_post_advisories(
                 " (bot からのメンションは Codex に無視される — ADR 0038 実測)。"
                 " この投稿自体は review-gate の合否条件ではない。",
             )
-            print(f"advisory: Codex 未着 ({elapsed:.0f} 分) の再トリガー依頼を投稿した")
+            if posted:
+                print(
+                    f"advisory: Codex 未着 ({elapsed:.0f} 分) の再トリガー依頼を投稿した"
+                )
     sensitive = sensitive_paths(changed_paths)
     if should_request_security_review(
         draft=draft,
         sensitive=sensitive,
-        marker_posted=any(SECURITY_RETRIGGER_MARKER in b for b in comment_bodies),
+        marker_posted=not still_unposted(SECURITY_RETRIGGER_MARKER, comment_bodies),
     ):
         listed = "\n".join(f"- `{p}`" for p in sensitive[:10])
         if len(sensitive) > 10:
             listed += f"\n- …他 {len(sensitive) - 10} 件"
-        post_comment(
+        posted = post_advisory_once(
             repo,
             number,
+            SECURITY_RETRIGGER_MARKER,
             f"{SECURITY_RETRIGGER_MARKER}\n"
             "🔒 **敏感パスに触れる PR です — security review を推奨します。**"
             "接続済みアカウントから `@codex security review` を投稿してください"
             " (bot からのメンションは Codex に無視される — ADR 0038 実測)。"
             " advisory であり review-gate の合否条件ではない。対象:\n" + listed,
         )
-        print(
-            f"advisory: 敏感パス {len(sensitive)} 件 → security review 依頼を投稿した"
+        if posted:
+            print(
+                f"advisory: 敏感パス {len(sensitive)} 件 → security review 依頼を投稿した"
+            )
+
+
+def run_advisory_sweep(repo: str) -> int:
+    """open PR (base=main) に advisory だけを適用する (PR #238 P1 指摘への対処)。
+
+    review-gate はイベント駆動のみのため、opened/synchronize 直後の run では
+    経過が猶予 (既定 10 分) 未満で投稿されず、その後イベントが無ければ二度と
+    評価されない — advisory が狙った失敗モード (Codex 沈黙 = イベントが来ない)
+    でまさに発火しない。schedule (30 分毎) からこのモードを回して塞ぐ。
+    status は貼らない (門の判定はイベント駆動の run が持つ)。
+    API 呼び出しは open PR 数に比例 (PR あたり最大 4 往復 + 投稿)。
+    """
+    prs = gh(
+        "api", f"repos/{repo}/pulls?state=open&base=main&per_page=100", "--paginate"
+    )
+    targets = sweep_targets(prs)  # type: ignore[arg-type]
+    print(f"advisory sweep: open PR {len(prs)} 件中 対象 {len(targets)} 件")  # type: ignore[arg-type]
+    for pr in targets:
+        number = pr["number"]
+        comment_bodies = fetch_comment_bodies(repo, number)
+        # 両マーカー投稿済みならこの PR にやることは無い — files 取得を省く
+        if not still_unposted(
+            CODEX_RETRIGGER_MARKER, comment_bodies
+        ) and not still_unposted(SECURITY_RETRIGGER_MARKER, comment_bodies):
+            print(f"#{number}: 両 advisory 投稿済み — skip")
+            continue
+        files = gh("api", f"repos/{repo}/pulls/{number}/files", "--paginate")
+        changed_paths = [f["filename"] for f in files]  # type: ignore[union-attr]
+        code_pr = is_code_pr(changed_paths)
+        codex_present = (
+            fetch_codex_present(
+                repo, number, os.environ.get("CODEX_LOGIN_PATTERN", "codex")
+            )
+            if (code_pr and still_unposted(CODEX_RETRIGGER_MARKER, comment_bodies))
+            else False
         )
+        maybe_post_advisories(
+            repo=repo,
+            number=number,
+            pr=pr,
+            changed_paths=changed_paths,
+            comment_bodies=comment_bodies,
+            code_pr=code_pr,
+            codex_present=codex_present,
+        )
+    return 0
 
 
 def post_status(repo: str, sha: str, state: str, description: str) -> None:
@@ -333,8 +442,10 @@ def post_status(repo: str, sha: str, state: str, description: str) -> None:
 
 
 def main() -> int:
-    number = int(sys.argv[1])
     repo = os.environ["GITHUB_REPOSITORY"]
+    if sys.argv[1] == "--advisory-sweep":
+        return run_advisory_sweep(repo)
+    number = int(sys.argv[1])
     owner, name = repo.split("/")
 
     pr = gh("api", f"repos/{repo}/pulls/{number}")

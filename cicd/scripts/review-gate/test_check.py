@@ -6,6 +6,7 @@
 """
 
 from check import (
+    CODEX_RETRIGGER_MARKER,
     decide,
     has_pm_accept,
     is_code_pr,
@@ -13,6 +14,8 @@ from check import (
     sensitive_paths,
     should_request_security_review,
     should_retrigger_codex,
+    still_unposted,
+    sweep_targets,
 )
 
 HEAD = "abc1234def5678"
@@ -175,3 +178,44 @@ def test_l1_敏感パスはadvisoryで合否には入らない() -> None:
 def test_l1_経過分の計算はISO8601のZ表記を読める() -> None:
     assert minutes_between("2026-08-11T03:00:00Z", "2026-08-11T03:30:00Z") == 30.0
     assert minutes_between("2026-08-11T03:00:00Z", "2026-08-11T03:00:00Z") == 0.0
+
+
+def test_l1_sweepの対象はopenかつbase_mainかつ非draftのみ() -> None:
+    """PR #238 P1 対応 (schedule sweep) の対象選定。
+
+    無いと何が静かに通るか: 選定の退行は「閉じた/対象外 PR へ 30 分毎に API を
+    叩き続ける」か「open PR が sweep から漏れて advisory が永遠に発火しない」
+    (= P1 が直っていない) のどちらかに倒れ、どちらも run は緑のまま。
+    """
+
+    def pr(**overrides) -> dict:
+        base = {"number": 1, "state": "open", "draft": False, "base": {"ref": "main"}}
+        base.update(overrides)
+        return base
+
+    target = pr()
+    assert sweep_targets([target]) == [target]
+    assert sweep_targets([pr(state="closed")]) == []
+    assert sweep_targets([pr(draft=True)]) == []
+    assert sweep_targets([pr(base={"ref": "release"})]) == []
+    assert sweep_targets([pr(base=None)]) == []  # base 欠落を落とさず対象外に
+    # 混在なら対象だけ残る
+    assert sweep_targets([pr(state="closed"), target, pr(draft=True)]) == [target]
+
+
+def test_l1_投稿直前の再フェッチ確認はマーカーを見つけたら投稿させない() -> None:
+    """PR #238 P2 対応 (2 重投稿レース) の判定部。
+
+    無いと何が静かに通るか: 近接した 2 run (または schedule sweep と event run) が
+    両方「未投稿」と観測して同じ advisory を 2 本投稿する。マーカーは部分文字列
+    一致なので、引用・返信に埋まっていても検出できることも固定する。
+    """
+    assert still_unposted(CODEX_RETRIGGER_MARKER, [])
+    assert still_unposted(CODEX_RETRIGGER_MARKER, ["普通のコメント", "[pm-accept] abc"])
+    assert not still_unposted(
+        CODEX_RETRIGGER_MARKER, ["x", f"{CODEX_RETRIGGER_MARKER}\n⏳ 未着です"]
+    )
+    # 本文の途中 (引用等) にあっても「投稿済み」と数える — 吠え直すよりノイズ回避を優先
+    assert not still_unposted(
+        CODEX_RETRIGGER_MARKER, [f"引用: {CODEX_RETRIGGER_MARKER} を見た"]
+    )

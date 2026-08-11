@@ -6,13 +6,19 @@
 # 強制力はブランチ保護 (required status check) が持つ — 設定は needs-human Issue 参照。
 #
 # 付随 (ADR 0038 — advisory、合否には入れない):
-#   - コード PR に Codex レビューが 10 分以上未着なら `@codex review` を 1 回だけ自動投稿
+#   - コード PR に Codex レビューが 10 分以上未着なら「接続済みアカウントから
+#     `@codex review` を投稿して」という依頼を 1 回だけ投稿 (bot の生メンションは
+#     Codex に無視される — PR #238 実測)
 #   - 敏感パス (IaC / workflow / BFF の認証・トークン・CORS 関連等) に触れる PR には
-#     `@codex security review` を 1 回だけ自動指名
-#   冪等性はコメント本文のマーカーで機械判定 (2 重投稿しない)。判定は check.py の純関数。
+#     `@codex security review` の依頼を 1 回だけ投稿
+#   冪等性 (2 重投稿防止) は二段防御: per-PR の concurrency (下) + 投稿直前の
+#   コメント再フェッチ確認 (check.py)。判定は check.py の純関数。
+#   イベント駆動だけだと「push 直後は猶予内 → その後イベントが来ない」で advisory が
+#   発火しないため、schedule (30 分毎) が open PR を advisory sweep する (status は貼らない)。
 #
-# 注意: issue_comment / pull_request_review トリガーは main に入った版でしか発火しない。
-#       コメント後の再評価が要るときは workflow_dispatch で PR 番号を渡して叩ける。
+# 注意: issue_comment / pull_request_review / schedule トリガーは main に入った版で
+#       しか発火しない。コメント後の再評価が要るときは workflow_dispatch で PR 番号を
+#       渡して叩ける。
 
 name: review-gate
 
@@ -23,15 +29,24 @@ on:
     types: [created, edited]
   pull_request_review:
     types: [submitted, edited, dismissed]
+  schedule:
+    - cron: "*/30 * * * *" # advisory sweep (ADR 0038 / PR #238 P1)
   workflow_dispatch:
     inputs:
       pr:
         description: "再評価する PR 番号"
         required: true
 
+# 同じ PR への run を直列化する (2 重投稿レースの防御 a / PR #238 P2)。
+# schedule / (番号の取れない) dispatch は run_id で group が一意になり直列化されない —
+# そちらは check.py の投稿直前再フェッチ確認 (防御 b) が塞ぐ。
+concurrency:
+  group: review-gate-${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr || github.run_id }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
-  # write は advisory コメント (@codex review / @codex security review) の投稿用 (ADR 0038)
+  # write は advisory コメント (Codex 再トリガー依頼 / security review 依頼) の投稿用 (ADR 0038)
   pull-requests: write
   statuses: write
 
@@ -45,10 +60,20 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: 判定して commit status を貼る
+        if: github.event_name != 'schedule'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REVIEW_GATE_REQUIRE_CODEX: ${{ vars.REVIEW_GATE_REQUIRE_CODEX }}
-          # Codex 自動再トリガーの猶予 (分)。未設定なら既定 10 (ADR 0038)
+          # Codex 再トリガー依頼の猶予 (分)。未設定なら既定 10 (ADR 0038)
           CODEX_RETRIGGER_MINUTES: ${{ vars.CODEX_RETRIGGER_MINUTES }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
         run: python3 cicd/scripts/review-gate/check.py "$PR_NUMBER"
+
+      # イベントが来ない PR の advisory を拾う (ADR 0038 / PR #238 P1)。
+      # open PR (base=main) を列挙して advisory だけ適用。status は貼らない。
+      - name: advisory sweep (schedule)
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CODEX_RETRIGGER_MINUTES: ${{ vars.CODEX_RETRIGGER_MINUTES }}
+        run: python3 cicd/scripts/review-gate/check.py --advisory-sweep
