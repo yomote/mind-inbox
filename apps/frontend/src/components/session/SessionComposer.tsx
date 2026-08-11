@@ -65,7 +65,9 @@ export function SessionComposer({
     onChangeRef.current(next);
   }, []);
 
-  const voice = useVoiceInput(appendTranscript);
+  // TTS の再生状態を認識側へ配線する (#228)。再生中はスピーカーの合成音声を
+  // ユーザー発話として拾ってしまうため、認識結果を破棄する (再生が終わると自動復帰)。
+  const voice = useVoiceInput(appendTranscript, { ttsPlaying: ttsStatus === "playing" });
   const inputRef = React.useRef<HTMLTextAreaElement | HTMLInputElement | null>(null);
 
   /**
@@ -171,7 +173,18 @@ export function SessionComposer({
             size="small"
           />
         )}
-        {voice.phase === "listening" && (
+        {voice.phase === "listening" && voice.muted && (
+          // TTS 再生中は認識結果を破棄している (#228)。「聞いています」のままだと
+          // この間の発話が入ると誤解させるので、止まっていることを見せる。
+          <Chip
+            icon={<MicOffIcon />}
+            label="読み上げ中は音声入力を一時停止中"
+            variant="outlined"
+            size="small"
+            data-testid="stt-muted"
+          />
+        )}
+        {voice.phase === "listening" && !voice.muted && (
           // 録音状態の可視化 (#121): 経過時間つきで「聞き続けている」ことを示す。
           // エンジンの無音タイムアウトで裏側が再起動しても、ユーザーが停止するまでこの表示は続く。
           <Chip
