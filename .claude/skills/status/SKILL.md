@@ -36,9 +36,9 @@ GitHub MCP ツール（`mcp__github__*`。ToolSearch で `select:` して読み�
 **出力する項目の根拠は必ず引く**（引けなかった項目は推測せず「未取得」と書く）:
 
 1. **Open Issue 一覧** — `list_issues` (state OPEN, perPage 100, fields: number/title/labels/**milestone**/updated_at)。レーン所属・詰まり・次の一手・今週の目標の根拠。
-2. **Open PR 一覧** — `list_pull_requests` (state open, fields: number/title/**body**/head/base/labels/updated_at)。`body` は `closes/refs #n` を読むため（PR → レーンの紐づけに使う）。
+2. **Open PR 一覧** — `list_pull_requests` (state open, fields: number/title/**body**/**draft**/head/base/labels/updated_at)。`body` は `closes/refs #n` を読むため（PR → レーンの紐づけ）、`draft` と `updated_at` は「走っているもの」の判定に使う（Step 2）。
 3. **PR の変更ファイル** — 「apps/ を触る PR が何本か」(Step 3) を出すときだけ、対象 PR に `pull_request_read` (method: `get_files`)。**PR 数が多い時は全件叩かない** — 数えた本数と、数えられなかった本数を両方書く。
-4. **今週の目標 (milestone)** — Issue の `milestone` から期限が直近の open milestone を取る。無ければ「未設定」と書く（勝手に代役を立てない）。
+4. **今週の目標 (milestone)** — Issue の `milestone` から、**(a) 期限が今週内 かつ (b) `stream:product` の Issue を含む** open milestone を取る。**「期限が一番近い open milestone」で代用しない** — 来月期限のインフラ milestone しか無い状況でそれを今週の目標として表示すると、Step 4 でプロダクトの P1 より優先されてしまう。条件を満たすものが無ければ「**未設定**」と書く（勝手に代役を立てない）。
 5. **dev への到達状況** — `actions_list` (method: `list_workflow_runs`, resource_id: `deploy.yml`)。**「成功 run があった」= 到達ではない**（下記）。**ここを省くと「工場は動いたがプロダクトは届いていない」が隠れる**（ADR 0043 D1）。
 
    > **⚠️ 成功 run だけで到達と判定しない。** `deploy.yml` は緑でもデプロイしていないことがある:
@@ -49,7 +49,15 @@ GitHub MCP ツール（`mcp__github__*`。ToolSearch で `select:` して読み�
    > | push で `AUTO_DEPLOY_ENABLED != true` | **成功** | 自動デプロイ未解禁で skip = **未デプロイ** |
    > | 手動 `workflow_dispatch` の `action=down` | **成功** | **環境を撤収した**（到達どころか消えている） |
    >
-   > 判定手順: 対象 run の `event` と入力 (`down` を除外) を見たうえで、`actions_list` (method: `list_workflow_jobs`) で **`Provision + deploy (up)` と `Smoke test（認可と疎通の実測）` が `skipped` ではなく `success`** であることを確認する。確認できたものだけを「到達」と書き、それ以外は**理由つきで「未到達」**（`未デプロイ (自動デプロイ未解禁)` / `未デプロイ (OIDC 未設定)` / `撤収済み (down)` / `失敗`）と書く。ジョブまで引けなかったときは「**未取得**」とし、成功 run の存在だけで到達と書かない。
+   > **判定手順 — 完了 run を新しい順に走査し、最初に「環境の状態を変えた run」に当たったところで打ち切る**:
+   >
+   > 1. 完了 run を**新しい順**に見る。各 run について `event` / 入力 (`action`) と、`actions_list` (method: `list_workflow_jobs`) の**ステップの結論**を取る
+   > 2. **`down` の成功 run に当たったら → 「撤収済み (down)」で確定**。それより古い up は無効
+   > 3. **up が実行された run** (`Provision + deploy (up)` が `skipped` でない) に当たったら、`Provision + deploy (up)` と `Smoke test（認可と疎通の実測）` の結論で確定 — 両方 `success` なら「**到達 (その run の commit)**」、いずれか失敗なら「**未到達 (デプロイ失敗)**」
+   > 4. 全ステップ skip の run (guard で止まったもの) は**環境を変えていないので読み飛ばす**
+   > 5. 走査しても 2〜3 に当たらなければ「**未デプロイ (自動デプロイ未解禁 / OIDC 未設定)**」
+   >
+   > **`down` を単純に一覧から除外してはいけない** — 「最新が `down`、その前に up 成功」というケースで、撤収済みの環境を「到達」と誤報する (環境の状態は**最後に状態を変えた run** が決める)。ジョブまで引けなかったときは「**未取得**」とし、成功 run の存在だけで到達と書かない。
 6. **直近マージ PR** — `list_pull_requests` (state closed, sort updated desc, perPage 10) から `merged_at` のあるものを数件。
 7. **レーン定義** — `cicd/scripts/status-page/streams.json` を読む（レーンの名前・目標・分類基準。工場の終了条件もここ）。
 
@@ -90,8 +98,11 @@ Issue を `stream:*` ラベルでレーンに振り分ける。**レーンは st
 各レーンについて **4 語だけ**で語る（それ以上書かない）:
 
 - **目標** — streams.json の `goal`
-- **走っているもの** — そのレーンの open PR + 直近 7 日更新の Issue（最大 3 件）
-- **詰まり** — そのレーンの `needs-human` / 停滞している PR
+- **走っているもの** — そのレーンの **`draft` でない** open PR のうち **7 日以内に更新**されたもの + 直近 7 日更新の Issue（最大 3 件）
+  - **`draft` PR を「走っている」と書かない** — review-gate も draft をマージ判定の対象外にしている (`cicd/scripts/review-gate/check.py`)。draft と 7 日超無更新の PR は **「休眠 n 本」と件数だけ**出す（隠さないが進行中に混ぜない）
+- **詰まり** — 判定は**既存の機械条件を再利用する**（新しい基準を発明しない）:
+  - **PR**: 全 check 🟢 + auto-merge 有効のまま **2 時間**以上未マージ（`MERGE_STALL_HOURS`。ADR 0040 D1 と同じ条件）。判定には Step 1-2 に加えて `pull_request_read` (method: `get_status` / `get_check_runs`) が要る — **引けなければ「詰まり: 未取得」**と書く
+  - **人間待ち**: `needs-human` Issue / Proposed ADR が **48 時間**以上停滞（`HUMAN_STALL_HOURS`）
 - **次の一手** — そのレーンの `P1` 最古 1 件
 
 **未分類**（`stream:*` が無い open Issue）は番号つきで**必ず**出す。0 件でも「未分類 0 件」と 1 行書く — ラベル運用が崩れたときに静かに腐らせないための生存条件（ADR 0044 D2）。
