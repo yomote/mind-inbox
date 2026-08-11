@@ -293,12 +293,12 @@ test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間�
   await page.getByRole("button", { name: "新しい相談を始める" }).click();
   await expect(page).toHaveURL(/\/consultations\/current$/);
 
-  // opener (AI 非呼び出しの問いかけ) も採点対象の会話に含める
-  const assistantLabels = page.locator("text=ガイド");
-  await expect(assistantLabels.first()).toBeVisible({ timeout: 60_000 });
-  record.openerText = (await assistantLabels.first().locator("..").innerText())
-    .replace(/^ガイド\n?/, "")
-    .trim();
+  // 開始時挨拶は #241 (ADR 0039 Phase A) で撤去された — 開始直後は
+  // マスコットの待機表示のみで、会話はユーザーの 1 発話目から始まる。
+  // openerText は記録スキーマ互換のため null のまま残す (ux_eval は null 許容)。
+  // 挨拶が「復活」したら誤配置なので、assistant メッセージが無いことを確認する。
+  await expect(page.locator("text=ガイド")).toHaveCount(0, { timeout: 30_000 });
+  record.openerText = null;
   flush();
 
   const composer = page.getByPlaceholder("ここに入力 / 話して入力");
