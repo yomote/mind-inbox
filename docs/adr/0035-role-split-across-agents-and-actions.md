@@ -1,6 +1,6 @@
 # 0035. 開発ループの役割を分け、それぞれを「生死が見える場所」に置く
 
-- Status: Accepted (2026-08-10 / 対話にて PO 承認)
+- Status: Accepted (2026-08-10 / 対話にて PO 承認) / 一部 Superseded by [0040](0040-project-continuity-three-layers.md) (2026-08-11 — D1 の「Routine ゼロ」のみ。当番 PM に限り条件付きで再導入。機械計測を Actions に置く本体は生きている)
 - Date: 2026-08-10
 - Deciders: yomote (PO) / 実装セッション
 - Related: [ADR 0019](0019-independent-judge-agents-security-qa-release.md) (独立 judge) / [ADR 0021](0021-parent-session-as-pm-orchestrator.md) (hub-and-spoke) / [ADR 0031](0031-agent-reaches-outside-via-github-actions.md) (外の事実は Actions 経由)
