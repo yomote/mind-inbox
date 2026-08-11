@@ -56,6 +56,27 @@ def _write_record(tmp_path: Path, record: object) -> Path:
     return path
 
 
+def test_envelope_は_recordedAt_付きの_1行JSON_を出す(tmp_path: Path) -> None:
+    """データブランチ追記 (ADR 0041) の出口。recordedAt が無いと ux_eval の
+    鮮度判定と append.py の月振り分けが働かず、記録が静かに読み飛ばされる。"""
+    original = _record()
+    src = _write_record(tmp_path, original)
+
+    result = _run(["envelope", str(src)], {"GITHUB_RUN_ID": "31459063773"})
+
+    assert result.returncode == 0
+    lines = result.stdout.strip().splitlines()
+    assert len(lines) == 1  # JSONL に 1 行で入る形
+    envelope = json.loads(lines[0])
+    assert envelope["kind"] == "ux-probe-record"
+    assert envelope["runId"] == "31459063773"
+    assert envelope["record"] == original
+    from datetime import datetime
+
+    parsed = datetime.fromisoformat(envelope["recordedAt"].replace("Z", "+00:00"))
+    assert parsed.tzinfo is not None
+
+
 def test_format_して_extract_すると_元の_record_に戻る(tmp_path: Path) -> None:
     original = _record()
     src = _write_record(tmp_path, original)
