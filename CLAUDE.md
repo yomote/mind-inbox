@@ -56,7 +56,8 @@ PR を作成したら放置せず、**merge / close されるまで追従する*
 - PR を作ったら `subscribe_pr_activity` で監視を有効化する
 - レビュー ([ADR 0008](docs/adr/0008-pr-review-via-cloud-routine.md) の Routine 含む) や CI コメントが付いたら調査し、**小さく確実な修正は push**、曖昧 / 重大な指摘は確認を取る。**再レビューが Resolve するまで追う**
 - webhook は CI 成功・新規 push・マージ遷移を配信しないので、定期チェックインで取りこぼしを補い、merge / close で監視を終える
-- **定期チェックインは `send_later` ではなく `CronCreate` を使う** — MCP 側は承認ゲートに当たり毎回確認を求められる ([ADR 0031](docs/adr/0031-agent-reaches-outside-via-github-actions.md) D6)
+- **「緑になったらマージ」の主経路は GitHub の auto-merge** — 受け入れ (pm-accept) まで済ませたら `enable_pr_auto_merge` (squash) を掛けて終わってよい。マージはサーバー側で行われ、**セッションの生死に依存しない**。required check (CI + review-gate) が門を守る。常設承認の例外 (リリース PR / needs-human 等) には掛けないこと。リポ設定の有効化は Issue #234
+- **定期チェックインは auto-merge の補助** (レビュー対応の取りこぼし確認など)。`send_later` ではなく `CronCreate` を使う (MCP 側は承認ゲートに当たる / [ADR 0031](docs/adr/0031-agent-reaches-outside-via-github-actions.md) D6) が、**CronCreate はセッション内メモリでありセッション終了と共に消える** — 2026-08-10 に PR #230 が「全 check 緑のままマージされず一晩放置」される実害が出た。チェックインだけに完遂を依存させない
 
 #### マージの常設承認 (2026-08-09 PO 決定)
 
