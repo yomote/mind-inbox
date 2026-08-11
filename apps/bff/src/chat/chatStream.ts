@@ -13,7 +13,12 @@
 
 import { config } from "../config";
 import { serviceHeaders } from "../clients/serviceToken";
-import { sendChatMessage, type ChatRequest, type ChatResponse } from "../clients/aiAgentClient";
+import {
+  sendChatMessage,
+  type ChatRequest,
+  type ChatResponse,
+  type StubMarked,
+} from "../clients/aiAgentClient";
 
 const encoder = new TextEncoder();
 
@@ -28,7 +33,7 @@ export function encodeSseEvent(payload: unknown): Uint8Array {
  * BFF 側の鏡 (`clients/aiAgentContracts.ts` の ChatStreamDoneSchema) を L0 契約テストが
  * 突き合わせている。stub もフォールバックもここを通す (手書きコピーを 1 箇所に閉じる)。
  */
-function toDoneEvent(res: ChatResponse): unknown {
+function toDoneEvent(res: StubMarked<ChatResponse>): unknown {
   return {
     type: "done",
     response: {
@@ -36,12 +41,16 @@ function toDoneEvent(res: ChatResponse): unknown {
       requires_approval: res.requiresApproval,
       approval_request_id: res.approvalRequestId,
       citations: res.citations,
+      // stub 判別フラグ (#146)。BFF が合成するストリーム (stub / フォールバック) にだけ
+      // 現れうる注釈で、実 ai-agent は返さない — よって pydantic の wire 契約とその鏡
+      // (aiAgentContracts.ts) には含めない。tRPC 側の真実は router.ts の ChatReplySchema。
+      ...(res.stubbed ? { stubbed: true } : {}),
     },
   };
 }
 
 /** 非ストリーミングの応答を delta + done の合成 SSE ストリームにする。 */
-function syntheticStream(res: ChatResponse): ReadableStream<Uint8Array> {
+function syntheticStream(res: StubMarked<ChatResponse>): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     start(controller) {
       if (res.reply) {
@@ -75,6 +84,7 @@ function stubStream(req: ChatRequest): ReadableStream<Uint8Array> {
             requiresApproval: false,
             approvalRequestId: null,
             citations: [],
+            stubbed: true,
           }),
         ),
       );

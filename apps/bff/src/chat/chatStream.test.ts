@@ -44,11 +44,17 @@ describe("[L2] openChatStream", () => {
     );
 
     const deltas = events.filter((e) => e.type === "delta");
-    const done = events.at(-1) as { type: string; response: { reply: string } };
+    const done = events.at(-1) as {
+      type: string;
+      response: { reply: string; stubbed?: boolean };
+    };
     expect(deltas.length).toBeGreaterThan(1); // 逐次配信されている (1 発全文なら stub の意味がない)
     expect(done.type).toBe("done");
     expect(deltas.map((d) => d.text).join("")).toBe(done.response.reply);
     expect(done.response.reply).toContain("こんにちは");
+    // stub 判別フラグ (#146)。無いと stub ストリームが本物のふりをしてバナーが出ない退行が静かに通る
+    // (実応答にフラグが立たないことは下のフォールバック test の toEqual 完全一致が守る)。
+    expect(done.response.stubbed).toBe(true);
   });
 
   it("upstream 200 + body あり: SSE バイトを素通しする", async () => {
