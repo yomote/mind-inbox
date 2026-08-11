@@ -2,6 +2,7 @@ export { startNewConsultation, sendMessage } from "./consultation";
 
 export {
   ExtractFailed,
+  commitPreview,
   extractMentions,
   previewExtraction,
   previewSupported,

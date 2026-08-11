@@ -30,7 +30,10 @@ test.describe("主要画面のスクリーンショット", () => {
     await expect(page.getByText("週末になると気分が落ち込む").first()).toBeVisible();
     await page.screenshot(shot("02-session"));
 
-    // mock ビルドは下書きプレビュー有効 → ボタンは「この内容で確定」(#187 / ADR 0039 D3)。
+    // mock ビルドは下書きプレビュー有効 (#187 / ADR 0039)。確定対象の下書きを
+    // 「今すぐ整理」で作ってから「この内容で確定」する (表示中の下書きの保存)。
+    await page.getByRole("button", { name: "今すぐ整理" }).click();
+    await expect(page.getByTestId("preview-card").first()).toBeVisible();
     await page.getByRole("button", { name: "この内容で確定" }).click();
     await expect(page.getByText(/件の困りごとを見つけました/)).toBeVisible();
     await page.screenshot(shot("03-extract-review"));

@@ -11,6 +11,12 @@ type SessionControlsProps = {
    * 「困りごとを抽出」(一発勝負の抽出)。
    */
   extractLabel?: string;
+  /**
+   * 確定対象の下書きがまだ無い間は押せない (dialogue-session.mdx §5.8)。
+   * 「この内容で確定」は表示中の下書きを保存する操作なので、対象なしで押せると
+   * 「この内容」が存在しない確定になる。
+   */
+  extractDisabled?: boolean;
 };
 
 export function SessionControls({
@@ -19,6 +25,7 @@ export function SessionControls({
   onPause,
   onExtract,
   extractLabel = "困りごとを抽出",
+  extractDisabled = false,
 }: SessionControlsProps) {
   return (
     <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
@@ -35,7 +42,7 @@ export function SessionControls({
         壊れた導線だったため撤去した。
       */}
       {onExtract && (
-        <Button variant="contained" onClick={onExtract} disabled={loading}>
+        <Button variant="contained" onClick={onExtract} disabled={loading || extractDisabled}>
           {extractLabel}
         </Button>
       )}

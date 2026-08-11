@@ -12,6 +12,7 @@
 import * as React from "react";
 import {
   ExtractFailed,
+  commitPreview,
   createProblemPlan,
   extractMentions,
   loadProblem,
@@ -79,6 +80,8 @@ const FAILURE_MESSAGE = {
   startConsultation: "相談を開始できませんでした。通信状況を確認して、もう一度お試しください。",
   sendMessage: "メッセージを送れませんでした。入力はそのまま残っています。もう一度お試しください。",
   extract: "困りごとを抽出できませんでした。通信状況を確認して、もう一度お試しください。",
+  commitPreview:
+    "下書きを確定できませんでした。下書きは残っています。通信状況を確認して、もう一度お試しください。",
   createPlan: "次の一歩を作れませんでした。通信状況を確認して、もう一度お試しください。",
   openProblemList: "困りごと一覧を開けませんでした。通信状況を確認して、もう一度お試しください。",
   openProblem: "困りごとを開けませんでした。通信状況を確認して、もう一度お試しください。",
@@ -129,9 +132,21 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
 
   const [preview, setPreview] = React.useState<ExtractionResult | null>(null);
   const [previewStatus, setPreviewStatus] = React.useState<"idle" | "updating" | "error">("idle");
+  // preview の世代トークン (PR #282 Codex P2): セッションが変わったら +1 し、飛行中だった
+  // 古い応答を無条件に破棄する。preview は 600ms 級 / 相談開始は 350ms 級で、
+  // 「今すぐ整理 → 中断 → 新規相談」で旧セッションの下書きが新セッションに出る競合が実在する。
+  const previewGenerationRef = React.useRef(0);
   // preview は会話 (loading / runAction) と独立に走る。多重実行だけ自前で防ぐ
-  // (ADR 0039 D2: in-flight 1 本 — LLM 呼び出しを重ねない)。
-  const previewInFlightRef = React.useRef(false);
+  // (ADR 0039 D2: in-flight 1 本 — LLM 呼び出しを重ねない)。世代で持つのは、
+  // 旧セッションの飛行中リクエストが新セッションの初回 preview を塞がないようにするため。
+  const previewInFlightGenerationRef = React.useRef<number | null>(null);
+
+  /** 下書きを揮発させ、飛行中の preview 応答を無効化する (セッション跨ぎ / reset)。 */
+  const invalidatePreview = React.useCallback(() => {
+    previewGenerationRef.current += 1;
+    setPreview(null);
+    setPreviewStatus("idle");
+  }, []);
 
   // loading は多重実行ガードにだけ使うので、ハンドラの identity を安定させるため ref でも持つ。
   const loadingRef = React.useRef(false);
@@ -182,18 +197,28 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
    */
   const runPreview = React.useCallback(async (sessionId: string, messages: ChatMessage[]) => {
     if (!previewSupported) return;
-    if (previewInFlightRef.current) return;
-    previewInFlightRef.current = true;
+    const generation = previewGenerationRef.current;
+    // in-flight 1 本 (ADR 0039 D2)。世代で比較するのは、旧セッションの飛行中リクエストが
+    // 新セッションの初回 preview を塞がないようにするため。
+    if (previewInFlightGenerationRef.current === generation) return;
+    previewInFlightGenerationRef.current = generation;
     setPreviewStatus("updating");
     try {
       const result = await previewExtraction(sessionId, messages);
+      // 応答が返るまでにセッションが変わっていたら捨てる (PR #282 Codex P2)。
+      // 旧セッションの下書きを新セッションに出すと「確定すると関係ない困りごとが
+      // 保存される」誤操作の入口になる。
+      if (previewGenerationRef.current !== generation) return;
       setPreview(result);
       setPreviewStatus("idle");
     } catch (err) {
+      if (previewGenerationRef.current !== generation) return;
       console.error("[useConsultation] 下書きプレビューの更新に失敗", err);
       setPreviewStatus("error");
     } finally {
-      previewInFlightRef.current = false;
+      if (previewInFlightGenerationRef.current === generation) {
+        previewInFlightGenerationRef.current = null;
+      }
     }
   }, []);
 
@@ -210,11 +235,11 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     if (!outcome.ok) return;
 
     setSession(outcome.value);
-    // 前セッションの下書きを新しい相談に持ち込まない (下書きはセッション内で揮発 — ADR 0039)。
-    setPreview(null);
-    setPreviewStatus("idle");
+    // 前セッションの下書きを持ち込まない + 飛行中の旧応答を無効化する
+    // (下書きはセッション内で揮発 — ADR 0039 / PR #282 Codex P2)。
+    invalidatePreview();
     transition("session");
-  }, [runAction, transition]);
+  }, [invalidatePreview, runAction, transition]);
 
   const sendDraftMessage = React.useCallback(async () => {
     if (!session || !draftMessage.trim() || loadingRef.current) return;
@@ -257,9 +282,29 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
 
   const extract = React.useCallback(async () => {
     if (!session) return;
-    // 会話はこちらが持っているので渡す (#183)。ai-agent のセッション履歴はプロセスメモリで、
-    // scale-to-zero・スケールアウト・リビジョン差し替えのいずれでも消えるため、
-    // それに依存すると「対話はできたのに抽出だけ 404」になる。
+
+    // プレビュー有効環境では「この内容で確定」= **表示中の下書きをそのまま永続化する**
+    // (ADR 0039 D1・D3 / PR #282 Codex P1)。抽出は非決定的なので、確定時に抽出し直すと
+    // 画面で確認した内容と違うものが保存されうる — 再抽出はしない。
+    if (previewSupported) {
+      // 下書きが無い間はボタンが disabled (dialogue-session.mdx §5.8)。二重ガード。
+      if (!preview) return;
+      const outcome = await runAction(FAILURE_MESSAGE.commitPreview, () =>
+        commitPreview(session.id, preview.items),
+      );
+      if (!outcome.ok) return;
+
+      setExtraction(outcome.value);
+      // 確定済みの下書きを「未確定の下書き」として残さない (揮発 — ADR 0039 D1)。
+      invalidatePreview();
+      transition("extractReview");
+      return;
+    }
+
+    // プレビュー無効環境 (BFF `consultation.preview` 未結線の real — #283 で結線) は
+    // 従来の一発抽出。会話はこちらが持っているので渡す (#183)。ai-agent のセッション履歴は
+    // プロセスメモリで、scale-to-zero・スケールアウト・リビジョン差し替えのいずれでも
+    // 消えるため、それに依存すると「対話はできたのに抽出だけ 404」になる。
     const outcome = await runAction(extractFailureMessage, () =>
       extractMentions(session.id, session.messages),
     );
@@ -267,7 +312,7 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
 
     setExtraction(outcome.value);
     transition("extractReview");
-  }, [runAction, session, transition]);
+  }, [invalidatePreview, preview, runAction, session, transition]);
 
   const openProblemList = React.useCallback(async () => {
     const outcome = await runAction(FAILURE_MESSAGE.openProblemList, () => loadProblems());
@@ -360,9 +405,8 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     setExtraction(null);
     setProblems([]);
     setSelectedProblem(null);
-    setPreview(null);
-    setPreviewStatus("idle");
-  }, [setBusy]);
+    invalidatePreview();
+  }, [invalidatePreview, setBusy]);
 
   return {
     loading,

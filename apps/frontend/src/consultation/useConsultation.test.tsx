@@ -12,6 +12,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ExtractFailed は hook が instanceof で種別を見るので実物を残す
 // (丸ごと差し替えるとクラスが undefined になり、文面の出し分けが黙って死ぬ)。
+// 下書きプレビュー (#187): テストビルドは mock モードではないため、素の previewSupported は
+// false になり自動更新・確定の分岐が一切通らない。getter 経由で test ごとに切り替える
+// (true = プレビュー有効環境 / false = BFF 未結線の従来経路)。
+const apiFlags = vi.hoisted(() => ({ previewSupported: true }));
+
 vi.mock("../api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api")>()),
   startNewConsultation: vi.fn(),
@@ -21,19 +26,21 @@ vi.mock("../api", async (importOriginal) => ({
   loadProblem: vi.fn(),
   triageProblem: vi.fn(),
   createProblemPlan: vi.fn(),
-  // 下書きプレビュー (#187): テストビルドは mock モードではないため、素の
-  // previewSupported は false になり自動更新の分岐が一切通らない。ここで有効化する。
-  previewSupported: true,
+  get previewSupported() {
+    return apiFlags.previewSupported;
+  },
   previewExtraction: vi.fn(async (sessionId: string) => ({
     sessionId,
     items: [],
     newProblemCount: 0,
     updatedProblemCount: 0,
   })),
+  commitPreview: vi.fn(),
 }));
 
 import {
   ExtractFailed,
+  commitPreview,
   createProblemPlan,
   extractMentions,
   loadProblem,
@@ -64,6 +71,7 @@ function setup() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  apiFlags.previewSupported = true;
 });
 
 describe("[L1] useConsultation — 相談の開始と発話", () => {
@@ -187,6 +195,12 @@ describe("[L1] useConsultation — 無音失敗の禁止 (ADR 0018)", () => {
    * ここでは全ハンドラについて「失敗したら必ず言葉が出る / 遷移しない」を固定する。
    */
   const failure = new Error("network");
+
+  // 「困りごとを抽出」は従来経路 (プレビュー無効環境) の挙動。プレビュー有効環境の
+  // 確定 (commitPreview) の無音失敗禁止は下の [単体] プレビュー describe が固定する。
+  beforeEach(() => {
+    apiFlags.previewSupported = false;
+  });
 
   /** ハンドラごとの [名前, 落とす api, 実行, 起きてはいけない遷移先]。 */
   const cases: Array<{
@@ -373,6 +387,130 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
     await waitFor(() => expect(previewExtraction).toHaveBeenCalledTimes(1));
   });
 
+  const draftItem = {
+    mention: { id: "m-d1", excerpt: "眠れない" },
+    grouping: { kind: "existing", problemId: "p-career" },
+  } as never;
+
+  it("確定は表示中の下書きをそのまま渡し、再抽出しない (PR #282 P1)", async () => {
+    // 無いと: 確定が extractMentions (再抽出) に退行しても例外は出ず、右ペインで
+    //         確認した内容と違う Problem が静かに保存される (ADR 0039 D1/D3 違反)。
+    vi.mocked(startNewConsultation).mockResolvedValue(session());
+    const draft = {
+      sessionId: "s1",
+      items: [draftItem],
+      newProblemCount: 0,
+      updatedProblemCount: 1,
+    };
+    vi.mocked(previewExtraction).mockResolvedValue(draft);
+    const committed = { ...draft, sessionId: "s1" };
+    vi.mocked(commitPreview).mockResolvedValue(committed);
+    const { result, transition } = setup();
+    await act(async () => {
+      await result.current.startConsultation();
+    });
+    await sendTimes(result, ["1 回目", "2 回目"]);
+    await waitFor(() => expect(result.current.preview).toEqual(draft));
+
+    await act(async () => {
+      await result.current.extract();
+    });
+
+    expect(commitPreview).toHaveBeenCalledWith("s1", draft.items);
+    expect(extractMentions).not.toHaveBeenCalled();
+    expect(result.current.extraction).toEqual(committed);
+    expect(transition).toHaveBeenCalledWith("extractReview");
+    // 確定済みの下書きを「未確定」として残さない (揮発)。
+    expect(result.current.preview).toBeNull();
+  });
+
+  it("下書きが無い間は確定できない (ボタン disabled の二重ガード)", async () => {
+    // 無いと: 「この内容」が存在しないのに確定が走り、空の確定 or 再抽出相当の
+    //         別内容が保存されうる。
+    vi.mocked(startNewConsultation).mockResolvedValue(session());
+    const { result, transition } = setup();
+    await act(async () => {
+      await result.current.startConsultation();
+    });
+    transition.mockClear();
+
+    await act(async () => {
+      await result.current.extract();
+    });
+
+    expect(commitPreview).not.toHaveBeenCalled();
+    expect(extractMentions).not.toHaveBeenCalled();
+    expect(transition).not.toHaveBeenCalled();
+  });
+
+  it("確定の失敗はエラーを表示し、下書きを残したまま遷移しない", async () => {
+    // 無いと: 確定の無音失敗 —「押したのに何も起きず、下書きも消えた」(ADR 0018)。
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(startNewConsultation).mockResolvedValue(session());
+    const draft = {
+      sessionId: "s1",
+      items: [draftItem],
+      newProblemCount: 0,
+      updatedProblemCount: 1,
+    };
+    vi.mocked(previewExtraction).mockResolvedValue(draft);
+    vi.mocked(commitPreview).mockRejectedValue(new Error("commit down"));
+    const { result, transition } = setup();
+    await act(async () => {
+      await result.current.startConsultation();
+    });
+    await sendTimes(result, ["1 回目", "2 回目"]);
+    await waitFor(() => expect(result.current.preview).toEqual(draft));
+    transition.mockClear();
+
+    await act(async () => {
+      await result.current.extract();
+    });
+
+    expect(result.current.actionError).toContain("確定できませんでした");
+    expect(transition).not.toHaveBeenCalled();
+    expect(result.current.preview).toEqual(draft);
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("古いセッションの preview 応答は破棄される (PR #282 P2)", async () => {
+    // 無いと: 「今すぐ整理」直後に中断 → 新規相談を開始すると、旧セッションの応答が
+    //         新セッションの右ペインに現れる (preview 600ms > 開始 350ms で実在する競合)。
+    //         そのまま確定すると関係ない困りごとが保存される。
+    vi.mocked(startNewConsultation).mockResolvedValue(session());
+    let resolveStale: ((value: typeof staleDraft) => void) | undefined;
+    const staleDraft = {
+      sessionId: "s1",
+      items: [draftItem],
+      newProblemCount: 0,
+      updatedProblemCount: 1,
+    };
+    vi.mocked(previewExtraction).mockImplementation(
+      () => new Promise((resolve) => (resolveStale = resolve)),
+    );
+    const { result } = setup();
+    await act(async () => {
+      await result.current.startConsultation();
+    });
+
+    // 旧セッションで「今すぐ整理」— 応答は返さないまま新セッションを開始する。
+    act(() => {
+      result.current.refreshPreview();
+    });
+    vi.mocked(startNewConsultation).mockResolvedValue(session({ id: "s2", messages: [] }));
+    await act(async () => {
+      await result.current.startConsultation();
+    });
+
+    // 旧セッションの応答が今さら届く → 捨てる。
+    await act(async () => {
+      resolveStale?.(staleDraft);
+    });
+
+    expect(result.current.preview).toBeNull();
+    expect(result.current.previewStatus).toBe("idle");
+  });
+
   it("新しい相談を開始すると前セッションの下書きは消える (揮発)", async () => {
     // 無いと: 前セッションの下書きが新セッションの右ペインに残り、「確定すると
     //         関係ない困りごとが保存される」誤操作の入口になる。
@@ -428,6 +566,11 @@ describe("[L1] useConsultation — reset", () => {
 });
 
 describe("[L1] useConsultation — 抽出の失敗をユーザーに見せる (#183)", () => {
+  // ここは従来経路 (プレビュー無効環境 = BFF 未結線の real) の仕様。
+  beforeEach(() => {
+    apiFlags.previewSupported = false;
+  });
+
   it("会話全文を渡して抽出する", async () => {
     // 無いと: 会話を送らない実装に戻り、ai-agent のプロセスメモリ頼みになる。
     //         メモリが生きている間は動くので手元では気づけず、scale-to-zero した

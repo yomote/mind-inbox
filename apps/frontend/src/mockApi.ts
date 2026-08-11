@@ -538,6 +538,63 @@ export async function previewExtraction(
   };
 }
 
+/**
+ * 表示中の下書きをそのまま確定する (#187 / ADR 0039 D1・D3 — 「この内容で確定」)。
+ *
+ * **再抽出しない**: 抽出は非決定的なので、確定時に抽出し直すと画面で確認した内容と
+ * 違うものが保存されうる (PR #282 Codex P1)。入力の drafts (previewExtraction が返した
+ * items) を**そのまま** Problem store へ書き、保存された結果を ExtractionResult として返す。
+ *
+ * mock は真実 (ADR 0004) — この入出力が BFF 側 commit 経路 (#283) の契約の写しになる:
+ *   入力: sessionId + drafts (ExtractedItem[] — zod は ExtractedItemSchema がそのまま使える)
+ *   出力: ExtractionResult (id 類はサーバー権威で採番し直してよい。mock は draft id を流用)
+ */
+export async function commitPreview(
+  sessionId: string,
+  drafts: ExtractionResult["items"],
+): Promise<ExtractionResult> {
+  await wait(400);
+
+  const items: ExtractionResult["items"] = drafts.map(({ mention, grouping }) => {
+    const existing = grouping.kind === "existing" ? getProblem(grouping.problemId) : undefined;
+    if (existing) {
+      // 既存 Problem への再出現: 下書きの Mention をそのまま追記する。
+      existing.mentions.push({ ...clone(mention), problemId: existing.id });
+      Object.assign(existing, deriveProblemDates({ ...existing, status: "open" }));
+      return {
+        mention: clone(mention),
+        grouping: { ...clone(grouping), mentionCount: existing.mentionCount },
+      };
+    }
+
+    // 新規 (または確定までの間に既存が消えていた場合): 下書きの内容から Problem を起こす。
+    const problem = deriveProblemDates({
+      id: grouping.problemId,
+      title: grouping.problemTitle,
+      summary: mention.statement,
+      theme: grouping.problemTheme,
+      tags: [...mention.proposedTags],
+      status: "open",
+      mentions: [{ ...clone(mention), problemId: grouping.problemId }],
+      mentionCount: 1,
+      plans: [],
+      createdAt: mention.createdAt,
+      lastMentionedAt: mention.createdAt,
+      resolvedAt: null,
+      shelvedAt: null,
+    });
+    problemStore = [problem, ...problemStore];
+    return { mention: clone(mention), grouping: clone(grouping) };
+  });
+
+  return {
+    sessionId,
+    items,
+    newProblemCount: items.filter((i) => i.grouping.kind === "new").length,
+    updatedProblemCount: items.filter((i) => i.grouping.kind === "existing").length,
+  };
+}
+
 /** UC-02 一覧。既定は直近言及順。store のスナップショット（複製）を返す。 */
 export async function loadProblems(filter?: ProblemFilter): Promise<Problem[]> {
   await wait(250);

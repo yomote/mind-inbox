@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   __resetProblemStore,
+  commitPreview,
   createProblemPlan,
   extractMentions,
   loadProblem,
@@ -82,25 +83,25 @@ describe("[L1] mockApi.extractMentions グルーピング", () => {
   });
 });
 
+const userMsg = (i: number) => ({
+  id: `u-${i}`,
+  role: "user" as const,
+  text: `ユーザー発話 ${i} — 最近いろいろ考えてしまって眠れない`,
+  createdAt: new Date().toISOString(),
+});
+const aiMsg = (i: number) => ({
+  id: `a-${i}`,
+  role: "assistant" as const,
+  text: "受け止めました。",
+  createdAt: new Date().toISOString(),
+});
+const conversation = (userCount: number) =>
+  Array.from({ length: userCount }, (_, i) => [userMsg(i), aiMsg(i)]).flat();
+
 describe("[単体] mockApi.previewExtraction — 読み取り専用の下書き (#187 / ADR 0039 D1)", () => {
   beforeEach(() => {
     __resetProblemStore();
   });
-
-  const userMsg = (i: number) => ({
-    id: `u-${i}`,
-    role: "user" as const,
-    text: `ユーザー発話 ${i} — 最近いろいろ考えてしまって眠れない`,
-    createdAt: new Date().toISOString(),
-  });
-  const aiMsg = (i: number) => ({
-    id: `a-${i}`,
-    role: "assistant" as const,
-    text: "受け止めました。",
-    createdAt: new Date().toISOString(),
-  });
-  const conversation = (userCount: number) =>
-    Array.from({ length: userCount }, (_, i) => [userMsg(i), aiMsg(i)]).flat();
 
   // 無いと何が静かに通るか: preview が store を書いても例外は出ず、確定していない下書きが
   // Problem 一覧に静かに現れる (ADR 0039 の核「揮発する下書き / 無垢な DB」が壊れる)。
@@ -137,6 +138,52 @@ describe("[単体] mockApi.previewExtraction — 読み取り専用の下書き 
     const messages = conversation(1);
     const result = await previewExtraction("s-preview", messages);
     expect(result.items[0].mention.excerpt).toBe(messages[0].text.slice(0, 60));
+  });
+});
+
+describe("[単体] mockApi.commitPreview — 表示中の下書きをそのまま保存する (#187 / PR #282 P1)", () => {
+  beforeEach(() => {
+    __resetProblemStore();
+  });
+
+  // 無いと何が静かに通るか: 確定が「再抽出」に退行しても例外は出ず、画面で確認した内容と
+  // 違う Problem が静かに保存される (ADR 0039 D1「この内容で確定」の約束が壊れる)。
+  // 2 往復時点の下書きは 1 件 — 確定で保存されるのもその 1 件だけでなければならない
+  // (extractMentions は常に 2 件書くので、再抽出経路ならこのテストが落ちる)。
+  it("1 件の下書きの確定では、その 1 件だけが保存される (新規 Problem は増えない)", async () => {
+    const drafts = (await previewExtraction("s-commit", conversation(2))).items;
+    expect(drafts).toHaveLength(1);
+    const before = await loadProblems();
+
+    const committed = await commitPreview("s-commit", drafts);
+
+    const after = await loadProblems();
+    expect(after.length).toBe(before.length);
+    expect(committed.items).toHaveLength(1);
+    expect(committed.newProblemCount).toBe(0);
+    expect(committed.updatedProblemCount).toBe(1);
+    const career = await loadProblem("p-career");
+    expect(career?.mentionCount).toBe(4);
+    expect(career?.mentions.at(-1)?.excerpt).toBe(drafts[0].mention.excerpt);
+  });
+
+  // 無いと何が静かに通るか: 新規下書きの確定が下書きと違う内容 (タイトル / 引用) で
+  // Problem を起こしても気づけない。「あなたがこう言ったやつ」の来歴が壊れる。
+  it("新規 + 既存の下書きを確定すると、下書きの内容どおりに書かれる", async () => {
+    const drafts = (await previewExtraction("s-commit", conversation(4))).items;
+    expect(drafts).toHaveLength(2);
+    const before = await loadProblems();
+
+    const committed = await commitPreview("s-commit", drafts);
+
+    const after = await loadProblems();
+    expect(after.length).toBe(before.length + 1);
+    expect(() => ExtractionResultSchema.parse(committed)).not.toThrow();
+
+    const newDraft = drafts.find((d) => d.grouping.kind === "new");
+    const created = await loadProblem(newDraft?.grouping.problemId ?? "");
+    expect(created?.title).toBe(newDraft?.grouping.problemTitle);
+    expect(created?.mentions[0]?.excerpt).toBe(newDraft?.mention.excerpt);
   });
 });
 

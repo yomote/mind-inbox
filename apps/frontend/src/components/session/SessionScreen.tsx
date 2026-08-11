@@ -101,6 +101,9 @@ export function SessionScreen({
           onExtract={onExtract}
           // 右ペインで下書きが見えている環境では、抽出は「確認の一手」(ADR 0039 D3)。
           extractLabel={previewEnabled ? "この内容で確定" : "困りごとを抽出"}
+          // 確定は表示中の下書きをそのまま保存する操作 (再抽出しない — PR #282 P1)。
+          // 下書きがまだ無い間は対象が無いので押せない (§5.8)。
+          extractDisabled={previewEnabled && preview === null}
         />
       </Stack>
     </Paper>

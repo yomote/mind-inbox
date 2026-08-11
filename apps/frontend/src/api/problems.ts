@@ -133,6 +133,22 @@ export async function previewExtraction(
   throw new Error("consultation.preview is not available in this build");
 }
 
+/**
+ * 表示中の下書きをそのまま確定する (#187 / ADR 0039 D1・D3 — 「この内容で確定」)。
+ *
+ * **再抽出しない** — 確定時に抽出し直すと、画面で確認した内容と違うものが保存されうる
+ * (抽出は非決定的 / PR #282 Codex P1)。契約の形は mock (ADR 0004) が真実で、
+ * BFF 側の commit 経路 (#283) はこれと同じ入出力で結線する。
+ */
+export async function commitPreview(
+  sessionId: string,
+  drafts: ExtractionResult["items"],
+): Promise<ExtractionResult> {
+  if (useMock) return mock.commitPreview(sessionId, drafts);
+  // BFF の commit 経路は #283 (ADR 0039 D1)。previewSupported=false の間はここに来ない。
+  throw new Error("consultation preview commit is not available in this build");
+}
+
 export async function loadProblems(filter?: ProblemFilter): Promise<Problem[]> {
   if (useMock) return mock.loadProblems(filter);
   return await trpc.problem.list.query(filter);
