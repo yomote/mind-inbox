@@ -1,4 +1,4 @@
-"""[L1] UX 機械計測の抽出 (ADR 0037 / 蓄積は ADR 0040 のデータブランチ)。
+"""[L1] UX 機械計測の抽出 (ADR 0037 / 蓄積は ADR 0041 のデータブランチ)。
 
 無いと何が静かに通るか:
     - 古い記録が「今日の計測」として積まれ、プローブが止まっているのに
@@ -239,7 +239,7 @@ def test_l1_payloadは会話本文を含まず追記の必須キーを持つ() -
     assert payload["kind"] == "ux-eval-mech"
     assert payload["probeRunId"] == "31339682965"
     assert payload["probeRecordedAt"] == "2026-08-09T22:37:35Z"
-    # recordedAt は append.py (ADR 0040) の必須キー — 無いと追記が exit 1 で落ちる
+    # recordedAt は append.py (ADR 0041) の必須キー — 無いと追記が exit 1 で落ちる
     assert payload["recordedAt"] == NOW.isoformat().replace("+00:00", "Z")
     assert payload["metrics"]["completedTurns"] == 2
     # 会話本文 (自由文) を持ち込まない — 肥大化とトレンド描画の混入を防ぐ

@@ -18,14 +18,14 @@
     {
       "id": "ux-eval.yml",
       "name": "毎朝の UX 機械計測",
-      "what": "前夜のプローブ記録からレイテンシ統計・往復数・警告数を抽出してデータブランチ data/ux-observations に積む (ADR 0040。LLM 採点は PM tick — traces 欄)",
+      "what": "前夜のプローブ記録からレイテンシ統計・往復数・警告数を抽出してデータブランチ data/ux-observations に積む (ADR 0041。LLM 採点は PM tick — traces 欄)",
       "expect_hours": 26,
       "critical": true
     },
     {
       "id": "ux-data-migrate.yml",
       "name": "UX 観測の過去データ移行 (one-shot)",
-      "what": "旧蓄積 (#162/#127 のコメント) をデータブランチの JSONL に取り込む (ADR 0040 D7。初期移行の 1 回きり)",
+      "what": "旧蓄積 (#162/#127 のコメント) をデータブランチの JSONL に取り込む (ADR 0041 D7。初期移行の 1 回きり)",
       "expect": "必要なときだけ (手動)"
     },
     {
@@ -102,7 +102,7 @@
   "traces": [
     {
       "name": "UX プローブ記録の蓄積 (data branch)",
-      "what": "毎朝のプローブ記録をデータブランチ data/ux-observations の probes/*.jsonl に追記する (採点の入力 / ADR 0040)",
+      "what": "毎朝のプローブ記録をデータブランチ data/ux-observations の probes/*.jsonl に追記する (採点の入力 / ADR 0041)",
       "trace": {
         "kind": "data_branch",
         "record_kind": "ux-probe-record"
@@ -117,7 +117,7 @@
         "record_kind": "ux-judge-score"
       },
       "expect_hours": 50,
-      "note": "expect 50h は週末スキップ許容。kind で絞って判定するため、機械計測 (ux-eval-mech) だけ動いて LLM 採点が止まった状態も検出できる (Issue コメント時代の既知の穴 — ADR 0037 Negative Consequences — は ADR 0040 D6 で解消)。"
+      "note": "expect 50h は週末スキップ許容。kind で絞って判定するため、機械計測 (ux-eval-mech) だけ動いて LLM 採点が止まった状態も検出できる (Issue コメント時代の既知の穴 — ADR 0037 Negative Consequences — は ADR 0041 D6 で解消)。"
     }
   ]
 }

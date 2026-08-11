@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # UX judge の採点レポートを検証し、データブランチ data/ux-observations へ
 # 1 採点 = 1 行 (kind: ux-judge-score) で追記する。
-# runbook `docs/runbooks/ux-probe-judge.md` Step 4 の自動化 (ADR 0027 D1 / ADR 0040 D4)。
+# runbook `docs/runbooks/ux-probe-judge.md` Step 4 の自動化 (ADR 0027 D1 / ADR 0041 D4)。
 # 旧実装は Issue #127 へのコメント投稿 (gh 必須 = 人間の手元専用) だった。
 # git push は agent セッションからも通るため、human / agent の別なくこの 1 本で投稿できる。
 #
@@ -50,7 +50,7 @@ log "採点ブロックの検証 OK — データブランチへ追記します"
 
 # payload = 正規化済み採点 + recordedAt (鮮度・月振り分けの基準) + レポート全文。
 # レポート本文も同じ行に持たせる — 白眉/最悪往復などの根拠が採点と一緒に残り、
-# 置き場が 1 つで済む (ADR 0040 D2)
+# 置き場が 1 つで済む (ADR 0041 D2)
 PAYLOAD="$(mktemp)"
 SCORE_JSON="$SCORE_JSON" REPORT_PATH="$REPORT" python3 - "$PAYLOAD" <<'EOF'
 import json

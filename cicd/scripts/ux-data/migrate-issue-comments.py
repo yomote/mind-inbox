@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""#162 / #127 の既存 Issue コメントを、データブランチ用の payload に変換する (ADR 0040 D7)。
+"""#162 / #127 の既存 Issue コメントを、データブランチ用の payload に変換する (ADR 0041 D7)。
 
 one-shot の移行スクリプト。Issue コメント時代 (ADR 0029 / 0037) の蓄積を
 JSONL 蓄積 (append.py の形) に取り込むための前処理を担う:

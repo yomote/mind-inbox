@@ -57,7 +57,7 @@ def _write_record(tmp_path: Path, record: object) -> Path:
 
 
 def test_envelope_は_recordedAt_付きの_1行JSON_を出す(tmp_path: Path) -> None:
-    """データブランチ追記 (ADR 0040) の出口。recordedAt が無いと ux_eval の
+    """データブランチ追記 (ADR 0041) の出口。recordedAt が無いと ux_eval の
     鮮度判定と append.py の月振り分けが働かず、記録が静かに読み飛ばされる。"""
     original = _record()
     src = _write_record(tmp_path, original)

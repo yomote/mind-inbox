@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """UX プローブ記録の封筒 (kind: "ux-probe-record") を作る / 取り出す。
 
-`envelope` がデータブランチ蓄積 (ADR 0040) 用の現行の出口。golden-path-monitor が
+`envelope` がデータブランチ蓄積 (ADR 0041) 用の現行の出口。golden-path-monitor が
 これで作った 1 行 JSON を `cicd/scripts/ux-data/append-observation.sh` で
 `data/ux-observations` の probes/*.jsonl に追記する。封筒の形の真実はこのモジュール
 (読み取り側 ux_eval.py とは round-trip テストで結合している)。
@@ -94,7 +94,7 @@ def build_envelope(record: dict, run_id: str) -> dict:
 
 
 def envelope_line(probe_json: Path, run_id: str, now: datetime | None = None) -> int:
-    """データブランチ追記用の封筒 JSON を 1 行で stdout に出す (ADR 0040)。
+    """データブランチ追記用の封筒 JSON を 1 行で stdout に出す (ADR 0041)。
 
     recordedAt (追記時刻 = 鮮度判定の基準) を持たせる — Issue コメント時代の
     created_at に相当し、これが無いと ux_eval の鮮度・月振り分けが働かない。

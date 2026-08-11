@@ -12,7 +12,7 @@
 ux-eval.yml は記録の鮮度も見る — **26 時間以内にプローブ記録が無ければ run が赤くなる**
 (古い記録を今日の計測として積まない)。抽出ロジックは `cicd/scripts/ux-eval/ux_eval.py`。
 
-## 蓄積の形 — データブランチ `data/ux-observations` (ADR 0040)
+## 蓄積の形 — データブランチ `data/ux-observations` (ADR 0041)
 
 観測は Issue コメントではなく **git のデータブランチに JSONL で蓄積する**
 (2026-08-11 PO 裁定 / [#197](https://github.com/yomote/mind-inbox/issues/197)。
@@ -36,7 +36,7 @@ ux-eval.yml は記録の鮮度も見る — **26 時間以内にプローブ記�
 - git の fetch/push ができること — **人間の手元・Actions runner・agent セッションのいずれも可**
   (git は agent セッションからも通る。`gh` は agent では使えないが、この運用ではもう不要)
 - 採点は Claude セッションから subagent `ux-reviewer` を起動できること
-- 背景理解: [ADR 0022](../adr/0022-autonomous-ux-improvement-loop.md) / [ADR 0037](../adr/0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md) / [ADR 0040](../adr/0040-ux-observations-on-git-data-branch.md) / rubric は `.github/claude/ux-rubric.md` (**真実**)
+- 背景理解: [ADR 0022](../adr/0022-autonomous-ux-improvement-loop.md) / [ADR 0037](../adr/0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md) / [ADR 0041](../adr/0041-ux-observations-on-git-data-branch.md) / rubric は `.github/claude/ux-rubric.md` (**真実**)
 
 ## データの流れ (どこに何が残るか)
 
@@ -54,7 +54,7 @@ artifact を併存させる理由は変わらず — 人間が障害調査で生
 
 ## Steps
 
-**機械計測は無人** (ux-eval.yml が毎朝自動)。**LLM 採点は PM セッションの日次 tick** が下の 2〜4 を回す ([ADR 0037](../adr/0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md))。以下は **PM tick が実行する手順であり、同時に手動フォールバックの手順**でもある。**human / agent で経路の違いは無い** (git だけで完結する — ADR 0040 D4)。
+**機械計測は無人** (ux-eval.yml が毎朝自動)。**LLM 採点は PM セッションの日次 tick** が下の 2〜4 を回す ([ADR 0037](../adr/0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md))。以下は **PM tick が実行する手順であり、同時に手動フォールバックの手順**でもある。**human / agent で経路の違いは無い** (git だけで完結する — ADR 0041 D4)。
 
 1. プローブを回す (毎朝 07:00 JST は自動。手動なら):
 
@@ -115,9 +115,9 @@ artifact を併存させる理由は変わらず — 人間が障害調査で生
 ### 旧 Routine (廃止 — ADR 0037)
 
 - `ux-judge — 毎朝の UX 採点 (ADR 0027 D1)` / ID `trig_01B2tk2Z8kRrsnHAwSgRJQcX` (2026-08-09 登録, [#156](https://github.com/yomote/mind-inbox/issues/156)) は **ADR 0035 D1 / 0037 で廃止**。claude.ai 側の Routine 実体の削除は needs-human (エージェントからは叩けない)
-- 削除されるまで発火しても、旧経路 (#127 コメント) に書けるだけでデータブランチの蓄積は壊れない — ただし移行 (ADR 0040) 後はその投稿は誰にも読まれない
+- 削除されるまで発火しても、旧経路 (#127 コメント) に書けるだけでデータブランチの蓄積は壊れない — ただし移行 (ADR 0041) 後はその投稿は誰にも読まれない
 
-## 過去データの移行と旧 Issue のクローズ (one-shot / ADR 0040 D7)
+## 過去データの移行と旧 Issue のクローズ (one-shot / ADR 0041 D7)
 
 Issue コメント時代の蓄積 (#162 / #127) をデータブランチへ取り込む手順。**実装 PR の
 マージ後に 1 回だけ**行う (実行は PM または人間):
@@ -131,7 +131,7 @@ Issue コメント時代の蓄積 (#162 / #127) をデータブランチへ取�
 3. 翌朝の golden-path-monitor / ux-eval が**データブランチに**追記していることを確認する
    (#162 / #127 にはもうコメントが増えない)
 4. **#162 / #127 をクローズする** — 最後に「蓄積は `data/ux-observations` へ移行した
-   (ADR 0040 / #197)。以後このスレッドは読まれない」とコメントし、`state_reason: completed`
+   (ADR 0041 / #197)。以後このスレッドは読まれない」とコメントし、`state_reason: completed`
    で閉じる
 5. 後片付け (任意): `probe-record-comment.py` の `format` / `extract` サブコマンドは
    旧コメント形式のレガシー。移行完了後は削除してよい (別 PR)
@@ -191,7 +191,7 @@ Issue コメント時代の蓄積 (#162 / #127) をデータブランチへ取�
 
 ## Related
 
-- ADR: [0040 データブランチ蓄積](../adr/0040-ux-observations-on-git-data-branch.md) / [0022 UX 自律改善ループ](../adr/0022-autonomous-ux-improvement-loop.md) / [0037 定期評価の分担](../adr/0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md) / [0029 旧: Issue コメント運搬](../adr/0029-probe-record-transport-via-issue-comment.md) / [0019 独立 judge](../adr/0019-independent-judge-agents-security-qa-release.md) / [0018 動作検証](../adr/0018-runtime-verification-in-the-loop.md)
+- ADR: [0040 データブランチ蓄積](../adr/0041-ux-observations-on-git-data-branch.md) / [0022 UX 自律改善ループ](../adr/0022-autonomous-ux-improvement-loop.md) / [0037 定期評価の分担](../adr/0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md) / [0029 旧: Issue コメント運搬](../adr/0029-probe-record-transport-via-issue-comment.md) / [0019 独立 judge](../adr/0019-independent-judge-agents-security-qa-release.md) / [0018 動作検証](../adr/0018-runtime-verification-in-the-loop.md)
 - rubric: `.github/claude/ux-rubric.md` / subagent: `.claude/agents/ux-reviewer.md`
 - プローブ実装: `apps/frontend/e2e-live/ux-probe.spec.ts` / workflow: `.github/workflows/golden-path-monitor.yml` / `.github/workflows/ux-eval.yml` (機械計測: `cicd/scripts/ux-eval/ux_eval.py`) / `.github/workflows/ux-data-migrate.yml` (過去データ移行)
 - 蓄積ヘルパー: `cicd/scripts/ux-data/` (append.py / append-observation.sh / migrate-issue-comments.py)

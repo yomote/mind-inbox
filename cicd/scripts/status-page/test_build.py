@@ -63,7 +63,7 @@ def _run(tmp_path: pathlib.Path, defs: dict | None = None,
         dpath.write_text(json.dumps(defs, ensure_ascii=False))
         env["STATUS_PAGE_WATCHERS"] = str(dpath)
     if ux_data is not None:
-        # データブランチ checkout の模倣 (probes/ evals/ の月別 JSONL — ADR 0040)
+        # データブランチ checkout の模倣 (probes/ evals/ の月別 JSONL — ADR 0041)
         root = tmp_path / "uxdata"
         for sub, items in ux_data.items():
             (root / sub).mkdir(parents=True, exist_ok=True)

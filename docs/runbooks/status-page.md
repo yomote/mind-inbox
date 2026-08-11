@@ -21,7 +21,7 @@
 - 定義 (何を見張るか): [`cicd/scripts/status-page/watchers.json`](../../cicd/scripts/status-page/watchers.json)
 - 組み立て: [`cicd/scripts/status-page/build.py`](../../cicd/scripts/status-page/build.py)
 - 実行: [`.github/workflows/status-page.yml`](../../.github/workflows/status-page.yml)
-- UX トレンド節: データブランチ `data/ux-observations` から描く ([ADR 0040](../adr/0040-ux-observations-on-git-data-branch.md) D6)。
+- UX トレンド節: データブランチ `data/ux-observations` から描く ([ADR 0041](../adr/0041-ux-observations-on-git-data-branch.md) D6)。
   PM tick の採点追記はページ再生成のトリガーではないため、採点直後は次の生成
   (毎朝 07:10 JST か手動) まで反映されない
 
@@ -68,7 +68,7 @@
 `trace.kind` は 4 種類 — `issue_comment` (指定 Issue の最新コメント) /
 `issue_label` (ラベル付き Issue の最新更新) / `issue_title` (タイトル一致の最新 Issue) /
 `data_branch` (UX 観測データブランチ `data/ux-observations` の `record_kind` 別の最終追記
-— ADR 0040。workflow が fetch して `UX_DATA_DIR` で渡す)。
+— ADR 0041。workflow が fetch して `UX_DATA_DIR` で渡す)。
 痕跡の在り処が決められないものは `"kind": "unknown"` にして `note` に理由を書く
 (❓ として表に出る。**表から消さない** — 消すと存在ごと忘れる)。
 

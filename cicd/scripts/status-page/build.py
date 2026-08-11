@@ -102,7 +102,7 @@ def workflow_state(w: dict) -> dict:
 
 
 def load_ux_observations() -> list[dict] | None:
-    """UX 観測データブランチ (ADR 0040) の checkout から全観測を読む。
+    """UX 観測データブランチ (ADR 0041) の checkout から全観測を読む。
 
     checkout の場所は環境変数 UX_DATA_DIR (workflow が data/ux-observations を
     fetch して渡す)。未設定・ディレクトリ無しは **None = 取得できなかった**
@@ -142,7 +142,7 @@ def trace_time(trace: dict) -> tuple[datetime | None, str, bool]:
     """
     kind = trace.get("kind")
     if kind == "data_branch":
-        # UX 観測データブランチの kind 別の最終追記時刻 (ADR 0040 D6)。
+        # UX 観測データブランチの kind 別の最終追記時刻 (ADR 0041 D6)。
         # kind で絞るので「機械計測だけ動いて LLM 採点が止まった」も検出できる
         # (Issue コメント時代の既知の穴 — ADR 0037 Negative Consequences)
         record_kind = trace.get("record_kind", "?")
@@ -209,7 +209,7 @@ def pending() -> dict:
     return {"needs_human": needs, "prs": prs, "proposed": proposed}
 
 
-# --- UX トレンド (ADR 0040 D6) ------------------------------------------
+# --- UX トレンド (ADR 0041 D6) ------------------------------------------
 
 TREND_DAYS = 14
 VERDICT_MARK = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
@@ -539,7 +539,7 @@ a {{ color:var(--accent); }}
 <h2>UX トレンド (直近 2 週間)</h2>
 <div class="trend">
 <div class="sub">毎朝の実環境プローブ (相談 4 往復) の send→応答表示レイテンシ。<strong>上がるほど悪い</strong>。
-蓄積は <code>data/ux-observations</code> ブランチ (ADR 0040)。</div>
+蓄積は <code>data/ux-observations</code> ブランチ (ADR 0041)。</div>
 {ux_trend}
 </div>
 

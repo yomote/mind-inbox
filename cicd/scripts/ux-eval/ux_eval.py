@@ -8,7 +8,7 @@
     そこで**機械で計算できる計測だけ**をこの script に切り出して Actions (ux-eval.yml)
     で毎朝走らせ、LLM 採点 (ux-judge-score) は PM セッションの日次 tick が subagent で
     行う — 分担の判断は ADR 0037。蓄積先は Issue コメントから git データブランチ
-    `data/ux-observations` へ移した — 判断は ADR 0040 (PO 裁定 2026-08-11 / #197)。
+    `data/ux-observations` へ移した — 判断は ADR 0041 (PO 裁定 2026-08-11 / #197)。
 
 責務 (LLM 判断は含めない):
     - データブランチ checkout の probes/*.jsonl から最新の ux-probe-record を選ぶ
@@ -225,7 +225,7 @@ def build_payload(
     now_iso = now.isoformat().replace("+00:00", "Z")
     return {
         "kind": OUTPUT_KIND,
-        "schemaVersion": 2,  # 2 = データブランチ蓄積 (ADR 0040)。1 は #127 コメント時代
+        "schemaVersion": 2,  # 2 = データブランチ蓄積 (ADR 0041)。1 は #127 コメント時代
         "recordedAt": now_iso,
         "evaluatedAt": now_iso,
         "probeId": envelope.get("probeId"),

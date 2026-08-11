@@ -47,6 +47,17 @@ const ChatReplySchema = z.object({
   requiresApproval: z.boolean(),
   approvalRequestId: z.string().nullable(),
   citations: z.array(z.string()),
+  /**
+   * stub フォールバック応答の機械判別フラグ (#146 / ADR 0039 D6)。
+   * AI_AGENT_BASE_URL 未設定で stub に落ちたときだけ true。実応答では付かない
+   * (optional なので後方互換)。フロントはこれで警告バナーを出す。
+   */
+  stubbed: z.boolean().optional(),
+});
+
+/** consultation.extract の出力 = ExtractionResult + stub 判別フラグ (#146)。 */
+const ExtractionReplySchema = ExtractionResultSchema.extend({
+  stubbed: z.boolean().optional(),
 });
 
 const ApproveResultSchema = z.object({
@@ -64,10 +75,6 @@ function deriveTitle(concern: string): string {
   if (trimmed.length === 0) return "相談セッション";
   return trimmed.length > 26 ? `${trimmed.slice(0, 26)}…` : trimmed;
 }
-
-// 空入力で開始した場合の AI からの初手 (home.mdx: テーマ入力なしで直接対話開始 /
-// dialogue-session.mdx「開始直後の挙動」)。受け止めトーンを崩さないこと。
-const EMPTY_START_OPENER = "今日はどんなことが気になっていますか?思いつくままで大丈夫です。";
 
 /**
  * ai-agent の抽出結果を Problem リポジトリに反映する。
@@ -300,29 +307,21 @@ const speechRouter = router({
 const consultationRouter = router({
   start: publicProcedure
     .input(z.object({ concern: z.string() }))
-    .output(z.object({ session: SessionSchema }))
+    .output(z.object({ session: SessionSchema, stubbed: z.boolean().optional() }))
     .mutation(async ({ input }) => {
       const sessionId = randomUUID();
       console.log(`[consultation.start] sessionId=${sessionId}`);
 
       // 空 concern で開始するのが既定 (home.mdx: テーマ入力画面なしで直接対話開始)。
-      // テーマ未入力の開始は AI を呼ばず、AI からの問いかけ (受け止めトーン,
-      // dialogue-session.mdx §3.1) だけ返す
-      // (空メッセージを ai-agent に流すと 422 になるため入口で分岐する)。
+      // AI の挨拶 (初手) は出さない (#241 / dialogue-session.mdx §3.1) — 会話は空のまま
+      // 返し、ユーザーの発話から始める。AI も呼ばない (空メッセージは ai-agent で 422)。
       const concern = input.concern.trim();
       if (concern.length === 0) {
         return {
           session: {
             id: sessionId,
             title: deriveTitle(""),
-            messages: [
-              {
-                id: randomUUID(),
-                role: "assistant" as const,
-                text: EMPTY_START_OPENER,
-                createdAt: nowIso(),
-              },
-            ],
+            messages: [],
           },
         };
       }
@@ -353,6 +352,7 @@ const consultationRouter = router({
           title: deriveTitle(concern),
           messages,
         },
+        stubbed: chatRes.stubbed,
       };
     }),
 
@@ -377,6 +377,7 @@ const consultationRouter = router({
         requiresApproval: chatRes.requiresApproval,
         approvalRequestId: chatRes.approvalRequestId,
         citations: chatRes.citations,
+        stubbed: chatRes.stubbed,
       };
     }),
 
@@ -391,7 +392,7 @@ const consultationRouter = router({
         messages: z.array(ConversationMessageSchema).default([]),
       }),
     )
-    .output(ExtractionResultSchema)
+    .output(ExtractionReplySchema)
     .mutation(async ({ input, ctx }) => {
       console.log(
         `[consultation.extract] sessionId=${input.sessionId} messages=${input.messages.length}`,

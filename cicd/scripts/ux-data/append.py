@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UX 観測 1 件をデータブランチの月別 JSONL に追記する (ADR 0040)。
+"""UX 観測 1 件をデータブランチの月別 JSONL に追記する (ADR 0041)。
 
 蓄積の形 (ここが真実):
     データブランチ `data/ux-observations` に 1 行 = 1 観測の JSONL。
@@ -37,7 +37,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-# kind → 置き場所。増やすときはこの表と ADR 0040 D2 を一緒に更新する
+# kind → 置き場所。増やすときはこの表と ADR 0041 D2 を一緒に更新する
 KIND_DIRS = {
     "ux-probe-record": "probes",
     "ux-eval-mech": "evals",

@@ -17,7 +17,7 @@ on:
 
 permissions:
   id-token: write # OIDC トークン取得に必須
-  contents: write # プローブ記録をデータブランチ data/ux-observations へ追記する (ADR 0040)
+  contents: write # プローブ記録をデータブランチ data/ux-observations へ追記する (ADR 0041)
   issues: write # 失敗時の自己通報 (report-failure)
 
 env:
@@ -131,7 +131,7 @@ jobs:
           print(f"summary written for {files[-1]}")
           EOF
 
-      # 記録 JSON は artifact とデータブランチの両方に残す (ADR 0029 → ADR 0040)。
+      # 記録 JSON は artifact とデータブランチの両方に残す (ADR 0029 → ADR 0041)。
       # artifact = 障害調査用の一次情報 (人間が gh で取る)。
       # データブランチ data/ux-observations = 毎朝の採点の入力 (ux-eval.yml と
       # PM tick が読む)。agent セッションからは artifact をダウンロードできない
@@ -149,7 +149,7 @@ jobs:
       # 追記に失敗しても monitor 自体は赤くしない (この workflow の役目はゴールデンパスの
       # 死活であって記録の運搬ではない)。代わりに warning annotation を残し、翌朝の
       # ux-eval.yml が「材料なし」で赤くなることで二重に気づけるようにする。
-      - name: UX プローブ記録をデータブランチへ追記 (採点の入力 / ADR 0040)
+      - name: UX プローブ記録をデータブランチへ追記 (採点の入力 / ADR 0041)
         if: always() && steps.guard.outputs.run == 'true'
         run: |
           PROBE_JSON="$(ls -1 apps/frontend/probe-results/*.json 2>/dev/null | sort | tail -1 || true)"

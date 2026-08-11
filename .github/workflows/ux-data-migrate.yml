@@ -1,4 +1,4 @@
-# UX 観測の過去データ移行 (one-shot / ADR 0040 D7)。
+# UX 観測の過去データ移行 (one-shot / ADR 0041 D7)。
 #
 # Issue コメント時代 (ADR 0029 / 0037) の蓄積 — 記録 #162 と スコアボード #127 の
 # コメント — をデータブランチ data/ux-observations の JSONL に取り込む。

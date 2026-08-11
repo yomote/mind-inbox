@@ -115,32 +115,20 @@ test.describe("TTS 再生中のエコー破棄 (#228)", () => {
     await gotoHome(page);
     await page.getByRole("button", { name: "新しい相談を始める" }).click();
 
-    // セッション開始と同時にガイドの挨拶が自動読み上げされる (standalone = ブラウザ読み上げ)。
-    await expect(page.getByTestId("tts-status")).toHaveText(/読み上げ中/);
-
+    // 開始直後は AI の挨拶を表示も読み上げもしない (#241 / dialogue-session.mdx §3.1)。
+    // 読み上げが走っていないので、マイクを入れるとすぐ「聞いています」になる。
+    await expect(page.getByTestId("tts-status")).toHaveCount(0);
     // mock ビルドは Web Speech 直行 (Azure のトークン照会をしない)。
-    // 読み上げ中にマイクを入れた場合も、認識が止まっていることが表示される。
     await page.getByRole("button", { name: "音声入力開始" }).click();
-    await expect(page.getByTestId("stt-muted")).toBeVisible();
-    await expect(page.getByText(/聞いています/)).toHaveCount(0);
-
-    // 挨拶の再生が終わる → 表示が「聞いています」に自動で戻る。
-    await endPlayback(page);
     await expect(page.getByText(/聞いています/)).toBeVisible();
+    await expect(page.getByTestId("stt-muted")).toHaveCount(0);
 
-    // 終了直後 (猶予内) の final はエコーの尻尾でありうるため破棄される。
-    // interim を経ず final だけ届く経路が両エンジンにあるための無条件防御
-    // (PR #231 Codex P1)。
+    // 再生中でない認識結果 (= ユーザー発話) はそのまま入力欄へ入る。
     const composer = page.getByPlaceholder("ここに入力 / 話して入力");
-    await fireFinal(page, "おわりかけのずんだもんの声");
-    await expect(composer).toHaveValue("");
-
-    // 猶予 (1.5s) が明けてからの認識結果は入力欄へ入る。
-    await page.waitForTimeout(1700);
     await fireFinal(page, "最近ねむれない");
     await expect(composer).toHaveValue("最近ねむれない");
 
-    // 送信 → mock の AI 応答が自動読み上げされる。
+    // 送信 → mock の AI 応答が自動読み上げされる (standalone = ブラウザ読み上げ)。
     await page.getByRole("button", { name: "送信" }).click();
     await expect(page.getByTestId("tts-status")).toHaveText(/読み上げ中/);
     // 認識が止まっていることが表示される (「聞いています」のままにしない)。
@@ -156,7 +144,13 @@ test.describe("TTS 再生中のエコー破棄 (#228)", () => {
     await expect(page.getByTestId("stt-muted")).toHaveCount(0);
     await expect(page.getByText(/聞いています/)).toBeVisible();
 
-    // 猶予明け後の発話は入力欄へ入る。エコーが漏れていればここが
+    // 終了直後 (猶予内) の final はエコーの尻尾でありうるため破棄される。
+    // interim を経ず final だけ届く経路が両エンジンにあるための無条件防御
+    // (PR #231 Codex P1)。
+    await fireFinal(page, "おわりかけのずんだもんの声");
+    await expect(composer).toHaveValue("");
+
+    // 猶予明け (1.5s) 後の発話は入力欄へ入る。エコーが漏れていればここが
     // 「ぼくはずんだもんなのだ\nつづきの発話」になり検知される。
     await page.waitForTimeout(1700);
     await fireFinal(page, "つづきの発話");

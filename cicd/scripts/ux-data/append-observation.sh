@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# UX 観測 payload をデータブランチ data/ux-observations に追記して push する (ADR 0040)。
+# UX 観測 payload をデータブランチ data/ux-observations に追記して push する (ADR 0041)。
 #
 # golden-path-monitor / ux-eval.yml / PM tick (post-judge-score.sh) の 3 経路が
 # 全部これを通る。git 操作をここに集約し、ファイル操作は append.py に委ねる。
 #
-# - ブランチが無ければ orphan で作る (main と履歴を共有しない — ADR 0040 D1)
+# - ブランチが無ければ orphan で作る (main と履歴を共有しない — ADR 0041 D1)
 # - push が競合したら (同時書き込み)、fetch からやり直して最大 3 回リトライする。
 #   追記は JSONL の append なので、最新の先端から append し直せば必ず合流できる
 # - 呼び出し元の checkout には触らない (使い捨ての worktree + 一時ブランチで作業)
@@ -71,7 +71,7 @@ while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
     git fetch --quiet "$REMOTE" "$BRANCH"
     git worktree add --quiet --detach "$WT" FETCH_HEAD
   else
-    log "ブランチ $BRANCH がまだありません — orphan で作ります (ADR 0040 D1)"
+    log "ブランチ $BRANCH がまだありません — orphan で作ります (ADR 0041 D1)"
     git worktree add --quiet --detach "$WT"
     git -C "$WT" checkout --quiet --orphan "$TMP_BRANCH"
     git -C "$WT" rm -r -f -q . 2>/dev/null || true
@@ -84,7 +84,7 @@ UX 観測データの蓄積ブランチ (orphan / main と履歴を共有しな�
 - `evals/YYYY-MM.jsonl` — 機械計測 (`ux-eval-mech`) と LLM 採点 (`ux-judge-score`)
 
 1 行 = 1 観測。**手で編集しない** (書き込みは `cicd/scripts/ux-data/append-observation.sh` 経由のみ)。
-判断の記録は ADR 0040、運用は docs/runbooks/ux-probe-judge.md。
+判断の記録は ADR 0041、運用は docs/runbooks/ux-probe-judge.md。
 EOF
   fi
 

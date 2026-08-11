@@ -93,6 +93,9 @@ export function SessionComposer({
           multiline
           minRows={1}
           maxRows={6}
+          // 開始直後はユーザーの発話から (#241 / dialogue-session.mdx §3.1)。
+          // 挨拶を出さない代わりに、すぐ話し始められるよう入力欄へフォーカスする。
+          autoFocus
           inputRef={inputRef}
           value={displayValue}
           onChange={(e) => onChange(e.target.value)}

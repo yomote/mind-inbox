@@ -5,7 +5,7 @@
 #   毎朝積み、LLM 採点 (ux-judge-score) は PM セッションの日次 tick が subagent で行う。
 #   Routine と違い、run 履歴が必ず残るので「沈黙 = 落ちていない」が成立する (ADR 0035 D1)。
 #
-# 流れ (蓄積は ADR 0040 のデータブランチ): data/ux-observations の probes/*.jsonl から
+# 流れ (蓄積は ADR 0041 のデータブランチ): data/ux-observations の probes/*.jsonl から
 #   最新のプローブ記録 (golden-path-monitor が 07:00 JST に追記) を読み → 鮮度を確認
 #   (26h 以内に記録が無ければ run を赤にする — 古い記録を「今日の計測」として積まない)
 #   → 機械計測を抽出して同ブランチの evals/*.jsonl に 1 run = 1 行
@@ -18,11 +18,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # データブランチ data/ux-observations へ追記する (ADR 0040)
+  contents: write # データブランチ data/ux-observations へ追記する (ADR 0041)
   issues: write # 失敗時の自己通報 (report-failure)
 
 env:
-  UX_DATA_BRANCH: data/ux-observations # 蓄積の置き場 (ADR 0040)
+  UX_DATA_BRANCH: data/ux-observations # 蓄積の置き場 (ADR 0041)
 
 jobs:
   ux-eval:

@@ -114,4 +114,5 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0037](0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md) — 定期評価を「機械計測 = Actions」と「LLM 採点 = PM tick」に分ける (ADR 0035 D1 の残作業)
 - [0038](0038-security-checks-as-mechanized-triggers.md) — セキュリティ検査のトリガーを人の判断から機構へ移す (週次 sweep / PR 自動指名 / リリース judge) — **Proposed**
 - [0039](0039-dialogue-live-preview-and-character.md) — 対話画面を「キャラと話すと右で困りごとが形になる」構成にする (読み取り専用プレビュー + 独自マスコット)
-- [0040](0040-ux-observations-on-git-data-branch.md) — UX 観測データの蓄積先を Issue コメントから git データブランチへ移す — **Proposed**
+- [0040](0040-project-continuity-three-layers.md) — プロジェクト継続性を 3 層 (機構化された完遂 / 当番 PM / 窓口 PM) で保証する — **Proposed**
+- [0041](0041-ux-observations-on-git-data-branch.md) — UX 観測データの蓄積先を Issue コメントから git データブランチへ移す — **Proposed**

@@ -153,19 +153,34 @@ describe("[L2] consultation.start", () => {
   });
 
   it.each(["", "   "])(
-    "starts with assistant opener (no AI call) when concern is empty or whitespace (%j)",
+    "starts with an empty conversation (no AI call, no greeting) when concern is empty or whitespace (%j)",
     async (concern) => {
-      // 無いと: UI 仕様 (home.mdx: テーマ入力なしで直接対話開始) に反して空 concern が
+      // 無いと: (1) UI 仕様 (home.mdx: テーマ入力なしで直接対話開始) に反して空 concern が
       // BAD_REQUEST になり、実環境でホームから相談を開始できない退行が静かに通る (2026-08-07 に実環境で発生)。
-      // また空メッセージが AI Agent に流れて 422 を引き起こす退行もここで止める
+      // 空メッセージが AI Agent に流れて 422 を引き起こす退行もここで止める。
+      // (2) 撤去したはずの AI 挨拶 (#241 / dialogue-session.mdx §3.1) が復活し、
+      // 毎回同じ文言の表示・読み上げが戻ってくる退行が静かに通る
       const { session } = await makeCaller().consultation.start({ concern });
       expect(session.title).toBe("相談セッション");
-      expect(session.messages).toHaveLength(1);
-      expect(session.messages[0]).toMatchObject({ role: "assistant" });
-      expect(session.messages[0]?.text.length).toBeGreaterThan(0);
+      expect(session.messages).toHaveLength(0);
       expect(sendChatMessage).not.toHaveBeenCalled();
     },
   );
+
+  it("marks the reply as stubbed when aiAgentClient fell back to stub", async () => {
+    // 無いと: stub フォールバックの機械判別フラグ (#146) が start 経路で落ち、
+    // 「frontend は real・BFF は stub」の組み合わせで偽応答が本物のふりをする退行が静かに通る
+    vi.mocked(sendChatMessage).mockResolvedValue({
+      reply: '[stub] received: "仕事が辛い"',
+      requiresApproval: false,
+      approvalRequestId: null,
+      citations: [],
+      stubbed: true,
+    });
+
+    const result = await makeCaller().consultation.start({ concern: "仕事が辛い" });
+    expect(result.stubbed).toBe(true);
+  });
 });
 
 // ---- consultation.sendMessage ---------------------------------------------
@@ -191,6 +206,35 @@ describe("[L2] consultation.sendMessage", () => {
       approvalRequestId: "appr-1",
       citations: ["doc-a", "doc-b"],
     });
+  });
+
+  it("marks the reply as stubbed on the stub path and leaves the flag absent on the real path", async () => {
+    // 無いと: stub フォールバックの機械判別フラグ (#146) が sendMessage 経路で落ちる /
+    // 逆に実応答へ誤って立ち、正常時に「AI サービス未接続」バナーが出続ける退行が静かに通る
+    vi.mocked(sendChatMessage).mockResolvedValueOnce({
+      reply: '[stub] received: "助けて"',
+      requiresApproval: false,
+      approvalRequestId: null,
+      citations: [],
+      stubbed: true,
+    });
+    const stubReply = await makeCaller().consultation.sendMessage({
+      sessionId: "s1",
+      message: "助けて",
+    });
+    expect(stubReply.stubbed).toBe(true);
+
+    vi.mocked(sendChatMessage).mockResolvedValueOnce({
+      reply: "本物の応答",
+      requiresApproval: false,
+      approvalRequestId: null,
+      citations: [],
+    });
+    const realReply = await makeCaller().consultation.sendMessage({
+      sessionId: "s1",
+      message: "助けて",
+    });
+    expect(realReply.stubbed).toBeUndefined();
   });
 
   it("propagates aiAgentClient errors as TRPCError", async () => {
@@ -300,6 +344,22 @@ describe("[L2] consultation.extract", () => {
     expect(problem.mentions).toHaveLength(1);
     expect(problem.mentionCount).toBe(1);
     expect(problem.status).toBe("open");
+  });
+
+  it("marks the extraction as stubbed on the stub path and leaves the flag absent on the real path", async () => {
+    // 無いと: stub フォールバックの機械判別フラグ (#146) が extract 経路で落ち、
+    // 「[stub] 困りごと」が本物の抽出結果のふりをして蓄積画面に並ぶ退行が静かに通る
+    const caller = makeCaller();
+    vi.mocked(extractAiAgent).mockResolvedValueOnce({
+      ...newExtraction("prob-stub-1"),
+      stubbed: true,
+    });
+    const stubResult = await caller.consultation.extract({ sessionId: "s1" });
+    expect(stubResult.stubbed).toBe(true);
+
+    vi.mocked(extractAiAgent).mockResolvedValueOnce(newExtraction("prob-2"));
+    const realResult = await caller.consultation.extract({ sessionId: "s2" });
+    expect(realResult.stubbed).toBeUndefined();
   });
 
   it("appends to an existing problem and passes candidates to ai-agent", async () => {
