@@ -538,11 +538,11 @@ def test_l1_needs_human停滞はコメント以外の人間更新も時計に入
     無いと何が静かに通るか: 通知後に PO が本文を編集して対応中と示しても
     「人間の反応なし」として 24h 後にメンションが飛び続ける (狼少年化)。
     逆に通知自身が進めた updated_at まで人間活動と数えると、再通知が永久に
-    止まる (前回 P2 の沈黙が別経路で再発)。マージン 1 分で両者を区別する —
+    止まる (前回 P2 の沈黙が別経路で再発)。区別は固定マージン無しの厳密比較 —
     実測 (2026-08-11 #262 #253) でコメント投稿の updated_at はコメント
-    created_at と**秒まで一致** (汚染幅 0 秒) のため、1 分あれば汚染は
-    確実に切り分けられ、「通知を見て数分後に直す」編集は取りこぼさない
-    (5 分猶予だと通知 4 分後の編集を汚染側に捨てていた — Codex 再指摘)。
+    created_at と**秒まで一致** (汚染幅 0 秒) のため、「既知の活動より
+    1 秒でも後 = 人間の更新」で切り分けられる (固定マージンを置くと
+    その幅の内側の編集を汚染側に捨てる — Codex 再々指摘で撤廃)。
     """
     now = "2026-08-11T12:00:00Z"
     bot = "github-actions[bot]"
@@ -550,7 +550,10 @@ def test_l1_needs_human停滞はコメント以外の人間更新も時計に入
     # 通知の 10h 後に本文編集 (updated_at だけが進む) → 反応ありとして黙る
     notify, reason = should_notify_human_stall("2026-08-10T10:00:00Z", [notice], now)
     assert not notify and "反応あり" in reason
-    # Codex 再指摘のシナリオそのもの: 通知の 4 分後の本文編集も人間活動と数える
+    # 通知を見てすぐ直すケース: 30 秒後の本文編集も人間活動と数える
+    # (1 分マージン時代はここが汚染側に落ちていた — Codex 再々指摘で反転)
+    notify, reason = should_notify_human_stall("2026-08-10T00:00:30Z", [notice], now)
+    assert not notify and "反応あり" in reason
     notify, reason = should_notify_human_stall("2026-08-10T00:04:00Z", [notice], now)
     assert not notify and "反応あり" in reason
     # 編集から 48h 停滞したら再通知する (測り直しの起点は編集時刻)
@@ -559,16 +562,9 @@ def test_l1_needs_human停滞はコメント以外の人間更新も時計に入
         "2026-08-09T00:00:00Z", [old_notice], now
     )  # 編集は 60h 前
     assert notify and "48h 停滞" in reason
-    # 通知自身が進めた updated_at (実測: 秒まで一致) は汚染扱い →
-    # 人間活動と数えず、24h 経過で再通知する
+    # 汚染は「秒まで一致」のみ (実測どおり) → 人間活動と数えず 24h 経過で再通知
     notify, _ = should_notify_human_stall("2026-08-10T00:00:00Z", [notice], now)
     assert notify
-    # マージン (1 分) 以内の時計ずれも汚染扱いのまま
-    notify, _ = should_notify_human_stall("2026-08-10T00:00:30Z", [notice], now)
-    assert notify
-    # マージンを超えて updated_at が進んでいれば人間の更新 → 黙る
-    notify, _ = should_notify_human_stall("2026-08-10T00:02:00Z", [notice], now)
-    assert not notify
     # bot コメント (Codex 等) が updated_at を進めた場合は既知の活動 → 汚染扱いで
     # 再通知は止まらない (bot を人間に化けさせない)
     codex = (

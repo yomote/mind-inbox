@@ -237,13 +237,6 @@ MERGE_STALL_HOURS = 2.0
 HUMAN_STALL_HOURS = 48.0
 # 時限系通知の再通知クールダウン (最後の通知からこの時間は黙る)
 RENOTIFY_COOLDOWN_HOURS = 24.0
-# updated_at が既知の活動 (コメント・通知) とこの分数以内なら「その活動自身が
-# 進めた汚染」とみなす。超えていればコメントに現れない人間の更新 (本文編集等)。
-# 実測 (2026-08-11 / #262 #253): コメントが最終活動の Issue では updated_at ==
-# コメント created_at が**秒まで完全一致** — 汚染幅は実質 0 秒なので、この
-# マージンは時計ずれ・書き込みレースの保険 1 分で足りる。5 分にすると
-# 「通知を見てすぐ (4 分後に) 本文を直す」編集を汚染側に捨てる (Codex 指摘)
-UPDATED_AT_MARGIN_MINUTES = 1.0
 # check run をマージ可と数える conclusion (GitHub の分岐保護と同じ扱い)
 GREEN_CONCLUSIONS = ("success", "neutral", "skipped")
 # GITHUB_TOKEN のマージ push では起動しない push トリガー workflow の補償対象
@@ -389,13 +382,14 @@ def should_notify_human_stall(
            自分の通知を反応と誤認すると再通知が永久に止まる)
         b. **コメントに現れない Issue 本体の更新** (本文・タイトル編集等 —
            Codex P2 追指摘 / PR #258)。updated_at が既知の活動 (全コメント +
-           通知) のどれよりもマージン (UPDATED_AT_MARGIN_MINUTES = 1 分) を
-           超えて後なら、コメント以外の更新があった証拠として updated_at を
-           人間の反応時刻に使う。**コメント投稿は issue の updated_at を
+           通知) の最新より**厳密に後 (> 0 秒) なら人間の更新**として
+           updated_at を反応時刻に使う。**コメント投稿は issue の updated_at を
            created_at と秒まで一致させる** (2026-08-11 実測: #262 #253 で
            完全一致 / 逆にコメント 0 件の #254 は本文編集で 20 分進んでいた)
-           ため、汚染幅は実質 0 秒 — 1 分マージンは時計ずれの保険で、
-           「通知を見て数分後に本文を直す」編集を汚染側に捨てない。
+           ため、固定マージン無しの厳密比較で汚染と編集を切り分けられる。
+           万一 production で汚染が数秒ずれても、誤分類は「人間活動と誤認 →
+           再通知が 24h でなく 48h 後になる」方向で、通知の目的 (届くこと) に
+           対して軽微 — 通知が消えることはない。
            残る穴: 人間の編集の**後**に bot コメントが付くと updated_at が
            bot コメントで説明でき、編集が見えない (body 編集は REST timeline に
            出ず、GraphQL userContentEdits が要る — 導入は PO 判断待ち)
@@ -417,10 +411,7 @@ def should_notify_human_stall(
         and minutes_between(last_marker, t) > 0
     ]
     known = latest_iso([t for _body, t, _login in comments] + [last_marker])
-    if (
-        known is not None
-        and minutes_between(known, updated_at) > UPDATED_AT_MARGIN_MINUTES
-    ):
+    if known is not None and minutes_between(known, updated_at) > 0:
         human_times.append(updated_at)
     last_human = latest_iso(human_times)  # type: ignore[arg-type]
     if last_human is None:
