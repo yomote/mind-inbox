@@ -188,3 +188,111 @@ describe("[L1] useVoiceInput — 使えるエンジンの有無と停止", () =>
     expect(append).toHaveBeenCalledWith("ねむれない");
   });
 });
+
+/**
+ * TTS 再生中のエコー破棄 (#228)。純ロジック (echoGate) は echoGate.test.ts が担当。
+ * ここでは **hook が門を実際に配線しているか** (ttsPlaying prop → 結果破棄) を固定する。
+ */
+describe("[L2] useVoiceInput — TTS 再生中は認識結果を入力欄へ流さない (#228)", () => {
+  /** ttsPlaying を後から切り替えられる形で hook を張る。 */
+  function renderVoice(append: (text: string) => void) {
+    return renderHook(({ ttsPlaying }) => useVoiceInput(append, { ttsPlaying }), {
+      initialProps: { ttsPlaying: false },
+    });
+  }
+
+  function fireResult(text: string, isFinal: boolean) {
+    FakeRecognition.instances[0].onresult?.({
+      resultIndex: 0,
+      results: [{ 0: { transcript: text }, isFinal }],
+    });
+  }
+
+  it("再生中に確定した認識結果は入力欄へ流れず、muted が立つ", () => {
+    // 無いと: スピーカーから出たずんだもんの声がユーザー発話として入力欄に入る
+    //         (#228 の実事象)。認識も再生も個々のテストは緑のまま通る。
+    installSpeechRecognition();
+    const append = vi.fn();
+    const { result, rerender } = renderVoice(append);
+
+    act(() => result.current.toggle());
+    rerender({ ttsPlaying: true });
+    expect(result.current.muted).toBe(true);
+
+    act(() => fireResult("ぼくはずんだもんなのだ", true));
+
+    expect(append).not.toHaveBeenCalled();
+    expect(result.current.interimTranscript).toBe("");
+  });
+
+  it("再生が終わると猶予明けから自動で認識結果が流れる (ユーザーの再操作は不要)", () => {
+    // 無いと: 一度読み上げが走ると音声入力が二度と効かず、手で入れ直す羽目になる。
+    // 猶予 (POST_PLAYBACK_GRACE_MS) 内はエコーの尻尾でありうるため final-only でも
+    // 破棄される — 通るのは猶予明けから (echoGate.test.ts が境界を固定)
+    installSpeechRecognition();
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(0);
+      const append = vi.fn();
+      const { result, rerender } = renderVoice(append);
+
+      act(() => result.current.toggle());
+      rerender({ ttsPlaying: true });
+      act(() => fireResult("ぼくはずんだもんなのだ", true));
+      nowSpy.mockReturnValue(1000);
+      rerender({ ttsPlaying: false });
+      expect(result.current.muted).toBe(false);
+
+      nowSpy.mockReturnValue(10_000); // 猶予明け
+      act(() => fireResult("ユーザーの発話", true));
+
+      expect(append).toHaveBeenCalledTimes(1);
+      expect(append).toHaveBeenCalledWith("ユーザーの発話");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("再生中に聞こえた発話が再生終了直後に確定しても破棄される (尻尾の防御)", () => {
+    // 無いと: 認識エンジンの final 化は再生停止より遅れて届くため、
+    //         ずんだもんの最後の 1 文だけが毎回入力欄に入る
+    installSpeechRecognition();
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(0);
+      const append = vi.fn();
+      const { result, rerender } = renderVoice(append);
+
+      act(() => result.current.toggle());
+      rerender({ ttsPlaying: true });
+      act(() => fireResult("ぼくはずんだもん", false)); // 再生中にエンジンが何か聞いた
+
+      nowSpy.mockReturnValue(1000);
+      rerender({ ttsPlaying: false });
+      act(() => fireResult("ぼくはずんだもんなのだ", true)); // 停止直後に final 化
+
+      expect(append).not.toHaveBeenCalled();
+
+      nowSpy.mockReturnValue(10_000); // 猶予を過ぎた後のユーザー発話は通る
+      act(() => fireResult("こんどはユーザー", true));
+      expect(append).toHaveBeenCalledWith("こんどはユーザー");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("再生開始時点で未確定だった interim (ユーザー発話) は捨てずに確定する", () => {
+    // 無いと: 送信直前まで喋っていた内容の末尾が、読み上げ開始と同時に黙って消える
+    installSpeechRecognition();
+    const append = vi.fn();
+    const { result, rerender } = renderVoice(append);
+
+    act(() => result.current.toggle());
+    act(() => fireResult("さいごのひとこと", false));
+    expect(result.current.interimTranscript).toBe("さいごのひとこと");
+
+    rerender({ ttsPlaying: true });
+
+    expect(append).toHaveBeenCalledWith("さいごのひとこと");
+  });
+});
