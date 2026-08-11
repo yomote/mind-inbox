@@ -155,7 +155,26 @@ _assign_role() {
 }
 
 if [[ -n "$OPENAI_ACCOUNT_NAME" ]]; then
-  OPENAI_ID="$(az cognitiveservices account show -g "$RG" -n "$OPENAI_ACCOUNT_NAME" --query id -o tsv 2>/dev/null || true)"
+  # scope が引けなければ _assign_role に到達しない = ロール未付与のまま緑になる。
+  # 「アカウントが無い」(az は exit 3) だけを許容し、参照エラーは落とす。
+  _OAI_ERR="$(mktemp)"
+  set +e
+  OPENAI_ID="$(az cognitiveservices account show -g "$RG" -n "$OPENAI_ACCOUNT_NAME" \
+    --query id -o tsv 2>"$_OAI_ERR")"
+  _OAI_RC=$?
+  set -e
+
+  if [[ $_OAI_RC -ne 0 ]] \
+     && [[ $_OAI_RC -ne 3 ]] \
+     && ! grep -qiE 'ResourceNotFound|was not found|could not be found|does not exist' "$_OAI_ERR"; then
+    echo "ERROR: OpenAI アカウント '$OPENAI_ACCOUNT_NAME' を参照できませんでした (az exit $_OAI_RC)。" >&2
+    echo "       ロール付与の可否を判定できないため中断します (未付与のまま緑にしない)。" >&2
+    cat "$_OAI_ERR" >&2
+    rm -f "$_OAI_ERR"
+    exit "$_OAI_RC"
+  fi
+  rm -f "$_OAI_ERR"
+
   if [[ -n "$OPENAI_ID" ]]; then
     _assign_role "$ROLE_OPENAI_USER" "$OPENAI_ID" "Cognitive Services OpenAI User"
   else
