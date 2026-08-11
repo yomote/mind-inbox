@@ -16,9 +16,27 @@
 #   イベント駆動だけだと「push 直後は猶予内 → その後イベントが来ない」で advisory が
 #   発火しないため、schedule (30 分毎) が open PR を advisory sweep する (status は貼らない)。
 #
-# 注意: issue_comment / pull_request_review / schedule トリガーは main に入った版で
-#       しか発火しない。コメント後の再評価が要るときは workflow_dispatch で PR 番号を
-#       渡して叩ける。
+# マージ執行 (ADR 0040 D1 / Issue #253):
+#   GitHub の auto-merge は「最後の required check を GITHUB_TOKEN が緑にする」と
+#   発火しない (GITHUB_TOKEN 起点イベントは後続自動化に連鎖しない — PR #247 が
+#   全条件 🟢 のまま 18 分放置された実測)。対処として check.py が success status を
+#   貼った直後、**auto-merge 有効化済みの PR に限り** squash マージ API まで叩く
+#   (有効化 = PM の受け入れ意思表示。needs-human ラベル / base≠main は除外)。
+#   405/409 は黙ってスキップし、schedule sweep が 30 分毎に再試行する (下限保証)。
+#   同じ連鎖抑止でマージ push は build-images / deploy の push トリガーも起動しない
+#   ため、マージ後に workflow_dispatch (GITHUB_TOKEN の例外) で補償する。deploy は
+#   build 完了の run を確認してから出す (古い image の据え置き防止)。補償は冪等
+#   (run 存在確認) で、失敗は sweep が直近 24h のマージ分を打ち直す。
+#   sweep はストール検知も行う: 全 check 🟢 + auto-merge 有効のまま 2h 未マージ →
+#   PR にコメント / needs-human Issue・Proposed ADR の 48h 停滞 → @yomote へ通知
+#   (再通知は 24h クールダウン)。
+#
+# 注意: issue_comment / schedule トリガーは main に入った版でしか発火しない。
+#       コメント後の再評価が要るときは **PR に任意のコメントを 1 本投稿する**
+#       (issue_comment で gate-trusted が再評価する)。workflow_dispatch は置かない —
+#       `gh workflow run --ref <branch>` は指定 branch の workflow 定義の版を実行する
+#       ため、特権 (contents:write) を持つこの workflow に付けると PR 作成者が
+#       自ブランチで yml を改変して特権 dispatch できてしまう (Codex P1 / PR #258)。
 
 name: review-gate
 
@@ -31,49 +49,123 @@ on:
     types: [submitted, edited, dismissed]
   schedule:
     - cron: "*/30 * * * *" # advisory sweep (ADR 0038 / PR #238 P1)
-  workflow_dispatch:
-    inputs:
-      pr:
-        description: "再評価する PR 番号"
-        required: true
 
 # 同じ PR への run を直列化する (2 重投稿レースの防御 a / PR #238 P2)。
-# schedule / (番号の取れない) dispatch は run_id で group が一意になり直列化されない —
+# schedule は run_id で group が一意になり直列化されない —
 # そちらは check.py の投稿直前再フェッチ確認 (防御 b) が塞ぐ。
 concurrency:
-  group: review-gate-${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr || github.run_id }}
+  group: review-gate-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
   cancel-in-progress: false
 
-permissions:
-  contents: read
-  # write は advisory コメント (Codex 再トリガー依頼 / security review 依頼) の投稿用 (ADR 0038)
-  pull-requests: write
-  statuses: write
+# 権限の分離 (Codex P1 / PR #258): pull_request イベントの run は **workflow 定義も
+# checkout も PR 側** から来る — その job に contents:write を渡すと、同一リポの
+# PR 作成者が check.py を改変して自分でマージまで実行できてしまう (門の無効化)。
+# 既定はゼロにして job 単位で最小権限を宣言する。マージ執行・補償 dispatch・
+# ストール通知は「定義も checkout も main から来るイベント」の job だけが持つ。
+permissions: {}
 
 jobs:
-  gate:
-    name: マージの門を判定
+  # PR 側のコード・定義で走るイベント (pull_request / pull_request_review) 専用 —
+  # **最小権限**。pull_request_review も GITHUB_REF/GITHUB_SHA が PR の merge ref を
+  # 指し、workflow 定義も checkout も PR 側から来る (公式 events リファレンスの
+  # GITHUB_SHA = "Last merge commit on the GITHUB_REF branch") ため、特権 job に
+  # 置くと PR が check.py どころか yml ごと書き換えて権限昇格できる (Codex P1-a)。
+  # やることは「push で門を failure に戻す」「レビュー到着/取り消しの再判定」等の
+  # 判定 status 貼りと advisory まで。verdict が緑でもマージはしない
+  # (REVIEW_GATE_EXECUTE_MERGE=false) — マージは pm-accept コメント (issue_comment)
+  # か 30 分毎の sweep が main 側コードで行う (レビュー到着時の即時マージは
+  # 失われるが sweep が 30 分以内に回収する)。
+  # 残余リスク: statuses:write がある限り PR 側コードは偽 success を貼れる。
+  # この門は協調するエージェントの手続きミス防止であり、悪意ある同一リポ author
+  # への防御は branch protection では完結しない (ADR 0036 追記事項)。
+  gate-pr:
+    name: マージの門を判定 (PR 側コード)
     runs-on: ubuntu-latest
-    # issue_comment は Issue にも飛ぶ — PR のコメントだけ拾う
-    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    if: >-
+      github.event_name == 'pull_request'
+      || github.event_name == 'pull_request_review'
+    permissions:
+      contents: read
+      statuses: write
+      # advisory コメント (Codex 再トリガー依頼 / security review 依頼) の投稿用
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
-
       - name: 判定して commit status を貼る
-        if: github.event_name != 'schedule'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REVIEW_GATE_REQUIRE_CODEX: ${{ vars.REVIEW_GATE_REQUIRE_CODEX }}
           # Codex 再トリガー依頼の猶予 (分)。未設定なら既定 10 (ADR 0038)
           CODEX_RETRIGGER_MINUTES: ${{ vars.CODEX_RETRIGGER_MINUTES }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+          # PR 側コードで走る run にマージ権限は無い — 執行も試みない (Codex P1)
+          REVIEW_GATE_EXECUTE_MERGE: "false"
+          # pull_request / pull_request_review はどちらも payload に
+          # event.pull_request.number を持つ (issue.number は無い — Codex P1-b)
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: python3 cicd/scripts/review-gate/check.py "$PR_NUMBER"
 
-      # イベントが来ない PR の advisory を拾う (ADR 0038 / PR #238 P1)。
-      # open PR (base=main) を列挙して advisory だけ適用。status は貼らない。
-      - name: advisory sweep (schedule)
-        if: github.event_name == 'schedule'
+  # workflow 定義と checkout が main から来るイベント (issue_comment。公式 events
+  # リファレンスで GITHUB_SHA = "Last commit on default branch") — マージ執行までの
+  # 権限を持つ。イベント駆動のマージは pm-accept コメント = issue_comment 起点
+  # なので、PR 側イベントの job から権限を抜いても機能は落ちない。
+  # workflow_dispatch はこの workflow に置かない (Codex P1 / PR #258):
+  # `gh workflow run --ref <branch>` は指定 branch の定義の版を実行するため、
+  # 特権 workflow に dispatch があると PR 作成者が自ブランチで yml を改変して
+  # 特権 dispatch できる。手動再評価は PR への任意コメント 1 本で代替する。
+  gate-trusted:
+    name: マージの門を判定 (main のコードで実行)
+    runs-on: ubuntu-latest
+    # issue_comment は Issue にも飛ぶ — PR のコメントだけ拾う
+    if: github.event_name == 'issue_comment' && github.event.issue.pull_request
+    permissions:
+      # write はマージ執行 (squash merge API) 用 (ADR 0040 D1 / #253)。checkout の read を含む
+      contents: write
+      statuses: write
+      # advisory / ストール記録コメントの投稿用 (ADR 0038 / #253)
+      pull-requests: write
+      # マージ後の build-images / deploy を workflow_dispatch で起動する補償用 (#253)
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 特権 job の checkout は default branch を明示 (Codex P1-a の安全側:
+          # イベント分離に加えて ref も固定する)
+          ref: ${{ github.event.repository.default_branch }}
+      - name: 判定して commit status を貼る (+ 揃っていればマージ執行)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEW_GATE_REQUIRE_CODEX: ${{ vars.REVIEW_GATE_REQUIRE_CODEX }}
+          CODEX_RETRIGGER_MINUTES: ${{ vars.CODEX_RETRIGGER_MINUTES }}
+          # マージ後の deploy dispatch は push 経路と同じ解禁ゲートを見る (#253)
+          AUTO_DEPLOY_ENABLED: ${{ vars.AUTO_DEPLOY_ENABLED }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: python3 cicd/scripts/review-gate/check.py "$PR_NUMBER"
+
+  # イベントが来ない PR の advisory・マージ執行・ストール検知を拾う
+  # (ADR 0038 / PR #238 P1、ADR 0040 D1 / #253)。schedule も定義・checkout とも
+  # main — マージ執行と needs-human / Proposed ADR 通知の権限を持つ。
+  sweep:
+    name: advisory sweep (schedule)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    permissions:
+      contents: write
+      statuses: write
+      pull-requests: write
+      # needs-human / Proposed ADR の停滞通知 (Issue へのコメント・集約 Issue の起票) 用 (#253)
+      issues: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 特権 job の checkout は default branch を明示 (Codex P1-a の安全側)
+          ref: ${{ github.event.repository.default_branch }}
+      - name: open PR を列挙して sweep
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CODEX_RETRIGGER_MINUTES: ${{ vars.CODEX_RETRIGGER_MINUTES }}
+          AUTO_DEPLOY_ENABLED: ${{ vars.AUTO_DEPLOY_ENABLED }}
+          # マージ直前のフル再評価 (Codex P1 / #258) をイベント経路と同じ条件で
+          # 行うため sweep にも渡す — 無いと sweep の再評価だけ Codex 条件が緩む
+          REVIEW_GATE_REQUIRE_CODEX: ${{ vars.REVIEW_GATE_REQUIRE_CODEX }}
         run: python3 cicd/scripts/review-gate/check.py --advisory-sweep
