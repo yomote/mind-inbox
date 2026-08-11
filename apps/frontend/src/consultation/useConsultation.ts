@@ -140,10 +140,16 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
   // (ADR 0039 D2: in-flight 1 本 — LLM 呼び出しを重ねない)。世代で持つのは、
   // 旧セッションの飛行中リクエストが新セッションの初回 preview を塞がないようにするため。
   const previewInFlightGenerationRef = React.useRef<number | null>(null);
+  // 実行中に届いた更新要求の持ち越し先 (PR #282 再レビュー P2)。**最新の 1 件だけ**持つ —
+  // 中間状態の下書きを順に流しても意味がなく、LLM 呼び出しだけが増えるため。
+  const pendingPreviewRef = React.useRef<{ sessionId: string; messages: ChatMessage[] } | null>(
+    null,
+  );
 
   /** 下書きを揮発させ、飛行中の preview 応答を無効化する (セッション跨ぎ / reset)。 */
   const invalidatePreview = React.useCallback(() => {
     previewGenerationRef.current += 1;
+    pendingPreviewRef.current = null;
     setPreview(null);
     setPreviewStatus("idle");
   }, []);
@@ -159,6 +165,10 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
    */
   const freezePreview = React.useCallback(() => {
     previewGenerationRef.current += 1;
+    // 確定中に届いていた自動更新の要求は繰り越さない — 確定が成功すれば下書きは揮発する
+    // ので更新しても捨てるだけ、失敗した場合は「押した時点の内容」を残す方が確定操作の
+    // 約束 (この内容で確定) と一致するため。
+    pendingPreviewRef.current = null;
     // 破棄した更新のスピナーを残さない (更新は起きなかったことになる)。
     setPreviewStatus("idle");
   }, []);
@@ -209,27 +219,46 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
    * runAction を通さない: 失敗しても会話は続けられる背景処理なので、Snackbar と
    * 多重実行ガード (loading) を会話と共有しない。ただし**無音にはしない** —
    * 失敗は previewStatus="error" として右ペイン内に表示する (ADR 0018)。
+   *
+   * 実行中に届いた要求は**捨てずに最新 1 件だけ持ち越し、完了後に走らせる**
+   * (PR #282 再レビュー P2)。捨てると「整理中に 2 往復目を送ると自動更新の契機が
+   * 消え、手動で押すか更に 2 往復するまで下書きが古いまま」になり、§5.8 の
+   * 「2 往復ごとに更新」が満たされなくなる。重ねて実行はしない (LLM 呼び出しは 1 本)。
    */
   const runPreview = React.useCallback(async (sessionId: string, messages: ChatMessage[]) => {
     if (!previewSupported) return;
     const generation = previewGenerationRef.current;
     // in-flight 1 本 (ADR 0039 D2)。世代で比較するのは、旧セッションの飛行中リクエストが
     // 新セッションの初回 preview を塞がないようにするため。
-    if (previewInFlightGenerationRef.current === generation) return;
+    if (previewInFlightGenerationRef.current === generation) {
+      pendingPreviewRef.current = { sessionId, messages };
+      return;
+    }
     previewInFlightGenerationRef.current = generation;
-    setPreviewStatus("updating");
     try {
-      const result = await previewExtraction(sessionId, messages);
-      // 応答が返るまでにセッションが変わっていたら捨てる (PR #282 Codex P2)。
-      // 旧セッションの下書きを新セッションに出すと「確定すると関係ない困りごとが
-      // 保存される」誤操作の入口になる。
-      if (previewGenerationRef.current !== generation) return;
-      setPreview(result);
-      setPreviewStatus("idle");
-    } catch (err) {
-      if (previewGenerationRef.current !== generation) return;
-      console.error("[useConsultation] 下書きプレビューの更新に失敗", err);
-      setPreviewStatus("error");
+      let request: { sessionId: string; messages: ChatMessage[] } | null = { sessionId, messages };
+      while (request) {
+        setPreviewStatus("updating");
+        try {
+          const result = await previewExtraction(request.sessionId, request.messages);
+          // 応答が返るまでにセッションが変わっていたら捨てる (PR #282 Codex P2)。
+          // 旧セッションの下書きを新セッションに出すと「確定すると関係ない困りごとが
+          // 保存される」誤操作の入口になる。
+          if (previewGenerationRef.current !== generation) return;
+          setPreview(result);
+          setPreviewStatus("idle");
+        } catch (err) {
+          if (previewGenerationRef.current !== generation) return;
+          console.error("[useConsultation] 下書きプレビューの更新に失敗", err);
+          setPreviewStatus("error");
+        }
+
+        // 実行中に会話が進んでいたら、最新の会話で続けて 1 回だけ走らせる。
+        // 世代が変わっていれば (セッション切替 / 確定) 持ち越しは無効なので捨てる。
+        request = pendingPreviewRef.current;
+        pendingPreviewRef.current = null;
+        if (previewGenerationRef.current !== generation) request = null;
+      }
     } finally {
       if (previewInFlightGenerationRef.current === generation) {
         previewInFlightGenerationRef.current = null;

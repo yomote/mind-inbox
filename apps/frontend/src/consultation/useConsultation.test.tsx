@@ -347,6 +347,56 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
     expect(messages.filter((m: { role: string }) => m.role === "user")).toHaveLength(2);
   });
 
+  it("整理中に会話が進んだら、完了後に最新の会話で自動更新する (PR #282 再レビュー P2)", async () => {
+    // 無いと: 実行中に届いた更新要求が捨てられ、先行リクエストは送信前の会話から作った
+    //         古い下書きを返して止まる。以降は手動で押すか更に 2 往復するまで更新されず、
+    //         §5.8 の「2 往復ごとに更新」が静かに満たされなくなる (画面は普通に動く)。
+    vi.mocked(startNewConsultation).mockResolvedValue(session());
+    const calls: number[] = [];
+    let resolveFirst: ((value: never) => void) | undefined;
+    const latest = {
+      sessionId: "s1",
+      items: [draftItem],
+      newProblemCount: 0,
+      updatedProblemCount: 1,
+    };
+    vi.mocked(previewExtraction).mockImplementation(async (_sessionId, messages) => {
+      calls.push(messages.length);
+      if (calls.length === 1) return await new Promise((resolve) => (resolveFirst = resolve));
+      return latest as never;
+    });
+    const { result } = setup();
+    await act(async () => {
+      await result.current.startConsultation();
+    });
+
+    // 「今すぐ整理」を開始 (完了させない)。
+    act(() => {
+      result.current.refreshPreview();
+    });
+    expect(previewExtraction).toHaveBeenCalledTimes(1);
+    const messagesAtStart = calls[0];
+
+    // 実行中に 2 往復ぶん送信 = 自動更新の契機。重ねて実行はしない。
+    await sendTimes(result, ["1 回目", "2 回目"]);
+    expect(previewExtraction).toHaveBeenCalledTimes(1);
+
+    // 先行処理が完了したら、持ち越した最新の会話で自動的に走る。
+    await act(async () => {
+      resolveFirst?.({
+        sessionId: "s1",
+        items: [],
+        newProblemCount: 0,
+        updatedProblemCount: 0,
+      } as never);
+    });
+
+    await waitFor(() => expect(previewExtraction).toHaveBeenCalledTimes(2));
+    expect(calls[1]).toBeGreaterThan(messagesAtStart);
+    await waitFor(() => expect(result.current.preview).toEqual(latest));
+    expect(result.current.previewStatus).toBe("idle");
+  });
+
   it("プレビューの失敗は会話を止めない (Snackbar に出さず、ペイン内の状態にする)", async () => {
     // 無いと: 背景処理の失敗が actionError (Snackbar) や unhandled rejection に化けて
     //         会話そのものを邪魔する。あるいは完全に無音で「右ペインが更新されない」
