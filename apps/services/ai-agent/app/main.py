@@ -23,9 +23,9 @@ from .kernel import get_kernel
 from .planner import generate_plan
 from .repositories import (
     ApprovalRepository,
-    InMemoryApprovalRepository,
-    InMemorySessionRepository,
     SessionRepository,
+    create_approval_repository,
+    create_session_repository,
 )
 from .schemas import (
     ApproveRequest,
@@ -45,10 +45,10 @@ settings = get_settings()
 logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
 logger = logging.getLogger(__name__)
 
-# PoC: モジュールレベルのシングルトン (本番動作用)
-# TODO(PoC): マルチレプリカ環境では Redis に差し替える
-_session_repo: SessionRepository = InMemorySessionRepository()
-_approval_repo: ApprovalRepository = InMemoryApprovalRepository()
+# モジュールレベルのシングルトン。実装は COSMOS_ENDPOINT の有無で選ばれる
+# (#188 / ADR 0030: あれば Cosmos 永続化、無ければ従来どおり in-memory)
+_session_repo: SessionRepository = create_session_repository()
+_approval_repo: ApprovalRepository = create_approval_repository()
 
 
 def get_session_repo() -> SessionRepository:
