@@ -13,7 +13,7 @@ Mind Inbox の「今どこまで進み・次に何をやるか」を **GitHub �
 
 - user が「状況」「進捗」「今どこ」「レポート」「/status」等を言ったとき
 - 開発を再開する前に全体像を把握したいとき
-- board（Projects の見る画面）を開かずに数字で状況を知りたいとき
+- [status ページ](https://yomote.github.io/mind-inbox/status/)を開かずに、会話の中で数字で状況を知りたいとき
 
 ## 設計思想
 
