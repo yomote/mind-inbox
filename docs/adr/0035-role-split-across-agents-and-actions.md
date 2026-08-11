@@ -50,7 +50,7 @@ Technical Story: 2026-08-10 の対話 (報告会 #7)。PO の「自動化の仕�
 
 ### 決定の内訳
 
-- **D1 Routine をゼロにする。** claude.ai 側の定期実行は生死が見えないので、無人の見張りには使わない。`ux-judge` → `ux-eval`、`maint-check` → `debt-check` として Actions へ移す
+- **D1 Routine をゼロにする。** claude.ai 側の定期実行は生死が見えないので、無人の見張りには使わない。`ux-judge` → `ux-eval`、`maint-check` → `debt-check` として Actions へ移す。**一部 Superseded by [0040](0040-project-continuity-three-layers.md)** (2026-08-11): 当番 PM に限り、痕跡を毎回 Issue コメントに残し欠落自体を watchers.json で監視する条件付きで Routine を再導入する。機械計測を Actions に置く本体は維持
 - **D2 cd-watchdog は廃止する。** 別の見張りを置くのではなく、**落ちた workflow 自身が Issue を立てる**。見張りが黙る問題が原理的に消える (黙っている = 落ちていない)
 - **D3 レビューは 2 種類に分ける。** 「**やってほしいことがそこにあるか**」(意図との一致) は意図を持つ PM が見る。「**コードとして正しいか / 危なくないか**」は意図を知らない別モデルが見る。前者は意図を知らないと判定できず、後者は知らない方がよい
 - **D4 実装は Claude Code、技術レビューは Codex。** 実装者とレビュアーが別のモデル系統になる (同じモデルは同じ盲点を持つ)。加えて Codex は**枠が別プール**なので、開発量に影響されない

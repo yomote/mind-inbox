@@ -1,6 +1,6 @@
 # 0037. 定期評価を「機械計測 = Actions」と「LLM 採点 = PM tick」に分ける
 
-- Status: Proposed
+- Status: Accepted (briefing #8 2026-08-11 で PO 承認)
 - Date: 2026-08-10
 - Deciders: yomote (PM 決定: 2026-08-10) / 実装セッション
 - Related: [ADR 0035](0035-role-split-across-agents-and-actions.md) (D1: Routine をゼロにする) / [ADR 0031](0031-agent-reaches-outside-via-github-actions.md) (外の事実は Actions 経由) / [ADR 0022](0022-autonomous-ux-improvement-loop.md) (UX 自律改善ループ — 目的と 3 段構成は不変)
