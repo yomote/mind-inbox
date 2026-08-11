@@ -22,7 +22,9 @@ BUILD = pathlib.Path(__file__).with_name("build.py")
 STUB = r"""#!/usr/bin/env python3
 import sys, json
 args = sys.argv[1:]
-url = args[1] if len(args) > 1 else ""
+# --paginate が入ると位置引数がずれる (gh api --paginate <url>)
+positional = [a for a in args if not a.startswith("-")]
+url = positional[1] if len(positional) > 1 else ""
 jqf = args[args.index("--jq") + 1].strip() if "--jq" in args else ""
 
 # ここが本物の gh の肝: --jq の結果が配列/オブジェクトなら JSON、
@@ -50,11 +52,12 @@ def _run(
     tmp_path: pathlib.Path,
     defs: dict | None = None,
     ux_data: dict[str, list[dict]] | None = None,
+    stub: str | None = None,
 ) -> str:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     gh = bin_dir / "gh"
-    gh.write_text(STUB)
+    gh.write_text(stub or STUB)
     gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
 
     env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
@@ -251,3 +254,83 @@ def test_l1_型を偽装したmech行でもトレンド描画が落ちない() -
     assert points[1]["avg"] == 4100.0
     svg = build.trend_svg(points, points[1]["threshold"])
     assert svg.startswith("<svg")
+
+
+# 心拍を「マーカーを含むコメント」だけで数えるかを見るための gh stub。
+# コメントは 2 件 — 古い当番レポート (マーカーあり) と、新しい人間のコメント
+# (マーカー無し)。マーカーで絞らなければ後者で時刻が進み 🟢 になってしまう。
+COMMENT_STUB = r"""#!/usr/bin/env python3
+import sys, json
+args = sys.argv[1:]
+positional = [a for a in args if not a.startswith("-")]
+url = positional[1] if len(positional) > 1 else ""
+jqf = args[args.index("--jq") + 1].strip() if "--jq" in args else ""
+
+def emit(value):
+    if jqf.startswith(("[", "{")):
+        print(json.dumps(value))
+    else:
+        print(value if isinstance(value, str) else json.dumps(value))
+
+if "/comments" in url:
+    # --paginate 無しでの取得は「1 ページ目しか見ていない」ので、心拍としては
+    # 数えさせない (常設の心拍が 100 件を超えると静かに止まる退行を落とすため)
+    if "--paginate" not in args:
+        print("stub: --paginate 無しの取得は許さない", file=sys.stderr)
+        sys.exit(1)
+    marked = "contains(" in jqf
+    print("2020-01-01T00:00:00Z")          # 古い当番レポート (マーカーあり)
+    if not marked:
+        print("2099-01-01T00:00:00Z")      # 新しい人間コメント (マーカー無し)
+elif "/runs" in url:
+    emit([])
+elif "needs-human" in url or "pulls" in url:
+    emit([])
+else:
+    emit("null")
+"""
+
+_TICK_DEFS = {
+    "workflows": [],
+    "routines": [
+        {
+            "name": "当番 PM tick",
+            "what": "巡回レポートを Issue に残す",
+            "trace": {
+                "kind": "issue_comment",
+                "issue": 254,
+                "body_contains": "\U0001f64b あなたの番",
+            },
+            "expect_hours": 16,
+        }
+    ],
+}
+
+
+def test_L1_issue_comment_の心拍はマーカー付きコメントだけを数える(tmp_path):
+    """人間の新しいコメントで心拍が進まないこと。
+
+    無いと何が静かに通るか:
+        Routine が止まっていても、その Issue に人間が一言書けば時刻が進んで
+        🟢 に戻る。「沈黙 = 未発火」という監視の前提そのものが崩れ、
+        止まった自動化が動いているように見える。
+    """
+    html = _run(tmp_path, defs=_TICK_DEFS, stub=COMMENT_STUB)
+    assert "🔴" in html, "マーカー無しの新しいコメントを心拍として数えている"
+    assert "🟢" not in html
+
+
+def test_L1_issue_comment_は全ページを見る(tmp_path):
+    """`--paginate` を付けて取得すること。
+
+    無いと何が静かに通るか:
+        `?per_page=100` の 1 ページ目しか見ないため、常設の心拍はコメントが
+        100 件を超えた時点で更新が止まり、**発火し続けていても恒久的に 🔴**
+        になる (1 日 3 件なら約 34 日)。誤検知はページを見た人の信頼を削る。
+    """
+    defs = json.loads(json.dumps(_TICK_DEFS))
+    defs["routines"][0]["trace"].pop("body_contains")
+    html = _run(tmp_path, defs=defs, stub=COMMENT_STUB)
+    # stub は --paginate が無いと失敗する (= ❓ 未検証)。取得できていれば
+    # 新しい方 (2099) が拾えて 🟢 になる
+    assert "🟢" in html, "--paginate を付けずに取得している (1 ページ目だけ)"
