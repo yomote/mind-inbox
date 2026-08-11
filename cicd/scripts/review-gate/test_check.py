@@ -6,6 +6,8 @@
 """
 
 import subprocess
+from datetime import datetime as real_datetime
+from datetime import timezone
 
 import check
 from check import (
@@ -430,7 +432,7 @@ def test_l1_sweepはpm_acceptが消えたprをマージしない(monkeypatch) ->
     monkeypatch.setattr(
         check, "post_status", lambda repo, sha, state, desc: posted_status.append(state)
     )
-    merged = check.reverify_and_merge("o/r", 1, "abc1234", "2026-08-11T12:00:00Z")
+    merged = check.reverify_and_merge("o/r", 1, "abc1234")
     assert not merged
     assert posted_status == ["failure"], "保存済み success を failure に訂正する"
     # 再評価が通れば try_merge → followup に進む
@@ -452,8 +454,54 @@ def test_l1_sweepはpm_acceptが消えたprをマージしない(monkeypatch) ->
         "ensure_merge_followup",
         lambda repo, merged_at, paths: followups.append(paths),
     )
-    merged = check.reverify_and_merge("o/r", 1, "abc1234", "2026-08-11T12:00:00Z")
+    merged = check.reverify_and_merge("o/r", 1, "abc1234")
     assert merged and followups == [["docs/x.md"]]
+
+
+def test_l1_補償の基準時刻はマージ成功の後に取る(monkeypatch) -> None:
+    """Codex P1 (PR #258): sweep が門の再評価より前に取った時刻を merged_at に
+    使うと、再評価の API 数往復の間に**別 PR** の build run が開始された場合、
+    runs_since がその run (この PR の変更を含まない) を「補償済み」と誤認する。
+
+    無いと何が静かに通るか: この PR の image build が永久に dispatch されず、
+    deploy は古い image を正常に載せ続ける (smoke も通る静かな劣化 — 本 PR の
+    P1 初回指摘と同じ失敗モードが、時刻の取り方だけで再発する)。
+    """
+    calls: list[str] = []
+
+    class FakeDateTime:
+        @staticmethod
+        def now(tz=None):
+            calls.append("now")
+            return real_datetime(2026, 8, 11, 12, 0, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(check, "datetime", FakeDateTime)
+    monkeypatch.setattr(
+        check,
+        "evaluate_gate",
+        lambda repo, number, head_sha: check.GateEval(
+            verdict=check.Verdict(ok=True),
+            changed_paths=["apps/services/ai-agent/x.py"],
+            comment_pairs=[],
+            code_pr=True,
+            codex_present=True,
+        ),
+    )
+    monkeypatch.setattr(
+        check, "try_merge", lambda *a: calls.append("merge") or (True, "")
+    )
+    captured: list[str] = []
+    monkeypatch.setattr(
+        check,
+        "ensure_merge_followup",
+        lambda repo, merged_at, paths: captured.append(merged_at),
+    )
+    assert check.reverify_and_merge("o/r", 1, "abc1234")
+    assert captured, "マージ成功後に followup が呼ばれる"
+    assert "now" in calls and "merge" in calls
+    assert calls.index("now") > calls.index("merge"), (
+        "基準時刻 (now) の取得はマージ成功より後 — 再評価前に取った時刻を使わない"
+    )
 
 
 def test_l1_sweepは1件のpr失敗で全体を中断しない(monkeypatch) -> None:

@@ -858,7 +858,7 @@ def evaluate_gate(repo: str, number: int, head_sha: str) -> GateEval:
     )
 
 
-def reverify_and_merge(repo: str, number: int, head_sha: str, now_iso: str) -> bool:
+def reverify_and_merge(repo: str, number: int, head_sha: str) -> bool:
     """sweep 経路のマージ試行 (Codex P1 / PR #258)。マージできたら True。
 
     sweep は**保存済みの success status を信じない** — status を貼ってから
@@ -878,7 +878,14 @@ def reverify_and_merge(repo: str, number: int, head_sha: str, now_iso: str) -> b
         return False
     merged, _ = try_merge(repo, number, head_sha)
     if merged:
-        ensure_merge_followup(repo, now_iso, ev.changed_paths)
+        # 補償の基準時刻は**マージ成功の後**に取る (Codex P1 / PR #258): 再評価の
+        # API 数往復の間に**別 PR** の build run が開始されると、マージ前に取った
+        # 時刻では runs_since がその run (この PR の変更を含まない) を「補償済み」と
+        # 誤認し、この PR の image build が永久に dispatch されない。
+        # イベント経路 (maybe_execute_merge) と同じ「マージ直後の now」で統一
+        ensure_merge_followup(
+            repo, datetime.now(timezone.utc).isoformat(), ev.changed_paths
+        )
     return merged
 
 
@@ -1281,10 +1288,9 @@ def sweep_one_pr(repo: str, pr: dict, now_iso: str) -> None:
         if gate_success is None:
             print(f"#{number}: review-gate が success でない — マージ試行せず")
         else:
-            # 保存済み success を信じず門をフル再評価してからマージ (Codex P1)
-            merged = reverify_and_merge(
-                repo, number, head_sha, datetime.now(timezone.utc).isoformat()
-            )
+            # 保存済み success を信じず門をフル再評価してからマージ (Codex P1)。
+            # 補償の基準時刻は reverify_and_merge がマージ成功後に自分で取る
+            merged = reverify_and_merge(repo, number, head_sha)
             if merged:
                 return  # マージ済み PR に advisory はもう要らない
             # 再評価で failure に訂正された場合、stall 判定は combined status を
@@ -1379,7 +1385,9 @@ def run_advisory_sweep(repo: str) -> int:
         print(f"human queue sweep が失敗 — {e!r}")
     if failures:
         # 続行はするが成功と偽らない — run を赤にして「できなかったこと」を残す
-        print(f"sweep: {failures} 件の失敗あり — run を失敗にする")
+        # ::error はサマリー上部に出る Actions アノテーション — 赤の理由をログを
+        # 掘らずに読めるようにする (watchers.json の review-gate watcher も拾う)
+        print(f"::error::review-gate sweep: {failures} 件の失敗あり — run を失敗にする")
         return 1
     return 0
 
