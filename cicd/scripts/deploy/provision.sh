@@ -78,41 +78,101 @@ fi
 # ai-agent MI → OpenAI User ロール割り当ての「養子縁組」(#262):
 # deploy-ai-agent.sh 時代の az role assignment create は名前を指定せずランダム GUID 名で
 # 作っていたため、bicep (PR #261) が guid() 名で同じ principal+role+scope を宣言すると
-# ARM が RoleAssignmentExists で毎回拒否する。既存の名前を実行時に解決して bicep へ渡し、
-# その名前で宣言させる (削除→再作成は Owner 相当の削除権限が要る上、剥奪〜再付与の間に
-# ai-agent が OpenAI を呼べない瞬断が出るため採らない)。
+# ARM が RoleAssignmentExists で毎回拒否する (割り当ての一意性は名前ではなく
+# principal+role+scope)。既存の名前を実行時に解決して bicep へ渡し、その名前で宣言させる
+# (削除→再作成は Owner 相当の削除権限が要る上、剥奪〜再付与の間に ai-agent が OpenAI を
+# 呼べない瞬断が出るため採らない)。
 # 初回 (Container App 未作成で principalId が取れない) は既存割り当ても無いので、
 # パラメータを渡さず従来どおり guid() で新規作成させる。
 # 名前の組み立ては bicep の命名規約 toLower('ca-{env}-{app から -_ を除去}-ai-agent') と同一。
+#
+# 解決は 2 段構え (PR #278 の 1 段目だけでは 1 回しか効かなかった / #262 再発):
+#   1. 一覧から拾う (下)。判定は role_assignment.py の純粋関数 = 大文字小文字を無視する
+#   2. それでも空振りしたら、ARM の RoleAssignmentExists が教えてくる ID を使って
+#      **1 度だけやり直す** (deploy_bootstrap の retry)。az 側の一過性・綴り揺れ・
+#      権限不足で 1 が黙って空になっても、実環境が半日止まらないようにするための保険
 APP_CLEAN="$(printf '%s' "$APP_NAME" | tr -d '_-' | tr '[:upper:]' '[:lower:]')"
 AI_AGENT_CA_NAME="ca-${ENVIRONMENT}-${APP_CLEAN}-ai-agent"
 OPENAI_ACCOUNT_NAME="oai-${ENVIRONMENT}-${APP_CLEAN}"
 ROLE_OPENAI_USER="5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"
+ROLE_HELPER="$DEPLOY_DIR/role_assignment.py"
+
+# az の失敗を握り潰さない (握り潰すと「養子縁組しなかった」と「する必要が無かった」が
+# 見分けられず、#262 のように同じ壁に毎回ぶつかる)。stderr はログに出す。
 AI_AGENT_PRINCIPAL_ID="$(az containerapp show -g "$RG" -n "$AI_AGENT_CA_NAME" \
-  --query 'identity.principalId' -o tsv 2>/dev/null || true)"
+  --query 'identity.principalId' -o tsv 2>&1 || true)"
+[[ "$AI_AGENT_PRINCIPAL_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || {
+  echo "==> ai-agent の principalId を解決できず (${AI_AGENT_PRINCIPAL_ID:-空}) — 養子縁組はスキップ"
+  AI_AGENT_PRINCIPAL_ID=""
+}
 OPENAI_SCOPE="$(az cognitiveservices account show -g "$RG" -n "$OPENAI_ACCOUNT_NAME" \
   --query 'id' -o tsv 2>/dev/null || true)"
+if [[ -z "$OPENAI_SCOPE" ]]; then
+  echo "==> OpenAI アカウント $OPENAI_ACCOUNT_NAME を解決できず — 養子縁組はスキップ"
+fi
+
+ADOPTED_ROLE_ASSIGNMENT_NAME=""
 if [[ -n "$AI_AGENT_PRINCIPAL_ID" && -n "$OPENAI_SCOPE" ]]; then
-  # --scope は継承分 (RG/サブスクリプション階層) も返すため、同一 scope のものだけ拾う
-  EXISTING_ROLE_ASSIGNMENT_NAME="$(az role assignment list \
-    --assignee "$AI_AGENT_PRINCIPAL_ID" \
-    --role "$ROLE_OPENAI_USER" \
-    --scope "$OPENAI_SCOPE" \
-    --query "[?scope=='${OPENAI_SCOPE}'] | [0].name" -o tsv 2>/dev/null || true)"
-  if [[ -n "$EXISTING_ROLE_ASSIGNMENT_NAME" ]]; then
-    echo "==> 既存ロール割り当てを養子縁組: aiAgentOpenAiRoleAssignmentName=$EXISTING_ROLE_ASSIGNMENT_NAME"
-    BOOTSTRAP_EXTRA_ARGS+=(-p "aiAgentOpenAiRoleAssignmentName=$EXISTING_ROLE_ASSIGNMENT_NAME")
+  # --assignee は Graph 解決に依存するので使わない (CD の SP にディレクトリ読み取りは無い)。
+  # scope で引いて、principal / role / scope の一致は純粋関数側で見る。
+  # stderr は JSON に混ぜない (az は Graph 権限不足の警告を stderr に出すので、
+  # 混ぜると出力が JSON として壊れ、また静かな空振りに戻る)。
+  ROLE_LIST_ERR="$(mktemp)"
+  ROLE_ASSIGNMENTS_JSON="$(az role assignment list --scope "$OPENAI_SCOPE" -o json \
+    2>"$ROLE_LIST_ERR" || true)"
+  if [[ -s "$ROLE_LIST_ERR" ]]; then
+    echo "==> (az role assignment list の出力メッセージ) $(head -c 300 "$ROLE_LIST_ERR" | tr '\n' ' ')"
+  fi
+  rm -f "$ROLE_LIST_ERR"
+  ADOPTED_ROLE_ASSIGNMENT_NAME="$(printf '%s' "$ROLE_ASSIGNMENTS_JSON" \
+    | python3 "$ROLE_HELPER" pick \
+        --scope "$OPENAI_SCOPE" \
+        --principal-id "$AI_AGENT_PRINCIPAL_ID" \
+        --role "$ROLE_OPENAI_USER" || true)"
+  if [[ -n "$ADOPTED_ROLE_ASSIGNMENT_NAME" ]]; then
+    echo "==> 既存ロール割り当てを養子縁組: aiAgentOpenAiRoleAssignmentName=$ADOPTED_ROLE_ASSIGNMENT_NAME"
+  else
+    echo "==> 一致する既存ロール割り当ては見つからず (新規作成に倒す。衝突したら ARM の応答から拾い直す)"
   fi
 fi
 
-az deployment group create \
-  -g "$RG" \
-  -n "$DEPLOYMENT" \
-  -f "$IAC_DIR/main-bootstrap.bicep" \
-  -p @"$IAC_DIR/main-bootstrap.parameters.json" \
-  -p appName="$APP_NAME" environmentName="$ENVIRONMENT" voicevoxTier="$VOICEVOX_TIER" \
-  ${BOOTSTRAP_EXTRA_ARGS[@]+"${BOOTSTRAP_EXTRA_ARGS[@]}"} \
-  -o none
+# bootstrap を 1 回流す。stderr も含めてログに残しつつ、失敗時は本文を呼び出し元へ返す
+# (RoleAssignmentExists の ID を読むため)。
+BOOTSTRAP_LOG="$(mktemp)"
+trap 'rm -f "$BOOTSTRAP_LOG"' EXIT
+deploy_bootstrap() {
+  local role_name="$1"
+  local args=()
+  if [[ ${#BOOTSTRAP_EXTRA_ARGS[@]} -gt 0 ]]; then
+    args=("${BOOTSTRAP_EXTRA_ARGS[@]}")
+  fi
+  if [[ -n "$role_name" ]]; then
+    args+=(-p "aiAgentOpenAiRoleAssignmentName=$role_name")
+  fi
+  local rc=0
+  az deployment group create \
+    -g "$RG" \
+    -n "$DEPLOYMENT" \
+    -f "$IAC_DIR/main-bootstrap.bicep" \
+    -p @"$IAC_DIR/main-bootstrap.parameters.json" \
+    -p appName="$APP_NAME" environmentName="$ENVIRONMENT" voicevoxTier="$VOICEVOX_TIER" \
+    ${args[@]+"${args[@]}"} \
+    -o none 2>&1 | tee "$BOOTSTRAP_LOG" || rc=$?
+  return "$rc"
+}
+
+if ! deploy_bootstrap "$ADOPTED_ROLE_ASSIGNMENT_NAME"; then
+  CONFLICT_NAME="$(python3 "$ROLE_HELPER" from-error < "$BOOTSTRAP_LOG" || true)"
+  if [[ -z "$CONFLICT_NAME" || "$CONFLICT_NAME" == "$ADOPTED_ROLE_ASSIGNMENT_NAME" ]]; then
+    echo "::error::bootstrap (main-bootstrap.bicep) が失敗しました。上の ARM エラーを参照してください。" >&2
+    exit 1
+  fi
+  echo "==> RoleAssignmentExists — ARM が返した既存 ID $CONFLICT_NAME を養子縁組して 1 度だけやり直します (#262)"
+  if ! deploy_bootstrap "$CONFLICT_NAME"; then
+    echo "::error::既存ロール割り当て ($CONFLICT_NAME) を養子縁組しても bootstrap が通りませんでした。上の ARM エラーを参照してください。" >&2
+    exit 1
+  fi
+fi
 
 if [[ "$PRINT_ENTRA_AUTH_HINT" == "true" ]]; then
   echo "==> [hint] Entra 認証(main-config) は UAMI 事前準備が要る。手順は iac/README §3 を参照（ここでは有効化しない）"
