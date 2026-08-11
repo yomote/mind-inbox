@@ -10,7 +10,13 @@
  * 発見の記録: strategy.md の性質候補は「分割して連結すると元の文字列に戻る」だったが、
  * 現行実装は**空白のみの断片を捨てる** (例: "a。 \n b。" の間の空白断片) ため、
  * 厳密な往復は「空白のみ断片が生じない入力」でだけ成り立つ。全入力で成り立つのは
- * 「空白を除いた内容の保存」— domain_rules.md §1 に現行仕様として明文化した。
+ * 「元の文字列から空白のみ断片だけを除いたものとの厳密一致」— domain_rules.md §1 に
+ * 現行仕様として明文化した。
+ *
+ * 当初は両辺の空白を落として比較していたが、それでは「本文中の空白を潰す」退行
+ * (例: 「今日は 少し疲れた。」→「今日は少し疲れた。」で TTS に渡る本文が静かに変わる)
+ * まで素通しになる (PR #263 Codex 指摘)。現在は参照モデル (expectedJoined) との
+ * 厳密一致で「捨ててよいのは空白のみ断片だけ・残る断片は内部の空白まで一字一句保存」を固定する。
  */
 
 import fc from "fast-check";
@@ -38,7 +44,18 @@ const anyText = fc.string({
   maxLength: 120,
 });
 
-const stripWhitespace = (s: string): string => s.replace(/\s+/g, "");
+/**
+ * 参照モデル: 実装が捨ててよいのは「空白のみの断片」だけ、という仕様 (domain_rules.md §1-3)
+ * を実装と独立に表したもの。区切り文字の連続 (run) の直後で断片に切り、空白のみの断片を
+ * 取り除いて連結する。分割結果の連結はこれと**厳密一致**しなければならない — 断片の
+ * 内部・端の空白も一字一句保存される (併合の仕方は join に影響しないので関与しない)。
+ */
+const SEPARATOR_RUN_END = /(?<=[。．！？!?\n])(?![。．！？!?\n])/;
+const expectedJoined = (text: string): string =>
+  text
+    .split(SEPARATOR_RUN_END)
+    .filter((piece) => piece.trim() !== "")
+    .join("");
 
 describe("[L1] splitTtsSentences (property)", () => {
   it("空白のみ断片が生じない入力では、分割して連結すると元の文字列に戻る (往復)", () => {
@@ -49,11 +66,25 @@ describe("[L1] splitTtsSentences (property)", () => {
     );
   });
 
-  it("どんな入力でも、空白を除いた内容と並びは保存される (文字の欠落・発明・並べ替えが無い)", () => {
+  it("どんな入力でも、連結結果は「元の文字列から空白のみ断片だけを除いたもの」と厳密一致する (本文中の空白も潰れない)", () => {
     fc.assert(
       fc.property(anyText, (text) => {
-        expect(stripWhitespace(splitTtsSentences(text).join(""))).toBe(stripWhitespace(text));
+        expect(splitTtsSentences(text).join("")).toBe(expectedJoined(text));
       }),
+    );
+  });
+
+  it("区切り文字を含まない入力は、空白のみでない限り丸ごと 1 文になる (本文中の空白がそのまま残る)", () => {
+    // 参照モデルの自明ケースを退行例 (「今日は 少し疲れた。」の空白潰し) の形で直接固定する。
+    // 改行は区切り文字なので除外する (区切り文字を含まない入力、が前提の性質)。
+    fc.assert(
+      fc.property(
+        fc.string({ unit: fc.constantFrom(...CONTENT_CHARS, " ", "\t", "　"), maxLength: 120 }),
+        (text) => {
+          const expected = text.trim() === "" ? [] : [text];
+          expect(splitTtsSentences(text)).toEqual(expected);
+        },
+      ),
     );
   });
 
