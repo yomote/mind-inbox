@@ -29,6 +29,12 @@
       "expect_hours": 192
     },
     {
+      "id": "security-sweep.yml",
+      "name": "週次のセキュリティスキャン",
+      "what": "npm audit / pip-audit / gitleaks を回し、依存の既知 CVE とコミットされた秘密を Issue に積む (カバー外領域は本文に明示)",
+      "expect_hours": 192
+    },
+    {
       "id": "test.yml",
       "name": "テスト (L0〜L3)",
       "what": "PR ごとに契約・単体・結合・画面テストを回す",
