@@ -62,10 +62,11 @@
     {
       "id": "review-gate.yml",
       "name": "マージの門 (review-gate)",
-      "what": "PM 受け入れ・スレッド解決・(コード PR は) Codex レビューが揃うまで PR のマージを止める",
-      "expect": "PR ごと",
+      "what": "PM 受け入れ・スレッド解決・(コード PR は) Codex レビューが揃うまで PR のマージを止め、揃って auto-merge 武装済みならマージまで執行する。30 分毎の sweep がマージ再試行とストール検知 (🟢のまま 2h / needs-human・Proposed ADR の 48h) を回す",
+      "event": "schedule",
+      "expect_hours": 2,
       "critical": true,
-      "note": "PR レビュー Routine (ADR 0008) の廃止後、レビューの痕跡はこの required check と PR 上の Codex / PM コメントが持つ (ADR 0035 D1/D4)。"
+      "note": "PR レビュー Routine (ADR 0008) の廃止後、レビューの痕跡はこの required check と PR 上の Codex / PM コメントが持つ (ADR 0035 D1/D4)。マージ執行とストール検知は ADR 0040 D1 / #253 — auto-merge は GITHUB_TOKEN の status では発火しないため workflow 自身がマージする。event=schedule で絞るのは sweep (30 分毎) の生死だけを見るため — 絞らないと sweep の連続失敗が直後の PR イベント run の成功に隠れて緑に見える (#258)。止まると『最悪 30 分でマージ』の下限保証が消える。イベント駆動の門判定の健全性は PR 側の required check が持つ。"
     },
     {
       "id": "adr-number-guard.yml",
