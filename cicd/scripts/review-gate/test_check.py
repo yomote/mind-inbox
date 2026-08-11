@@ -531,6 +531,45 @@ def test_l1_needs_human停滞は人間が反応したら再通知しない() -> 
     assert notify and "48h 停滞" in reason
 
 
+def test_l1_needs_human停滞はコメント以外の人間更新も時計に入れる() -> None:
+    """Codex P2 追指摘 (PR #258): 本文・タイトルの編集はコメントに現れないが
+    updated_at を進める。
+
+    無いと何が静かに通るか: 通知後に PO が本文を編集して対応中と示しても
+    「人間の反応なし」として 24h 後にメンションが飛び続ける (狼少年化)。
+    逆に通知自身が進めた updated_at まで人間活動と数えると、再通知が永久に
+    止まる (前回 P2 の沈黙が別経路で再発)。猶予 (5 分) で両者を区別する。
+    """
+    now = "2026-08-11T12:00:00Z"
+    bot = "github-actions[bot]"
+    notice = (f"{HUMAN_STALL_MARKER}\n⏰ 停滞", "2026-08-10T00:00:00Z", bot)  # 36h 前
+    # 通知の 10h 後に本文編集 (updated_at だけが進む) → 反応ありとして黙る
+    notify, reason = should_notify_human_stall("2026-08-10T10:00:00Z", [notice], now)
+    assert not notify and "反応あり" in reason
+    # 編集から 48h 停滞したら再通知する (測り直しの起点は編集時刻)
+    old_notice = (f"{HUMAN_STALL_MARKER}\n⏰ 停滞", "2026-08-08T00:00:00Z", bot)
+    notify, reason = should_notify_human_stall(
+        "2026-08-09T00:00:00Z", [old_notice], now
+    )  # 編集は 60h 前
+    assert notify and "48h 停滞" in reason
+    # 通知直後の updated_at (通知自身が進めた分 = 猶予 5 分以内) は汚染扱い →
+    # 人間活動と数えず、24h 経過で再通知する
+    notify, _ = should_notify_human_stall("2026-08-10T00:02:00Z", [notice], now)
+    assert notify
+    # 猶予を超えて updated_at が進んでいれば人間の更新 → 黙る
+    notify, _ = should_notify_human_stall("2026-08-10T00:10:00Z", [notice], now)
+    assert not notify
+    # bot コメント (Codex 等) が updated_at を進めた場合は既知の活動 → 汚染扱いで
+    # 再通知は止まらない (bot を人間に化けさせない)
+    codex = (
+        "Codex Review: ...",
+        "2026-08-10T06:00:00Z",
+        "chatgpt-codex-connector[bot]",
+    )
+    notify, _ = should_notify_human_stall("2026-08-10T06:00:00Z", [notice, codex], now)
+    assert notify
+
+
 def test_l1_bot判定はloginの接尾辞で見る() -> None:
     assert is_bot_login("github-actions[bot]")
     assert is_bot_login("chatgpt-codex-connector[bot]")

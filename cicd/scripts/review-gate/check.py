@@ -237,6 +237,9 @@ MERGE_STALL_HOURS = 2.0
 HUMAN_STALL_HOURS = 48.0
 # 時限系通知の再通知クールダウン (最後の通知からこの時間は黙る)
 RENOTIFY_COOLDOWN_HOURS = 24.0
+# updated_at が既知の活動 (コメント・通知) とこの分数以内なら「その活動自身が
+# 進めた汚染」とみなす。超えていればコメントに現れない人間の更新 (本文編集等)
+UPDATED_AT_GRACE_MINUTES = 5.0
 # check run をマージ可と数える conclusion (GitHub の分岐保護と同じ扱い)
 GREEN_CONCLUSIONS = ("success", "neutral", "skipped")
 # GITHUB_TOKEN のマージ push では起動しない push トリガー workflow の補償対象
@@ -373,13 +376,19 @@ def should_notify_human_stall(
     倒れ、本文で約束している 24h 後の再通知が永久に起きない。判定を分岐する:
 
     - マーカー無し (未通知): updated_at で 48h 停滞を判定 (従来どおり)
-    - マーカー有り: updated_at は自分の通知で汚れているので見ない。
+    - マーカー有り: updated_at をそのまま停滞時計にはしない。
       最後の通知から cooldown_hours (24h) 経過していて、かつ通知の後に
-      **人間の反応が無い** (bot 以外のコメントが無い) なら再通知する。
-      人間の反応があれば時計はそこから測り直し、反応からさらに stall_hours
-      停滞したら再通知する (反応 1 回で永久に沈黙しない)。
-      bot のコメント (自分の通知・Codex 等) は人間の反応に数えない —
-      自分の通知を反応と誤認すると、やはり再通知が永久に止まる。
+      **人間の反応が無い**なら再通知する。人間の反応があれば時計はそこから
+      測り直し、反応からさらに stall_hours 停滞したら再通知する (反応 1 回で
+      永久に沈黙しない)。人間の反応と数えるのは:
+        a. bot 以外のコメント (自分の通知・Codex 等の bot コメントは数えない —
+           自分の通知を反応と誤認すると再通知が永久に止まる)
+        b. **コメントに現れない Issue 本体の更新** (本文・タイトル編集等 —
+           Codex P2 追指摘 / PR #258)。updated_at が既知の活動 (全コメント +
+           通知) のどれよりも猶予 (UPDATED_AT_GRACE_MINUTES) を超えて後なら、
+           コメント以外の更新があった証拠として updated_at を人間の反応時刻に
+           使う。通知直後の updated_at (通知自身が進めた分) は既知の活動と
+           ほぼ一致するため汚染として除外される。timeline API は叩かない (重い)
     """
     last_marker = latest_iso(
         [t for body, t, _login in comments if HUMAN_STALL_MARKER in body]
@@ -390,15 +399,20 @@ def should_notify_human_stall(
         return (False, "停滞していない")
     if not is_stale(last_marker, now_iso, cooldown_hours):
         return (False, f"前回通知から {cooldown_hours:.0f}h 未満 (クールダウン)")
-    last_human = latest_iso(
-        [
-            t
-            for body, t, login in comments
-            if HUMAN_STALL_MARKER not in body
-            and not is_bot_login(login)
-            and minutes_between(last_marker, t) > 0
-        ]
-    )
+    human_times = [
+        t
+        for body, t, login in comments
+        if HUMAN_STALL_MARKER not in body
+        and not is_bot_login(login)
+        and minutes_between(last_marker, t) > 0
+    ]
+    known = latest_iso([t for _body, t, _login in comments] + [last_marker])
+    if (
+        known is not None
+        and minutes_between(known, updated_at) > UPDATED_AT_GRACE_MINUTES
+    ):
+        human_times.append(updated_at)
+    last_human = latest_iso(human_times)  # type: ignore[arg-type]
     if last_human is None:
         return (
             True,
