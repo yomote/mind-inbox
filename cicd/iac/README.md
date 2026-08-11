@@ -232,6 +232,10 @@ az deployment group create \
 
 必要に応じて `-p key=value` で上書きします。
 
+bicep 単独適用は稼働 image を既定タグへ戻す等の副作用があるため
+(`bootstrap-core.bicep` の `containerImageTag` コメント参照)、適用後は §0 の
+`provision.sh` (または §4 の deploy スクリプト群) を続けて実行して収束させてください。
+
 ---
 
 ## 6. 削除
@@ -271,6 +275,18 @@ az deployment group create \
 ```
 
 `Complete` は破壊的です。必ず `what-if` で影響確認してから実行してください。
+
+補足 (#262 / PR #279):
+
+- ai-agent MI の OpenAI ロール (スクリプト管理 — §0 の注意参照) は Complete モードでも
+  **削除されない**。`Microsoft.Authorization/roleAssignments` は complete mode deletion の
+  対象外 ([公式の対象一覧](https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/complete-mode-deletion)
+  の Microsoft.Authorization 表で "No")。
+- ただし bicep 単独適用 (このモードを含む) には稼働 image を既定タグへ戻す等の副作用がある
+  (`bootstrap-core.bicep` の `containerImageTag` コメント参照)。適用後は §0 の `provision.sh`
+  (または §4 の deploy スクリプト群) を続けて実行して収束させること。ロール付与も
+  `deploy-ai-agent.sh` が冪等に再確認するため、万一 (手動削除等で) 消えていても
+  この手順で復旧する。
 
 ---
 
