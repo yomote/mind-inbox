@@ -13,7 +13,7 @@ Mind Inbox の「今どこまで進み・次に何をやるか」を **GitHub �
 
 - user が「状況」「進捗」「今どこ」「レポート」「/status」等を言ったとき
 - 開発を再開する前に全体像を把握したいとき
-- [status ページ](https://yomote.github.io/mind-inbox/status/)を開かずに、会話の中で数字で状況を知りたいとき
+- 会話の中で数字で状況を知りたいとき（**#289 までは戦況図を出せるのはこの skill だけ**。[status ページ](https://yomote.github.io/mind-inbox/status/)には自動化の生死しか出ない）
 
 ## 設計思想
 
@@ -147,7 +147,7 @@ user が「HTML で」「レポートにまとめて」「見れる形で」等�
 - ❌ レーンを毎回作り直す・増やす（地図の形が変わると PO は毎回読み直しになる。変更は streams.json の PR で / ADR 0044）
 - ❌ 未分類を黙って省く（0 件でも 1 行出す。腐敗を見えなくしない）
 - ❌ 裁定を全部並べる（最重要 3 件 + 「寝かせ中 n 件」。ADR 0044 D3）
-- ❌ Projects v2 board の作成・更新（**board は ADR 0044 D5 で退役**。描画面は status ページ）
+- ❌ Projects v2 board の作成・更新（**board は ADR 0044 D5 で退役**。代替はこの skill — status ページへの描画は #289 後）
 - ❌ Issue の open/close やコメント投稿（レポートは読み取り専用。状態変更は明示依頼時のみ）
 - ❌ 設計内容の記述（それは docs / ADR。ここは状態の要約のみ）
 
