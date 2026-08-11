@@ -1211,7 +1211,16 @@ var cognitiveServicesOpenAiUserRoleId = subscriptionResourceId(
 @description('ai-agent MI → Cognitive Services OpenAI User の既存ロール割り当て名 (GUID)。空なら guid() で新規作成。既存環境では provision.sh が解決して渡す (#262)。')
 param aiAgentOpenAiRoleAssignmentName string = ''
 
-resource aiAgentOpenAiRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableOpenAi && enableAiAgentAca) {
+// 既存名を解決できなかった run のための逃げ道 (#277)。false を渡すと bicep はこの
+// 割り当てを宣言しない。**incremental デプロイなので既存の割り当ては消えない**し、
+// 直後の deploy-ai-agent.sh が冪等に付与し直すので ai-agent の OpenAI 呼び出しは切れない。
+// 名前が分からないまま guid() 名で宣言すると RoleAssignmentExists でデプロイ全体が
+// 落ちる — 「分からない」ときに環境ごと止めないための分岐 (判定は provision.sh /
+// decide_role_assignment.py)。既定 true = 通常はここが真実の所在 (ADR 0017)。
+@description('ai-agent MI → OpenAI User のロール割り当てを bicep で宣言するか。provision.sh が既存名を解決できなかった run でのみ false が渡る (#277)。')
+param manageAiAgentOpenAiRoleAssignment bool = true
+
+resource aiAgentOpenAiRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableOpenAi && enableAiAgentAca && manageAiAgentOpenAiRoleAssignment) {
   name: empty(aiAgentOpenAiRoleAssignmentName)
     ? guid(resourceGroup().id, openAiAccountName, aiAgentContainerAppName, 'openai-user')
     : aiAgentOpenAiRoleAssignmentName
