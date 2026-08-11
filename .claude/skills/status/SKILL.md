@@ -36,7 +36,7 @@ GitHub MCP ツール（`mcp__github__*`。ToolSearch で `select:` して読み�
 **出力する項目の根拠は必ず引く**（引けなかった項目は推測せず「未取得」と書く）:
 
 1. **Open Issue 一覧** — `list_issues` (state OPEN, perPage 100, fields: number/title/labels/**milestone**/**created_at**/updated_at)。レーン所属・詰まり・次の一手・今週の目標の根拠（`created_at` は「次の一手」のタイブレーク用）。
-2. **Open PR 一覧** — `list_pull_requests` (state open, fields: number/title/**body**/**draft**/head/base/labels/updated_at)。`body` は `closes/refs #n` を読むため（PR → レーンの紐づけ）、`draft` と `updated_at` は「走っているもの」の判定に使う（Step 2）。**`auto_merge` は `list_pull_requests` の fields に無いので、詰まり判定に使う PR だけ `pull_request_read` (method: `get`) で個別に取る**（未武装の PR をストール扱いしないため）。
+2. **Open PR 一覧** — `list_pull_requests` (state open, fields: number/title/**body**/**draft**/head/base/labels/updated_at)。`body` は Issue 参照 (`closes` / `fixes` / `resolves` / `refs` — 下記) を読むため（PR → レーンの紐づけ）、`draft` と `updated_at` は「走っているもの」の判定に使う（Step 2）。**`auto_merge` は `list_pull_requests` の fields に無いので、詰まり判定に使う PR だけ `pull_request_read` (method: `get`) で個別に取る**（未武装の PR をストール扱いしないため）。
 3. **PR の変更ファイル** — 「apps/ を触る PR が何本か」(Step 3) を出すときだけ、対象 PR に `pull_request_read` (method: `get_files`)。**PR 数が多い時は全件叩かない** — 数えた本数と、数えられなかった本数を両方書く。
 4. **今週の目標 (milestone)** — Issue の `milestone` から、**(a) 期限が今週内 かつ (b) `stream:product` の Issue を含む** open milestone を取る。**「期限が一番近い open milestone」で代用しない** — 来月期限のインフラ milestone しか無い状況でそれを今週の目標として表示すると、Step 4 でプロダクトの P1 より優先されてしまう。条件を満たすものが無ければ「**未設定**」と書く（勝手に代役を立てない）。
 5. **dev への到達状況** — `actions_list` (method: `list_workflow_runs`, resource_id: `deploy.yml`)。**「成功 run があった」= 到達ではない**（下記）。**ここを省くと「工場は動いたがプロダクトは届いていない」が隠れる**（ADR 0043 D1）。
@@ -67,7 +67,7 @@ GitHub MCP ツール（`mcp__github__*`。ToolSearch で `select:` して読み�
 
 > Issue 番号は変わりうるので**ラベルで発見**する（番号をこの skill に固定しない）。レーン所属 = `stream:*` ラベル、人間待ち = `needs-human`、優先 = `P1`。
 >
-> **PR → レーンの紐づけ**: PR 本文の `closes/refs #n` から Issue の `stream:*` を引くのが第一。取れないものは「未紐づけ PR」として末尾に列挙する（黙って落とさない）。
+> **PR → レーンの紐づけ**: PR 本文の Issue 参照から `stream:*` を引くのが第一。**GitHub の closing keyword を全部拾う** — `close` / `closes` / `closed` / `fix` / `fixes` / `fixed` / `resolve` / `resolves` / `resolved` + `refs`（大文字小文字を問わない）。このリポジトリは `Fixes #n` も実際に使っており、`closes` だけを見ると**紐づいている PR を「未紐づけ」と誤判定し、その Issue が「実装中」除外をすり抜けて次アクションに再選定される**。取れないものは「未紐づけ PR」として末尾に列挙する（黙って落とさない）。
 >
 > **重い取得 (3 / 5) を省いてよい**。ただし省いたら該当項目を「未取得」と明記する — 推測値を数字として出さない。
 
