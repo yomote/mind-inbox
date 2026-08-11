@@ -1,14 +1,15 @@
 """
 Microsoft Agent Framework の chat client シングルトン (ADR 0016, M1)。
 
-extractor / planner (単発 structured 呼び出し系) が共有する。
-/chat 系 (workflow.py) は M1-3 で移行するまで kernel.py (Semantic Kernel) を
-使い続ける — 変化を 1 度に 1 種類にするため (implementation_plan_v2 §0.2)。
+extractor / planner (単発 structured 呼び出し系 = `complete`) と
+workflow.py (/chat 系 = `chat` / `chat_stream`) が共有する、
+このサービス唯一の LLM 呼び出し面 (M1-5 で SK 依存を除去し一本化)。
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator, Sequence
 
 from agent_framework import BaseChatClient, Message
 from agent_framework.openai import OpenAIChatClient, OpenAIChatOptions
@@ -87,3 +88,23 @@ async def complete(client: BaseChatClient, prompt: str) -> str:
         options=_options_for_model(_current_model()),
     )
     return response.text
+
+
+async def chat(client: BaseChatClient, messages: Sequence[Message]) -> str:
+    """会話履歴 (Message 列) → 応答テキスト (workflow の RESPOND / 非ストリーミング)。"""
+    response = await client.get_response(
+        list(messages), options=_options_for_model(_current_model())
+    )
+    return response.text
+
+
+async def chat_stream(
+    client: BaseChatClient, messages: Sequence[Message]
+) -> AsyncIterator[str]:
+    """chat のストリーミング版。トークン (チャンク) 文字列を逐次 yield する。"""
+    async for update in client.get_response(
+        list(messages), stream=True, options=_options_for_model(_current_model())
+    ):
+        text = update.text or ""
+        if text:
+            yield text

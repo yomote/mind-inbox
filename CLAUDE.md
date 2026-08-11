@@ -102,7 +102,7 @@ pnpm --dir apps/frontend test:e2e                 # Playwright (旧 L3 mock — 
 pnpm --dir apps/frontend build                    # tsc -b && vite build
 ```
 
-### AI Agent (Python FastAPI + Semantic Kernel → MAF へ移行中 / [ADR 0016](docs/adr/0016-ai-agent-orchestration-on-maf.md))
+### AI Agent (Python FastAPI + Microsoft Agent Framework / [ADR 0016](docs/adr/0016-ai-agent-orchestration-on-maf.md) — M1 移行完了)
 
 ```bash
 cd apps/services/ai-agent
