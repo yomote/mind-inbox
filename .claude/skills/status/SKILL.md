@@ -54,10 +54,13 @@ PO の応答待ちを先頭に出すための材料を引く:
 
 1. **`needs-human` ラベルの Open Issue** — `list_issues` (labels: ["needs-human"])
 2. **Proposed のまま滞留している ADR** — `grep -l "Status: Proposed" docs/adr/*.md` (経過日数も出す)
+3. **上位候補の中身を読む (必須)** — 1・2 で挙がったもののうち **3 件に絞ってから**、その Issue の `body` + 直近コメント (`issue_read` method: `get`／`get_comments`) と、ADR の本文 (Context / Decision Outcome) を読む
+
+**3 は省略できない** — 下の出力形式は「どのレーンが止まるか / 推奨 / 先送りの代償」を要求しており、**タイトルとラベルだけからは書けない**。読まずに書けば推測が裁定の材料として PO に届く (この skill が最も避けるべき失敗)。読めなかった場合は、その件について**推測で埋めず「未取得 — 中身を読めていない」と書く**。
 
 これはレポート冒頭に**必ず**表示する (0 件なら「🙋 あなたの番: なし」と 1 行)。ただし**全部は並べない** — ADR 0044 D3 に従い:
 
-- **最重要 3 件だけ**を出す。選定基準は「**レーンを止めているもの優先**」(古い順・P1 順ではない)
+- **最重要 3 件だけ**を出す。選定基準は「**レーンを止めているもの優先**」(古い順・P1 順ではない)。**絞り込みはタイトル・ラベル・レーンで行い、中身を読むのは絞った後の 3 件だけ** (全件精読はコストに見合わない)
 - 各件は「**どのレーンが止まっていて、通すには何の裁定が要るか。推奨は X、先送りすると Y が止まったまま**」の形で書く。裁定の材料を戦況に接続する
 - 残りは「**寝かせ中 n 件**」と件数だけ。隠さないが押し付けない (PO が「全部見せて」と言えば全量を出す)
 
@@ -156,7 +159,7 @@ user が「HTML で」「レポートにまとめて」「見れる形で」等�
 ## 関連
 
 - ADR 0044（戦況図 = stream レーン / 裁定 3 件 / board 退役）: `docs/adr/0044-stream-lanes-as-the-project-map.md`
-- ADR 0043（PM 自走モード — 週次目標・日次ダイジェスト）: `docs/adr/0043-pm-self-driving-mode.md`
+- ADR 0043（PM 自走モード — 週次目標・日次ダイジェスト）: **PR #284 で審議中。マージされるまで `docs/adr/` に無い** — 「今週の目標」「dev 到達」の扱いは本 skill の記述を正とする
 - ADR 0011（実行状態 = GitHub Issues が真実）: `docs/adr/0011-github-projects-as-execution-dashboard.md`
 - レーン定義: `cicd/scripts/status-page/streams.json`
 - 常設の定点: <https://yomote.github.io/mind-inbox/status/>（Runbook: `docs/runbooks/status-page.md`）
