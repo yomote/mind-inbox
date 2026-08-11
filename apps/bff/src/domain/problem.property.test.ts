@@ -119,19 +119,24 @@ describe("[単体] appendMention (property)", () => {
     );
   });
 
-  // 既知の仕様の穴 (docs/design/domain_rules.md §3 未決): appendMention は
-  // lastMentionedAt に「追記した Mention の createdAt」を無条件で採用する。
-  // 過去日時の Mention が後から届く (再送・バックフィル) と lastMentionedAt が
-  // **逆行**し、休眠判定・並び順が狂う。relink / merge (withDerived) は max を
-  // 取るので、導出ルールが経路によって食い違っている。裁定後、統一したら
-  // このテストを通常の it に昇格すること。
-  it.fails("lastMentionedAt は常に mentions の最大 createdAt — 未決の仕様の穴", () => {
+  // 2026-08-11 PO 裁定「lastMentionedAt は常に全 Mention の createdAt の最大値」で
+  // 確定し、it.fails から昇格 (domain_rules.md §3 の旧・未決)。旧実装は追記経路だけ
+  // 「追記した Mention の createdAt を無条件採用」で、過去日時の Mention が後から
+  // 届く (再送・バックフィル・時計ずれ) と逆行していた。現在は relink / merge と
+  // 同じ withDerived (max 再計算) に統一されている。
+  it("lastMentionedAt は常に mentions の最大 createdAt (2026-08-11 PO 裁定)", () => {
     fc.assert(
       fc.property(
-        // 既存は 2028 年以降、追記 Mention は 2021 年以前 → 必ず逆行する
-        arbProblem(isoDate({ min: "2028-01-01", max: "2030-01-01" })),
-        arbMention(isoDate({ min: "2020-01-01", max: "2021-01-01" })),
-        (existing, mention) => {
+        // 任意の日時どうし + 「既存が新しく追記が古い = 必ず逆行する」領域の両方を回す
+        // (後者は旧実装の反例が決定的に出る領域。退行検知を運任せにしない)
+        fc.oneof(
+          fc.tuple(arbProblem(anyIso), arbMention(anyIso)),
+          fc.tuple(
+            arbProblem(isoDate({ min: "2028-01-01", max: "2030-01-01" })),
+            arbMention(isoDate({ min: "2020-01-01", max: "2021-01-01" })),
+          ),
+        ),
+        ([existing, mention]) => {
           const updated = appendMention(existing, mention);
           const maxCreatedAt = updated.mentions.reduce(
             (max, m) => (m.createdAt > max ? m.createdAt : max),

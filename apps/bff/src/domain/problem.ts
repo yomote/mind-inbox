@@ -30,21 +30,19 @@ export function withDerived(problem: Problem): Problem {
  * - 棚卸し済み（resolved / shelved）への再言及は **`open` に戻す**（UC-03 の事後条件 /
  *   domain_model.md §4.2「再燃は自動」）。棚卸し日時も消す (再オープンなのに
  *   解決日時が残っていると履歴が嘘になる)。
- * - NOTE: `lastMentionedAt` は追記した Mention の `createdAt` を無条件に採用する
- *   (max 再計算ではない)。過去日時の Mention を後から追記すると逆行する —
- *   docs/design/domain_rules.md §3 の未決事項。
+ * - `lastMentionedAt` は **常に全 Mention の `createdAt` の最大値** (2026-08-11 PO 裁定 /
+ *   docs/design/domain_rules.md §3)。追記 Mention の日時を無条件採用すると、
+ *   過去日時の Mention が後から届いたとき (再送・バックフィル・時計ずれ) に逆行して
+ *   休眠判定・並び順が狂う。relink / merge と同じく `withDerived` に委譲して統一する。
  */
 export function appendMention(existing: Problem, mention: Mention): Problem {
-  const mentions = [...existing.mentions, mention];
-  return {
+  return withDerived({
     ...existing,
-    mentions,
-    mentionCount: mentions.length,
-    lastMentionedAt: mention.createdAt,
+    mentions: [...existing.mentions, mention],
     ...(existing.status === "open"
       ? {}
       : { status: "open" as const, resolvedAt: null, shelvedAt: null }),
-  };
+  });
 }
 
 /**
