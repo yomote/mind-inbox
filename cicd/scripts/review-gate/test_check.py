@@ -501,6 +501,41 @@ def test_l1_sweepは1件のpr失敗で全体を中断しない(monkeypatch) -> N
     assert check.run_advisory_sweep("o/r") == 0
 
 
+def test_l1_sweepは一覧取得の失敗でも後続フェーズを実行する(monkeypatch) -> None:
+    """Codex P2 (PR #258): open PR 一覧の取得 (入口 1 行) が raise すると、
+    PR 単位の隔離にも failures の集計にも到達せず関数ごと終了していた。
+
+    無いと何が静かに通るか: GitHub API の一過性障害が一覧取得に当たるたび、
+    followups / human queue が丸ごとスキップされる — 障害が続くと補償対象が
+    24h lookback を外れ、build/deploy の欠落が永久に残る (隔離したはずの
+    中断経路が入口だけ残っている)。
+    """
+    phases: list[str] = []
+
+    def failing_gh(*args):
+        raise subprocess.TimeoutExpired(["gh"], 60)
+
+    monkeypatch.setattr(check, "gh", failing_gh)
+    monkeypatch.setattr(
+        check,
+        "sweep_one_pr",
+        lambda repo, pr, now_iso: (_ for _ in ()).throw(
+            AssertionError("一覧が取れていないのに PR 処理が呼ばれた")
+        ),
+    )
+    monkeypatch.setattr(
+        check,
+        "sweep_merged_followups",
+        lambda repo, now_iso: phases.append("followups") or True,
+    )
+    monkeypatch.setattr(
+        check, "sweep_human_queue", lambda repo, now_iso: phases.append("human")
+    )
+    exit_code = check.run_advisory_sweep("o/r")
+    assert phases == ["followups", "human"], "一覧取得が落ちても後続フェーズは走る"
+    assert exit_code != 0, "一覧取得の失敗も握りつぶさず run を赤にする"
+
+
 def test_l1_補償対象ページの打ち切りはlookbackで判定する() -> None:
     """Codex P2 (PR #258): closed PR の取得が 1 ページ固定だと、24h に 30 件超の
     close や古い closed PR のコメント更新で lookback 内のマージがページ外へ

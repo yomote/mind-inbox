@@ -1344,12 +1344,20 @@ def run_advisory_sweep(repo: str) -> int:
     run を赤にする (watchers.json の review-gate watcher が拾う)。
     """
     now_iso = datetime.now(timezone.utc).isoformat()
-    prs = gh(
-        "api", f"repos/{repo}/pulls?state=open&base=main&per_page=100", "--paginate"
-    )
-    targets = sweep_targets(prs)  # type: ignore[arg-type]
-    print(f"advisory sweep: open PR {len(prs)} 件中 対象 {len(targets)} 件")  # type: ignore[arg-type]
     failures = 0
+    # 一覧取得もフェーズ隔離の内側に置く (Codex P2 / PR #258): ここで raise すると
+    # failures の集計にも後続フェーズにも到達せず、followups / human queue が
+    # 毎回スキップされる — 隔離したはずの中断が入口 1 行だけ残る
+    targets: list[dict] = []
+    try:
+        prs = gh(
+            "api", f"repos/{repo}/pulls?state=open&base=main&per_page=100", "--paginate"
+        )
+        targets = sweep_targets(prs)  # type: ignore[arg-type]
+        print(f"advisory sweep: open PR {len(prs)} 件中 対象 {len(targets)} 件")  # type: ignore[arg-type]
+    except Exception as e:  # noqa: BLE001 — 隔離が目的。失敗は exit code で顕在化する
+        failures += 1
+        print(f"open PR 一覧の取得に失敗 — PR フェーズを skip して続行: {e!r}")
     for pr in targets:
         try:
             sweep_one_pr(repo, pr, now_iso)
