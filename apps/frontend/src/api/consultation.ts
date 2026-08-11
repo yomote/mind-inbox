@@ -14,14 +14,19 @@ export async function startNewConsultation(concern: string): Promise<Consultatio
   // 変わると id が一致しなくなり、前セッションの応答が新セッションに幽霊バブルとして
   // 出てしまう (アプリ内遷移ではリロードが挟まらないので実際に踏む)。
   clearStreamingReply();
-  // 前セッションの stub 状態も持ち越さない (#146 / 上の streamingReply clear と同じ位置づけ)。
-  // 新セッションは AI 応答をまだ含まないので、ここでリセットしないと「stub 応答を見た後に
-  // 新しい相談を始めると、応答が 1 つも無い画面に古いバナーが出続ける」ことになる
-  // (空 concern の start は stubbed を返さないため)。
-  resetStubbedResponse();
-  if (useMock) return mock.startNewConsultation(concern);
+  if (useMock) {
+    const session = await mock.startNewConsultation(concern);
+    // 成功後にリセット (real 経路と同じ意味論)。mock は stub フラグを立てないが、
+    // ビルド切り替え等で残った状態を空の新セッションに持ち越さない。
+    resetStubbedResponse();
+    return session;
+  }
   const { session, stubbed } = await trpc.consultation.start.mutate({ concern });
-  // テーマ入力ありの開始は AI を呼ぶので、その応答の値で上書きする (stub なら再点灯)。
+  // 前セッションの stub 状態は**新セッションの作成が成功してから**捨てる (#146)。
+  // 冒頭でリセットすると、start が失敗したとき (useConsultation は旧セッションを保持して
+  // 遷移しない) に旧 stub セッションへ戻ってもバナーが消えたままになる。
+  // reportStubbedResponse は undefined (空 concern 開始 = AI 非呼び出し / 実応答) を
+  // false と扱うのでリセットを兼ね、テーマ入力あり開始が stub ならそのまま再点灯する。
   reportStubbedResponse(stubbed);
   return session;
 }

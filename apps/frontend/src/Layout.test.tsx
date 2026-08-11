@@ -9,10 +9,10 @@
  * ここでは「ユーザー操作 → hook のどの入口が叩かれるか」だけを固定する。
  */
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./auth/msal", () => ({
   authEnabled: false,
@@ -45,13 +45,16 @@ import { Layout } from "./Layout";
 /**
  * iOS の解錠は「音量 0 の空発話を speechSynthesis に流す」で表現されるので、
  * speak に渡された utterance の volume で判別する。
+ *
+ * `autoEnd: false` を渡すと onend を呼ばない = 発話が「再生中のまま」になり、
+ * 再生中の画面遷移・停止の配線を検証できる。
  */
-function speechSynthesisSpy() {
+function speechSynthesisSpy({ autoEnd = true }: { autoEnd?: boolean } = {}) {
   const spoken: { text: string; volume: number }[] = [];
   vi.stubGlobal("speechSynthesis", {
-    speak: (u: { text: string; volume: number; onend?: () => void }) => {
+    speak: (u: { text: string; volume: number; onend?: (() => void) | null }) => {
       spoken.push({ text: u.text, volume: u.volume });
-      u.onend?.();
+      if (autoEnd) u.onend?.();
     },
     cancel: vi.fn(),
     getVoices: () => [],
@@ -85,6 +88,10 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+// vitest は isolate:false で走るので、DOM は test 間で共有される。
+// 片付けないと前のテストのツリー (別画面のヘッダー等) が次のクエリに引っかかる。
+afterEach(cleanup);
+
 describe("[L2] Layout — 音声解錠 (iOS) の配線", () => {
   it("相談開始のタップで音声を解錠する", async () => {
     // 無いと: iOS Safari で以降の自動読み上げが無音になる。ブラウザ (headless) では
@@ -111,5 +118,27 @@ describe("[L2] Layout — 音声解錠 (iOS) の配線", () => {
     await userEvent.click(await screen.findByRole("button", { name: /読み上げ(ON|OFF)$/ }));
 
     expect(spoken.filter((u) => u.volume === 0)).toHaveLength(0);
+  });
+});
+
+describe("[L2] Layout — 新しい相談の開始で読み上げを止める (#146 レビュー)", () => {
+  it("再生中に新しい相談を始めると読み上げが止まる (旧セッションの音声と speaking を持ち込まない)", async () => {
+    // 無いと: 前の応答の再生中にホームへ戻って新しい相談を始めると、旧セッションの音声が
+    // 鳴り続け、メッセージ 0 件の新セッションのマスコットが speaking のまま表示される退行が
+    // 静かに通る (tts と consultation は互いを知らないので、止める配線は Layout にしか無い)。
+    speechSynthesisSpy({ autoEnd: false }); // onend が来ない = 再生しっぱなし
+    renderLayout();
+
+    await userEvent.click(await screen.findByRole("button", { name: "新しい相談を始める" }));
+    // AI の返事が自動読み上げされ、再生中の表示になる (standalone = ブラウザ読み上げ)
+    const chip = await screen.findByTestId("tts-status");
+    expect(chip.textContent).toContain("読み上げ中");
+
+    // ホームへ戻り、再生が続いたまま新しい相談を開始する
+    await userEvent.click(screen.getByRole("button", { name: "Mind Inbox" }));
+    await userEvent.click(await screen.findByRole("button", { name: "新しい相談を始める" }));
+
+    // 開始タップで読み上げが止まり、「読み上げ中」表示 (= ttsStatus playing) が消える
+    await waitFor(() => expect(screen.queryByTestId("tts-status")).toBeNull());
   });
 });

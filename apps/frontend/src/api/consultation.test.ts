@@ -178,6 +178,18 @@ describe("[L2] sendMessage — ストリーミング経路", () => {
     expect(getStubbedResponse()).toBe(false);
   });
 
+  it("start が失敗したら前セッションの stub 状態を保持する (#146)", async () => {
+    // 無いと: 開始リクエストの失敗時 (useConsultation は旧セッションを保持して遷移しない)
+    // に先走りのリセットが走り、旧 stub セッションに戻ったのにバナーだけが消える —
+    // 「stub 応答が本物のふりをする」#146 の症状が開始失敗の裏道から復活する退行が静かに通る。
+    reportStubbedResponse(true);
+    vi.mocked(trpc.consultation.start.mutate).mockRejectedValue(new Error("boom"));
+
+    await expect(startNewConsultation("")).rejects.toThrow("boom");
+
+    expect(getStubbedResponse()).toBe(true);
+  });
+
   it("テーマ入力ありの開始が stub 応答なら、リセット後にバナー状態が再点灯する (#146)", async () => {
     // 無いと: 開始時リセットが「開始の応答そのものが stub」のケースまで潰し、
     // テーマ入力で始めた stub セッションの最初の応答が本物のふりをする退行が静かに通る。

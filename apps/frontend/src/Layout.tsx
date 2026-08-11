@@ -132,7 +132,13 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
   // 相談フロー (state 9 + ハンドラ 12) は consultation/ が所有する (#142)。
   const consultation = useConsultation(transition);
-  const { speakOnce, unlock, reset: resetTts, toggleEnabled: toggleTtsEnabled } = tts;
+  const {
+    speakOnce,
+    unlock,
+    reset: resetTts,
+    stop: stopTts,
+    toggleEnabled: toggleTtsEnabled,
+  } = tts;
   const { reset: resetConsultation, startConsultation, sendDraftMessage } = consultation;
 
   // iOS は最初のユーザージェスチャ内で一度発話しておかないと、以降の自動読み上げが無音になる。
@@ -140,8 +146,13 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   // 起点になるか」を知っている Layout がここで束ねる (#141 のレビュー指摘: 分離で配線が消えた)。
   const startConsultationWithAudio = React.useCallback(() => {
     unlock();
+    // 前セッションの読み上げを新しい相談に持ち込まない (#146 レビュー / dialogue-session.mdx
+    // §5.6): 再生中にホームへ戻って開始すると、旧セッションの音声が鳴り続け、メッセージ
+    // 0 件の新セッションのマスコットが speaking のまま表示される。開始タップで止める
+    // (ttsStatus も idle に戻る)。
+    stopTts();
     return startConsultation();
-  }, [startConsultation, unlock]);
+  }, [startConsultation, stopTts, unlock]);
 
   const sendDraftMessageWithAudio = React.useCallback(() => {
     unlock();
