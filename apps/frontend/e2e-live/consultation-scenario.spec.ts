@@ -38,12 +38,17 @@ test("[L4] 相談 → 実AIの返事 → 実VOICEVOXの音声 まで デプロ�
     timeout: 60_000,
   });
 
-  // ホーム → 直接セッション開始 (home.mdx)。開始時の問いかけは AI 非呼び出しで即表示
+  // ホーム → 直接セッション開始 (home.mdx)。開始時挨拶は #241 で撤去済み —
+  // 空の会話 + 入力欄 (autoFocus) で始まるのが正。挨拶が「表示される」を待つと
+  // Phase A (PR #249) 以降は必ずタイムアウトする (deploy 5 連敗の実害 2026-08-11)。
+  // golden-path.sh step 2 と同じ向きの検証にする: 入力欄が出ていること + 撤去した
+  // 挨拶が復活していないこと (復活は #241 の仕様退行)
   await page.getByRole("button", { name: "新しい相談を始める" }).click();
   await expect(page).toHaveURL(/\/consultations\/current$/);
-  await expect(page.getByText(/気になっていること|気になっています/)).toBeVisible({
+  await expect(page.getByPlaceholder("ここに入力 / 話して入力")).toBeVisible({
     timeout: 60_000,
   });
+  await expect(page.getByText(/気になっていること|気になっています/)).toHaveCount(0);
 
   // 発話 → 実 AI の返事。TTS (実 VOICEVOX) は返事の描画後に非同期で走るため、
   // 先にレスポンス待ちを仕掛けてから送信する
