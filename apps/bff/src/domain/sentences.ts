@@ -1,5 +1,6 @@
 /**
  * TTS 分割合成 (#120) 用の文分割。
+ * 仕様: docs/design/domain_rules.md §1 (現行仕様の明文化 / #259)。
  *
  * **この分割アルゴリズムは BFF だけが持つ** (PR #132 レビュー対応 / ADR 0024)。
  * 最終合成 (`synthesizeTts`) もストリーミング中の先行合成 (`prefetchTts`) も
