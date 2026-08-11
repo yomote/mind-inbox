@@ -11,6 +11,6 @@ Codex など GitHub 連携エージェント向けの作業指示。Claude Code 
 
 ## リポジトリの前提 (レビュー時に踏まえること)
 
-- テスト戦略: [docs/testing/strategy.md](docs/testing/strategy.md) — L0〜L4 の階層、「無いと何が静かに通るか」を書けないテストは書かない
+- テスト戦略: [docs/testing/strategy.md](docs/testing/strategy.md) — **見直し中** (2026-08-10 報告会 #7)。既存の L0〜L4 分類から「契約 / 単体 / スモーク / E2E」の 4 層へ置き換え方針。テスト追加の評価は新 4 層の考え方 (単体には入場条件「壊れても例外が出ず、データが静かに間違うところだけ」) で行うこと。「無いと何が静かに通るか」を書けないテストは書かない、は不変
 - UI 仕様は MDX が真実 ([ADR 0005](docs/adr/0005-mdx-ui-spec-as-truth.md))、型は tRPC の zod / pydantic が真実 (OpenAPI は生成物)
 - アーキテクチャ判断は [docs/adr/](docs/adr/README.md) に不変記録がある。覆す提案をする場合は該当 ADR を参照すること
