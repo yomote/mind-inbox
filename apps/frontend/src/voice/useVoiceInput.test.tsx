@@ -225,22 +225,32 @@ describe("[L2] useVoiceInput — TTS 再生中は認識結果を入力欄へ流�
     expect(result.current.interimTranscript).toBe("");
   });
 
-  it("再生が終わると自動で認識結果が流れる (ユーザーの再操作は不要)", () => {
-    // 無いと: 一度読み上げが走ると音声入力が二度と効かず、手で入れ直す羽目になる
+  it("再生が終わると猶予明けから自動で認識結果が流れる (ユーザーの再操作は不要)", () => {
+    // 無いと: 一度読み上げが走ると音声入力が二度と効かず、手で入れ直す羽目になる。
+    // 猶予 (POST_PLAYBACK_GRACE_MS) 内はエコーの尻尾でありうるため final-only でも
+    // 破棄される — 通るのは猶予明けから (echoGate.test.ts が境界を固定)
     installSpeechRecognition();
-    const append = vi.fn();
-    const { result, rerender } = renderVoice(append);
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(0);
+      const append = vi.fn();
+      const { result, rerender } = renderVoice(append);
 
-    act(() => result.current.toggle());
-    rerender({ ttsPlaying: true });
-    act(() => fireResult("ぼくはずんだもんなのだ", true));
-    rerender({ ttsPlaying: false });
-    expect(result.current.muted).toBe(false);
+      act(() => result.current.toggle());
+      rerender({ ttsPlaying: true });
+      act(() => fireResult("ぼくはずんだもんなのだ", true));
+      nowSpy.mockReturnValue(1000);
+      rerender({ ttsPlaying: false });
+      expect(result.current.muted).toBe(false);
 
-    act(() => fireResult("ユーザーの発話", true));
+      nowSpy.mockReturnValue(10_000); // 猶予明け
+      act(() => fireResult("ユーザーの発話", true));
 
-    expect(append).toHaveBeenCalledTimes(1);
-    expect(append).toHaveBeenCalledWith("ユーザーの発話");
+      expect(append).toHaveBeenCalledTimes(1);
+      expect(append).toHaveBeenCalledWith("ユーザーの発話");
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("再生中に聞こえた発話が再生終了直後に確定しても破棄される (尻尾の防御)", () => {

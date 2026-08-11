@@ -128,8 +128,15 @@ test.describe("TTS 再生中のエコー破棄 (#228)", () => {
     await endPlayback(page);
     await expect(page.getByText(/聞いています/)).toBeVisible();
 
-    // 通常時 (読み上げなし): 認識結果は入力欄へ入る。
+    // 終了直後 (猶予内) の final はエコーの尻尾でありうるため破棄される。
+    // interim を経ず final だけ届く経路が両エンジンにあるための無条件防御
+    // (PR #231 Codex P1)。
     const composer = page.getByPlaceholder("ここに入力 / 話して入力");
+    await fireFinal(page, "おわりかけのずんだもんの声");
+    await expect(composer).toHaveValue("");
+
+    // 猶予 (1.5s) が明けてからの認識結果は入力欄へ入る。
+    await page.waitForTimeout(1700);
     await fireFinal(page, "最近ねむれない");
     await expect(composer).toHaveValue("最近ねむれない");
 
@@ -149,8 +156,9 @@ test.describe("TTS 再生中のエコー破棄 (#228)", () => {
     await expect(page.getByTestId("stt-muted")).toHaveCount(0);
     await expect(page.getByText(/聞いています/)).toBeVisible();
 
-    // 再生後の発話は入力欄へ入る。エコーが漏れていればここが
+    // 猶予明け後の発話は入力欄へ入る。エコーが漏れていればここが
     // 「ぼくはずんだもんなのだ\nつづきの発話」になり検知される。
+    await page.waitForTimeout(1700);
     await fireFinal(page, "つづきの発話");
     await expect(composer).toHaveValue("つづきの発話");
   });
