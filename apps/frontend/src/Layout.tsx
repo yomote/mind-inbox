@@ -26,6 +26,7 @@ import { useEnvStatus } from "./envstatus/useEnvStatus";
 import { EnvStatusBanner } from "./envstatus/EnvStatusBanner";
 import { StubResponseBanner } from "./components/StubResponseBanner";
 import { resetStubbedResponse } from "./api/stubStatus";
+import { previewSupported } from "./api";
 import type { PaletteMode } from "@mui/material";
 import { AppRouter, ROUTE_PATHS } from "./Router";
 import type { AppRoute, AuthStatus } from "./Router";
@@ -337,7 +338,11 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
       <EnvStatusBanner status={envStatus} />
       {/* BFF が stub 応答のときの警告 (#146)。api 層が立てるフラグを購読するだけ。 */}
       <StubResponseBanner />
-      <Container maxWidth="md" sx={{ py: 3 }}>
+      {/* 対話画面は 2 ペイン (#187 / ADR 0039) のため広めに取る。他画面は従来の md。 */}
+      <Container
+        maxWidth={currentRoute === "session" && previewSupported ? "lg" : "md"}
+        sx={{ py: 3 }}
+      >
         <Stack spacing={2}>
           {authStatus === "loading" ? (
             <Typography color="text.secondary">認証状態を確認中...</Typography>
@@ -361,6 +366,10 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
                 extraction={consultation.extraction}
                 problems={consultation.problems}
                 selectedProblem={consultation.selectedProblem}
+                previewEnabled={previewSupported}
+                preview={consultation.preview}
+                previewStatus={consultation.previewStatus}
+                handleRefreshPreview={consultation.refreshPreview}
                 themeMode={themeMode}
                 onToggleTheme={onToggleTheme}
                 transition={transition}
