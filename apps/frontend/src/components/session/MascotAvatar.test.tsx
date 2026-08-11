@@ -37,9 +37,12 @@ describe("[L1] MascotAvatar", () => {
 
 describe("[L1] deriveMascotState", () => {
   it.each([
-    // 読み上げ再生中は生成状態に関わらず speaking
+    // 読み上げ再生中 (応答待ちでない) は speaking
     { loading: false, ttsStatus: "playing", expected: "speaking" },
-    { loading: true, ttsStatus: "playing", expected: "speaking" },
+    // **前の応答の読み上げ中に次を送った場合は preparing が勝つ** (Codex P2)。
+    // 無いと: speaking が返って SessionMessages の「考え中」プレースホルダ
+    // (preparing のときだけ出す) が現れず、読み上げ中の送信が無反応に見える退行が静かに通る
+    { loading: true, ttsStatus: "playing", expected: "preparing" },
     // AI 生成中 / 音声合成中は preparing (「ずんだもんが準備中…」の区間)
     { loading: true, ttsStatus: "idle", expected: "preparing" },
     { loading: true, ttsStatus: undefined, expected: "preparing" },

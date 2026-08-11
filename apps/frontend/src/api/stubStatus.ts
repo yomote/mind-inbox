@@ -5,9 +5,11 @@
  * `StubResponseBanner` が useSyncExternalStore で購読して警告バナーを出す。
  * `streamingReply.ts` と同じ流儀 (api 層は React を知らないので hook にしない)。
  *
- * 意味論は「**直近に画面へ入った応答が stub かどうか**」:
+ * 意味論は「**今のセッションで直近に画面へ入った応答が stub かどうか**」:
  *   - stub 応答 (stubbed: true) を受け取ったら立てる
  *   - 実応答 (フラグ無し) を受け取ったら下ろす — BFF が復旧したのにバナーが残り続けない
+ *   - 新しい相談の開始でリセットする (startNewConsultation) — 新セッションは AI 応答を
+ *     まだ含まないので、前セッションの stub 状態を空の画面に持ち越さない
  *   - mock モード (VITE_USE_MOCK) は BFF を呼ばない自己完結デモで stub とは別物。触らない
  */
 

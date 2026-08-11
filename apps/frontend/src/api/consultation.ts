@@ -4,7 +4,7 @@ import { trpc } from "../trpc/client";
 import { chatStreamFetch, ttsPrefetchFetch, useMock } from "./http";
 import { parseSseJsonStream } from "./sse";
 import { appendStreamingReply, beginStreamingReply, clearStreamingReply } from "./streamingReply";
-import { reportStubbedResponse } from "./stubStatus";
+import { reportStubbedResponse, resetStubbedResponse } from "./stubStatus";
 
 const voicevoxSpeaker = Number(import.meta.env.VITE_VOICEVOX_SPEAKER || "3");
 
@@ -14,10 +14,15 @@ export async function startNewConsultation(concern: string): Promise<Consultatio
   // 変わると id が一致しなくなり、前セッションの応答が新セッションに幽霊バブルとして
   // 出てしまう (アプリ内遷移ではリロードが挟まらないので実際に踏む)。
   clearStreamingReply();
+  // 前セッションの stub 状態も持ち越さない (#146 / 上の streamingReply clear と同じ位置づけ)。
+  // 新セッションは AI 応答をまだ含まないので、ここでリセットしないと「stub 応答を見た後に
+  // 新しい相談を始めると、応答が 1 つも無い画面に古いバナーが出続ける」ことになる
+  // (空 concern の start は stubbed を返さないため)。
+  resetStubbedResponse();
   if (useMock) return mock.startNewConsultation(concern);
   const { session, stubbed } = await trpc.consultation.start.mutate({ concern });
-  // 空 concern 開始 (既定) は AI を呼ばないので stubbed は付かない = バナー状態は変えない。
-  if (stubbed !== undefined) reportStubbedResponse(stubbed);
+  // テーマ入力ありの開始は AI を呼ぶので、その応答の値で上書きする (stub なら再点灯)。
+  reportStubbedResponse(stubbed);
   return session;
 }
 
