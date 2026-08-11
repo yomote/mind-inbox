@@ -101,4 +101,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CODEX_RETRIGGER_MINUTES: ${{ vars.CODEX_RETRIGGER_MINUTES }}
           AUTO_DEPLOY_ENABLED: ${{ vars.AUTO_DEPLOY_ENABLED }}
+          # マージ直前のフル再評価 (Codex P1 / #258) をイベント経路と同じ条件で
+          # 行うため sweep にも渡す — 無いと sweep の再評価だけ Codex 条件が緩む
+          REVIEW_GATE_REQUIRE_CODEX: ${{ vars.REVIEW_GATE_REQUIRE_CODEX }}
         run: python3 cicd/scripts/review-gate/check.py --advisory-sweep

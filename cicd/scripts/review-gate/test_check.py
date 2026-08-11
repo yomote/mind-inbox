@@ -29,6 +29,7 @@ from check import (
     merge_failure_reason,
     minutes_between,
     needs_image_build,
+    page_exhausts_lookback,
     parse_gh_json,
     recently_merged,
     review_gate_success_at,
@@ -400,6 +401,79 @@ def test_l1_マージ直前の再取得に失敗したらマージしない(monk
     monkeypatch.setattr(check, "gh", failing_gh)
     merged, reason = check.try_merge("o/r", 1, "abc1234")
     assert not merged and "再取得に失敗" in reason
+
+
+def test_l1_sweepはpm_acceptが消えたprをマージしない(monkeypatch) -> None:
+    """Codex P1 (PR #258): gate が success を貼った後に [pm-accept] コメントが
+    削除されても issue_comment.deleted は購読外で status は緑のまま残る。
+
+    無いと何が静かに通るか: sweep が保存済み status だけを信じて try_merge を
+    呼ぶと、**PM 受け入れの無い PR が次の schedule でマージされる** — 門の
+    3 条件のうちコメント由来のものが、撤回後も機械には見え続ける。
+    """
+    posted_status: list[str] = []
+
+    def gate_closed(repo, number, head_sha):
+        return check.GateEval(
+            verdict=check.Verdict(ok=False, missing=["PM 受け入れが無い"]),
+            changed_paths=["docs/x.md"],
+            comment_pairs=[],
+            code_pr=False,
+            codex_present=False,
+        )
+
+    def must_not_merge(*args):
+        raise AssertionError("門が閉じているのにマージ API が呼ばれた")
+
+    monkeypatch.setattr(check, "evaluate_gate", gate_closed)
+    monkeypatch.setattr(check, "try_merge", must_not_merge)
+    monkeypatch.setattr(
+        check, "post_status", lambda repo, sha, state, desc: posted_status.append(state)
+    )
+    merged = check.reverify_and_merge("o/r", 1, "abc1234", "2026-08-11T12:00:00Z")
+    assert not merged
+    assert posted_status == ["failure"], "保存済み success を failure に訂正する"
+    # 再評価が通れば try_merge → followup に進む
+    followups: list[list[str]] = []
+    monkeypatch.setattr(
+        check,
+        "evaluate_gate",
+        lambda repo, number, head_sha: check.GateEval(
+            verdict=check.Verdict(ok=True),
+            changed_paths=["docs/x.md"],
+            comment_pairs=[],
+            code_pr=False,
+            codex_present=False,
+        ),
+    )
+    monkeypatch.setattr(check, "try_merge", lambda *a: (True, ""))
+    monkeypatch.setattr(
+        check,
+        "ensure_merge_followup",
+        lambda repo, merged_at, paths: followups.append(paths),
+    )
+    merged = check.reverify_and_merge("o/r", 1, "abc1234", "2026-08-11T12:00:00Z")
+    assert merged and followups == [["docs/x.md"]]
+
+
+def test_l1_補償対象ページの打ち切りはlookbackで判定する() -> None:
+    """Codex P2 (PR #258): closed PR の取得が 1 ページ固定だと、24h に 30 件超の
+    close や古い closed PR のコメント更新で lookback 内のマージがページ外へ
+    押し出され、失敗した補償が永久に残る。
+
+    無いと何が静かに通るか: 打ち切り判定の退行は「lookback 内のマージを残した
+    まま打ち切る (= P2 が直っていない)」か「closed PR 全履歴を 30 分毎に全ページ
+    走査し続ける」に倒れ、どちらも run は緑のまま。merged_at <= updated_at に
+    よる安全な早期終了だけを許す。
+    """
+    now = "2026-08-11T12:00:00Z"
+    old = {"number": 1, "updated_at": "2026-08-09T00:00:00Z"}  # lookback (24h) 外
+    fresh = {"number": 2, "updated_at": "2026-08-11T11:00:00Z"}  # lookback 内
+    no_time = {"number": 3}
+    assert page_exhausts_lookback([old, old], now), "全部古い → 打ち切ってよい"
+    assert not page_exhausts_lookback([old, fresh], now), "新しい PR が居る → 続ける"
+    assert not page_exhausts_lookback([no_time], now), "時刻欠落は古いと断定しない"
+    assert not page_exhausts_lookback([], now), "空ページは打ち切り判定の対象外"
 
 
 def test_l1_マージ失敗の翻訳は405と409を正常系として区別する() -> None:

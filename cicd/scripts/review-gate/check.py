@@ -543,6 +543,17 @@ class Verdict:
         return text[:137] + "…" if len(text) > 140 else text
 
 
+@dataclass
+class GateEval:
+    """門の評価一式 (イベント経路 main() と sweep のマージ直前再評価で共用)。"""
+
+    verdict: Verdict
+    changed_paths: list[str]
+    comment_pairs: list[tuple[str, str]]  # (本文, author_association)
+    code_pr: bool
+    codex_present: bool
+
+
 def is_code_pr(changed_paths: list[str]) -> bool:
     return any(p.startswith(CODE_PREFIXES) for p in changed_paths)
 
@@ -806,6 +817,71 @@ def fetch_comments_with_times(repo: str, number: int) -> list[tuple[str, str, st
     ]
 
 
+def evaluate_gate(repo: str, number: int, head_sha: str) -> GateEval:
+    """門の 3 条件 (pm-accept + head SHA / スレッド解決 / Codex) を現在の API
+    状態から評価する。イベント経路 (main) と sweep のマージ直前再評価 (Codex
+    P1 / PR #258) の共通実装 — 判定材料の取り方を 1 箇所にする。"""
+    owner, name = repo.split("/")
+    files = gh("api", f"repos/{repo}/pulls/{number}/files", "--paginate")
+    changed_paths = [f["filename"] for f in files]  # type: ignore[union-attr]
+    comments = gh("api", f"repos/{repo}/issues/{number}/comments", "--paginate")
+    unresolved = fetch_unresolved_threads(owner, name, number)
+    require_codex = os.environ.get("REVIEW_GATE_REQUIRE_CODEX", "").lower() == "true"
+    code_pr = is_code_pr(changed_paths)
+    # 合否 (require_codex) だけでなく自動再トリガー (ADR 0038) もコード PR で
+    # Codex の既着を見るので、コード PR なら常に取得する
+    codex_present = (
+        fetch_codex_present(
+            repo, number, os.environ.get("CODEX_LOGIN_PATTERN", "codex")
+        )
+        if (require_codex or code_pr)
+        else False
+    )
+    comment_pairs = [
+        (c.get("body") or "", c.get("author_association") or "")  # type: ignore[union-attr]
+        for c in comments
+    ]
+    verdict = decide(
+        head_sha=head_sha,
+        changed_paths=changed_paths,
+        comments=comment_pairs,
+        unresolved_threads=unresolved,
+        codex_present=codex_present,
+        require_codex=require_codex,
+    )
+    return GateEval(
+        verdict=verdict,
+        changed_paths=changed_paths,
+        comment_pairs=comment_pairs,
+        code_pr=code_pr,
+        codex_present=codex_present,
+    )
+
+
+def reverify_and_merge(repo: str, number: int, head_sha: str, now_iso: str) -> bool:
+    """sweep 経路のマージ試行 (Codex P1 / PR #258)。マージできたら True。
+
+    sweep は**保存済みの success status を信じない** — status を貼ってから
+    マージまでの間に `[pm-accept]` コメントの削除・スレッドの unresolve が
+    起きても、issue_comment.deleted 等は購読外で status は緑のまま残るため、
+    そのまま try_merge すると受け入れの無い PR がマージされる。門の 3 条件を
+    その場でフル再評価し、崩れていれば **failure を貼り直して** (緑のまま
+    残すと同じ穴が次の sweep でも開く) マージしない。
+    """
+    ev = evaluate_gate(repo, number, head_sha)
+    if not ev.verdict.ok:
+        post_status(repo, head_sha, "failure", ev.verdict.description)
+        print(
+            f"#{number}: マージ直前の再評価で門が閉じた — {ev.verdict.description}"
+            " (保存済み success を failure に訂正)"
+        )
+        return False
+    merged, _ = try_merge(repo, number, head_sha)
+    if merged:
+        ensure_merge_followup(repo, now_iso, ev.changed_paths)
+    return merged
+
+
 def try_merge(repo: str, number: int, head_sha: str) -> tuple[bool, str]:
     """squash マージ API を叩く。(成功したか, 失敗理由) を返す。
 
@@ -930,6 +1006,45 @@ def ensure_merge_followup(repo: str, merged_at: str, changed_paths: list[str]) -
     )
 
 
+def page_exhausts_lookback(prs: list[dict], now_iso: str) -> bool:
+    """更新順 (desc) のページ全体が lookback より古いか (以降のページを読む必要なし)。
+
+    merged_at <= updated_at なので、ページ内の全 PR の updated_at が lookback より
+    古ければ、以降のページに lookback 内のマージ済み PR は存在しない (純関数)。
+    updated_at が欠けた PR は「古い」と断定できないため False (読み続ける側に倒す)。
+    """
+    return bool(prs) and all(
+        pr.get("updated_at")
+        and is_stale(pr["updated_at"], now_iso, FOLLOWUP_LOOKBACK_HOURS)
+        for pr in prs
+    )
+
+
+def fetch_recent_closed_prs(repo: str, now_iso: str) -> list[dict]:
+    """closed PR (base=main) を更新順に、lookback を出るまでページングして集める。
+
+    1 ページ固定だと 24h に 30 件超の close や古い closed PR の更新 (コメント等)
+    で lookback 内のマージ済み PR がページ外へ押し出され、失敗した補償が永久に
+    残る (Codex P2 / PR #258)。かといって全ページ走査は closed PR の全履歴に
+    比例して 30 分毎に効いてくるため、「ページ全体が lookback より古くなったら
+    打ち切る」(page_exhausts_lookback — merged_at <= updated_at による安全な
+    早期終了)。安全弁として最大 10 ページ (1000 件)。
+    """
+    collected: list[dict] = []
+    for page in range(1, 11):
+        batch = gh(
+            "api",
+            f"repos/{repo}/pulls?state=closed&base=main&sort=updated"
+            f"&direction=desc&per_page=100&page={page}",
+        )
+        if not batch:
+            break
+        collected.extend(batch)  # type: ignore[arg-type]
+        if page_exhausts_lookback(batch, now_iso) or len(batch) < 100:  # type: ignore[arg-type]
+            break
+    return collected
+
+
 def sweep_merged_followups(repo: str, now_iso: str) -> bool:
     """直近 FOLLOWUP_LOOKBACK_HOURS にマージされた PR の補償 dispatch を打ち直す。
 
@@ -940,12 +1055,8 @@ def sweep_merged_followups(repo: str, now_iso: str) -> bool:
     冪等性は run 存在確認 (runs_since) が持つ。個別 PR の失敗は残りを止めず、
     最後に False を返して run を赤にする (できなかったことを隠さない)。
     """
-    prs = gh(
-        "api",
-        f"repos/{repo}/pulls?state=closed&base=main&sort=updated"
-        "&direction=desc&per_page=30",
-    )
-    targets = recently_merged(prs, now_iso)  # type: ignore[arg-type]
+    prs = fetch_recent_closed_prs(repo, now_iso)
+    targets = recently_merged(prs, now_iso)
     print(
         f"merged followup sweep: 直近 {FOLLOWUP_LOOKBACK_HOURS:.0f}h のマージ {len(targets)} 件"
     )
@@ -1191,17 +1302,14 @@ def run_advisory_sweep(repo: str) -> int:
             if gate_success is None:
                 print(f"#{number}: review-gate が success でない — マージ試行せず")
             else:
-                merged, _ = try_merge(repo, number, head_sha)
+                # 保存済み success を信じず門をフル再評価してからマージ (Codex P1)
+                merged = reverify_and_merge(
+                    repo, number, head_sha, datetime.now(timezone.utc).isoformat()
+                )
                 if merged:
-                    files = gh(
-                        "api", f"repos/{repo}/pulls/{number}/files", "--paginate"
-                    )
-                    ensure_merge_followup(
-                        repo,
-                        datetime.now(timezone.utc).isoformat(),
-                        [f["filename"] for f in files],  # type: ignore[union-attr]
-                    )
                     continue  # マージ済み PR に advisory はもう要らない
+                # 再評価で failure に訂正された場合、stall 判定は combined status を
+                # 見るので自然に発火しない (全緑 + 未マージだけが stall)
                 maybe_report_merge_stall(repo, number, head_sha, gate_success, now_iso)
         else:
             print(f"#{number}: マージ執行の対象外 — {skip_reason}")
@@ -1263,7 +1371,6 @@ def main() -> int:
     if sys.argv[1] == "--advisory-sweep":
         return run_advisory_sweep(repo)
     number = int(sys.argv[1])
-    owner, name = repo.split("/")
 
     pr = gh("api", f"repos/{repo}/pulls/{number}")
     head_sha = pr["head"]["sha"]
@@ -1276,23 +1383,7 @@ def main() -> int:
         return 0
 
     try:
-        files = gh("api", f"repos/{repo}/pulls/{number}/files", "--paginate")
-        changed_paths = [f["filename"] for f in files]  # type: ignore[union-attr]
-        comments = gh("api", f"repos/{repo}/issues/{number}/comments", "--paginate")
-        unresolved = fetch_unresolved_threads(owner, name, number)
-        require_codex = (
-            os.environ.get("REVIEW_GATE_REQUIRE_CODEX", "").lower() == "true"
-        )
-        code_pr = is_code_pr(changed_paths)
-        # 合否 (require_codex) だけでなく自動再トリガー (ADR 0038) もコード PR で
-        # Codex の既着を見るので、コード PR なら常に取得する
-        codex_present = (
-            fetch_codex_present(
-                repo, number, os.environ.get("CODEX_LOGIN_PATTERN", "codex")
-            )
-            if (require_codex or code_pr)
-            else False
-        )
+        ev = evaluate_gate(repo, number, head_sha)
     except (
         subprocess.CalledProcessError,
         subprocess.TimeoutExpired,
@@ -1303,18 +1394,8 @@ def main() -> int:
         post_status(repo, head_sha, "error", f"評価に失敗: {e}"[:140])
         raise
 
-    comment_pairs = [
-        (c.get("body") or "", c.get("author_association") or "")  # type: ignore[union-attr]
-        for c in comments
-    ]
-    verdict = decide(
-        head_sha=head_sha,
-        changed_paths=changed_paths,
-        comments=comment_pairs,
-        unresolved_threads=unresolved,
-        codex_present=codex_present,
-        require_codex=require_codex,
-    )
+    verdict = ev.verdict
+    changed_paths = ev.changed_paths
     post_status(
         repo, head_sha, "success" if verdict.ok else "failure", verdict.description
     )
@@ -1336,9 +1417,9 @@ def main() -> int:
         number=number,
         pr=pr,
         changed_paths=changed_paths,
-        comment_bodies=[body for body, _ in comment_pairs],
-        code_pr=code_pr,
-        codex_present=codex_present,
+        comment_bodies=[body for body, _ in ev.comment_pairs],
+        code_pr=ev.code_pr,
+        codex_present=ev.codex_present,
     )
     return 0
 
