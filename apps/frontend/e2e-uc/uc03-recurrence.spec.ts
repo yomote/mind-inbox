@@ -44,7 +44,10 @@ test.describe.serial("UC-03 繰り返している悩みに気づく", () => {
     // 3〜4. 再出現が記録され、気づきとして提示される
     await expect(page.getByText("新規 0 件 / 既存に追加 1 件")).toBeVisible();
     await expect(page.getByText("既存に追加", { exact: true })).toBeVisible();
-    await expect(page.getByText("🔁 2回目")).toBeVisible();
+    // 回数バッジは MUI アイコン (Repeat) + 「N回目」— 絵文字ではない (#237 / ui_specs 共通規約)
+    const recurrenceChip = page.locator(".MuiChip-root", { hasText: "2回目" });
+    await expect(recurrenceChip).toBeVisible();
+    await expect(recurrenceChip.locator('svg[data-testid="RepeatIcon"]')).toBeVisible();
     await expect(page.getByText("この困りごとは繰り返し話しています")).toBeVisible();
   });
 
@@ -53,7 +56,7 @@ test.describe.serial("UC-03 繰り返している悩みに気づく", () => {
     await gotoHome(page);
     await openProblemList(page);
 
-    // 自分の題材のカードに限定する — 他 spec も再出現を作るので、素の "🔁 2回" は
+    // 自分の題材のカードに限定する — 他 spec も再出現を作るので、素の「2回」バッジは
     // 一覧に複数出る。カードの aria-label (タイトル + 状態 + 言及回数 / #98) で絞る。
     await expect(
       page.getByRole("button", { name: new RegExp(`${TOPIC.title}.*言及 2 回`) }),
