@@ -99,13 +99,21 @@ MAX_STEP_CHECKS = 6
 MAX_OK_CHECKS = 3
 
 
-def dev_state(runs: object, deploy_issue: int | None = None, run_steps=None) -> dict:
+def dev_state(
+    runs: object,
+    deploy_issue: int | None = None,
+    run_steps=None,
+    deploy_issue_at: str | None = None,
+) -> dict:
     """deploy.yml の run 履歴から「dev がどの commit の状態か」を判定する。
 
     runs: 新しい順の [{id, c: conclusion, s: status, t: created_at, sha, e: event, u}]。
     run_steps: run dict → {"deployed", "attempted", "torn_down"} | None (取得失敗)。
       deployed  = デプロイ処理が**完走**した / attempted = デプロイ処理が**走った**
       (失敗も含む)。attempted が無い辞書では deployed で代用する。
+    deploy_issue / deploy_issue_at: open な deploy の ci-failure Issue の番号と
+      **作成時刻**。deploy が緑になれば自動で閉じる (ADR 0035 D2) ので、
+      「open のまま = まだ復旧していない」を run の取得窓に依存せず言える。
 
     conclusion == success を信用しない理由 (PR #281 Codex P2):
         deploy.yml には **run が success でも実デプロイが走っていない経路** がある —
@@ -200,14 +208,25 @@ def dev_state(runs: object, deploy_issue: int | None = None, run_steps=None) -> 
         if info.get("deployed"):
             anchor = r
             break
-    # (3) 赤の保持 (PR #281 Codex P2-a)。guard skip の成功 push が予算 (MAX_OK_CHECKS)
-    # より多く続くと (1) が届かず ok=None になり、⚠️ と ci-failure Issue が消える。
-    # **jobs API を追加で叩かず**、取得済みの run だけで保守側に倒す:
-    #   「失敗した push があり、それより新しい『デプロイできた痕跡』が無いなら赤のまま」
-    # 痕跡 = ok を決めた成功 run / 実デプロイが完走した run (anchor)。
+    # (3) 赤の保持 (PR #281 Codex P2-a)。guard skip の緑が続くと (1) の探索窓
+    # (MAX_OK_CHECKS) からも run 一覧の取得窓 (per_page) からも失敗が押し出され、
+    # ok=None になって ⚠️ と ci-failure Issue が消える。**追加の API を叩かず**、
+    # 手元の 2 つの根拠で保守側に倒す:
+    #   a. 取得済み run の中の失敗 push (窓の中の直接の証拠)
+    #   b. **open な deploy の ci-failure Issue** — deploy が緑になれば report-failure
+    #      が自動で閉じる (ADR 0035 D2) ので、open のまま = まだ復旧していない。
+    #      Issue は run 一覧の取得窓に依存しないため、skip が何本続いても消えない
+    # どちらも「それより新しい『デプロイできた痕跡』」があれば採用しない (復旧済みの
+    # 古い失敗で赤を出さない)。痕跡 = ok を決めた成功 run / 実デプロイ完走 (anchor)。
     if ok is not False:
         failed_push = next((r for r in pushes if r.get("c") == "failure"), None)
-        if failed_push is not None:
+        # Issue は「今の失敗の始まり」を指す created_at で比べる (更新時刻だと
+        # 人間のコメントでも進み、復旧後まで赤を引きずりうる)
+        evidence = max(
+            (failed_push.get("t") or "") if failed_push else "",
+            deploy_issue_at or "",
+        )
+        if evidence:
             good_times = [
                 r.get("t") or ""
                 for r in (ok_run if ok else None, anchor)
@@ -215,7 +234,7 @@ def dev_state(runs: object, deploy_issue: int | None = None, run_steps=None) -> 
             ]
             newest_good = max(good_times) if good_times else ""
             # ISO 8601 (Z 固定) は文字列比較で時刻順になる
-            if (failed_push.get("t") or "") > newest_good:
+            if evidence > newest_good:
                 ok = False
 
     behind = 0
@@ -341,22 +360,26 @@ def collect(gh, gh_lines, gh_objects) -> dict:
             return None
         return parse_steps(got.get("steps"))
 
+    # created_at も取る — 「open のまま = まだ復旧していない」を run の取得窓に
+    # 依存せず言うための根拠 (dev_state の (3) 参照)
     ci_fail = gh(
         "api",
         "repos/{owner}/{repo}/issues?state=open&labels=ci-failure&per_page=50",
         "--jq",
-        "[.[] | {n: .number, t: .title}]",
+        "[.[] | {n: .number, t: .title, at: .created_at}]",
     )
-    deploy_issue = None
+    deploy_issue, deploy_issue_at = None, None
     if isinstance(ci_fail, list):
-        deploy_issue = next(
+        hit = next(
             (
-                i["n"]
+                i
                 for i in ci_fail
                 if isinstance(i, dict) and "deploy" in (i.get("t") or "")
             ),
             None,
         )
+        if hit:
+            deploy_issue, deploy_issue_at = hit.get("n"), hit.get("at")
 
     # 一覧そのものも全ページ取る — 50 件で切ると 51 件目以降が分類以前に
     # 「進行中」から静かに消える (PR #281 Codex P2)
@@ -401,7 +424,7 @@ def collect(gh, gh_lines, gh_objects) -> dict:
         "milestones": milestones,
         "goal": goal,
         "goal_items": goal_items,
-        "dev": dev_state(runs, deploy_issue, _run_steps),
+        "dev": dev_state(runs, deploy_issue, _run_steps, deploy_issue_at),
         "prs": prs,
         "p1": p1,
     }

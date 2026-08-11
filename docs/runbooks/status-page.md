@@ -60,7 +60,7 @@
   - 撤収が最後なら「⚠️ dev は撤収されています」、guard skip だけが続くなら「実デプロイの痕跡がありません」— いずれも「反映済み」とも「赤」とも書かない
   - **「デプロイ経路に入った」痕跡は deploy.yml の no-op marker step が持つ** (`デプロイ経路に入った (marker)` — guard 通過直後・Azure login より前)。Azure login や IMAGE_TAG 解決で落ちると `Provision + deploy (up)` は skipped になり、marker が無いと「試みて失敗した」と「そもそも走らなかった」を区別できない (deploy が赤なのにページだけ緑になる)
   - **`deploy.yml` のステップ名を変えたら `product_status.py` の `DEPLOY_STEP` / `TEARDOWN_STEP` / `MARKER_STEP` を追随させる** (deploy.yml 側にも同じ注意をコメントで置いてある)
-  - 赤は保守側に保持する — 失敗した push があり、それより新しい「デプロイできた痕跡」が無い間は、guard skip の緑が何本続いても ⚠️ を消さない (jobs API を追加で叩かず、取得済み run だけで判定)
+  - 赤は保守側に保持する — guard skip の緑が何本続いても ⚠️ を消さない。根拠は 2 つで、**追加の API は叩かない**: ①取得済み run の中の失敗 push ②**open な deploy の `ci-failure` Issue** (緑になれば report-failure が自動で閉じる / ADR 0035 D2 なので、open のまま = 未復旧。**run 一覧の取得窓に依存しない**のがこちらの役目)。どちらも「それより新しいデプロイできた痕跡」があれば採用しない (復旧済みの古い失敗・閉じ損ねた Issue で永久に赤くしない)
   - deploy.yml の該当ステップ名を変えたら `product_status.py` の `DEPLOY_STEP` / `TEARDOWN_STEP` も直すこと
 
 ## 記号の読み方

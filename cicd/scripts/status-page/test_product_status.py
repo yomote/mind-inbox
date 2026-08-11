@@ -135,6 +135,49 @@ def test_単体_guard_skipが5本続いても直前の失敗を保持する():
     assert "#262" in html
 
 
+def test_単体_失敗runが取得窓から消えてもopen_Issueで赤を保持する():
+    """run 一覧 (per_page=30) から失敗が押し出されても ⚠️ を消さない。
+
+    無いと何が静かに通るか:
+        guard skip の成功 push が 30 本続くと失敗 run が **runs 一覧そのもの**から
+        消え、窓の中だけを見る規則では ok=None に戻る (PR #281 Codex P2-a 再提起)。
+        deploy の ci-failure Issue は緑になれば report-failure が自動で閉じる
+        (ADR 0035 D2) ので、open のままなら「まだ復旧していない」と言える。
+    """
+    skips = [
+        _run("success", "completed", f"2099-02-{i:02}T00:00:00Z", rid=200 + i)
+        for i in range(30, 0, -1)  # 新しい順に 30 本すべて guard skip
+    ]
+    dev = dev_state(
+        skips,
+        deploy_issue=262,
+        run_steps=lambda r: {"deployed": False, "attempted": False},
+        deploy_issue_at="2099-01-15T00:00:00Z",  # 窓の外で起きた失敗の Issue
+    )
+    assert dev["ok"] is False, "失敗が取得窓から消えると赤が消えている"
+    html = render({"dev": dev}, _PEND)
+    assert "⚠️" in html
+    assert "#262" in html
+
+
+def test_単体_Issueが古くその後に成功デプロイがあれば赤にしない():
+    """閉じ損ねた古い Issue で永久に赤くしない (誤検知を持ち込まない)。"""
+    skip = _run("success", "completed", "2099-03-09T00:00:00Z", rid=210)
+    deployed = _run("success", "completed", "2099-03-05T00:00:00Z", rid=211)
+    steps = {
+        210: {"deployed": False, "attempted": False},
+        211: {"deployed": True, "attempted": True},
+    }
+    dev = dev_state(
+        [skip, deployed],
+        deploy_issue=262,
+        run_steps=lambda r: steps[r["id"]],
+        deploy_issue_at="2099-03-01T00:00:00Z",  # 成功デプロイより古い
+    )
+    assert dev["ok"] is not False, "復旧済みなのに古い Issue で赤を出している"
+    assert "⚠️" not in render({"dev": dev}, _PEND)
+
+
 def test_単体_成功デプロイより古い失敗は赤にしない():
     """赤の保持は「その後デプロイできていない」ときだけ (誤検知を持ち込まない)。"""
     skip = _run("success", "completed", "2099-01-09T00:00:00Z", rid=120)
