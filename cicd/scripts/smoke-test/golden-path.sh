@@ -69,10 +69,23 @@ code="$(curl -s -o /dev/null -m 60 -w '%{http_code}' -H "$A" "$H/api/trpc/health
 [[ "$code" == "200" ]] && ok "health.ping 200" || ng "health.ping が $code (期待 200)。EasyAuth/audience の破損疑い"
 
 echo "== 2. consultation.start 空 concern (AI 非呼び出しの入口) =="
+# #241 (ADR 0039 Phase A) で開始時挨拶は撤去された。空 concern の start は
+# 「セッションが作られ、会話は空」が正 — assistant メッセージが返ったら
+# 挨拶が復活している (仕様退行) ので落とす。
 body="$(curl -s -m 60 -X POST -H "$A" -H "Content-Type: application/json" -d '{"concern":""}' "$H/api/trpc/consultation.start")"
-echo "$body" | grep -q '"role":"assistant"' \
-  && ok "空 concern で opener が返る" \
-  || ng "空 concern の開始が壊れている: $(echo "$body" | head -c 200)"
+start_verdict="$(echo "$body" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)['result']['data']['session']
+    assistants = [m for m in d.get('messages', []) if m.get('role') == 'assistant']
+    print('ok' if (d.get('id') or d.get('sessionId')) and not assistants else 'regressed' if assistants else 'broken')
+except Exception:
+    print('broken')")"
+case "$start_verdict" in
+  ok) ok "空 concern でセッションが作られ、挨拶なし (#241 の仕様どおり)" ;;
+  regressed) ng "撤去したはずの開始時挨拶が返っている (#241 の仕様退行): $(echo "$body" | head -c 200)" ;;
+  *) ng "空 concern の開始が壊れている: $(echo "$body" | head -c 200)" ;;
+esac
 
 echo "== 3. consultation.start concern あり (実 AI) =="
 body="$(curl -s -m 180 -X POST -H "$A" -H "Content-Type: application/json" \

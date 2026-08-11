@@ -30,6 +30,7 @@ import { trpc } from "../trpc/client";
 import { chatStreamFetch, ttsPrefetchFetch } from "./http";
 import { sendMessage, startNewConsultation } from "./consultation";
 import { clearStreamingReply, getStreamingReply } from "./streamingReply";
+import { getStubbedResponse, reportStubbedResponse, resetStubbedResponse } from "./stubStatus";
 
 function sseResponse(events: object[]): Response {
   const encoder = new TextEncoder();
@@ -50,6 +51,7 @@ function sseResponse(events: object[]): Response {
 beforeEach(() => {
   vi.clearAllMocks();
   clearStreamingReply();
+  resetStubbedResponse();
 });
 
 describe("[L2] sendMessage — ストリーミング経路", () => {
@@ -160,5 +162,44 @@ describe("[L2] sendMessage — ストリーミング経路", () => {
     await startNewConsultation("");
 
     expect(getStreamingReply()).toBeNull();
+  });
+
+  it("新しい相談の開始で前セッションの stub 状態を持ち越さない (#146)", async () => {
+    // 無いと: stub 応答を受けた後にホームへ戻って新しい相談を始めると、空 concern の
+    // start は stubbed を返さないため module-global の状態が true のまま残り、
+    // AI 応答が 1 つも無い新セッションに「AI サービス未接続」バナーが出続ける退行が静かに通る。
+    reportStubbedResponse(true);
+    vi.mocked(trpc.consultation.start.mutate).mockResolvedValue({
+      session: { id: "s2", title: "相談セッション", messages: [] },
+    } as never);
+
+    await startNewConsultation("");
+
+    expect(getStubbedResponse()).toBe(false);
+  });
+
+  it("start が失敗したら前セッションの stub 状態を保持する (#146)", async () => {
+    // 無いと: 開始リクエストの失敗時 (useConsultation は旧セッションを保持して遷移しない)
+    // に先走りのリセットが走り、旧 stub セッションに戻ったのにバナーだけが消える —
+    // 「stub 応答が本物のふりをする」#146 の症状が開始失敗の裏道から復活する退行が静かに通る。
+    reportStubbedResponse(true);
+    vi.mocked(trpc.consultation.start.mutate).mockRejectedValue(new Error("boom"));
+
+    await expect(startNewConsultation("")).rejects.toThrow("boom");
+
+    expect(getStubbedResponse()).toBe(true);
+  });
+
+  it("テーマ入力ありの開始が stub 応答なら、リセット後にバナー状態が再点灯する (#146)", async () => {
+    // 無いと: 開始時リセットが「開始の応答そのものが stub」のケースまで潰し、
+    // テーマ入力で始めた stub セッションの最初の応答が本物のふりをする退行が静かに通る。
+    vi.mocked(trpc.consultation.start.mutate).mockResolvedValue({
+      session: { id: "s3", title: "仕事が辛い", messages: [] },
+      stubbed: true,
+    } as never);
+
+    await startNewConsultation("仕事が辛い");
+
+    expect(getStubbedResponse()).toBe(true);
   });
 });
