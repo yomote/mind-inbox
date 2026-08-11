@@ -11,6 +11,14 @@ import {
   sendChatMessage,
 } from "../clients/aiAgentClient";
 import { issueSpeechAuthToken } from "../clients/speechTokenClient";
+import { deriveTitle } from "../domain/title";
+import {
+  appendMention,
+  dedupe,
+  mergeProblems,
+  problemFromMention,
+  withDerived,
+} from "../domain/problem";
 import type { ProblemRepository } from "../repositories/problemRepository";
 import {
   ExtractionResultSchema,
@@ -59,12 +67,6 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function deriveTitle(concern: string): string {
-  const trimmed = concern.trim();
-  if (trimmed.length === 0) return "相談セッション";
-  return trimmed.length > 26 ? `${trimmed.slice(0, 26)}…` : trimmed;
-}
-
 // 空入力で開始した場合の AI からの初手 (home.mdx: テーマ入力なしで直接対話開始 /
 // dialogue-session.mdx「開始直後の挙動」)。受け止めトーンを崩さないこと。
 const EMPTY_START_OPENER = "今日はどんなことが気になっていますか?思いつくままで大丈夫です。";
@@ -79,6 +81,9 @@ const EMPTY_START_OPENER = "今日はどんなことが気になっています�
  * 表示するのに一覧の既定（open のみ）には出てこない、という食い違いが起きていた
  * （＝「また話しているのに気づかせてくれない」= プロダクトの芯が通らない）。
  * 誤検知なら詳細画面から「解決した」で戻せる。
+ *
+ * ルールの本体（追記 / 新規起こし / 再燃）は `../domain/problem.ts` の純粋関数。
+ * ここはリポジトリとの往復だけを持つ。
  */
 async function materializeExtraction(
   result: ExtractionResult,
@@ -88,46 +93,13 @@ async function materializeExtraction(
     if (grouping.kind === "existing") {
       const existing = await repo.get(grouping.problemId);
       if (existing) {
-        const mentions = [...existing.mentions, mention];
-        await repo.upsert({
-          ...existing,
-          mentions,
-          // 言及回数は mentions から導出する。ai-agent の申告値をそのまま持つと、
-          // 候補集合のズレや再送で実体（mentions.length）と食い違う。
-          mentionCount: mentions.length,
-          lastMentionedAt: mention.createdAt,
-          ...(existing.status === "open"
-            ? {}
-            : { status: "open" as const, resolvedAt: null, shelvedAt: null }),
-        });
+        await repo.upsert(appendMention(existing, mention));
         continue;
       }
       // 既存が見つからない（候補集合との齟齬）→ 取りこぼさず新規として作る
     }
-    // 新規 Problem（new、または existing だが候補が見つからないフォールバック）。
-    // Mention は1件なので mentionCount は必ず 1（mentions.length と一致させる。
-    // grouping.mentionCount は既存追記前提の値なのでここでは使わない）。
-    const problem: Problem = {
-      id: grouping.problemId,
-      title: grouping.problemTitle,
-      summary: mention.statement,
-      theme: grouping.problemTheme,
-      tags: mention.proposedTags,
-      status: "open",
-      mentions: [mention],
-      mentionCount: 1,
-      plans: [],
-      createdAt: mention.createdAt,
-      lastMentionedAt: mention.createdAt,
-      resolvedAt: null,
-      shelvedAt: null,
-    };
-    await repo.upsert(problem);
+    await repo.upsert(problemFromMention(mention, grouping));
   }
-}
-
-function dedupe(values: string[]): string[] {
-  return [...new Set(values)];
 }
 
 // ---- triage ----------------------------------------------------------------
@@ -175,16 +147,6 @@ async function requireProblem(repo: ProblemRepository, id: string): Promise<Prob
     throw new TRPCError({ code: "NOT_FOUND", message: `Problem not found: ${id}` });
   }
   return problem;
-}
-
-/** mentions 変更後に派生フィールド（mentionCount / lastMentionedAt）を再計算する。 */
-function withDerived(problem: Problem): Problem {
-  const mentionCount = problem.mentions.length;
-  const lastMentionedAt = problem.mentions.reduce(
-    (max, m) => (m.createdAt > max ? m.createdAt : max),
-    problem.mentions[0]?.createdAt ?? problem.lastMentionedAt,
-  );
-  return { ...problem, mentionCount, lastMentionedAt };
 }
 
 /** トリアージ操作を適用し、影響を受けた Problem を返す（dismiss / merge で消えたものは含めない）。 */
@@ -249,13 +211,7 @@ async function applyTriage(input: TriageInput, repo: ProblemRepository): Promise
       }
       const source = await requireProblem(repo, input.sourceProblemId);
       const target = await requireProblem(repo, input.targetProblemId);
-      const movedMentions = source.mentions.map((m) => ({ ...m, problemId: target.id }));
-      const merged = withDerived({
-        ...target,
-        mentions: [...target.mentions, ...movedMentions],
-        tags: dedupe([...target.tags, ...source.tags]),
-        plans: [...target.plans, ...source.plans],
-      });
+      const merged = mergeProblems(target, source);
       await repo.remove(source.id);
       return [await repo.upsert(merged)];
     }
