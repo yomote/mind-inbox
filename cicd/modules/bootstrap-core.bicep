@@ -87,19 +87,15 @@ param functionAuthEntraClientId string = ''
 @description('Container Apps の認証の門 (ADR 0017) の audience となる Entra app client ID。BFF はこの audience の Managed Identity トークンを付けて下流を呼ぶ。空なら AUDIENCE 設定を出力しない (= BFF はトークンを付けず、門が立っていれば 401 になる)。')
 param containerAppsGateClientId string = ''
 
-// BFF → 下流の base URL。ai-agent / vv-wrap の Container App はこのテンプレート外
-// (デプロイスクリプト) で作られるため FQDN をここから参照できない。しかし appSettings は
-// 全置換なので、ここで宣言しないと毎デプロイで消え、deploy-backend.sh が再結線して
-// 収束するまでの数分間 BFF が stub 化する (対話が [stub]・tts が 204 = 2026-08-08 実障害)。
-// 既知の FQDN をパラメータで固定し、環境再作成等で変わった場合は deploy-backend.sh の
-// 再結線が上書きする (こちらが真実を追従する側)。
-// 注意: Container App 再作成で FQDN が変わった後に bicep を**単独適用**すると、
-// 古い FQDN が復活する (BFF は fetch 失敗で例外)。bicep 適用後は必ず
-// deploy-backend.sh を続けて実行すること (provision.sh 経由なら自動で連続実行される)。
-@description('BFF が呼ぶ ai-agent Container App の base URL。空なら設定しない (deploy-backend.sh の再結線に任せる)。')
+// BFF → 下流の base URL。ai-agent / vv-wrap の Container App は #188 でこのテンプレートに
+// 取り込んだため、enable*Aca=true なら FQDN をリソース参照から直接導出する (下の
+// effective*BaseUrl)。この 2 つのパラメータは **enable*Aca=false のときのフォールバック**
+// (テンプレート外で立てた CA を BFF に配線したい場合) としてだけ残る。
+// deploy-backend.sh の再結線は FQDN 変化への追従・フォールバックとして引き続き残る。
+@description('BFF が呼ぶ ai-agent の base URL。enableAiAgentAca=true なら無視され、テンプレート内の Container App の FQDN が使われる。')
 param aiAgentBaseUrl string = ''
 
-@description('BFF が呼ぶ voicevox-wrapper Container App の base URL (エンジン直ではなく wrapper)。空なら設定しない (deploy-backend.sh の再結線に任せる)。')
+@description('BFF が呼ぶ voicevox-wrapper の base URL (エンジン直ではなく wrapper)。enableVoicevoxWrapperAca=true なら無視され、テンプレート内の Container App の FQDN が使われる。')
 param voicevoxWrapperBaseUrl string = ''
 
 @description('Entra tenant ID. 単一テナント限定 (この tenant の identity のみ許可)。')
@@ -273,6 +269,38 @@ var cosmosContainerNames = [
 var cosmosProblemsContainerName = cosmosContainerNames[0]
 var cosmosHistoryContainerName = cosmosContainerNames[1]
 
+// ai-agent 側の短命データ (#188 / ADR 0030 D4 の見直し)。器はここ、利用者は
+// ai-agent Container App (下の aiAgentEnvVars)。名前の既定は ai-agent の
+// config.py (COSMOS_*_CONTAINER) と揃えている。
+// TTL は _ts (最終更新) 起点のスライディング — save のたびに寿命が延びる。
+// 削除処理を書かないための仕組み (ADR 0030 動作検証 4 の対象)。
+var cosmosSessionsContainerName = 'sessions'
+var cosmosApprovalsContainerName = 'approvals'
+var cosmosCheckpointsContainerName = 'checkpoints'
+var cosmosAiAgentContainers = [
+  {
+    // 会話セッション (ChatHistory)。寿命 7 日 = 1 回の「座り」の目安 (#188)
+    name: cosmosSessionsContainerName
+    partitionKeyPath: '/id'
+    defaultTtl: 604800
+  }
+  {
+    // 承認レコード。寿命 1 時間 = 承認 1 往復の目安 (#188)
+    name: cosmosApprovalsContainerName
+    partitionKeyPath: '/id'
+    defaultTtl: 3600
+  }
+  {
+    // MAF workflow checkpoint。承認レコードと同寿命 (どちらか欠けたら /approve は
+    // 再開不能なので寿命を揃える)。partition key は MAF CosmosCheckpointStorage の
+    // 仕様で /workflow_name 固定。解決済み分は ai-agent が即時 delete し、
+    // 残り (完了 run の checkpoint 等) はこの TTL が掃除する
+    name: cosmosCheckpointsContainerName
+    partitionKeyPath: '/workflow_name'
+    defaultTtl: 3600
+  }
+]
+
 // -------------------- AI Agent Container App params --------------------
 // NOTE: ACR は廃止（#67 / ADR 0013）。image は GitHub Actions で ghcr に事前ビルドし、
 // Container App は ghcr の public image を pull する（待機 ¥750/月 の ACR を除去）。
@@ -288,6 +316,23 @@ param enableVoicevoxWrapperAca bool = false
 
 @description('Container App name for VOICEVOX Wrapper.')
 param voicevoxWrapperContainerAppName string = toLower('ca-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-vv-wrap')
+
+// -------------------- ghcr image 座標 (ai-agent / vv-wrap 共通) --------------------
+// #188 で両 Container App をテンプレートに取り込んだ。image は build-images.yml が
+// ghcr へ事前ビルド済みのものを pull する (ADR 0013 / ADR 0025)。
+@description('ghcr の image 座標のベース (ghcr.io/<owner>/<repo>)。この下に /ai-agent, /voicevox-wrapper がある。')
+param ghcrImageRepository string = 'ghcr.io/yomote/mind-inbox'
+
+// ADR 0025: 反映の主経路は **不変 sha タグ** (CD が build-images の sha-<full-sha> を
+// provision.sh 経由でここに渡す)。既定 latest は「初回 bootstrap を CD 外で叩いた」とき
+// のフォールバック。bicep を**単独適用**すると稼働中の sha タグがこの値へ戻り得るが、
+// 直後に deploy-*.sh が走れば sha タグへ再収束する (provision.sh の順序 /
+// aiAgentBaseUrl の再結線と同じ「bicep 適用後は deploy スクリプトを続けて実行」の規律)。
+@description('ai-agent / voicevox-wrapper の image タグ。CD は sha-<full-sha> を渡す (ADR 0025)。')
+param containerImageTag string = 'latest'
+
+var aiAgentImage = '${ghcrImageRepository}/ai-agent:${containerImageTag}'
+var voicevoxWrapperImage = '${ghcrImageRepository}/voicevox-wrapper:${containerImageTag}'
 
 @allowed([
   'B1'
@@ -687,21 +732,23 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
                     value: 'api://${containerAppsGateClientId}'
                   }
                 ],
-            // 下流 base URL (パラメータ宣言の理由は param 定義箇所のコメント参照)
-            empty(aiAgentBaseUrl)
+            // 下流 base URL。enable*Aca=true ならテンプレート内 Container App の FQDN を
+            // 直接参照する (#188 — 古い FQDN が bicep 単独適用で復活する問題はこれで消えた)。
+            // false ならパラメータ値のフォールバック (param 定義箇所のコメント参照)。
+            empty(effectiveAiAgentBaseUrl)
               ? []
               : [
                   {
                     name: 'AI_AGENT_BASE_URL'
-                    value: aiAgentBaseUrl
+                    value: effectiveAiAgentBaseUrl
                   }
                 ],
-            empty(voicevoxWrapperBaseUrl)
+            empty(effectiveVoicevoxWrapperBaseUrl)
               ? []
               : [
                   {
                     name: 'VOICEVOX_BASE_URL'
-                    value: voicevoxWrapperBaseUrl
+                    value: effectiveVoicevoxWrapperBaseUrl
                   }
                 ],
             // Azure Speech (ADR 0023)。未設定なら BFF の speech.issueToken が
@@ -933,8 +980,236 @@ resource speechRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-0
   }
 }
 
-// AI Agent / VOICEVOX Wrapper の Container App 本体は deploy-*.sh が作成/更新する
-// (ARM のプロビジョニングタイムアウトを避けるため)。載せる環境は上の共有 CAE (#68)。
+// -------------------- AI Agent / VOICEVOX Wrapper Container Apps (#188) --------------------
+// 以前は「デプロイスクリプトが作成/更新する (テンプレート外)」だったが、#188 で取り込んだ。
+// 理由: 宣言が無いと SystemAssigned MI を安定して付けられず (Cosmos の data plane ロールの
+// 前提)、auth gate 等の手動設定が再デプロイで剥がれる (debrief #2 で voicevox の設定が
+// 3 回消えた事例 / ADR 0017「誰が宣言しているか」)。
+// image の反映主経路は従来どおり deploy-*.sh の sha タグ差し替え (ADR 0025) — bicep は
+// containerImageTag パラメータで同じタグを宣言し、単独適用時のロールバック窓は
+// 直後の deploy-*.sh 実行で収束する (containerImageTag の param コメント参照)。
+
+var aiAgentEnvVars = concat(
+  [
+    {
+      name: 'AZURE_OPENAI_ENDPOINT'
+      value: enableOpenAi ? (openAiAccount.?properties.?endpoint ?? '') : ''
+    }
+    {
+      name: 'AZURE_OPENAI_DEPLOYMENT'
+      value: openAiDeploymentName
+    }
+    {
+      name: 'USE_MANAGED_IDENTITY'
+      value: 'true'
+    }
+    {
+      name: 'LOG_LEVEL'
+      value: 'INFO'
+    }
+  ],
+  // Cosmos (ADR 0030 / #188)。**COSMOS_ENDPOINT の有無が ai-agent の分岐点** — 未設定なら
+  // in-memory のまま動く (BFF と同じ流儀)。キーは渡さない (disableLocalAuth: true / D3)。
+  enableCosmos
+    ? [
+        {
+          name: 'COSMOS_ENDPOINT'
+          value: 'https://${cosmosAccountName}.documents.azure.com:443/'
+        }
+        {
+          name: 'COSMOS_DATABASE'
+          value: cosmosDatabaseName
+        }
+        {
+          name: 'COSMOS_SESSIONS_CONTAINER'
+          value: cosmosSessionsContainerName
+        }
+        {
+          name: 'COSMOS_APPROVALS_CONTAINER'
+          value: cosmosApprovalsContainerName
+        }
+        {
+          name: 'COSMOS_CHECKPOINTS_CONTAINER'
+          value: cosmosCheckpointsContainerName
+        }
+      ]
+    : []
+)
+
+resource aiAgentContainerApp 'Microsoft.App/containerApps@2024-03-01' = if (enableAiAgentAca) {
+  name: aiAgentContainerAppName
+  location: containerAppsLocation
+  // SystemAssigned MI: OpenAI (Cognitive Services OpenAI User) と Cosmos
+  // (Built-in Data Contributor) の data plane 認証に使う。静的シークレット 0 の系譜。
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    managedEnvironmentId: sharedManagedEnvironment.id
+    configuration: {
+      activeRevisionsMode: 'Single'
+      // external ingress + 組み込み認証の門 (ADR 0017 / 下の authConfig)。
+      // IP 許可リストには戻さない。
+      ingress: {
+        external: true
+        targetPort: 8000
+        transport: 'http'
+      }
+    }
+    template: {
+      containers: [
+        {
+          name: 'ai-agent'
+          image: aiAgentImage
+          env: aiAgentEnvVars
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+        }
+      ]
+      // scale-to-zero (ADR 0002)。値は deploy-ai-agent.sh の従来値と同一。
+      scale: {
+        minReplicas: 0
+        maxReplicas: 3
+      }
+    }
+  }
+}
+
+resource voicevoxWrapperContainerApp 'Microsoft.App/containerApps@2024-03-01' = if (enableVoicevoxWrapperAca) {
+  name: voicevoxWrapperContainerAppName
+  location: containerAppsLocation
+  // 今は MI を使う相手が居ないが、ai-agent と宣言を揃える (identity を宣言しないと
+  // 後から手動付与した MI が bicep 再適用で剥がれる)。
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    managedEnvironmentId: sharedManagedEnvironment.id
+    configuration: {
+      activeRevisionsMode: 'Single'
+      ingress: {
+        external: true
+        targetPort: 8080
+        transport: 'http'
+      }
+    }
+    template: {
+      containers: [
+        {
+          name: 'voicevox-wrapper'
+          image: voicevoxWrapperImage
+          env: [
+            {
+              // エンジンは internal ingress (#86) — 同じ CAE 内の FQDN を直接参照する
+              name: 'VOICEVOX_ENGINE_BASE_URL'
+              value: enableVoicevoxAca
+                ? 'https://${voicevoxContainerApp.?properties.?configuration.?ingress.?fqdn ?? ''}'
+                : ''
+            }
+            {
+              name: 'LOG_LEVEL'
+              value: 'INFO'
+            }
+          ]
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+        }
+      ]
+      scale: {
+        minReplicas: 0
+        maxReplicas: 3
+      }
+    }
+  }
+}
+
+// 組み込み認証の門 (ADR 0017 / #86)。deploy-*.sh の `az containerapp auth` と同内容を
+// 宣言に固定する — 手動適用だけだと環境再作成で剥がれる (#188 の動機)。
+// gate app (containerAppsGateClientId) が未設定なら作らない (スクリプト側が WARN を出す)。
+resource aiAgentAuthConfig 'Microsoft.App/containerApps/authConfigs@2024-03-01' = if (enableAiAgentAca && !empty(containerAppsGateClientId)) {
+  parent: aiAgentContainerApp
+  name: 'current'
+  properties: {
+    platform: {
+      enabled: true
+    }
+    globalValidation: {
+      unauthenticatedClientAction: 'Return401'
+    }
+    identityProviders: {
+      azureActiveDirectory: {
+        enabled: true
+        registration: {
+          openIdIssuer: 'https://login.microsoftonline.com/${functionAuthEntraTenantId}/v2.0'
+          clientId: containerAppsGateClientId
+        }
+        validation: {
+          allowedAudiences: [
+            'api://${containerAppsGateClientId}'
+            containerAppsGateClientId
+          ]
+        }
+      }
+    }
+  }
+}
+
+resource voicevoxWrapperAuthConfig 'Microsoft.App/containerApps/authConfigs@2024-03-01' = if (enableVoicevoxWrapperAca && !empty(containerAppsGateClientId)) {
+  parent: voicevoxWrapperContainerApp
+  name: 'current'
+  properties: {
+    platform: {
+      enabled: true
+    }
+    globalValidation: {
+      unauthenticatedClientAction: 'Return401'
+    }
+    identityProviders: {
+      azureActiveDirectory: {
+        enabled: true
+        registration: {
+          openIdIssuer: 'https://login.microsoftonline.com/${functionAuthEntraTenantId}/v2.0'
+          clientId: containerAppsGateClientId
+        }
+        validation: {
+          allowedAudiences: [
+            'api://${containerAppsGateClientId}'
+            containerAppsGateClientId
+          ]
+        }
+      }
+    }
+  }
+}
+
+// BFF が呼ぶ下流 base URL の実効値 (#188)。enable*Aca=true ならテンプレート内の FQDN。
+var effectiveAiAgentBaseUrl = enableAiAgentAca
+  ? 'https://${aiAgentContainerApp.?properties.?configuration.?ingress.?fqdn ?? ''}'
+  : aiAgentBaseUrl
+var effectiveVoicevoxWrapperBaseUrl = enableVoicevoxWrapperAca
+  ? 'https://${voicevoxWrapperContainerApp.?properties.?configuration.?ingress.?fqdn ?? ''}'
+  : voicevoxWrapperBaseUrl
+
+// Cognitive Services OpenAI User — ai-agent MI の LLM 呼び出し (deploy-ai-agent.sh が
+// az role assignment で足していたものを宣言に固定)。
+var cognitiveServicesOpenAiUserRoleId = subscriptionResourceId(
+  'Microsoft.Authorization/roleDefinitions',
+  '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
+)
+
+resource aiAgentOpenAiRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableOpenAi && enableAiAgentAca) {
+  name: guid(resourceGroup().id, openAiAccountName, aiAgentContainerAppName, 'openai-user')
+  scope: openAiAccount
+  properties: {
+    roleDefinitionId: cognitiveServicesOpenAiUserRoleId
+    principalId: aiAgentContainerApp.?identity.?principalId ?? ''
+    principalType: 'ServicePrincipal'
+  }
+}
 
 // -------------------- Cosmos DB (ADR 0030 / #165) --------------------
 // Problem / 履歴の永続化ストア。FR-4「再起動・再ログインで消えない」の実体。
@@ -1026,9 +1301,36 @@ resource cosmosContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
           kind: 'Hash'
         }
         // TTL は既定オフ (-1 でも 0 でもない = 未設定)。Problem も履歴も消してはいけない。
-        // 短命データ (会話セッション / 承認レコード) は ai-agent 側の in-memory に据え置き (D4)。
+        // 短命データ (会話セッション / 承認レコード / checkpoint) は下の TTL 付き
+        // コンテナ群 (#188 / D4 の見直し) — こちらと混ぜないこと。
       }
     }
+  }
+]
+
+// ai-agent 側の短命データ用 TTL コンテナ (#188)。定義は cosmosAiAgentContainers 参照。
+// @batchSize(1) + dependsOn: Cosmos の control plane は同一アカウントへの並行操作で
+// 409/429 になることがあるため、既存コンテナ群に続けて 1 つずつ作る。
+@batchSize(1)
+resource cosmosAiAgentTtlContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = [
+  for c in cosmosAiAgentContainers: if (enableCosmos) {
+    parent: cosmosDatabase
+    name: c.name
+    properties: {
+      resource: {
+        id: c.name
+        partitionKey: {
+          paths: [
+            c.partitionKeyPath
+          ]
+          kind: 'Hash'
+        }
+        defaultTtl: c.defaultTtl
+      }
+    }
+    dependsOn: [
+      cosmosContainers
+    ]
   }
 ]
 
@@ -1048,9 +1350,28 @@ resource cosmosDataRoleAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRole
   properties: {
     roleDefinitionId: '${cosmosAccountResourceId}/sqlRoleDefinitions/${cosmosDataContributorRoleId}'
     principalId: functionApp.identity.principalId
-    // アカウント全体。コンテナ 2 つとも同じ 1 つの MI しか触らないので分ける意味が無い。
+    // アカウント全体。BFF は problems / history を触るので分ける意味が無い。
     scope: cosmosAccountResourceId
   }
+}
+
+// ai-agent MI にも同じ data plane ロールを付ける (#188)。触るのは sessions /
+// approvals / checkpoints — 「機微データへの到達経路を増やさない」(#86 系譜) の観点は
+// ADR 0030 D4 の見直しとして受け入れ済み: 経路はキーではなく MI + RBAC で、
+// アカウントキーは disableLocalAuth: true で存在しない。
+resource cosmosDataRoleAssignmentAiAgent 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-11-15' = if (enableCosmos && enableAiAgentAca) {
+  parent: cosmosAccount
+  name: guid(cosmosAccountName, aiAgentContainerAppName, cosmosDataContributorRoleId)
+  properties: {
+    roleDefinitionId: '${cosmosAccountResourceId}/sqlRoleDefinitions/${cosmosDataContributorRoleId}'
+    principalId: aiAgentContainerApp.?identity.?principalId ?? ''
+    scope: cosmosAccountResourceId
+  }
+  // Cosmos の sqlRoleAssignments は同一アカウントで並列作成できない (409 conflict)
+  // ことがあるため、BFF 分に続けて直列に作る。
+  dependsOn: [
+    cosmosDataRoleAssignment
+  ]
 }
 
 // -------------------- Static Web Apps (frontend) --------------------
@@ -1401,6 +1722,14 @@ output aiAgentContainerAppsEnvironmentName string = enableAiAgentAca ? container
 output voicevoxWrapperEnabled bool = enableVoicevoxWrapperAca
 output voicevoxWrapperContainerAppName string = enableVoicevoxWrapperAca ? voicevoxWrapperContainerAppName : ''
 output voicevoxWrapperContainerAppsEnvironmentName string = enableVoicevoxWrapperAca ? containerAppsEnvironmentName : ''
+// #188: 両 Container App をテンプレートに取り込んだので FQDN も output で引ける
+// (名前は param aiAgentBaseUrl / voicevoxWrapperBaseUrl と衝突しないよう App を挟む)。
+output aiAgentAppBaseUrl string = enableAiAgentAca
+  ? 'https://${aiAgentContainerApp.?properties.?configuration.?ingress.?fqdn ?? ''}'
+  : ''
+output voicevoxWrapperAppBaseUrl string = enableVoicevoxWrapperAca
+  ? 'https://${voicevoxWrapperContainerApp.?properties.?configuration.?ingress.?fqdn ?? ''}'
+  : ''
 
 // Cosmos DB (ADR 0030)。runbook / 検証スクリプトがアカウント名と DB 名をここから引く。
 output cosmosEnabled bool = enableCosmos

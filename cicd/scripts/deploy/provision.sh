@@ -60,12 +60,21 @@ az group update -n "$RG" --set "tags.deployedAtEpoch=$(date +%s)" -o none >/dev/
   || echo "WARN: deployedAtEpoch タグの記録に失敗（デプロイは続行。記録用途のみ）" >&2
 
 echo "==> [2/5] Bootstrap infra (main-bootstrap.bicep) — voicevoxTier=$VOICEVOX_TIER"
+# ai-agent / vv-wrap の Container App は #188 で bicep 管理になった。IMAGE_TAG が
+# 解決済みなら bicep にも同じ sha タグを渡し、bicep 適用が稼働 image を過去に
+# 戻さないようにする (ADR 0025)。未指定なら bicep 既定 (latest) — 直後の
+# deploy-*.sh が従来どおり収束させる。
+BOOTSTRAP_IMAGE_ARGS=()
+if [[ -n "$IMAGE_TAG" ]]; then
+  BOOTSTRAP_IMAGE_ARGS+=(-p "containerImageTag=$IMAGE_TAG")
+fi
 az deployment group create \
   -g "$RG" \
   -n "$DEPLOYMENT" \
   -f "$IAC_DIR/main-bootstrap.bicep" \
   -p @"$IAC_DIR/main-bootstrap.parameters.json" \
   -p appName="$APP_NAME" environmentName="$ENVIRONMENT" voicevoxTier="$VOICEVOX_TIER" \
+  ${BOOTSTRAP_IMAGE_ARGS[@]+"${BOOTSTRAP_IMAGE_ARGS[@]}"} \
   -o none
 
 if [[ "$PRINT_ENTRA_AUTH_HINT" == "true" ]]; then
