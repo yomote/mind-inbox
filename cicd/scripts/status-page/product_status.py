@@ -195,13 +195,14 @@ def next_candidates(issues: object, limit: int = 5) -> list | None:
 # --- 収集 ---------------------------------------------------------------
 
 
-def collect(gh, gh_lines) -> dict:
+def collect(gh, gh_lines, gh_objects) -> dict:
     """GitHub の実データを取る。個々の取得失敗は None のまま返し、描画側が
     「(未検証: …)」にする — 1 箇所の失敗でページごと落とさない。
 
-    gh: build.gh (単発 JSON)。gh_lines: build.gh_lines (--paginate の 1 行 1 値
-    出力。--paginate + --jq はページごとに jq を適用するため、配列で受けると
-    2 ページ目以降が壊れる — build.gh_lines の docstring 参照)。"""
+    gh: build.gh (単発 JSON)。gh_lines / gh_objects: build の `--paginate` 版
+    (1 行 1 値 / 1 行 1 オブジェクト)。`--paginate` + `--jq` は**ページごとに**
+    jq を適用するため、`[...]` で包むと 2 ページ目以降が壊れる — 一覧 API は
+    必ず paginate 版で取ること (build.gh_objects の docstring 参照)。"""
     milestones = gh(
         "api",
         "repos/{owner}/{repo}/milestones?state=open&per_page=20",
@@ -269,11 +270,14 @@ def collect(gh, gh_lines) -> dict:
             None,
         )
 
-    prs = gh(
+    # 一覧そのものも全ページ取る — 50 件で切ると 51 件目以降が分類以前に
+    # 「進行中」から静かに消える (PR #281 Codex P2)
+    prs = gh_objects(
         "api",
-        "repos/{owner}/{repo}/pulls?state=open&base=main&per_page=50",
+        "--paginate",
+        "repos/{owner}/{repo}/pulls?state=open&base=main&per_page=100",
         "--jq",
-        "[.[] | {n: .number, t: .title, sha: .head.sha, draft: .draft}]",
+        ".[] | {n: .number, t: .title, sha: .head.sha, draft: .draft}",
     )
     if isinstance(prs, list):
         for p in prs:

@@ -80,6 +80,37 @@ def gh_lines(*args: str) -> list[str] | None:
         return None
 
 
+def gh_objects(*args: str) -> list[dict] | None:
+    """`--paginate` で **1 行 1 オブジェクト** を吐かせ、全ページ分を結合して返す。
+
+    一覧 API (PR / Issue) は per_page の上限を超えると静かに切り捨てられる —
+    `gh()` で 1 ページだけ読むと「51 件目以降が存在しない」ように見える
+    (PR #281 Codex P2)。`--paginate` + `--jq` は**ページごとに** jq を適用するため
+    `[...]` で包むと配列が複数個並んで `json.loads` が落ちる。`.[] | {...}` の形で
+    1 行 1 オブジェクトにして、ここで畳む。
+
+    1 行でも JSON として読めなければ **None (未検証)** にする — 一部だけ黙って
+    捨てると「取れなかった」が「無かった」に化ける。
+    """
+    lines = gh_lines(*args)
+    if lines is None:
+        return None
+    out = []
+    for ln in lines:
+        try:
+            obj = json.loads(ln)
+        except json.JSONDecodeError as e:
+            print(f"WARN: gh {' '.join(args)} の出力を読めません: {e}", file=sys.stderr)
+            return None
+        if not isinstance(obj, dict):
+            print(
+                f"WARN: gh {' '.join(args)} が dict 以外を返しました", file=sys.stderr
+            )
+            return None
+        out.append(obj)
+    return out
+
+
 def parse(ts: str | None) -> datetime | None:
     if not ts:
         return None
@@ -304,11 +335,14 @@ def pending() -> dict:
         "--jq",
         "[.[] | {n: .number, t: .title}]",
     )
-    prs = gh(
+    # 全ページ取る — 51 件目以降が黙って消えると「main 向け以外の PR」の
+    # 補完元も欠ける (PR #281 Codex P2)
+    prs = gh_objects(
         "api",
-        "repos/{owner}/{repo}/pulls?state=open&per_page=50",
+        "--paginate",
+        "repos/{owner}/{repo}/pulls?state=open&per_page=100",
         "--jq",
-        "[.[] | {n: .number, t: .title, d: .created_at}]",
+        ".[] | {n: .number, t: .title, d: .created_at}",
     )
     proposed = []
     for f in sorted((REPO_ROOT / "docs" / "adr").glob("0*.md")):
@@ -638,7 +672,9 @@ def build(out_dir: pathlib.Path) -> int:
 
     # プロダクトの現在地 (Issue #280) — 「あなたの番」「開いたままの PR」も
     # このセクションに畳んだ (needs-human / Proposed ADR は pend から渡す)
-    product = product_status.render(product_status.collect(gh, gh_lines), pend)
+    product = product_status.render(
+        product_status.collect(gh, gh_lines, gh_objects), pend
+    )
 
     page = TEMPLATE.format(
         now=now,

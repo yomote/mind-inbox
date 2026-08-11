@@ -204,8 +204,6 @@ def test_単体_PRのfilesは全ページ取得しappsが2ページ目でもプ�
             return []
         if "labels=" in url:
             return []
-        if "base=main" in url:
-            return [{"n": 1, "t": "大きい PR", "sha": "abc", "draft": False}]
         if "/status" in url:
             return {"s": "success"}
         return None
@@ -217,13 +215,44 @@ def test_単体_PRのfilesは全ページ取得しappsが2ページ目でもプ�
         assert "--paginate" in args, "--paginate 無しでは 1 ページ目しか取れない"
         return files_2pages
 
-    data = collect(fake_gh, fake_gh_lines)
+    def fake_gh_objects(*args):
+        assert "--paginate" in args
+        return [{"n": 1, "t": "大きい PR", "sha": "abc", "draft": False}]
+
+    data = collect(fake_gh, fake_gh_lines, fake_gh_objects)
     assert any("/pulls/1/files" in a for call in calls for a in call)
     product, factory, _ = classify_prs(data["prs"])
     assert [p["n"] for p in product] == [1], (
         "2 ページ目の apps/ が工場に誤分類されている"
     )
     assert factory == []
+
+
+def test_単体_open_PR一覧も全ページ取得し51件目が進行中に出る():
+    """一覧そのものが 1 ページで切れると、51 件目以降は分類以前に「進行中」から
+    静かに消える (PR #281 Codex P2)。paginate 版で取ることを呼び方ごと固定する。"""
+    many = [
+        {"n": i, "t": f"PR {i}", "sha": f"sha{i}", "draft": False}
+        for i in range(1, 52)  # 51 件
+    ]
+    seen = []
+
+    def fake_gh(*args):
+        url = args[1] if len(args) > 1 else ""
+        if "/status" in url:
+            return {"s": "success"}
+        return []
+
+    def fake_gh_objects(*args):
+        seen.append(args)
+        assert "--paginate" in args, "open PR の一覧を --paginate 無しで取っている"
+        return many
+
+    data = collect(fake_gh, lambda *a: [], fake_gh_objects)
+    assert any("base=main" in a for call in seen for a in call)
+    assert len(data["prs"]) == 51
+    html = render(data, _PEND)
+    assert "/pull/51" in html, "51 件目の PR が「進行中」から消えている"
 
 
 def test_単体_全PR一覧の取得失敗はmain向け以外不明と明示する():
