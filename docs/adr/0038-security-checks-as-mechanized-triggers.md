@@ -1,8 +1,8 @@
 # 0038. セキュリティ検査のトリガーを人の判断から機構へ移す (週次 sweep / PR 自動指名 / リリース judge)
 
-- Status: Proposed
+- Status: Accepted (briefing #8 2026-08-11 で PO 承認)
 - Date: 2026-08-11
-- Deciders: yomote (PO) / PM セッション (方針は 2026-08-11 の PM 対話で選択肢承認済み。ADR の Accept は debrief で)
+- Deciders: yomote (PO) / PM セッション (方針は 2026-08-11 の PM 対話で選択肢承認済み。ADR の Accept は報告会 #8 (2026-08-11) で取得)
 - Related: [ADR 0019](0019-independent-judge-agents-security-qa-release.md) (独立 judge) / [ADR 0035](0035-role-split-across-agents-and-actions.md) (役割分担と「生死が見える場所」) / [ADR 0036](0036-merge-gate-as-required-check-and-pm-cadence.md) (review-gate) / [ADR 0037](0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md) (debt-check — 本 ADR が踏襲する型)
 
 Technical Story: 2026-08-11 の PM セッション対話。セキュリティ検査の実績ゼロ問題と、Codex 自動レビューの沈黙 (PR #231) への対処。
