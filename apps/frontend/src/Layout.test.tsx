@@ -38,6 +38,8 @@ vi.mock("./api", () => ({
   loadProblem: vi.fn(),
   triageProblem: vi.fn(),
   createProblemPlan: vi.fn(),
+  previewSupported: false,
+  previewExtraction: vi.fn(),
 }));
 
 import { Layout } from "./Layout";
