@@ -79,7 +79,10 @@ test("[L4] 相談 → 実AIの返事 → 実VOICEVOXの音声 まで デプロ�
   await expect(
     page.getByText("ゴールデンパスのシナリオテストです。一言だけ返してください"),
   ).toBeVisible();
-  await expect(page.locator("text=ガイド").nth(1)).toBeVisible({ timeout: 210_000 });
+  // 挨拶を撤去した (#241 / Phase A) ので、画面に出る「ガイド」は**返事の 1 個目**。
+  // nth(1) は挨拶があった頃の index で、今は永久に現れず 210s 待って落ちる
+  // (#268 は挨拶の可視性待ちだけ直し、この index を取り残していた)
+  await expect(page.locator("text=ガイド").first()).toBeVisible({ timeout: 210_000 });
 
   // stub 応答 ("[stub] received: ...") も「ガイドの返事」として描画されるため、
   // 上の可視性チェックだけでは BASE_URL 結線切れが緑ですり抜ける (2026-08-08 実障害)
