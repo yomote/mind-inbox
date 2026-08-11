@@ -1086,7 +1086,21 @@ def sweep_merged_followups(repo: str, now_iso: str) -> bool:
 def maybe_execute_merge(
     repo: str, number: int, pr: dict, head_sha: str, changed_paths: list[str]
 ) -> bool:
-    """マージ執行の入口 (イベント駆動 / sweep 共用)。マージできたら True。"""
+    """マージ執行の入口 (イベント駆動 / sweep 共用)。マージできたら True。
+
+    REVIEW_GATE_EXECUTE_MERGE=false の run では執行しない (Codex P1 / PR #258):
+    pull_request イベントの run は **PR 側の check.py** を実行するため、workflow
+    側でマージ権限 (contents:write) を渡していない — 権限が無いのに叩いて
+    毎回エラーログを出すより、設計として執行しないことを明示する。マージは
+    issue_comment (pm-accept 投稿) / schedule sweep の main 側コードが行う。
+    """
+    if os.environ.get("REVIEW_GATE_EXECUTE_MERGE", "true").lower() != "true":
+        print(
+            f"#{number}: マージ執行はこの run では無効 (REVIEW_GATE_EXECUTE_MERGE=false"
+            " — pull_request run は PR 側コードで走るため権限を持たない。"
+            " issue_comment / sweep の main 側 run が執行する)"
+        )
+        return False
     ok, reason = should_execute_merge(pr)
     if not ok:
         print(f"#{number}: マージ執行の対象外 — {reason}")

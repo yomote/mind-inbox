@@ -604,6 +604,41 @@ def test_l1_補償対象ページの打ち切りはlookbackで判定する() -> 
     assert not page_exhausts_lookback([], now), "空ページは打ち切り判定の対象外"
 
 
+def test_l1_pull_request経路のrunはマージを執行しない(monkeypatch) -> None:
+    """Codex P1 (PR #258): pull_request イベントの run は PR 側の check.py を
+    実行するため、workflow はマージ権限 (contents:write) を渡さない。
+
+    無いと何が静かに通るか: 権限分離の意図 (PR 作成者が check.py を改変しても
+    自分でマージできない) が check.py 側に残らず、将来 workflow の permissions
+    だけ緩められた場合に pull_request run が黙ってマージ経路に戻る。この env
+    ゲートは「PR 側コードの run はそもそも執行しない」という設計の固定。
+    """
+    monkeypatch.setenv("REVIEW_GATE_EXECUTE_MERGE", "false")
+    monkeypatch.setattr(
+        check,
+        "try_merge",
+        lambda *a: (_ for _ in ()).throw(
+            AssertionError("執行無効の run でマージ API が呼ばれた")
+        ),
+    )
+    assert not check.maybe_execute_merge(
+        "o/r", 1, _mergeable_pr(), "abc1234", ["docs/x.md"]
+    )
+    # 既定 (env 未設定 = true) では従来どおり執行する
+    monkeypatch.delenv("REVIEW_GATE_EXECUTE_MERGE")
+    calls: list[str] = []
+    monkeypatch.setattr(
+        check, "try_merge", lambda *a: calls.append("merge") or (True, "")
+    )
+    monkeypatch.setattr(
+        check, "ensure_merge_followup", lambda repo, merged_at, paths: None
+    )
+    assert check.maybe_execute_merge(
+        "o/r", 1, _mergeable_pr(), "abc1234", ["docs/x.md"]
+    )
+    assert calls == ["merge"]
+
+
 def test_l1_マージ失敗の翻訳は405と409を正常系として区別する() -> None:
     """無いと何が静かに通るか: 405/409 (他 check 未完・base 遅れ) を想定外扱いに
     すると sweep が 30 分毎にノイズを吐く。逆に全部を正常系に丸めると
