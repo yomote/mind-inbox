@@ -153,6 +153,7 @@ if [[ "$kind" == "SEED" ]]; then
 
   SEED_ATTEMPTS="${SEED_ATTEMPTS:-3}"
   new_id=""
+  seed_verdict=""
   for attempt in $(seq 1 "$SEED_ATTEMPTS"); do
     extract_body="$(curl -s -m 180 -X POST -H "$A" -H "Content-Type: application/json" \
       -d "$(python3 -c "
@@ -167,28 +168,51 @@ print(json.dumps({
 }))
 ")" \
       "$H/api/trpc/consultation.extract")"
+    curl_rc=$?
 
-    new_id="$(python3 -c "
+    # 再試行してよいのは「正しくパースできた 0 件」だけ (PR #236 Codex P2)。
+    # curl の途中失敗 (タイムアウト / 切断) は、サーバー側で抽出が**完了した後**に
+    # 応答だけ失われた可能性があり、再試行すると Problem / Mention が重複作成される。
+    # extract は冪等ではないので、曖昧な失敗は即 NG に倒す。
+    if [[ "$curl_rc" -ne 0 ]]; then
+      seed_verdict="transport"
+      echo "INFO- extract の transport が失敗した (curl exit $curl_rc) — 重複作成を避けるため再試行しません"
+      break
+    fi
+    seed_verdict="$(python3 -c "
 import json, sys
 try:
     items = json.load(sys.stdin)['result']['data']['items']
-    print(items[0]['grouping']['problemId'] if items else '')
 except Exception:
-    print('')
+    print('invalid')
+else:
+    print('ok:' + items[0]['grouping']['problemId'] if items else 'empty')
 " <<<"$extract_body")"
 
-    [[ -n "$new_id" ]] && break
+    if [[ "$seed_verdict" == ok:* ]]; then
+      new_id="${seed_verdict#ok:}"
+      break
+    fi
+    if [[ "$seed_verdict" != "empty" ]]; then
+      # 200 だが形が想定外 (エラー封筒など)。これも再試行で重複しうるので止める。
+      echo "INFO- extract の応答を解釈できなかった — 再試行しません: $(echo "$extract_body" | head -c 200)"
+      break
+    fi
     if [[ "$attempt" -lt "$SEED_ATTEMPTS" ]]; then
-      echo "INFO- 抽出が困りごとを返さなかった (attempt $attempt/$SEED_ATTEMPTS) — 再試行します: $(echo "$extract_body" | head -c 200)"
+      echo "INFO- 抽出が困りごとを返さなかった (attempt $attempt/$SEED_ATTEMPTS) — 再試行します"
       sleep 5
     fi
   done
 
   if [[ -z "$new_id" ]]; then
-    # ここに来るのは (a) transport / 認証 / Cosmos が壊れて応答自体が異常、または
-    # (b) 実 AI が上の悩み文から $SEED_ATTEMPTS 回連続で 1 件も抽出できない、のどちらか。
-    # (b) なら golden-path.sh の step 6 (抽出) も赤いはず — 突き合わせて切り分けること。
-    ng "マーカーの種を作れなかった ($SEED_ATTEMPTS 回試行): $(echo "$extract_body" | head -c 300)"
+    if [[ "$seed_verdict" == "empty" ]]; then
+      # 実 AI が上の悩み文から $SEED_ATTEMPTS 回連続で 1 件も抽出できない。
+      # golden-path.sh の step 6 (抽出) も赤いはず — 突き合わせて切り分けること。
+      ng "マーカーの種を作れなかった (抽出 0 件 × $SEED_ATTEMPTS 回): $(echo "$extract_body" | head -c 300)"
+    else
+      # transport / 認証 / Cosmos / 応答形の異常。再試行していないので 1 回分の証拠だけ。
+      ng "マーカーの種を作れなかった (verdict=$seed_verdict / 重複作成を避け再試行なし): $(echo "$extract_body" | head -c 300)"
+    fi
   else
     # AI が付けたタイトルを、次回 run が見つけられる決定的な名前に上書きする。
     rename_body="$(curl -s -m 120 -X POST -H "$A" -H "Content-Type: application/json" \
