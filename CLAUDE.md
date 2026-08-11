@@ -96,7 +96,7 @@ npm run lint      # ESLint
 pnpm --dir apps/frontend install
 VITE_USE_MOCK=true pnpm --dir apps/frontend dev   # BFF も認証も不要のモック
 pnpm --dir apps/frontend test                     # vitest
-pnpm --dir apps/frontend test:e2e                 # Playwright (L3 / mock)
+pnpm --dir apps/frontend test:e2e                 # Playwright (旧 L3 mock — 廃止方針、新規シナリオを足さない / strategy.md §6.3)
 pnpm --dir apps/frontend build                    # tsc -b && vite build
 ```
 
