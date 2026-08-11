@@ -64,6 +64,11 @@ def normalize(text: str, table: list[tuple[str, str]]) -> str:
     text = re.sub(r"#(\d+)", r"\1 番", text)
     for src, dst in table:
         text = text.replace(src, dst)
+    # ASCII 空白は VOICEVOX でアクセント句の切れ目になり、「19 本」「ピーアール が」の
+    # ような箇所で不自然な間 (詰まった読み) を作る (briefing #8 の PO 指摘)。
+    # 日本語文字・数字どうしに挟まれた空白は詰めてから合成する
+    jp = "0-9ぁ-ゖァ-ヺー一-鿿々"
+    text = re.sub(rf"(?<=[{jp}])[ \t]+(?=[{jp}])", "", text)
     return text
 
 
