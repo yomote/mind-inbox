@@ -125,15 +125,42 @@ if [[ -z "$PRINCIPAL_ID" ]]; then
 fi
 echo "  Principal ID: $PRINCIPAL_ID"
 
+# このスクリプトがロール付与の**唯一の所有者** (#262 / PR #279 — bicep には宣言しない。
+# 理由は cicd/modules/bootstrap-core.bicep のコメント参照)。だから付与失敗を握りつぶすと
+# 「provision は緑なのに ai-agent が OpenAI を呼べない」静かな故障になる (PR #279 Codex P2)。
+# 冪等の正常系「already exists」だけを明示的に許容し、AuthorizationFailed や一時的な
+# API エラーは exit code で伝播してデプロイごと失敗させる。
 _assign_role() {
   local role="$1" scope="$2" label="$3"
-  az role assignment create \
+  # 既存確認を先に (assignee にオブジェクト ID を直接渡す = Graph 解決を挟まない)。
+  # list の一過性失敗は「無いかもしれない」として create 側に判断を倒す。
+  local existing
+  existing="$(az role assignment list \
+    --assignee "$PRINCIPAL_ID" \
+    --role "$role" \
+    --scope "$scope" \
+    --query '[0].id' -o tsv 2>/dev/null || true)"
+  if [[ -n "$existing" ]]; then
+    echo "  $label: already assigned."
+    return 0
+  fi
+  local out
+  if ! out="$(az role assignment create \
     --assignee-object-id "$PRINCIPAL_ID" \
     --assignee-principal-type ServicePrincipal \
     --role "$role" \
     --scope "$scope" \
-    --output none 2>&1 | grep -v "already exists" || true
-  echo "  $label: done."
+    --output none 2>&1)"; then
+    if grep -qi "already exists" <<<"$out"; then
+      # list が空を返した直後に既存が見えたレース等。付いているなら成功と同じ。
+      echo "  $label: already assigned."
+      return 0
+    fi
+    echo "ERROR: role assignment '$label' failed (principal=$PRINCIPAL_ID scope=$scope):" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "  $label: assigned."
 }
 
 if [[ -n "$OPENAI_ACCOUNT_NAME" ]]; then

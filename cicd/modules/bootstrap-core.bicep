@@ -1198,7 +1198,9 @@ var effectiveVoicevoxWrapperBaseUrl = enableVoicevoxWrapperAca
 
 // Cognitive Services OpenAI User (ai-agent MI の LLM 呼び出し) は**ここでは宣言しない**。
 // 担当は deploy-ai-agent.sh の `az role assignment create` (毎デプロイで冪等に適用 /
-// provision.sh が bicep 適用直後に必ず実行する)。
+// provision.sh が bicep 適用直後に必ず実行する)。初回構築の正規ルートも provision.sh
+// (cicd/iac/README §0 / CD の deploy.yml と同経路) — bicep 単体 + deploy-all.sh では
+// ロールが付かないため、その経路を最短ルートとして案内しない (PR #279 P1)。
 //
 // #262 の教訓: PR #261 でこの assignment を bicep に宣言したところ、既存環境で
 // RoleAssignmentExists により provisioning が落ちた (deploy run 164/165)。原因は

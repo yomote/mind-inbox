@@ -57,7 +57,10 @@ cd cicd
 RG=<your-rg> DEPLOYMENT=<deployment-name> ./scripts/deploy/deploy-all.sh
 ```
 
-`deploy-all.sh` は成果物デプロイ専用です（IaC は実行しません）。
+`deploy-all.sh` は **BFF + frontend の成果物デプロイ専用**です（IaC は実行しません。
+Container Apps も対象外 — ai-agent MI への OpenAI ロール付与は `deploy-ai-agent.sh` が
+唯一の所有者なので、**初回構築を deploy-all.sh だけで済ませない**こと (#262 / PR #279)。
+初回は `deploy/provision.sh` が全経路を正しい順序で実行します）。
 Entra 認証の有効化/更新は、先に `main-config.bicep` デプロイを実行してください。
 
 ## Cleanup Environment

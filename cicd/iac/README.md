@@ -32,36 +32,32 @@
 
 ## 0. 最短ルート（初回）
 
-まずはこれだけで環境を起動できます。
+初回構築は `provision.sh` (up) に一本化しています。RG 作成 → bootstrap (IaC) →
+コンテナ (voicevox-wrapper / ai-agent — **MI へのロール付与を含む**) → BFF / frontend を
+正しい順序で一括実行します (CD の deploy.yml もこの経路)。
 
 ```bash
-# 1) 前提
+# 1) 前提 (成果物デプロイまで含むため az に加えて npm / pnpm / zip / curl / swa が必要。
+#    不足があれば provision.sh が冒頭でまとめて検査して止まる)
 az login
 az account set --subscription "<subscription-name-or-id>"
 az bicep version
 
-# 2) RG 作成
-az group create -n <rg-name> -l <location>
-
-# 3) インフラ作成（VOICEVOX を同時に作る場合）
-cd cicd/iac
-az deployment group create \
-  -g <rg-name> \
-  -n main-bootstrap \
-  -f main-bootstrap.bicep \
-  -p @main-bootstrap.parameters.json \
-  -p appName='mind-box' environmentName='dev' \
-  -p enableVoicevoxAca=true \
-  -p voicevoxLocation='japaneast'
-
-# 4) アプリ成果物反映（frontend + backend）
-cd ..
-RG=<rg-name> DEPLOYMENT=main-bootstrap ./scripts/deploy/deploy-all.sh
+# 2) まとめて構築 (既定: RG=rg-dev-mind-inbox / LOCATION=japaneast / ENVIRONMENT=dev。
+#    有効化フラグ (VOICEVOX / OpenAI / Cosmos 等) は main-bootstrap.parameters.json が持つ)
+RG=<rg-name> LOCATION=<location> ./cicd/scripts/deploy/provision.sh
 ```
 
 注意:
 
-- `deploy-all.sh` は成果物デプロイ専用で、IaC は実行しません。
+- **bicep 単体 + `deploy-all.sh` では初回構築は完結しない** (#262 / PR #279 P1)。
+  `deploy-all.sh` は BFF + frontend の成果物デプロイ専用で、ai-agent MI への
+  Cognitive Services OpenAI User ロール付与を含まない。付与の唯一の所有者は
+  `deploy-ai-agent.sh` (bicep には宣言しない — 理由は
+  [`../modules/bootstrap-core.bicep`](../modules/bootstrap-core.bicep) のコメント参照)。
+  この経路を飛ばすと ai-agent の LLM 呼び出しが認可エラーになる。
+- 手動で分割実行したい場合も、bootstrap の後に必ず `deploy-voicevox-wrapper.sh` →
+  `deploy-ai-agent.sh` → `deploy-all.sh` の順で実行すること（[§4](#4-アプリ成果物の反映)）。
 - Entra 認証を有効化する場合は後述の `main-config.bicep` を追加実行します。
 
 ---
@@ -200,14 +196,18 @@ az deployment group create \
 
 ## 4. アプリ成果物の反映
 
-この Bicep はインフラ作成までです。frontend/backend の成果物反映は別手順です。
+この Bicep はインフラ作成までです。frontend/backend/コンテナの成果物反映は別手順です。
 
 - [../scripts/deploy/README.md](../scripts/deploy/README.md)
 
-ワンショットで成果物まで反映する場合:
+bootstrap 後に分割実行する場合の順序 (provision.sh の [3/5]〜[5/5] と同じ):
 
 ```bash
 cd cicd
+# コンテナ (BFF より先に。ai-agent は MI への OpenAI ロール付与を含む — §0 の注意参照)
+RG=<rg-name> DEPLOYMENT=main-bootstrap IMAGE_TAG=sha-<full-sha> ./scripts/deploy/deploy-voicevox-wrapper.sh
+RG=<rg-name> DEPLOYMENT=main-bootstrap IMAGE_TAG=sha-<full-sha> ./scripts/deploy/deploy-ai-agent.sh
+# BFF + frontend
 RG=<rg-name> DEPLOYMENT=main-bootstrap ./scripts/deploy/deploy-all.sh
 ```
 
