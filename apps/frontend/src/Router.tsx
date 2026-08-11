@@ -46,6 +46,11 @@ type AppRouterProps = {
   extraction: ExtractionResult | null;
   problems: Problem[];
   selectedProblem: Problem | null;
+  /** 2 ペイン下書きプレビュー (#187 / ADR 0039)。 */
+  previewEnabled: boolean;
+  preview: ExtractionResult | null;
+  previewStatus: "idle" | "updating" | "error";
+  handleRefreshPreview: () => void;
   themeMode: PaletteMode;
   onToggleTheme: () => void;
   transition: (next: AppRoute) => void;
@@ -108,6 +113,10 @@ export function AppRouter({
   extraction,
   problems,
   selectedProblem,
+  previewEnabled,
+  preview,
+  previewStatus,
+  handleRefreshPreview,
   themeMode,
   onToggleTheme,
   transition,
@@ -186,6 +195,10 @@ export function AppRouter({
                 ttsStatus={ttsStatus}
                 ttsEnabled={ttsEnabled}
                 voiceError={voiceError}
+                previewEnabled={previewEnabled}
+                preview={preview}
+                previewStatus={previewStatus}
+                onRefreshPreview={handleRefreshPreview}
                 onDraftMessageChange={setDraftMessage}
                 onSendMessage={handleSendMessage}
                 onToggleTtsEnabled={toggleTtsEnabled}

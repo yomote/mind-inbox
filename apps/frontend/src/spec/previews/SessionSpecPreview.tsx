@@ -21,6 +21,66 @@ const previewSession = {
   ],
 };
 
+// 右ペインの下書きプレビュー (#187 / ADR 0039 / §5.8) の fixture。
+// 「既存に追加 (🔁)」と「新規」の両方のカードを見せる。
+const previewExtraction = {
+  sessionId: "preview-session",
+  items: [
+    {
+      mention: {
+        id: "m-preview-recur",
+        sessionId: "preview-session",
+        dumpId: "preview-session",
+        createdAt: new Date().toISOString(),
+        statement: "やることが多く、優先順位がつけられないことに焦りがある。",
+        excerpt: "やることが多くて、何から手をつけるか決められません。",
+        affect: { label: "焦り", valence: "negative" as const, intensity: 0.6 },
+        proposedTheme: "仕事・キャリア" as const,
+        proposedTags: ["優先順位"],
+        problemId: "p-career",
+        groupingConfidence: 0.85,
+      },
+      grouping: {
+        kind: "existing" as const,
+        problemId: "p-career",
+        problemTitle: "転職すべきか迷っている",
+        problemTheme: "仕事・キャリア" as const,
+        isRecurrence: true,
+        mentionCount: 4,
+        reignited: false,
+        groupingConfidence: 0.85,
+      },
+    },
+    {
+      mention: {
+        id: "m-preview-new",
+        sessionId: "preview-session",
+        dumpId: "preview-session",
+        createdAt: new Date().toISOString(),
+        statement: "タスクの全体量が見えず、着手の判断ができない。",
+        excerpt: "何から手をつけるか決められません",
+        affect: { label: "混乱", valence: "negative" as const, intensity: 0.5 },
+        proposedTheme: "日常・生活" as const,
+        proposedTags: ["タスク管理"],
+        problemId: "p-draft-preview",
+        groupingConfidence: null,
+      },
+      grouping: {
+        kind: "new" as const,
+        problemId: "p-draft-preview",
+        problemTitle: "タスクが多すぎて着手できない",
+        problemTheme: "日常・生活" as const,
+        isRecurrence: false,
+        mentionCount: 1,
+        reignited: false,
+        groupingConfidence: null,
+      },
+    },
+  ],
+  newProblemCount: 1,
+  updatedProblemCount: 1,
+};
+
 export function SessionSpecPreview() {
   const [draftMessage, setDraftMessage] = React.useState("下書きメッセージ");
 
@@ -32,6 +92,10 @@ export function SessionSpecPreview() {
       speaking={false}
       ttsEnabled
       voiceError={null}
+      previewEnabled
+      preview={previewExtraction}
+      previewStatus="idle"
+      onRefreshPreview={() => {}}
       onDraftMessageChange={setDraftMessage}
       onSendMessage={() => {}}
       onToggleTtsEnabled={() => {}}
