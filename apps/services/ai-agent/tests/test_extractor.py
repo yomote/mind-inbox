@@ -5,12 +5,16 @@
 - prompt 文面の正しさ — 仕様変更時に false positive を量産する
 - session repository 自体の挙動 — それは test_repositories.py
 - HTTP / FastAPI 経由の通し挙動 — それは L2 (test_l2_endpoints.py)
+
+fixture 置き換え (M1-5 / #82): SK 依存除去に伴い、履歴 fixture を SK ChatHistory
+から app.history.ChatHistory (MAF Message ベース / 追記 API は同形) へ差し替えた。
+検証意図は不変。
 """
 
 import json
 
 import pytest
-from semantic_kernel.contents import ChatHistory
+from app.history import ChatHistory
 
 from app.extractor import ExtractionParseError, ExtractionUnavailable, extract
 from app.schemas import ConversationMessage, ExistingProblemRef
