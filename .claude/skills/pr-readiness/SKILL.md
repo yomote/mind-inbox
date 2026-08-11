@@ -71,9 +71,15 @@ git status --short
 
 ### Step 4 — 既存テスト/docs 触れ判定
 
-Step 2 で立った各 trigger について、**diff に対応するテスト/docs ファイルが含まれているか** を `git diff main...HEAD --name-only` で確認。含まれていれば「✅ 対応あり」、無ければ「⚠️ 未対応」と分類。
+Step 2 で立った各 trigger について、**diff に対応するテスト/docs ファイルが含まれているか** を `git diff main...HEAD --name-only` で確認する。判定は trigger の性質で分岐する:
 
-例: `apps/bff/src/trpc/routers/consultation.ts` が変わった diff に `apps/bff/**/*.test.ts` が含まれない → ⚠️。
+- **無条件トリガー** (該当したら必ず対応が要る行 — 言語間 I/O 変更の契約テスト、OpenAPI 再生成、Runbook / CLAUDE.md 更新、実装より先の ADR): 対応ファイルが diff に含まれていれば「✅ 対応あり」、無ければ「⚠️ 未対応」
+- **条件付きトリガー** (入場条件・影響判定に依存する行 — 単体テストの要否、スモーク / E2E への影響確認): 対応テストが diff に有れば「✅ 対応あり」。無くても機械分類で ⚠️ にせず、**diff の中身で条件を判定する** — 入場条件 (strategy.md §2.2「壊れても例外が出ず、データが静かに間違う」) を満たすドメインルール変更か / スモーク・E2E の対象シナリオに影響するか。**満たす・影響するのにテスト/更新が無ければ「⚠️ 未対応」。満たさない・影響しない (受け渡し・ルーティング・型の詰め替えだけ等) ならテストは要求せず、PR 本文の Verification 欄に実測が貼られているか (これから貼る前提が示されているか) の確認に切り替える** — 実測の予定すら無ければ「⚠️ Verification 実測なし」
+
+例:
+
+- `apps/bff/src/trpc/routers/consultation.ts` で言及回数の導出 (ドメインルール) を変えた diff に `apps/bff/**/*.{test,spec}.ts` が含まれない → ⚠️ 未対応 (入場条件を満たすのに単体が無い)
+- 同ファイルで呼び出し先の付け替え (受け渡しだけ) の diff にテストが無い → テストは要求せず Verification 実測の確認へ。実測も無ければ ⚠️ Verification 実測なし
 
 ### Step 5 — LLM 判断 (rubric ベース)
 
