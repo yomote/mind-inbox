@@ -123,6 +123,19 @@ async function materializeExtraction(
       // (domain_model.md §2.1) なので、同じ Mention ID が既に入っていれば書くことは何も無い。
       // 無いと同じ Mention が二重に入り mentionCount まで増える (静かなデータ破損)。
       const alreadyCommitted = target.mentions.some((m) => m.id === mention.id);
+
+      // **応答も冪等にする**: この Problem の "種" (最初の Mention) がこの Mention なら、
+      // その Problem は**この確定操作が作った**もの = 初回の実績は "new" だった。再送では
+      // createdHere が空なので、これが無いと「新規 1 件」だった応答が「既存に追加 1 件」に
+      // 化ける (書き込みは起きていないのに件数もバッジも変わる)。**追加の状態を持たず、
+      // 保存済みデータから復元する** — 種は appendMention でも mergeProblems でも
+      // 先頭に残るため (relink で種を剥がした場合だけ崩れるが、その時は Problem の
+      // 来歴自体が変わっている)。
+      const seededByThisMention = target.mentions[0]?.id === mention.id;
+      const isNew = createdHere.has(target.id) || grouping.kind === "new" || seededByThisMention;
+      // 再燃したか = **この確定で** 棚卸し済みを open に戻したか (appendMention の事後条件)
+      const reignited = !alreadyCommitted && target.status !== "open";
+
       const after = alreadyCommitted ? target : appendMention(target, mention);
       if (!alreadyCommitted) await repo.upsert(after);
 
@@ -131,8 +144,15 @@ async function materializeExtraction(
         grouping: {
           ...grouping,
           // このバッチで起こした Problem への追記は "new" のまま (二重計上を防ぐ)
-          kind: createdHere.has(target.id) || grouping.kind === "new" ? "new" : "existing",
+          kind: isNew ? "new" : "existing",
+          // **表示値は下書き時点ではなく確定時点の Problem から取る** — preview 後に別タブで
+          // タイトル/テーマを編集したり棚卸ししたりできる。書き込みは最新の target に対して
+          // 行うのに、返却だけ下書き時点のままだとレビュー画面が古い姿を見せる。
+          problemTitle: after.title,
+          problemTheme: after.theme,
           mentionCount: after.mentionCount,
+          isRecurrence: !isNew,
+          reignited,
         },
       });
       continue;
@@ -146,7 +166,14 @@ async function materializeExtraction(
     createdHere.add(created.id);
     materialized.push({
       mention,
-      grouping: { ...grouping, kind: "new", mentionCount: 1, isRecurrence: false },
+      grouping: {
+        ...grouping,
+        kind: "new",
+        mentionCount: 1,
+        isRecurrence: false,
+        // 何も再オープンしていない (寄せ先はもう無い)
+        reignited: false,
+      },
     });
   }
   return materialized;

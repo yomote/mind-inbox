@@ -887,6 +887,94 @@ describe("[単体] consultation.extract — draft commit (#283 / ADR 0039 D1/D3)
     );
   });
 
+  it("returns the same result when the vanished-target commit is re-sent (応答も冪等)", async () => {
+    // 無いと: 「消えた既存 → 新規作成」の確定応答が失われて再送すると、作成済みの Problem が
+    //         見つかるので応答だけ「既存に追加 1 件」に化ける (書き込みは冪等で何も起きない
+    //         のに、件数もカードのバッジも初回と食い違う)。同じ確定操作は同じ答えを返す
+    //         べきで、ズレると「2 回押したら 2 件目ができた」ように見える (#283 Codex P2)。
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem());
+    await caller.problem.triage({ action: "dismiss", problemId: "prob-1" });
+
+    const draft = {
+      items: [
+        {
+          mention: makeMention({ id: "men-a", createdAt: "2026-02-01T00:00:00.000Z" }),
+          grouping: {
+            kind: "existing" as const,
+            problemId: "prob-1",
+            problemTitle: "転職の迷い",
+            problemTheme: "仕事・キャリア" as const,
+            isRecurrence: true,
+            mentionCount: 2,
+            reignited: false,
+            groupingConfidence: 0.9,
+          },
+        },
+      ],
+    };
+
+    const first = await caller.consultation.extract({ sessionId: "s2", draft });
+    const second = await caller.consultation.extract({ sessionId: "s2", draft });
+
+    expect(second).toEqual(first);
+    expect(second.newProblemCount).toBe(1);
+    expect(second.updatedProblemCount).toBe(0);
+    expect(second.items[0].grouping.kind).toBe("new");
+    // 保存データも増えない
+    expect((await caller.problem.get({ id: "prob-1" })).mentionCount).toBe(1);
+  });
+
+  it("normalizes the returned grouping from the target's state at commit time", async () => {
+    // 無いと: preview 後・確定前に別タブで対象のタイトル/テーマを編集したり棚卸ししたりすると、
+    //         書き込みは最新の Problem に対して行うのに返却だけ下書き時点の値のままになる。
+    //         ExtractReviewScreen はこれを直接表示するので、確定したのに古いタイトルが出る /
+    //         実際は再オープンしたのに「再燃」バッジが出ない、という嘘を静かに表示する。
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem());
+
+    // 下書きを取ったあと、別経路でタイトル変更 + 棚卸し
+    await caller.problem.triage({
+      action: "editTitle",
+      problemId: "prob-1",
+      title: "新しい見出し",
+    });
+    await caller.problem.triage({ action: "editTheme", problemId: "prob-1", theme: "心と体" });
+    await caller.problem.triage({ action: "resolve", problemId: "prob-1" });
+
+    const result = await caller.consultation.extract({
+      sessionId: "s2",
+      draft: {
+        items: [
+          {
+            mention: makeMention({ id: "men-a", createdAt: "2026-02-01T00:00:00.000Z" }),
+            grouping: {
+              kind: "existing",
+              problemId: "prob-1",
+              problemTitle: "転職の迷い", // 下書き時点の (もう古い) 値
+              problemTheme: "仕事・キャリア",
+              isRecurrence: true,
+              mentionCount: 2,
+              reignited: false, // 下書き時点では open だった
+              groupingConfidence: 0.9,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(result.items[0].grouping).toMatchObject({
+      kind: "existing",
+      problemTitle: "新しい見出し", // 確定時点のタイトル
+      problemTheme: "心と体", // 確定時点のテーマ
+      mentionCount: 2,
+      isRecurrence: true,
+      reignited: true, // 棚卸し済みを実際に open へ戻した (UC-03)
+    });
+    // 実際に再オープンされている (返却値と保存状態が一致する)
+    expect((await caller.problem.get({ id: "prob-1" })).status).toBe("open");
+  });
+
   it("counts a vanished 'existing' target as new (preview 後・確定前に消された場合)", async () => {
     // 無いと: preview 時は既存だった Problem が確定前に dismiss / merge で消えていると、
     //         materializeExtraction は新規作成にフォールバックするのに、counts は draft の
