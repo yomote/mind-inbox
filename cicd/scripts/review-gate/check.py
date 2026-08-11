@@ -17,6 +17,16 @@
     3. コード PR (apps/ か cicd/ に触れる) かつ REVIEW_GATE_REQUIRE_CODEX=true のとき、
        Codex のレビューが付いている (login が CODEX_LOGIN_PATTERN にマッチする投稿)
 
+付随して、合否とは別に advisory のコメントを 2 種類だけ自動投稿する (ADR 0038):
+    A. Codex 自動レビューの再トリガー — コード PR に Codex レビューが
+       CODEX_RETRIGGER_MINUTES (既定 10) 分以上付いていなければ `@codex review` を
+       1 回だけ投稿する (自動トリガーはイベント欠落・枠切れでリトライされない —
+       2026-08-10 の PR #231 で 11 時間沈黙した実測への対処)
+    B. 敏感パスの security review 自動指名 — IaC / workflow / BFF の認証・トークン・
+       CORS 関連等に触れる PR に `@codex security review` を 1 回だけ投稿する。
+       **どちらも合否条件には入れない** (門を重くしない。入れるかは実測後に PO 判断)。
+    冪等性はコメント本文のマーカー (機械可読) で判定する — 2 重投稿しない。
+
 規律 (status-page / ops-inspect と同じ):
     取れなかったものを「合格」と書かない。取得に失敗したら error status を貼って終わる。
 """
@@ -25,9 +35,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 PM_ACCEPT_MARKER = "[pm-accept]"
 # 受け入れとして数えるコメントの投稿者。**このリポジトリは public なので、
@@ -38,6 +50,77 @@ TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 CODE_PREFIXES = ("apps/", "cicd/")
 STATUS_CONTEXT = "review-gate"
 SHORT_SHA_LEN = 7
+
+# ---- Codex 自動再トリガー / 敏感パス指名 (ADR 0038 — advisory、合否には入れない) ----
+
+# 冪等マーカー。投稿済みかは本文のこの文字列で機械判定する (2 重投稿防止)。
+CODEX_RETRIGGER_MARKER = "<!-- codex-auto-retrigger -->"
+SECURITY_RETRIGGER_MARKER = "<!-- codex-security-retrigger -->"
+# PR 作成 (または最新 push) からこの分数、Codex レビューが無ければ再トリガーする。
+DEFAULT_RETRIGGER_MINUTES = 10.0
+
+# security review を自動指名する敏感パス (初期セット — ADR 0038)。
+# prefix 一致するもの:
+SENSITIVE_PREFIXES = ("cicd/iac/", ".github/workflows/", ".github/actions/")
+# apps/bff/src/** のうち、パスに認証・トークン・CORS の匂いがあるもの
+# (機構で判定できる近似。取り逃しは release-gate の security-reviewer が持つ):
+_SENSITIVE_BFF_PATTERN = re.compile(r"auth|token|cors", re.IGNORECASE)
+
+
+def sensitive_paths(changed_paths: list[str]) -> list[str]:
+    """変更ファイルのうち敏感パス (ADR 0038 の初期セット) に当たるものを返す。"""
+    matched = []
+    for path in changed_paths:
+        basename = path.rsplit("/", 1)[-1]
+        if (
+            path.startswith(SENSITIVE_PREFIXES)
+            or basename.startswith("local.settings")
+            or (
+                path.startswith("apps/bff/src/") and _SENSITIVE_BFF_PATTERN.search(path)
+            )
+        ):
+            matched.append(path)
+    return matched
+
+
+def minutes_between(earlier_iso: str, later_iso: str) -> float:
+    """ISO 8601 (GitHub API の `2026-08-11T03:00:00Z` 形式) の 2 時刻の差を分で返す。"""
+    earlier = datetime.fromisoformat(earlier_iso.replace("Z", "+00:00"))
+    later = datetime.fromisoformat(later_iso.replace("Z", "+00:00"))
+    return (later - earlier).total_seconds() / 60.0
+
+
+def should_retrigger_codex(
+    *,
+    code_pr: bool,
+    draft: bool,
+    codex_present: bool,
+    marker_posted: bool,
+    minutes_since_last_push: float,
+    threshold_minutes: float = DEFAULT_RETRIGGER_MINUTES,
+) -> bool:
+    """`@codex review` を自動投稿すべきか。
+
+    条件: コード PR / draft でない / Codex レビュー未着 / 再トリガー未投稿 /
+    PR 作成 (または最新 push) から threshold 分以上経過。
+    marker はコメント全量から探す — 1 PR につき 1 回しか投稿しない (push で
+    リセットしない: 再トリガーしても沈黙するなら機構の外の問題で、
+    毎 push 吠えても直らずノイズになるだけ)。
+    """
+    return (
+        code_pr
+        and not draft
+        and not codex_present
+        and not marker_posted
+        and minutes_since_last_push >= threshold_minutes
+    )
+
+
+def should_request_security_review(
+    *, draft: bool, sensitive: list[str], marker_posted: bool
+) -> bool:
+    """`@codex security review` を自動投稿すべきか (敏感パスに触れる PR に 1 回だけ)。"""
+    return bool(sensitive) and not draft and not marker_posted
 
 
 @dataclass
@@ -141,6 +224,87 @@ def fetch_codex_present(repo: str, number: int, pattern: str) -> bool:
     )
 
 
+def fetch_head_pushed_at(repo: str, pr: dict) -> str:
+    """「PR 作成または最新 push」の時刻 (ISO 8601)。
+
+    push イベントそのものの時刻は PR API に無いため、head commit の committer date と
+    PR 作成時刻の**遅い方**で近似する。rebase 等で commit date が古く出る分には
+    経過が長く見えるだけ (再トリガーが早まる方向) で、created_at が下限になるため
+    作成直後の誤射にはならない。
+    """
+    commit = gh("api", f"repos/{repo}/commits/{pr['head']['sha']}")
+    committed = commit["commit"]["committer"]["date"]  # type: ignore[index]
+    return max(str(committed), str(pr["created_at"]))
+
+
+def post_comment(repo: str, number: int, body: str) -> None:
+    gh("api", f"repos/{repo}/issues/{number}/comments", "-f", f"body={body}")
+
+
+def maybe_post_advisories(
+    repo: str,
+    number: int,
+    pr: dict,
+    changed_paths: list[str],
+    comment_bodies: list[str],
+    code_pr: bool,
+    codex_present: bool,
+) -> None:
+    """合否とは別の advisory コメント 2 種 (ADR 0038)。判定は上の純粋関数、ここは I/O。"""
+    if pr.get("state") != "open":
+        return
+    draft = bool(pr.get("draft"))
+    threshold = float(
+        os.environ.get("CODEX_RETRIGGER_MINUTES", "") or DEFAULT_RETRIGGER_MINUTES
+    )
+    retrigger_marker_posted = any(CODEX_RETRIGGER_MARKER in b for b in comment_bodies)
+    # 高い方 (API 1 往復) の取得は、安い条件が揃ったときだけ
+    if code_pr and not draft and not codex_present and not retrigger_marker_posted:
+        elapsed = minutes_between(
+            fetch_head_pushed_at(repo, pr), datetime.now(timezone.utc).isoformat()
+        )
+        if should_retrigger_codex(
+            code_pr=code_pr,
+            draft=draft,
+            codex_present=codex_present,
+            marker_posted=retrigger_marker_posted,
+            minutes_since_last_push=elapsed,
+            threshold_minutes=threshold,
+        ):
+            post_comment(
+                repo,
+                number,
+                f"{CODEX_RETRIGGER_MARKER}\n@codex review\n\n"
+                f"(自動再トリガー — コード PR に Codex レビューが {threshold:.0f} 分以上"
+                "付いていないため。自動レビューのトリガーは欠落してもリトライされない"
+                " (2026-08-10 PR #231 で 11 時間沈黙した実測)。ADR 0038 /"
+                " この投稿自体は review-gate の合否条件ではない)",
+            )
+            print(
+                f"advisory: @codex review を自動再トリガーした (未着 {elapsed:.0f} 分)"
+            )
+    sensitive = sensitive_paths(changed_paths)
+    if should_request_security_review(
+        draft=draft,
+        sensitive=sensitive,
+        marker_posted=any(SECURITY_RETRIGGER_MARKER in b for b in comment_bodies),
+    ):
+        listed = "\n".join(f"- `{p}`" for p in sensitive[:10])
+        if len(sensitive) > 10:
+            listed += f"\n- …他 {len(sensitive) - 10} 件"
+        post_comment(
+            repo,
+            number,
+            f"{SECURITY_RETRIGGER_MARKER}\n@codex security review\n\n"
+            "この PR は敏感パス (IaC / CI 定義 / 認証・トークン・CORS 関連 / 設定実体) に"
+            "触れているため security review を自動指名しています (advisory —"
+            " review-gate の合否条件ではない / ADR 0038)。対象:\n" + listed,
+        )
+        print(
+            f"advisory: 敏感パス {len(sensitive)} 件 → @codex security review を自動指名した"
+        )
+
+
 def post_status(repo: str, sha: str, state: str, description: str) -> None:
     run_id = os.environ.get("GITHUB_RUN_ID", "")
     target = (
@@ -179,16 +343,20 @@ def main() -> int:
 
     try:
         files = gh("api", f"repos/{repo}/pulls/{number}/files", "--paginate")
+        changed_paths = [f["filename"] for f in files]  # type: ignore[union-attr]
         comments = gh("api", f"repos/{repo}/issues/{number}/comments", "--paginate")
         unresolved = fetch_unresolved_threads(owner, name, number)
         require_codex = (
             os.environ.get("REVIEW_GATE_REQUIRE_CODEX", "").lower() == "true"
         )
+        code_pr = is_code_pr(changed_paths)
+        # 合否 (require_codex) だけでなく自動再トリガー (ADR 0038) もコード PR で
+        # Codex の既着を見るので、コード PR なら常に取得する
         codex_present = (
             fetch_codex_present(
                 repo, number, os.environ.get("CODEX_LOGIN_PATTERN", "codex")
             )
-            if require_codex
+            if (require_codex or code_pr)
             else False
         )
     except (
@@ -201,13 +369,14 @@ def main() -> int:
         post_status(repo, head_sha, "error", f"評価に失敗: {e}"[:140])
         raise
 
+    comment_pairs = [
+        (c.get("body") or "", c.get("author_association") or "")  # type: ignore[union-attr]
+        for c in comments
+    ]
     verdict = decide(
         head_sha=head_sha,
-        changed_paths=[f["filename"] for f in files],  # type: ignore[index]
-        comments=[
-            (c.get("body") or "", c.get("author_association") or "")  # type: ignore[union-attr]
-            for c in comments
-        ],
+        changed_paths=changed_paths,
+        comments=comment_pairs,
         unresolved_threads=unresolved,
         codex_present=codex_present,
         require_codex=require_codex,
@@ -217,6 +386,17 @@ def main() -> int:
     )
     print(
         f"review-gate → {'🟢' if verdict.ok else '🔴'} {verdict.description} (sha {head_sha[:7]})"
+    )
+    # 合否の後に advisory (ADR 0038)。ここで失敗しても status は貼れているが、
+    # run は赤にして「投稿できなかったこと」を隠さない
+    maybe_post_advisories(
+        repo=repo,
+        number=number,
+        pr=pr,
+        changed_paths=changed_paths,
+        comment_bodies=[body for body, _ in comment_pairs],
+        code_pr=code_pr,
+        codex_present=codex_present,
     )
     return 0
 

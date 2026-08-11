@@ -5,6 +5,12 @@
 # workflow run の緑 = 「評価できたこと」。判定の 🟢/🔴 は commit status 側に出る。
 # 強制力はブランチ保護 (required status check) が持つ — 設定は needs-human Issue 参照。
 #
+# 付随 (ADR 0038 — advisory、合否には入れない):
+#   - コード PR に Codex レビューが 10 分以上未着なら `@codex review` を 1 回だけ自動投稿
+#   - 敏感パス (IaC / workflow / BFF の認証・トークン・CORS 関連等) に触れる PR には
+#     `@codex security review` を 1 回だけ自動指名
+#   冪等性はコメント本文のマーカーで機械判定 (2 重投稿しない)。判定は check.py の純関数。
+#
 # 注意: issue_comment / pull_request_review トリガーは main に入った版でしか発火しない。
 #       コメント後の再評価が要るときは workflow_dispatch で PR 番号を渡して叩ける。
 
@@ -25,7 +31,8 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
+  # write は advisory コメント (@codex review / @codex security review) の投稿用 (ADR 0038)
+  pull-requests: write
   statuses: write
 
 jobs:
@@ -41,5 +48,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REVIEW_GATE_REQUIRE_CODEX: ${{ vars.REVIEW_GATE_REQUIRE_CODEX }}
+          # Codex 自動再トリガーの猶予 (分)。未設定なら既定 10 (ADR 0038)
+          CODEX_RETRIGGER_MINUTES: ${{ vars.CODEX_RETRIGGER_MINUTES }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
         run: python3 cicd/scripts/review-gate/check.py "$PR_NUMBER"
