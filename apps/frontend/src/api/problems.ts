@@ -108,6 +108,31 @@ export async function extractMentions(
   }
 }
 
+/**
+ * 読み取り専用の抽出プレビュー (#187 / ADR 0039 D1) が使えるか。
+ *
+ * real は BFF の `consultation.preview` procedure (Cosmos に書かない読み取り専用抽出)
+ * が前提だが未実装のため、現状は mock ビルドのみ。BFF 側が生えたらここを結線して
+ * real でも true にする (画面側はこのフラグしか見ない)。
+ */
+export const previewSupported = useMock;
+
+/**
+ * 会話の途中経過から「整理されつつある困りごと」の下書きを計算する (#187 / ADR 0039)。
+ *
+ * **書かない**: 戻り値は画面内だけの揮発する下書きで、Problem リポジトリには何も起きない。
+ * 確定は従来どおり extractMentions (consultation.extract) の 1 本だけ。
+ */
+export async function previewExtraction(
+  sessionId: string,
+  messages: ChatMessage[],
+): Promise<ExtractionResult> {
+  if (useMock) return mock.previewExtraction(sessionId, messages);
+  // BFF `consultation.preview` 未実装 (ADR 0039 Phase B の BFF 側残作業)。
+  // previewSupported=false の環境で呼ばれること自体が配線ミスなので黙らせない。
+  throw new Error("consultation.preview is not available in this build");
+}
+
 export async function loadProblems(filter?: ProblemFilter): Promise<Problem[]> {
   if (useMock) return mock.loadProblems(filter);
   return await trpc.problem.list.query(filter);

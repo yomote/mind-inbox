@@ -17,13 +17,14 @@ import {
   extractMentions,
   loadProblem,
   loadProblems,
+  previewExtraction,
   sendMessage,
   triageProblem,
 } from "./mockApi";
 // Problem 系の shape は domain.ts（BFF = 型の真実 / CLAUDE.md §8.3）の zod schema を
 // 直接 import して縛る。inline コピーだと .int()/.min(1) などランタイムバリデータの
 // 乖離をこのテストが検知できなくなる（PR #44 レビュー指摘）。
-import { ProblemSchema } from "../../bff/src/trpc/domain";
+import { ExtractionResultSchema, ProblemSchema } from "../../bff/src/trpc/domain";
 
 // ── frontend 内 type と shape を縛る zod schema ──────────────────────────────
 // mockApi.ts が export している type 宣言と同じ shape を runtime でも縛る。
@@ -78,6 +79,64 @@ describe("[L1] mockApi.extractMentions グルーピング", () => {
     await extractMentions("s-test");
     const after = await loadProblems();
     expect(after.length).toBe(before.length + 1);
+  });
+});
+
+describe("[単体] mockApi.previewExtraction — 読み取り専用の下書き (#187 / ADR 0039 D1)", () => {
+  beforeEach(() => {
+    __resetProblemStore();
+  });
+
+  const userMsg = (i: number) => ({
+    id: `u-${i}`,
+    role: "user" as const,
+    text: `ユーザー発話 ${i} — 最近いろいろ考えてしまって眠れない`,
+    createdAt: new Date().toISOString(),
+  });
+  const aiMsg = (i: number) => ({
+    id: `a-${i}`,
+    role: "assistant" as const,
+    text: "受け止めました。",
+    createdAt: new Date().toISOString(),
+  });
+  const conversation = (userCount: number) =>
+    Array.from({ length: userCount }, (_, i) => [userMsg(i), aiMsg(i)]).flat();
+
+  // 無いと何が静かに通るか: preview が store を書いても例外は出ず、確定していない下書きが
+  // Problem 一覧に静かに現れる (ADR 0039 の核「揮発する下書き / 無垢な DB」が壊れる)。
+  it("preview を何度呼んでも Problem store は変化しない", async () => {
+    const before = await loadProblems();
+    await previewExtraction("s-preview", conversation(2));
+    await previewExtraction("s-preview", conversation(4));
+    const after = await loadProblems();
+    expect(after).toEqual(before);
+  });
+
+  // 無いと何が静かに通るか: 「会話が進むと下書きが増える / 育つ」の可視化 (#187 の体験の核) が
+  // 常に同じ 1 枚を返す実装に退行しても、画面は描画され続けて気づけない。
+  it("会話が進むほど下書きは単調に増え、既存への再出現 (🔁) と新規の両方が現れる", async () => {
+    let prevCount = 0;
+    for (const userCount of [0, 1, 2, 3, 4]) {
+      const result = await previewExtraction("s-preview", conversation(userCount));
+      expect(() => ExtractionResultSchema.parse(result)).not.toThrow();
+      expect(result.items.length).toBeGreaterThanOrEqual(prevCount);
+      prevCount = result.items.length;
+    }
+    const full = await previewExtraction("s-preview", conversation(4));
+    expect(full.items.some((i) => i.grouping.kind === "existing" && i.grouping.isRecurrence)).toBe(
+      true,
+    );
+    expect(full.items.some((i) => i.grouping.kind === "new")).toBe(true);
+    expect(full.newProblemCount).toBe(1);
+    expect(full.updatedProblemCount).toBe(1);
+  });
+
+  // 無いと何が静かに通るか: 下書きカードの excerpt が固定文言に退行すると「自分の言葉が
+  // 形になっていく」来歴表示が失われる (extract-review.mdx の excerpt の意図と同じ)。
+  it("下書きの excerpt は実際のユーザー発話から引用される", async () => {
+    const messages = conversation(1);
+    const result = await previewExtraction("s-preview", messages);
+    expect(result.items[0].mention.excerpt).toBe(messages[0].text.slice(0, 60));
   });
 });
 

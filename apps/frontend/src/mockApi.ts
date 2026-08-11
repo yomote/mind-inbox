@@ -451,6 +451,93 @@ export async function extractMentions(sessionId: string): Promise<ExtractionResu
   };
 }
 
+/**
+ * 読み取り専用の抽出プレビュー (#187 / ADR 0039 D1)。
+ *
+ * **store には一切書かない** — 右ペインの下書きは揮発し、確定 (extractMentions) して
+ * 初めて Problem が増える。ここが書いてしまうと「確定していない下書き」が
+ * 蓄積データを静かに汚す (ADR 0039 の核を壊す)。
+ *
+ * 会話が進むほど下書きが「増える / 育つ」体験を mock で再現する:
+ *   - ユーザー発話 1 件〜: 既存「転職」への再出現 (🔁) の下書き
+ *   - ユーザー発話 3 件〜: 新規 Problem (プレゼン不安) の下書きが加わる
+ * excerpt には実際のユーザー発話を引用し、「話した内容が形になっていく」を見せる。
+ */
+export async function previewExtraction(
+  sessionId: string,
+  messages: ChatMessage[],
+): Promise<ExtractionResult> {
+  await wait(600);
+
+  const userTexts = messages.filter((m) => m.role === "user").map((m) => m.text);
+  const items: ExtractionResult["items"] = [];
+
+  if (userTexts.length >= 1) {
+    // 既存 Problem への再出現の下書き。mentionCount は「確定したらこうなる」件数。
+    const career = getProblem("p-career");
+    items.push({
+      mention: makeMention({
+        id: `m-draft-${sessionId}-recur`,
+        problemId: "p-career",
+        sessionId,
+        daysAgo: 0,
+        statement: "やっぱり転職のことが頭から離れない。面談だけでも受けてみようか迷う。",
+        excerpt: userTexts[0].slice(0, 60),
+        affect: { label: "迷い", valence: "negative", intensity: 0.58 },
+        theme: "仕事・キャリア",
+        tags: ["転職", "迷い"],
+        confidence: 0.88,
+      }),
+      grouping: {
+        kind: "existing",
+        problemId: "p-career",
+        problemTitle: career?.title ?? "転職すべきか迷っている",
+        problemTheme: "仕事・キャリア",
+        isRecurrence: true,
+        mentionCount: (career?.mentionCount ?? 3) + 1,
+        reignited: false,
+        groupingConfidence: 0.88,
+      },
+    });
+  }
+
+  if (userTexts.length >= 3) {
+    // 新規 Problem の下書き。id は draft 前置で「未確定」を機械的に区別できるようにする。
+    const draftProblemId = `p-draft-${sessionId}`;
+    items.push({
+      mention: makeMention({
+        id: `m-draft-${sessionId}-new`,
+        problemId: draftProblemId,
+        sessionId,
+        daysAgo: 0,
+        statement: "来週のプレゼンが不安で気が重い。",
+        excerpt: userTexts[2].slice(0, 60),
+        affect: { label: "緊張", valence: "negative", intensity: 0.65 },
+        theme: "仕事・キャリア",
+        tags: ["プレゼン", "緊張"],
+        confidence: null,
+      }),
+      grouping: {
+        kind: "new",
+        problemId: draftProblemId,
+        problemTitle: "来週のプレゼンが不安",
+        problemTheme: "仕事・キャリア",
+        isRecurrence: false,
+        mentionCount: 1,
+        reignited: false,
+        groupingConfidence: null,
+      },
+    });
+  }
+
+  return {
+    sessionId,
+    items,
+    newProblemCount: items.filter((i) => i.grouping.kind === "new").length,
+    updatedProblemCount: items.filter((i) => i.grouping.kind === "existing").length,
+  };
+}
+
 /** UC-02 一覧。既定は直近言及順。store のスナップショット（複製）を返す。 */
 export async function loadProblems(filter?: ProblemFilter): Promise<Problem[]> {
   await wait(250);

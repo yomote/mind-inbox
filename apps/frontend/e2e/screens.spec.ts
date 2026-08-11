@@ -30,7 +30,8 @@ test.describe("主要画面のスクリーンショット", () => {
     await expect(page.getByText("週末になると気分が落ち込む").first()).toBeVisible();
     await page.screenshot(shot("02-session"));
 
-    await page.getByRole("button", { name: "困りごとを抽出" }).click();
+    // mock ビルドは下書きプレビュー有効 → ボタンは「この内容で確定」(#187 / ADR 0039 D3)。
+    await page.getByRole("button", { name: "この内容で確定" }).click();
     await expect(page.getByText(/件の困りごとを見つけました/)).toBeVisible();
     await page.screenshot(shot("03-extract-review"));
 

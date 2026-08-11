@@ -42,7 +42,9 @@ test.describe("mock ビルド (認証なし)", () => {
     ).toBeVisible();
     await expect(composer).toHaveValue("");
 
-    await page.getByRole("button", { name: "困りごとを抽出" }).click();
+    // mock ビルドは下書きプレビューが有効なので、抽出ボタンは「この内容で確定」
+    // (#187 / ADR 0039 D3。real 未結線ビルドでは従来の「困りごとを抽出」のまま)。
+    await page.getByRole("button", { name: "この内容で確定" }).click();
     await expect(page).toHaveURL(/\/consultations\/current\/extract$/);
     await expect(page.getByText(/件の困りごとを見つけました/)).toBeVisible();
 
@@ -91,6 +93,6 @@ test.describe("mock ビルド (認証なし)", () => {
 
     await page.getByRole("button", { name: "新しい相談を始める" }).click();
     await expect(page.getByRole("button", { name: "整理結果へ" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "困りごとを抽出" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "この内容で確定" })).toBeVisible();
   });
 });

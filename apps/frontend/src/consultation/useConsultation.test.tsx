@@ -21,6 +21,15 @@ vi.mock("../api", async (importOriginal) => ({
   loadProblem: vi.fn(),
   triageProblem: vi.fn(),
   createProblemPlan: vi.fn(),
+  // 下書きプレビュー (#187): テストビルドは mock モードではないため、素の
+  // previewSupported は false になり自動更新の分岐が一切通らない。ここで有効化する。
+  previewSupported: true,
+  previewExtraction: vi.fn(async (sessionId: string) => ({
+    sessionId,
+    items: [],
+    newProblemCount: 0,
+    updatedProblemCount: 0,
+  })),
 }));
 
 import {
@@ -29,6 +38,7 @@ import {
   extractMentions,
   loadProblem,
   loadProblems,
+  previewExtraction,
   sendMessage,
   startNewConsultation,
   triageProblem,
@@ -271,6 +281,117 @@ describe("[L1] useConsultation — 無音失敗の禁止 (ADR 0018)", () => {
 
     expect(result.current.actionError).not.toBeNull();
     expect(transition).not.toHaveBeenCalledWith("problemDetail");
+  });
+});
+
+describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039)", () => {
+  const reply = (id: string) => ({
+    id,
+    role: "assistant" as const,
+    text: "受け止めました",
+    createdAt: "2026-01-01",
+  });
+
+  async function sendTimes(result: ReturnType<typeof setup>["result"], texts: string[]) {
+    for (const [i, text] of texts.entries()) {
+      vi.mocked(sendMessage).mockResolvedValue(reply(`a-r${i}`));
+      await act(async () => {
+        result.current.setDraftMessage(text);
+      });
+      await act(async () => {
+        await result.current.sendDraftMessage();
+      });
+    }
+  }
+
+  it("ユーザー発話 2 回ごとに自動更新され、毎ターンは走らない", async () => {
+    // 無いと: 「2 往復ごと」の間引き (LLM 呼び出しコストの上限 — ADR 0039 D2) が
+    //         毎ターン実行に退行しても、画面は普通に動き続けて気づけない。逆に
+    //         一度も走らない退行でも右ペインが空のままなだけで例外は出ない。
+    vi.mocked(startNewConsultation).mockResolvedValue(session());
+    const draft = {
+      sessionId: "s1",
+      items: [],
+      newProblemCount: 0,
+      updatedProblemCount: 0,
+    };
+    vi.mocked(previewExtraction).mockResolvedValue(draft);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.startConsultation();
+    });
+
+    await sendTimes(result, ["1 回目の発話"]);
+    expect(previewExtraction).not.toHaveBeenCalled();
+
+    await sendTimes(result, ["2 回目の発話"]);
+    await waitFor(() => expect(result.current.preview).toEqual(draft));
+    expect(previewExtraction).toHaveBeenCalledTimes(1);
+    // 会話全文を渡す (#183 と同じ理由: 真実は画面が持っている)。
+    const [sessionId, messages] = vi.mocked(previewExtraction).mock.calls[0];
+    expect(sessionId).toBe("s1");
+    expect(messages.filter((m: { role: string }) => m.role === "user")).toHaveLength(2);
+  });
+
+  it("プレビューの失敗は会話を止めない (Snackbar に出さず、ペイン内の状態にする)", async () => {
+    // 無いと: 背景処理の失敗が actionError (Snackbar) や unhandled rejection に化けて
+    //         会話そのものを邪魔する。あるいは完全に無音で「右ペインが更新されない」
+    //         だけになり、壊れていることに誰も気づけない (ADR 0018)。
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(startNewConsultation).mockResolvedValue(session());
+    vi.mocked(previewExtraction).mockRejectedValue(new Error("preview down"));
+    const { result } = setup();
+    await act(async () => {
+      await result.current.startConsultation();
+    });
+
+    await sendTimes(result, ["1 回目", "2 回目"]);
+
+    await waitFor(() => expect(result.current.previewStatus).toBe("error"));
+    expect(result.current.actionError).toBeNull();
+
+    // 会話は続けられる (loading が preview に巻き込まれない)。
+    expect(result.current.loading).toBe(false);
+    await sendTimes(result, ["3 回目"]);
+    expect(result.current.session?.messages.length).toBeGreaterThan(5);
+  });
+
+  const emptyDraft = { sessionId: "s1", items: [], newProblemCount: 0, updatedProblemCount: 0 };
+
+  it("手動「今すぐ整理」は往復数と無関係に更新する", async () => {
+    vi.mocked(startNewConsultation).mockResolvedValue(session());
+    vi.mocked(previewExtraction).mockResolvedValue(emptyDraft);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.startConsultation();
+    });
+
+    await act(async () => {
+      result.current.refreshPreview();
+    });
+
+    await waitFor(() => expect(previewExtraction).toHaveBeenCalledTimes(1));
+  });
+
+  it("新しい相談を開始すると前セッションの下書きは消える (揮発)", async () => {
+    // 無いと: 前セッションの下書きが新セッションの右ペインに残り、「確定すると
+    //         関係ない困りごとが保存される」誤操作の入口になる。
+    vi.mocked(startNewConsultation).mockResolvedValue(session());
+    vi.mocked(previewExtraction).mockResolvedValue(emptyDraft);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.startConsultation();
+    });
+    await sendTimes(result, ["1 回目", "2 回目"]);
+    await waitFor(() => expect(result.current.preview).not.toBeNull());
+
+    vi.mocked(startNewConsultation).mockResolvedValue(session({ id: "s2", messages: [] }));
+    await act(async () => {
+      await result.current.startConsultation();
+    });
+
+    expect(result.current.preview).toBeNull();
+    expect(result.current.previewStatus).toBe("idle");
   });
 });
 

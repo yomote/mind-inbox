@@ -16,11 +16,19 @@ import {
   extractMentions,
   loadProblem,
   loadProblems,
+  previewExtraction,
+  previewSupported,
   sendMessage,
   startNewConsultation,
   triageProblem,
 } from "../api";
-import type { ConsultationSession, ExtractionResult, Problem, TriageInput } from "../api";
+import type {
+  ChatMessage,
+  ConsultationSession,
+  ExtractionResult,
+  Problem,
+  TriageInput,
+} from "../api";
 import type { AppRoute } from "../Router";
 import { deriveSessionTitle } from "./sessionTitle";
 
@@ -37,6 +45,16 @@ export type Consultation = {
   extraction: ExtractionResult | null;
   problems: Problem[];
   selectedProblem: Problem | null;
+
+  /**
+   * 「整理されつつある困りごと」の揮発する下書き (#187 / ADR 0039 D1)。
+   * 読み取り専用 — 確定 (extract) して初めて Problem リポジトリに書かれる。
+   */
+  preview: ExtractionResult | null;
+  /** error は右ペイン内に表示する (会話を止めない — Snackbar には出さない)。 */
+  previewStatus: "idle" | "updating" | "error";
+  /** 手動「今すぐ整理」(ADR 0039 D2)。 */
+  refreshPreview: () => void;
 
   startConsultation: () => Promise<void>;
   sendDraftMessage: () => Promise<void>;
@@ -109,6 +127,12 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
   const [problems, setProblems] = React.useState<Problem[]>([]);
   const [selectedProblem, setSelectedProblem] = React.useState<Problem | null>(null);
 
+  const [preview, setPreview] = React.useState<ExtractionResult | null>(null);
+  const [previewStatus, setPreviewStatus] = React.useState<"idle" | "updating" | "error">("idle");
+  // preview は会話 (loading / runAction) と独立に走る。多重実行だけ自前で防ぐ
+  // (ADR 0039 D2: in-flight 1 本 — LLM 呼び出しを重ねない)。
+  const previewInFlightRef = React.useRef(false);
+
   // loading は多重実行ガードにだけ使うので、ハンドラの identity を安定させるため ref でも持つ。
   const loadingRef = React.useRef(false);
   const setBusy = React.useCallback((next: boolean) => {
@@ -149,6 +173,35 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     [setBusy],
   );
 
+  /**
+   * 下書きプレビューを更新する (#187 / ADR 0039)。
+   *
+   * runAction を通さない: 失敗しても会話は続けられる背景処理なので、Snackbar と
+   * 多重実行ガード (loading) を会話と共有しない。ただし**無音にはしない** —
+   * 失敗は previewStatus="error" として右ペイン内に表示する (ADR 0018)。
+   */
+  const runPreview = React.useCallback(async (sessionId: string, messages: ChatMessage[]) => {
+    if (!previewSupported) return;
+    if (previewInFlightRef.current) return;
+    previewInFlightRef.current = true;
+    setPreviewStatus("updating");
+    try {
+      const result = await previewExtraction(sessionId, messages);
+      setPreview(result);
+      setPreviewStatus("idle");
+    } catch (err) {
+      console.error("[useConsultation] 下書きプレビューの更新に失敗", err);
+      setPreviewStatus("error");
+    } finally {
+      previewInFlightRef.current = false;
+    }
+  }, []);
+
+  const refreshPreview = React.useCallback(() => {
+    if (!session) return;
+    void runPreview(session.id, session.messages);
+  }, [runPreview, session]);
+
   const startConsultation = React.useCallback(async () => {
     // テーマ入力画面は廃止 (home.mdx)。常に空で開始し、AI の問いかけから対話が始まる。
     const outcome = await runAction(FAILURE_MESSAGE.startConsultation, () =>
@@ -157,6 +210,9 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     if (!outcome.ok) return;
 
     setSession(outcome.value);
+    // 前セッションの下書きを新しい相談に持ち込まない (下書きはセッション内で揮発 — ADR 0039)。
+    setPreview(null);
+    setPreviewStatus("idle");
     transition("session");
   }, [runAction, transition]);
 
@@ -189,7 +245,15 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     }
 
     setSession((prev) => (prev ? { ...prev, messages: [...prev.messages, outcome.value] } : prev));
-  }, [draftMessage, runAction, session]);
+
+    // ユーザー発話 2 往復ごとに下書きプレビューを自動更新する (#187 / ADR 0039 D2)。
+    // 毎ターンは LLM 呼び出しが倍増するため間引く。fire-and-forget — 会話を待たせない。
+    const messagesAfterReply = [...session.messages, userMessage, outcome.value];
+    const userTurnCount = messagesAfterReply.filter((m) => m.role === "user").length;
+    if (userTurnCount > 0 && userTurnCount % 2 === 0) {
+      void runPreview(session.id, messagesAfterReply);
+    }
+  }, [draftMessage, runAction, runPreview, session]);
 
   const extract = React.useCallback(async () => {
     if (!session) return;
@@ -296,6 +360,8 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     setExtraction(null);
     setProblems([]);
     setSelectedProblem(null);
+    setPreview(null);
+    setPreviewStatus("idle");
   }, [setBusy]);
 
   return {
@@ -308,6 +374,9 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     extraction,
     problems,
     selectedProblem,
+    preview,
+    previewStatus,
+    refreshPreview,
     startConsultation,
     sendDraftMessage,
     extract,

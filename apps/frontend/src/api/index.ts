@@ -3,6 +3,8 @@ export { startNewConsultation, sendMessage } from "./consultation";
 export {
   ExtractFailed,
   extractMentions,
+  previewExtraction,
+  previewSupported,
   loadProblems,
   loadProblem,
   triageProblem,
