@@ -66,14 +66,24 @@ _WORKFLOW_NAME = "mind-inbox-chat-turn"
 
 _REJECTION_REPLY = "操作はキャンセルされました。他にご用件はありますか？"
 
+
+# checkpoint storage は run ごとに新品を作る。プロセス共有の 1 個にすると、
+# 承認と無関係な全ターンの checkpoint が削除経路なしに溜まり続ける
+# (PR #243 レビュー指摘 / 1 GiB レプリカでメモリを圧迫)。承認待ちで中断した
+# run の storage だけを registry に保持し、/approve の解決で解放する。
 # TODO(PoC): in-memory checkpoint はプロセス再起動で消える。#188 で MAF 公式の
-# CosmosCheckpointStorage (agent-framework-azure-cosmos) に差し替える。
-_checkpoint_storage: CheckpointStorage = InMemoryCheckpointStorage()
+# CosmosCheckpointStorage (agent-framework-azure-cosmos) へ差し替える際は
+# 共有ストア + document TTL 掃除の構成になる (この registry は不要になる)。
+def _new_checkpoint_storage() -> CheckpointStorage:
+    return InMemoryCheckpointStorage()
 
 
-def get_checkpoint_storage() -> CheckpointStorage:
-    """MAF checkpoint storage のシングルトン (#188 で永続実装に差し替え)。"""
-    return _checkpoint_storage
+_pending_run_storages: dict[str, CheckpointStorage] = {}
+
+
+def get_pending_checkpoint_storage(approval_id: str) -> Optional[CheckpointStorage]:
+    """承認待ち run の checkpoint storage (解決済み・不明 ID は None)。"""
+    return _pending_run_storages.get(approval_id)
 
 
 # ── Session history helpers (v1 から不変の防御仕様) ───────────────────────────
@@ -518,7 +528,11 @@ class FinishExecutor(Executor):
 
 
 def _build_chat_workflow(
-    session_repo: SessionRepository, kernel: Kernel, *, stream: bool
+    session_repo: SessionRepository,
+    kernel: Kernel,
+    *,
+    stream: bool,
+    checkpoint_storage: CheckpointStorage,
 ) -> Workflow:
     """1 ターン分の chat workflow を組む。
 
@@ -537,7 +551,7 @@ def _build_chat_workflow(
         WorkflowBuilder(
             name=_WORKFLOW_NAME,
             start_executor=receive,
-            checkpoint_storage=get_checkpoint_storage(),
+            checkpoint_storage=checkpoint_storage,
             output_from=[finish],
             intermediate_output_from=[respond],
         )
@@ -555,11 +569,11 @@ def _build_chat_workflow(
 # ── FastAPI 境界の薄いアダプタ (API 契約は v1 と不変) ─────────────────────────
 
 
-async def _find_checkpoint_id(request_id: str) -> Optional[str]:
+async def _find_checkpoint_id(
+    storage: CheckpointStorage, request_id: str
+) -> Optional[str]:
     """pending の approval request を保持する checkpoint を探す (写像の実体)。"""
-    checkpoints = await get_checkpoint_storage().list_checkpoints(
-        workflow_name=_WORKFLOW_NAME
-    )
+    checkpoints = await storage.list_checkpoints(workflow_name=_WORKFLOW_NAME)
     matching = [
         cp for cp in checkpoints if request_id in cp.pending_request_info_events
     ]
@@ -570,7 +584,9 @@ async def _find_checkpoint_id(request_id: str) -> Optional[str]:
 
 
 async def _record_approval_request(
-    event: WorkflowEvent, approval_repo: ApprovalRepository
+    event: WorkflowEvent,
+    approval_repo: ApprovalRepository,
+    storage: CheckpointStorage,
 ) -> ChatResponse:
     """MAF の request_info event を API 契約 (requiresApproval 応答) へ写す。"""
     request: ApprovalRequest = event.data
@@ -579,9 +595,12 @@ async def _record_approval_request(
         session_id=request.session_id,
         plan=request.plan,
         rag_context=request.rag_context,
-        checkpoint_id=await _find_checkpoint_id(event.request_id),
+        checkpoint_id=await _find_checkpoint_id(storage, event.request_id),
     )
     await approval_repo.save(record)
+    if record.checkpoint_id is not None:
+        # 承認待ちの run だけ storage を生かしておく (/approve の解決で解放)
+        _pending_run_storages[record.id] = storage
     return ChatResponse(
         reply=f"「{request.plan.tool_name}」を実行するには承認が必要です。実行してよろしいですか？",
         requires_approval=True,
@@ -597,13 +616,17 @@ async def run_workflow(
     approval_repo: ApprovalRepository,
     kernel: Kernel,
 ) -> ChatResponse:
-    workflow = _build_chat_workflow(session_repo, kernel, stream=False)
+    storage = _new_checkpoint_storage()
+    workflow = _build_chat_workflow(
+        session_repo, kernel, stream=False, checkpoint_storage=storage
+    )
     result = await workflow.run(ChatTurn(session_id=session_id, message=message))
 
     requests = result.get_request_info_events()
     if requests:
-        return await _record_approval_request(requests[0], approval_repo)
+        return await _record_approval_request(requests[0], approval_repo, storage)
 
+    # 承認なしで完了した run の checkpoint は storage ごとここで破棄される
     outputs = result.get_outputs()
     if not outputs:
         raise RuntimeError("Chat workflow completed without producing a response")
@@ -623,7 +646,10 @@ async def run_workflow_stream(
     し、完了時に従来 /chat と同一形の ChatResponse を ChatStreamDone で返す。
     承認が要るターンは逐次配信するものが無いので done のみを返す。
     """
-    workflow = _build_chat_workflow(session_repo, kernel, stream=True)
+    storage = _new_checkpoint_storage()
+    workflow = _build_chat_workflow(
+        session_repo, kernel, stream=True, checkpoint_storage=storage
+    )
 
     request_event: Optional[WorkflowEvent] = None
     final_response: Optional[ChatResponse] = None
@@ -641,7 +667,9 @@ async def run_workflow_stream(
 
     if request_event is not None:
         yield ChatStreamDone(
-            response=await _record_approval_request(request_event, approval_repo)
+            response=await _record_approval_request(
+                request_event, approval_repo, storage
+            )
         )
         return
 
@@ -665,10 +693,18 @@ async def resume_after_approval(
     if not record.checkpoint_id:
         raise ValueError(f"Approval checkpoint not found: {approval_id!r}")
 
+    # 解決に入る時点で registry から解放する (成功・失敗どちらでも再試行は
+    # status チェックで弾かれるため、checkpoint を保持し続ける理由がない)
+    storage = _pending_run_storages.pop(approval_id, None)
+    if storage is None:
+        raise ValueError(f"Approval checkpoint not found: {approval_id!r}")
+
     record.status = "approved" if approved else "rejected"
     await approval_repo.save(record)
 
-    workflow = _build_chat_workflow(session_repo, kernel, stream=False)
+    workflow = _build_chat_workflow(
+        session_repo, kernel, stream=False, checkpoint_storage=storage
+    )
     result = await workflow.run(
         responses={approval_id: ApprovalDecision(approved=approved)},
         checkpoint_id=record.checkpoint_id,

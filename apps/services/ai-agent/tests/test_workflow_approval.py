@@ -4,6 +4,8 @@
 - approvalRequestId → MAF checkpoint の写像が壊れ、/approve が中断点から再開できない退行
 - 承認/却下の分岐反転 (却下なのにツールが走る / 承認なのに走らない) が静かに通る
 - 再開後の履歴積み忘れ (tool result / assistant 応答) で次ターンの文脈が壊れる退行
+- 完了した run の checkpoint が解放されず、長寿命レプリカのメモリを食い潰す退行
+  (PR #243 レビュー指摘)
 
 ここで test しないこと:
 - SSE / HTTP の枠組み (それは L2 /chat 系)
@@ -15,7 +17,8 @@ import json
 import pytest
 
 from app.workflow import (
-    get_checkpoint_storage,
+    _pending_run_storages,
+    get_pending_checkpoint_storage,
     resume_after_approval,
     run_workflow,
 )
@@ -25,6 +28,13 @@ APPROVAL_CLASSIFICATION = {
     "needs_tool": True,
     "tool_name": "send_reply",
     "tool_args": {"to": "a@example.com", "body": "hi"},
+}
+
+NO_TOOL_CLASSIFICATION = {
+    "needs_retrieval": False,
+    "needs_tool": False,
+    "tool_name": None,
+    "tool_args": {},
 }
 
 
@@ -71,9 +81,11 @@ class TestApprovalCheckpointMapping:
         assert record.status == "pending"
         assert record.checkpoint_id is not None
 
-        # 写像の実体: checkpoint は MAF の storage に実在し、
+        # 写像の実体: checkpoint はこの run の storage に実在し、
         # この approvalRequestId の pending request を保持している
-        checkpoint = await get_checkpoint_storage().load(record.checkpoint_id)
+        storage = get_pending_checkpoint_storage(res.approval_request_id)
+        assert storage is not None
+        checkpoint = await storage.load(record.checkpoint_id)
         assert res.approval_request_id in checkpoint.pending_request_info_events
 
 
@@ -124,6 +136,22 @@ class TestResumeAfterApproval:
         assert history.messages[-1].role.value == "assistant"
         assert contents[-1] == reply
 
+    async def test_l1_resolved_approval_releases_checkpoint_storage(
+        self, session_repo, approval_repo
+    ):
+        kernel = FakeKernel(RoutedChatService(APPROVAL_CLASSIFICATION))
+
+        res = await run_workflow(
+            "s-release", "返信して", session_repo, approval_repo, kernel
+        )
+        assert get_pending_checkpoint_storage(res.approval_request_id) is not None
+
+        await resume_after_approval(
+            res.approval_request_id, True, session_repo, approval_repo, kernel
+        )
+
+        assert get_pending_checkpoint_storage(res.approval_request_id) is None
+
     async def test_l1_resume_unknown_id_raises(self, session_repo, approval_repo):
         kernel = FakeKernel(RoutedChatService(APPROVAL_CLASSIFICATION))
 
@@ -148,3 +176,19 @@ class TestResumeAfterApproval:
             await resume_after_approval(
                 res.approval_request_id, True, session_repo, approval_repo, kernel
             )
+
+
+class TestCheckpointCleanup:
+    async def test_l1_completed_run_without_approval_retains_no_checkpoints(
+        self, session_repo, approval_repo
+    ):
+        kernel = FakeKernel(RoutedChatService(NO_TOOL_CLASSIFICATION))
+        before = dict(_pending_run_storages)
+
+        res = await run_workflow(
+            "s-clean", "こんにちは", session_repo, approval_repo, kernel
+        )
+
+        assert res.requires_approval is False
+        # 承認と無関係な run はプロセス側に checkpoint 参照を一切残さない
+        assert _pending_run_storages == before
