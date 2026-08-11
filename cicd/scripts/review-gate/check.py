@@ -19,7 +19,9 @@
        (受け入れ後に積まれた未レビューコードのマージを防ぐ)
     2. レビュースレッドが全部解決している
     3. コード PR (apps/ か cicd/ に触れる) かつ REVIEW_GATE_REQUIRE_CODEX=true のとき、
-       Codex のレビューが付いている (login が CODEX_LOGIN_PATTERN にマッチする投稿)
+       Codex のレビューが付いている (login が CODEX_LOGIN_PATTERN にマッチする投稿。
+       指摘ゼロの clean review は issue コメントにしか痕跡が残らないため、
+       「Codex Review」ヘッダを持つ issue コメントも数える — PR #239 実測)
 
 付随して、合否とは別に advisory のコメントを 2 種類だけ自動投稿する (ADR 0038):
     A. Codex 自動レビューの再トリガー依頼 — コード PR に Codex レビューが
@@ -159,6 +161,44 @@ def sweep_targets(prs: list[dict]) -> list[dict]:
     ]
 
 
+def is_codex_login(login: str, pattern: str) -> bool:
+    return pattern.lower() in (login or "").lower()
+
+
+def is_codex_review_result(body: str) -> bool:
+    """Codex bot の issue コメントが「レビュー結果」か。
+
+    Codex は**指摘ゼロのとき review オブジェクトを作らず、issue コメント**
+    (「Codex Review: Didn't find any major issues.」) だけを残す (PR #239 実測)。
+    一方で同じ bot は非レビューの定型応答も投稿する — bot メンションへの
+    アカウント案内「To use Codex here, create a Codex account…」と、エラーの
+    「Codex couldn't complete this request. Try again later.」。これらを既着と
+    数えると、再トリガー依頼 (advisory) が発火しなくなる。
+    「Codex Review」ヘッダの有無で区別する (定型応答には現れない)。
+    """
+    return "codex review" in body.lower()
+
+
+def codex_present_in(
+    review_logins: list[str],
+    issue_comments: list[tuple[str, str]],
+    pattern: str,
+) -> bool:
+    """Codex レビュー既着の判定 (純関数)。
+
+    review_logins: pulls/N/reviews + pulls/N/comments の投稿者 login 列
+    (レビューオブジェクト・レビューコメントは存在自体がレビューの証拠)。
+    issue_comments: issues/N/comments の (login, body) 列 — こちらは
+    **レビュー結果の本文を持つものだけ**を数える (is_codex_review_result)。
+    """
+    if any(is_codex_login(login, pattern) for login in review_logins):
+        return True
+    return any(
+        is_codex_login(login, pattern) and is_codex_review_result(body)
+        for login, body in issue_comments
+    )
+
+
 @dataclass
 class Verdict:
     ok: bool
@@ -248,15 +288,31 @@ def fetch_unresolved_threads(owner: str, name: str, number: int) -> int:
 
 
 def fetch_codex_present(repo: str, number: int, pattern: str) -> bool:
-    """Codex 連携アカウントの痕跡 (レビュー / レビューコメント) があるか。"""
+    """Codex 連携アカウントのレビュー痕跡があるか (判定は codex_present_in)。
+
+    見る場所は 3 つ。pulls/N/reviews と pulls/N/comments に加えて
+    issues/N/comments も走査する — **指摘ゼロの clean review はレビュー
+    オブジェクトを作らず issue コメントだけを残す** (PR #239 実測。ここを
+    見ないと clean な PR ほど門が永遠に赤のままになる)。issue コメント側は
+    同 bot の非レビュー定型応答を除くため本文でも絞る。
+    """
     posts: list[dict] = []
     for path in (
         f"repos/{repo}/pulls/{number}/reviews",
         f"repos/{repo}/pulls/{number}/comments",
     ):
         posts.extend(gh("api", path, "--paginate"))  # type: ignore[arg-type]
-    return any(
-        pattern.lower() in (p.get("user") or {}).get("login", "").lower() for p in posts
+    issue_comments = gh("api", f"repos/{repo}/issues/{number}/comments", "--paginate")
+    return codex_present_in(
+        review_logins=[(p.get("user") or {}).get("login", "") for p in posts],
+        issue_comments=[
+            (
+                ((c.get("user") or {}).get("login", "")),  # type: ignore[union-attr]
+                (c.get("body") or ""),  # type: ignore[union-attr]
+            )
+            for c in issue_comments
+        ],
+        pattern=pattern,
     )
 
 

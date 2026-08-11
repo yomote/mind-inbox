@@ -7,9 +7,11 @@
 
 from check import (
     CODEX_RETRIGGER_MARKER,
+    codex_present_in,
     decide,
     has_pm_accept,
     is_code_pr,
+    is_codex_review_result,
     minutes_between,
     sensitive_paths,
     should_request_security_review,
@@ -219,3 +221,49 @@ def test_l1_投稿直前の再フェッチ確認はマーカーを見つけた�
     assert not still_unposted(
         CODEX_RETRIGGER_MARKER, [f"引用: {CODEX_RETRIGGER_MARKER} を見た"]
     )
+
+
+# Codex bot が issue コメントとして投稿する実在 3 パターン (PR #238 / #239 で実測)
+CODEX_LOGIN = "chatgpt-codex-connector[bot]"
+CODEX_CLEAN_REVIEW = "**Codex Review**: Didn't find any major issues. Nice work!"
+CODEX_ACCOUNT_GUIDE = (
+    "To use Codex here, create a Codex account and connect it to your GitHub account."
+)
+CODEX_ERROR_REPLY = "Codex couldn't complete this request. Try again later."
+
+
+def test_l1_指摘ゼロのclean_reviewはissueコメントの本文で既着と数える() -> None:
+    """PR #239 実測: Codex は指摘ゼロのとき review オブジェクトを作らず、
+    issue コメント (Codex Review ヘッダ) だけを残す。
+
+    無いと何が静かに通るか:
+        clean な PR ほど「Codex レビューが無い」と判定され**門が永遠に赤のまま**
+        (PR #239 / #246 で実発生)。逆側の退行 (定型応答を既着と数える) は
+        下のテストが固定する。
+    """
+    assert is_codex_review_result(CODEX_CLEAN_REVIEW)
+    assert codex_present_in([], [(CODEX_LOGIN, CODEX_CLEAN_REVIEW)], "codex")
+
+
+def test_l1_同botの非レビュー定型応答は既着と数えない() -> None:
+    """アカウント案内・エラー応答を既着と数えると、Codex が実際には
+    レビューしていないのに再トリガー依頼 (advisory) が発火しなくなる。"""
+    assert not is_codex_review_result(CODEX_ACCOUNT_GUIDE)
+    assert not is_codex_review_result(CODEX_ERROR_REPLY)
+    assert not codex_present_in(
+        [],
+        [(CODEX_LOGIN, CODEX_ACCOUNT_GUIDE), (CODEX_LOGIN, CODEX_ERROR_REPLY)],
+        "codex",
+    )
+
+
+def test_l1_codex既着の判定はloginでも絞る() -> None:
+    # review オブジェクト / レビューコメントは存在自体が証拠 (従来どおり)
+    assert codex_present_in([CODEX_LOGIN], [], "codex")
+    assert not codex_present_in(["yomote"], [], "codex")
+    # issue コメントは本文が review 結果でも、投稿者が Codex でなければ数えない
+    # (advisory の依頼文や人間の引用が「既着」に化けるのを防ぐ)
+    assert not codex_present_in(
+        [], [("github-actions[bot]", "`@codex review` を投稿してください")], "codex"
+    )
+    assert not codex_present_in([], [("yomote", CODEX_CLEAN_REVIEW)], "codex")
