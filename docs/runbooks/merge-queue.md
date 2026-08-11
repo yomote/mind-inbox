@@ -50,7 +50,12 @@
 ### queue に入れた PR が check pending のままタイムアウト脱落する
 
 - 原因: required check の workflow に `merge_group:` トリガーが無い (新しい check を required に足したときに起きがち。paths フィルタ付き workflow は特に — paths は merge_group に効かないので、常に走って常に結論を出す作りにする)
-- 対処: 該当 workflow に `merge_group:` を足す。adr-number-guard / auto-improve-guard の書き方を参考に
+- 対処: 該当 workflow に `merge_group:` を足す。adr-number-guard / auto-improve-guard の書き方を参考に。**このとき信頼境界を必ず確認する** (ADR 0042 D3 / 次項)
+
+### merge_group を足した workflow が queue ref のコードを write 権限で実行している
+
+- 原因: merge_group の checkout は queue の一時 branch = **PR が改変したコード**。`pull_request` イベントと違い fork でも GITHUB_TOKEN が read-only に落ちないため、write 権限 (statuses / pull-requests 等) を持つ job で PR 由来のスクリプトを実行すると門の迂回 (偽 status) や改ざんに使える (PR #271 Codex P1)
+- 対処: リポジトリのスクリプトを実行する job は `ref: main` の信頼版 checkout で実行するか (review-gate の `gate-merge-group` job が例)、write を落として投稿系は別 job に分離する (`test.yml` の `pr-comment` job が例)
 
 ### merge group で review-gate が 🔴「merge_group ref から PR を解決できない」
 

@@ -58,6 +58,16 @@ review-gate (`cicd/scripts/review-gate/check.py`) の受け入れ判定を拡張
 
 ADR 0036 は merge queue を「並行 2 本・同一アカウント運用にはオーバーキル」として不採用にした。**実測で覆す**: 並行 3〜4 本 + 活発な main で「追いつき競争」が 1 日 4 周の実害になった。queue は「追いついて check を回してからマージ」をサーバー側で直列化し、セッションの生死に依存しない (auto-merge と同じ性質)。
 
+### D3 — 信頼境界: 門のスクリプトは常に main の信頼版を実行する (PR #271 Codex P1)
+
+merge_group イベントの checkout は queue の一時 branch = **PR が改変したコード**を含む。`statuses: write` を持つ job がそこから `check.py` を実行すると、`check.py` を改変した (外部 fork の) PR が偽の `review-gate=success` を merge group SHA に貼り、門を丸ごと迂回できる — `pull_request` イベントでは fork の GITHUB_TOKEN を GitHub が read-only に落とすが、**merge_group は base リポジトリのイベントなので落ちない**。よって:
+
+- **review-gate の merge_group 判定は専用 job に分離し、`ref: main` で checkout した信頼版スクリプトだけを実行する** (判定材料は全て API 経由 — queue ref の作業ツリー自体が不要)。permissions は `contents: read` + `statuses: write` のみ (`pull-requests: write` は持たない — advisory は merge_group で投稿しないため)
+- **未信頼コード (PR 由来の npm / pnpm スクリプト) を実行する job には write を持たせない** — `test.yml` の workflow permissions を `contents: read` に落とし、PR への sticky コメント投稿は未信頼コードを実行しない別 job (`pr-comment`、`pull-requests: write` のみ) へ artifact 経由で分離した
+- `pull_request` イベント側の review-gate は従来どおり PR 版 `check.py` を実行する — fork PR は token が read-only で偽 status を貼れず、same-repo PR の作者は信頼境界の内側 (単一アカウント運用)。挙動を変えないことを選び、理由を workflow コメントに明記
+- auto-improve-guard / adr-number-guard の merge_group 経路はリポジトリのスクリプトを実行しない (インライン bash + git / gh API のみ) かつ read 権限のみで、この穴の対象外
+- 帰結: **required check の workflow に merge_group を足すときは「queue ref のコードを write 権限で実行していないか」を必ず確認する** (Runbook の Common Issues に追記)
+
 ### Positive Consequences
 
 - base 追随だけの push で PM の再受け入れが不要になる — 受け入れは「実装差分への承認」という本来の意味に戻る

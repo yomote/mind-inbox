@@ -22,6 +22,16 @@
 #   PR を解決できないときは failure を貼る (安全側 — 静かに通さない)。
 #   pm-accept は「実装差分が不変の main 追随」なら引き継がれる (check.py / ADR 0042)。
 #
+# 信頼境界 (PR #271 Codex P1 / ADR 0042):
+#   merge_group の checkout は queue の一時 branch = **PR が改変したコード**を含む。
+#   statuses: write を持つ job で PR 版 check.py を実行すると、check.py を改変した
+#   PR が偽の review-gate=success を merge group SHA に貼って門を迂回できる。
+#   よって merge_group の判定は別 job (gate-merge-group) に分け、**main から
+#   checkout した信頼版スクリプトだけ**を実行する (判定材料は全て API 経由なので
+#   queue ref の checkout 自体が不要)。pull_request イベント側は PR 版 check.py を
+#   実行するが、fork PR の GITHUB_TOKEN は GitHub が read-only に落とすため偽 status は
+#   貼れず、same-repo PR の作者は信頼境界の内側 (単一アカウント運用) — 挙動は従来のまま。
+#
 # 注意: issue_comment / pull_request_review / schedule トリガーは main に入った版で
 #       しか発火しない。コメント後の再評価が要るときは workflow_dispatch で PR 番号を
 #       渡して叩ける。
@@ -53,23 +63,28 @@ concurrency:
   group: review-gate-${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr || github.event.merge_group.head_sha || github.run_id }}
   cancel-in-progress: false
 
-permissions:
-  contents: read
-  # write は advisory コメント (Codex 再トリガー依頼 / security review 依頼) の投稿用 (ADR 0038)
-  pull-requests: write
-  statuses: write
+# permissions は job 単位で分ける (信頼境界 — 上のコメント参照)。
+# workflow レベルには置かない: merge_group job に pull-requests: write を持たせない。
 
 jobs:
   gate:
     name: マージの門を判定
     runs-on: ubuntu-latest
-    # issue_comment は Issue にも飛ぶ — PR のコメントだけ拾う
-    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    # issue_comment は Issue にも飛ぶ — PR のコメントだけ拾う。
+    # merge_group は信頼境界の異なる別 job (下) が持つ。
+    if: github.event_name != 'merge_group' && (github.event_name != 'issue_comment' || github.event.issue.pull_request)
+    permissions:
+      contents: read
+      # write は advisory コメント (Codex 再トリガー依頼 / security review 依頼) の投稿用 (ADR 0038)
+      pull-requests: write
+      statuses: write
     steps:
+      # pull_request では PR 版 check.py が動く (fork は token read-only、same-repo は
+      # 信頼内 — 冒頭「信頼境界」参照)。issue_comment / schedule / dispatch は main を checkout。
       - uses: actions/checkout@v4
 
       - name: 判定して commit status を貼る
-        if: github.event_name != 'schedule' && github.event_name != 'merge_group'
+        if: github.event_name != 'schedule'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REVIEW_GATE_REQUIRE_CODEX: ${{ vars.REVIEW_GATE_REQUIRE_CODEX }}
@@ -77,17 +92,6 @@ jobs:
           CODEX_RETRIGGER_MINUTES: ${{ vars.CODEX_RETRIGGER_MINUTES }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
         run: python3 cicd/scripts/review-gate/check.py "$PR_NUMBER"
-
-      # merge queue の一時 branch へ status を貼る (ADR 0042)。判定材料は
-      # head_ref から解決した対象 PR。advisory は投稿しない (PR 側イベントが持つ)。
-      - name: 判定して commit status を貼る (merge_group)
-        if: github.event_name == 'merge_group'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REVIEW_GATE_REQUIRE_CODEX: ${{ vars.REVIEW_GATE_REQUIRE_CODEX }}
-          MERGE_GROUP_HEAD_REF: ${{ github.event.merge_group.head_ref }}
-          MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
-        run: python3 cicd/scripts/review-gate/check.py --merge-group
 
       # イベントが来ない PR の advisory を拾う (ADR 0038 / PR #238 P1)。
       # open PR (base=main) を列挙して advisory だけ適用。status は貼らない。
@@ -97,3 +101,31 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CODEX_RETRIGGER_MINUTES: ${{ vars.CODEX_RETRIGGER_MINUTES }}
         run: python3 cicd/scripts/review-gate/check.py --advisory-sweep
+
+  # merge queue の一時 branch へ status を貼る (ADR 0042)。判定材料は head_ref から
+  # 解決した対象 PR。advisory は投稿しない (PR 側イベントが持つ) ので
+  # pull-requests: write も持たない — 最小権限。
+  gate-merge-group:
+    name: マージの門を判定 (merge_group)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'merge_group'
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      # 信頼境界 (PR #271 Codex P1): queue の一時 branch (= PR 由来コード) は
+      # checkout しない。**main の信頼版スクリプトだけ**を実行する — 判定材料は
+      # 全て API 経由なので queue ref の作業ツリーは不要。
+      # 注: main にこの版の check.py (--merge-group 対応) が入るまでこの経路は
+      # 動かない — queue 有効化 (#269) は本 PR マージ後なので順序は満たされる。
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: 判定して commit status を貼る (merge_group)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEW_GATE_REQUIRE_CODEX: ${{ vars.REVIEW_GATE_REQUIRE_CODEX }}
+          MERGE_GROUP_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: python3 cicd/scripts/review-gate/check.py --merge-group
