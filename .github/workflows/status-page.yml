@@ -41,6 +41,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # UX トレンド (ADR 0041 D6) の描画元。ブランチが無くても落とさない —
+      # build.py が「未検証」として出す (取れなかったを異常なしに見せない)
+      - name: UX 観測データブランチを取得 (トレンド描画用)
+        run: |
+          if git ls-remote --exit-code --heads origin data/ux-observations >/dev/null 2>&1; then
+            git fetch origin data/ux-observations
+            git worktree add /tmp/ux-data FETCH_HEAD
+            echo "UX_DATA_DIR=/tmp/ux-data" >> "$GITHUB_ENV"
+          else
+            echo "::warning::data/ux-observations がまだ無いため UX トレンドは未検証表示になります"
+          fi
+
       - name: ページを組み立てる
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

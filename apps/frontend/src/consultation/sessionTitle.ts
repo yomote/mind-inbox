@@ -6,7 +6,10 @@
  * 見出しの長さが変わるのは非対称なので、ここを唯一の接続点として明示する。
  */
 
-/** 切り詰め長。BFF `apps/bff/src/trpc/router.ts` の deriveTitle と同値にすること。 */
+/**
+ * 切り詰め長。BFF `apps/bff/src/domain/title.ts` の TITLE_MAX_CHARS と同値にすること。
+ * 仕様: docs/design/domain_rules.md §2。
+ */
 export const SESSION_TITLE_MAX = 26;
 
 export function deriveSessionTitle(text: string): string {

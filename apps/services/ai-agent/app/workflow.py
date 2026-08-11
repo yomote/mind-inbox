@@ -43,10 +43,12 @@ from agent_framework import (
     handler,
     response_handler,
 )
+from agent_framework_azure_cosmos import CosmosCheckpointStorage
 from pydantic import BaseModel
 from semantic_kernel import Kernel
 from semantic_kernel.contents import ChatHistory
 
+from .config import get_settings
 from .kernel import get_execution_settings
 from .prompts import CHAT_SYSTEM_PROMPT
 from .rag import retrieve
@@ -67,14 +69,56 @@ _WORKFLOW_NAME = "mind-inbox-chat-turn"
 _REJECTION_REPLY = "操作はキャンセルされました。他にご用件はありますか？"
 
 
-# checkpoint storage は run ごとに新品を作る。プロセス共有の 1 個にすると、
-# 承認と無関係な全ターンの checkpoint が削除経路なしに溜まり続ける
-# (PR #243 レビュー指摘 / 1 GiB レプリカでメモリを圧迫)。承認待ちで中断した
-# run の storage だけを registry に保持し、/approve の解決で解放する。
-# TODO(PoC): in-memory checkpoint はプロセス再起動で消える。#188 で MAF 公式の
-# CosmosCheckpointStorage (agent-framework-azure-cosmos) へ差し替える際は
-# 共有ストア + document TTL 掃除の構成になる (この registry は不要になる)。
+# checkpoint に入り得るアプリの pydantic 型 (edge を流れるメッセージ + HITL payload)。
+# CosmosCheckpointStorage の復元は許可リスト式 (JSON + pickle ハイブリッド) なので、
+# ここに登録が無い型は **保存は通るのに復元 (= /approve の再開) だけが落ちる**。
+# executor 間のメッセージ型を増やしたら必ずここにも足すこと
+# (test_workflow_checkpoint_storage.py が fake ストアで encode → decode を通して pin する)。
+_APP_CHECKPOINT_TYPES = [
+    "app.schemas:ChatResponse",
+    "app.schemas:Plan",
+    "app.workflow:ApprovalDecision",
+    "app.workflow:ApprovalRequest",
+    "app.workflow:ChatTurn",
+    "app.workflow:ClassifiedTurn",
+    "app.workflow:FinalReply",
+    "app.workflow:PlannedTurn",
+    "app.workflow:RespondRequest",
+    "app.workflow:ToolInvocation",
+]
+
+
+def _cosmos_enabled() -> bool:
+    return bool(get_settings().cosmos_endpoint)
+
+
+# checkpoint storage は構成で 2 系統 (#188):
+#
+# - **Cosmos (COSMOS_ENDPOINT あり)**: MAF 公式 CosmosCheckpointStorage の共有ストア。
+#   プロセス再起動を跨いで /approve が再開できる (この Issue の本体)。掃除は
+#   **コンテナ TTL (bicep 宣言) が主経路 + 解決時 delete が即時分** — 下の registry は
+#   使わない (プロセス内参照に依存すると再起動で再開できず、永続化の意味が無い)。
+# - **in-memory (未設定)**: run ごとに新品を作る。プロセス共有の 1 個にすると、承認と
+#   無関係な全ターンの checkpoint が削除経路なしに溜まり続ける (PR #243 レビュー指摘 /
+#   1 GiB レプリカでメモリを圧迫)。承認待ちで中断した run の storage だけを registry に
+#   保持し、/approve の解決で解放する (in-memory には TTL が無いための掃除機構)。
 def _new_checkpoint_storage() -> CheckpointStorage:
+    if _cosmos_enabled():
+        settings = get_settings()
+        from . import cosmos
+
+        # container_client を渡す = create_*_if_not_exists を踏まない
+        # (data plane ロールに作成権限は無い。器は bicep が宣言する)。
+        # storage 自体は薄い wrapper なので run ごとに作ってよい —
+        # 「共有」の実体は cosmos.get_container が返す共有コンテナ。
+        return CosmosCheckpointStorage(
+            container_client=cosmos.get_container(
+                settings.cosmos_checkpoints_container
+            ),
+            database_name=settings.cosmos_database,
+            container_name=settings.cosmos_checkpoints_container,
+            allowed_checkpoint_types=_APP_CHECKPOINT_TYPES,
+        )
     return InMemoryCheckpointStorage()
 
 
@@ -82,7 +126,10 @@ _pending_run_storages: dict[str, CheckpointStorage] = {}
 
 
 def get_pending_checkpoint_storage(approval_id: str) -> Optional[CheckpointStorage]:
-    """承認待ち run の checkpoint storage (解決済み・不明 ID は None)。"""
+    """承認待ち run の checkpoint storage (解決済み・不明 ID は None)。
+
+    in-memory 構成専用の掃除機構。Cosmos 構成では registry を使わないので常に None。
+    """
     return _pending_run_storages.get(approval_id)
 
 
@@ -598,8 +645,9 @@ async def _record_approval_request(
         checkpoint_id=await _find_checkpoint_id(storage, event.request_id),
     )
     await approval_repo.save(record)
-    if record.checkpoint_id is not None:
-        # 承認待ちの run だけ storage を生かしておく (/approve の解決で解放)
+    if record.checkpoint_id is not None and not _cosmos_enabled():
+        # in-memory 構成のみ: 承認待ちの run だけ storage を生かしておく
+        # (/approve の解決で解放)。Cosmos 構成は共有ストアなので registry 不要
         _pending_run_storages[record.id] = storage
     return ChatResponse(
         reply=f"「{request.plan.tool_name}」を実行するには承認が必要です。実行してよろしいですか？",
@@ -626,7 +674,8 @@ async def run_workflow(
     if requests:
         return await _record_approval_request(requests[0], approval_repo, storage)
 
-    # 承認なしで完了した run の checkpoint は storage ごとここで破棄される
+    # 承認なしで完了した run の checkpoint: in-memory 構成は storage ごとここで
+    # 破棄される。Cosmos 構成はコンテナ TTL (1 時間) が掃除する
     outputs = result.get_outputs()
     if not outputs:
         raise RuntimeError("Chat workflow completed without producing a response")
@@ -693,11 +742,20 @@ async def resume_after_approval(
     if not record.checkpoint_id:
         raise ValueError(f"Approval checkpoint not found: {approval_id!r}")
 
-    # 解決に入る時点で registry から解放する (成功・失敗どちらでも再試行は
-    # status チェックで弾かれるため、checkpoint を保持し続ける理由がない)
-    storage = _pending_run_storages.pop(approval_id, None)
-    if storage is None:
-        raise ValueError(f"Approval checkpoint not found: {approval_id!r}")
+    if _cosmos_enabled():
+        # 共有ストア構成: checkpoint は Cosmos にある (プロセス再起動を跨げる)。
+        # TTL 失効等で文書が消えていたら、未知 ID と同じ 404 系に写す
+        storage = _new_checkpoint_storage()
+        try:
+            await storage.load(record.checkpoint_id)
+        except Exception as exc:
+            raise ValueError(f"Approval checkpoint not found: {approval_id!r}") from exc
+    else:
+        # in-memory 構成: 解決に入る時点で registry から解放する (成功・失敗
+        # どちらでも再試行は status チェックで弾かれるため、保持し続ける理由がない)
+        storage = _pending_run_storages.pop(approval_id, None)
+        if storage is None:
+            raise ValueError(f"Approval checkpoint not found: {approval_id!r}")
 
     record.status = "approved" if approved else "rejected"
     await approval_repo.save(record)
@@ -712,4 +770,10 @@ async def resume_after_approval(
     outputs = result.get_outputs()
     if not outputs:
         raise RuntimeError("Chat workflow resume completed without a response")
+
+    if _cosmos_enabled():
+        # 解決時 delete (#188): 解決済みの pending checkpoint は TTL を待たずに消す。
+        # 再開中に書かれた後続 checkpoint と、中断前の祖先はコンテナ TTL が掃除する
+        await storage.delete(record.checkpoint_id)
+
     return outputs[-1].reply

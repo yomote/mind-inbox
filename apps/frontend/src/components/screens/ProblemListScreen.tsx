@@ -14,7 +14,7 @@ import {
   ToggleButtonGroup,
   Typography,
 } from "@mui/material";
-import LocalFireDepartmentRoundedIcon from "@mui/icons-material/LocalFireDepartmentRounded";
+import RepeatIcon from "@mui/icons-material/Repeat";
 import type { Problem, Theme } from "../../api";
 import { STATUS_COLOR, STATUS_LABEL, THEME_OPTIONS, relativeDays } from "./problemShared";
 
@@ -29,7 +29,7 @@ type ProblemListScreenProps = {
 
 /**
  * 困りごと一覧（UC-02）。
- * 既定: 直近言及順 + 🔁N回バッジで再出現を常時強調 +「よく出る順」トグル。
+ * 既定: 直近言及順 + 回数バッジ（Repeat アイコン + N回）で再出現を常時強調 +「よく出る順」トグル。
  * テーマフィルタ + 棚卸し済み（resolved/shelved）の表示トグル。
  * docs/frontend/ui_specs/problem-list.mdx が真実。
  */
@@ -138,8 +138,10 @@ export function ProblemListScreen({
                     <Chip
                       size="small"
                       color="warning"
-                      icon={<LocalFireDepartmentRoundedIcon />}
-                      label={`🔁 ${p.mentionCount}回`}
+                      // data-testid は明示する — MUI の自動付与 (アイコン名 + "Icon") は
+                      // production ビルドで剥がれるため、E2E (production 配信) で検証できない
+                      icon={<RepeatIcon data-testid="RepeatIcon" />}
+                      label={`${p.mentionCount}回`}
                     />
                   )}
                   <Chip

@@ -30,12 +30,12 @@ main への機能 PR / dev の日常 auto-deploy には差し込まない。
 
 共通規約 (Severity / 出力ルール) は [`.github/claude/_common.md`](../../.github/claude/_common.md)。
 
-| 役割               | 一言 (**詳細は rubric が正典**)                                                              | 審査基準 (直すのはここ)                                           | subagent 定義                          |
-| ------------------ | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------- |
-| security-reviewer  | スキャナ総動員 + 動的チェック + 攻撃面追跡。使えなかった分は UNKNOWN 明記                    | [`security-rubric.md`](../../.github/claude/security-rubric.md)   | `.claude/agents/security-reviewer.md`  |
-| qa-reviewer        | 受け入れマトリクス + L3 E2E の作成・実行 (**L3 レイヤの所有者**)。プロダクトコードは触らない | [`qa-rubric.md`](../../.github/claude/qa-rubric.md)               | `.claude/agents/qa-reviewer.md`        |
-| biz-owner-reviewer | 実操作ウォークスルー (stub + Playwright、スクショつき) + 違和感                              | [`biz-owner-rubric.md`](../../.github/claude/biz-owner-rubric.md) | `.claude/agents/biz-owner-reviewer.md` |
-| release-judge      | 4 レポート + CI を突合 → GO/NO-GO + 宛先つき作業指示 (**既定 NO-GO**)                        | [`release-rubric.md`](../../.github/claude/release-rubric.md)     | `.claude/agents/release-judge.md`      |
+| 役割               | 一言 (**詳細は rubric が正典**)                                                                                                                           | 審査基準 (直すのはここ)                                           | subagent 定義                          |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------- |
+| security-reviewer  | スキャナ総動員 + 動的チェック + 攻撃面追跡。使えなかった分は UNKNOWN 明記                                                                                 | [`security-rubric.md`](../../.github/claude/security-rubric.md)   | `.claude/agents/security-reviewer.md`  |
+| qa-reviewer        | 受け入れマトリクス + 受け入れの機械検証 (**受け入れ観点の創出の所有者** — 異常系スモークの作成・実行 + 実環境 E2E の結果確認)。プロダクトコードは触らない | [`qa-rubric.md`](../../.github/claude/qa-rubric.md)               | `.claude/agents/qa-reviewer.md`        |
+| biz-owner-reviewer | 実操作ウォークスルー (stub + Playwright、スクショつき) + 違和感                                                                                           | [`biz-owner-rubric.md`](../../.github/claude/biz-owner-rubric.md) | `.claude/agents/biz-owner-reviewer.md` |
+| release-judge      | 4 レポート + CI を突合 → GO/NO-GO + 宛先つき作業指示 (**既定 NO-GO**)                                                                                     | [`release-rubric.md`](../../.github/claude/release-rubric.md)     | `.claude/agents/release-judge.md`      |
 
 subagent 定義は薄いラッパで、観点はすべて rubric 側に置く。**観点変更 = rubric の PR** (Routine や agent 定義をいじらない)。
 
@@ -136,7 +136,12 @@ subagent はレビューセッション内でも新品コンテキストで起�
 
 - テストは QA レポートと一緒に提示される。取り込む場合はテストファイルのみの commit / PR にする
   (プロダクトコードの差分が混ざっていたら rubric 違反 — 取り込まず finding として扱う)。
-- 取り込んだ L3 は以後 CI (`npm run test:e2e`) の資産になる。
+- qa-reviewer が新規に作るのは**異常系スモーク** (実配線ハーネス `apps/frontend/e2e-uc/` / qa-rubric Q3)。
+  取り込んだシナリオは以後 CI (`pnpm --dir apps/frontend test:e2e:uc`) の資産になる。
+  **廃止方針の旧 L3 mock (`apps/frontend/e2e/` / `npm run test:e2e`) には取り込まない**
+  ([strategy.md §6.3](../testing/strategy.md))。
+- 正常系の受け入れ不足に対する QA の「実環境 E2E への hop 追加提案」は、
+  恒常追加の判断 (本数を増やさない制約 / strategy.md §2.4) を人間裁定 (PO / needs-human) で通してから取り込む。
 
 ### 実装セッションが「自分でチェックしたから GO」と言う
 
@@ -146,5 +151,5 @@ subagent はレビューセッション内でも新品コンテキストで起�
 
 - 判断記録: [ADR 0019](../adr/0019-independent-judge-agents-security-qa-release.md)
 - PR レビュー judge: [ADR 0008](../adr/0008-pr-review-via-cloud-routine.md) / [Runbook](claude-pr-review.md) / [`review-rubric.md`](../../.github/claude/review-rubric.md)
-- テスト戦略 (L0〜L4 と QA の分担): [`docs/testing/strategy.md`](../testing/strategy.md)
+- テスト戦略 (4 層 [契約 / 単体 / スモーク / E2E] と QA の分担): [`docs/testing/strategy.md`](../testing/strategy.md)
 - Subagents: <https://code.claude.com/docs/en/sub-agents>

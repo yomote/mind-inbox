@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### まず読む戦略 doc
 
-- **テスト戦略**: [`docs/testing/strategy.md`](docs/testing/strategy.md) — L0〜L4 のテスト階層 / 書く・書かない判断基準 / PR・Issue テンプレ運用
+- **テスト戦略**: [`docs/testing/strategy.md`](docs/testing/strategy.md) — 4 層 (契約 / 単体 / スモーク / E2E) のテスト階層 / 書く・書かない判断基準 / PR・Issue テンプレ運用
 - **ドキュメント戦略**: [`docs/documentation/strategy.md`](docs/documentation/strategy.md) — 真実の所在 (UI = MDX / API = OpenAPI / 判断 = ADR / 手順 = Runbook) / 生成物 commit ルール
 - **プロダクト設計 (v1)**: [`docs/design/`](docs/design/requirements.md) — [要件](docs/design/requirements.md) → [ユースケース](docs/design/use_cases.md) → [ドメインモデル](docs/design/domain_model.md) → [v1 実装計画 (archive)](docs/design/archive/implementation_plan_v1.md) → [v2 計画](docs/design/implementation_plan_v2.md)。**Problem 中心 2層モデル (Mention → Problem)** が v1 の核 (ADR 0007)
 - **アーキテクチャ判断 (ADR)**: [`docs/adr/`](docs/adr/README.md) — 過去の構成/技術選択の不変記録。覆す前に必ず読む。主要: [0001 tRPC](docs/adr/0001-bff-as-trpc-not-rest.md) / [0002 Container Apps](docs/adr/0002-container-apps-not-aks.md) / [0003 2-phase Bicep](docs/adr/0003-two-phase-bicep.md) / [0004 mockApi 真実](docs/adr/0004-mockapi-as-frontend-truth.md) / [0005 MDX 真実](docs/adr/0005-mdx-ui-spec-as-truth.md) / [0007 Problem 中心 2層](docs/adr/0007-problem-centric-two-layer-domain-model.md) / [0008 PR レビュー Routine](docs/adr/0008-pr-review-via-cloud-routine.md) / [0011 Projects=実行ダッシュボード](docs/adr/0011-github-projects-as-execution-dashboard.md) / [0013 常設 dev 環境+自動デプロイ](docs/adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) / [0014 理解ゲート+デブリーフ](docs/adr/0014-design-comprehension-gate-and-debrief.md) / [0018 動作検証をループに組み込む](docs/adr/0018-runtime-verification-in-the-loop.md) / [0019 独立 judge (security/QA/release)](docs/adr/0019-independent-judge-agents-security-qa-release.md) / [0020 HITL 選択肢形式+needs-human](docs/adr/0020-hitl-choice-format-and-needs-human-queue.md) / [0021 hub-and-spoke セッション運用](docs/adr/0021-parent-session-as-pm-orchestrator.md)
@@ -27,8 +27,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 正典: [`docs/testing/strategy.md`](docs/testing/strategy.md)。毎回効く要点だけ:
 
-- **L2 結合を主戦場に、L1 単体は絞る**。テスト名に `[L0]`/`[L1]`/`[L2]`/`[L3]` プレフィックスを付ける (§1.3)
-- **「無いと何が静かに通るか?」を 1 文で書けないテストは書かない** (§1.2)
+- **4 層 (契約 / 単体 / スモーク / E2E) で守る** (§2)。単体は入場条件「壊れても例外が出ず、データが静かに間違う」を満たすところだけに書き、**例ではなく性質 (プロパティ) で書くのが既定** (§2.2 / §3)。新規テスト名に `[契約]`/`[単体]`/`[スモーク]`/`[E2E]` プレフィックス (§1.3 — 既存の `[L0]`〜`[L3]` の読み替えと移行は §6)
+- **「無いと何が静かに通るか?」を 1 文で書けないテストは書かない** (§1.2)。**仕様を指せないテストも書かない — 「仕様がない」と言う** (§3.4)
 - **状態・副作用を持つ新モジュールはテストファーストで切る。テストが書けない構成は設計の警報** (§1.4)
 - `npm run test:fast` をローカルで緑にしてから PR を出す
 - **自動テストが緑でも「動かせば見つかる」層は残る** — 実際に叩いた結果を PR に貼る。「設定したか」ではなく**振る舞い**で書く ([ADR 0018](docs/adr/0018-runtime-verification-in-the-loop.md))。UI 変更はローカル (mock + 認証なし) でブラウザ確認する
@@ -98,7 +98,7 @@ npm run lint      # ESLint
 pnpm --dir apps/frontend install
 VITE_USE_MOCK=true pnpm --dir apps/frontend dev   # BFF も認証も不要のモック
 pnpm --dir apps/frontend test                     # vitest
-pnpm --dir apps/frontend test:e2e                 # Playwright (L3 / mock)
+pnpm --dir apps/frontend test:e2e                 # Playwright (旧 L3 mock — 廃止方針、新規シナリオを足さない / strategy.md §6.3)
 pnpm --dir apps/frontend build                    # tsc -b && vite build
 ```
 

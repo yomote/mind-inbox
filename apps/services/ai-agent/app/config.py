@@ -25,6 +25,18 @@ class Settings(BaseSettings):
     # Set to true in ACA (managed identity); false for local dev with API key
     use_managed_identity: bool = False
 
+    # Cosmos DB (ADR 0030 / #188) — 会話セッション・承認レコード・MAF checkpoint の永続化。
+    # **cosmos_endpoint の有無が分岐点**: 未設定なら従来どおり in-memory で動く
+    # (ローカル / テストの既定 = BFF の COSMOS_ENDPOINT と同じ流儀 / ADR 0030 D7)。
+    # 認証は Managed Identity のみ — キーは disableLocalAuth: true で殺されている (D3)。
+    # コンテナは bicep (bootstrap-core.bicep) が TTL 付きで宣言する。名前がズレると
+    # 「デプロイは通るが実行時 404」になるので、既定値は bicep 側の宣言と揃えること。
+    cosmos_endpoint: str = ""
+    cosmos_database: str = "mindinbox"
+    cosmos_sessions_container: str = "sessions"
+    cosmos_approvals_container: str = "approvals"
+    cosmos_checkpoints_container: str = "checkpoints"
+
     app_name: str = "mind-inbox-ai-agent"
     log_level: str = "INFO"
 
