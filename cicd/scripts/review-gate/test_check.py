@@ -5,6 +5,9 @@
 判定ロジックの退行はテストでしか捕まえられない。
 """
 
+import subprocess
+
+import check
 from check import (
     CODEX_RETRIGGER_MARKER,
     MERGE_STALL_HOURS,
@@ -329,6 +332,66 @@ def test_l1_closed_merged_draftはマージ執行しない() -> None:
     # sweep は list API (merged ブール無し / merged_at のみ) の PR を渡す
     assert not should_execute_merge(_mergeable_pr(merged_at="2026-08-11T00:00:00Z"))[0]
     assert not should_execute_merge(_mergeable_pr(draft=True))[0]
+
+
+def test_l1_マージ直前の再取得で保留条件を再評価する(monkeypatch) -> None:
+    """TOCTOU (Codex P1 / PR #258) の再確認を I/O 関数の構造で固定する。
+
+    無いと何が静かに通るか: run 冒頭のスナップショット判定と merge API 呼び出しの
+    間 (コメント・レビュー取得を挟む) に PM が auto-merge を解除 / needs-human を
+    付けても、古い判定のままマージされる。merge API が強制するのは sha= (head
+    変更) だけで、本 workflow 固有の保留条件は強制しない — try_merge 自身が
+    PR を取り直して should_execute_merge を再評価しなければ塞がらない。
+    """
+    put_calls: list[tuple] = []
+
+    def gh_returning(fresh_pr: dict):
+        def fake_gh(*args):
+            if "-X" in args:  # PUT merge
+                put_calls.append(args)
+                return {}
+            return fresh_pr  # 直前再確認の GET pulls/N
+
+        return fake_gh
+
+    head = {"sha": "abc1234def5678"}
+    # 再取得で auto-merge が外れていた → マージしない
+    monkeypatch.setattr(
+        check, "gh", gh_returning(_mergeable_pr(auto_merge=None, head=head))
+    )
+    merged, reason = check.try_merge("o/r", 1, head["sha"])
+    assert not merged and not put_calls and "auto-merge" in reason
+    # 再取得で needs-human が付いていた → マージしない
+    monkeypatch.setattr(
+        check,
+        "gh",
+        gh_returning(_mergeable_pr(labels=[{"name": "needs-human"}], head=head)),
+    )
+    merged, reason = check.try_merge("o/r", 1, head["sha"])
+    assert not merged and not put_calls and "needs-human" in reason
+    # 再取得で head が動いていた → マージしない (見ていないコミットをマージしない)
+    monkeypatch.setattr(
+        check, "gh", gh_returning(_mergeable_pr(head={"sha": "zzz99990000"}))
+    )
+    merged, reason = check.try_merge("o/r", 1, head["sha"])
+    assert not merged and not put_calls and "head" in reason
+    # 保留条件が保たれていれば PUT が 1 回だけ飛ぶ
+    monkeypatch.setattr(check, "gh", gh_returning(_mergeable_pr(head=head)))
+    merged, _ = check.try_merge("o/r", 1, head["sha"])
+    assert merged and len(put_calls) == 1
+
+
+def test_l1_マージ直前の再取得に失敗したらマージしない(monkeypatch) -> None:
+    """無いと何が静かに通るか: 再取得の失敗を「保留条件は変わっていない」と
+    読み替えると、確認できていない状態でマージが飛ぶ (「取れなかったものを
+    合格と書かない」規律の破れ)。"""
+
+    def failing_gh(*args):
+        raise subprocess.CalledProcessError(1, list(args), stderr="HTTP 500")
+
+    monkeypatch.setattr(check, "gh", failing_gh)
+    merged, reason = check.try_merge("o/r", 1, "abc1234")
+    assert not merged and "再取得に失敗" in reason
 
 
 def test_l1_マージ失敗の翻訳は405と409を正常系として区別する() -> None:

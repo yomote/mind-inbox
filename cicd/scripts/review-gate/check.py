@@ -612,10 +612,30 @@ def fetch_comments_with_times(repo: str, number: int) -> list[tuple[str, str]]:
 def try_merge(repo: str, number: int, head_sha: str) -> tuple[bool, str]:
     """squash マージ API を叩く。(成功したか, 失敗理由) を返す。
 
-    sha を渡す — 判定に使った head から動いていたら GitHub 側が 409 で弾く
-    (見ていないコミットをマージしない)。405/409 等は正常系のスキップとして
-    ログに理由を出すだけで run は落とさない (Issue #253)。
+    **投稿直前の再フェッチ確認と同じ規律をマージにも適用する** (Codex P1 / PR #258):
+    呼び出し側の判定は run 冒頭のスナップショットで、コメント・レビューの取得を
+    挟むうちに PM が auto-merge を解除 / needs-human を付けたかもしれない。
+    merge API が強制するのは sha= (head 変更で 409) だけで、auto-merge /
+    needs-human という本 workflow 固有の保留条件は強制しない — ここで PR を
+    取り直して should_execute_merge を再評価し、通らなければマージしない。
+    再取得に失敗したときもマージしない (取れなかったものを「合格」と書かない)。
+    405/409 等は正常系のスキップとしてログに理由を出すだけで run は落とさない。
     """
+    try:
+        fresh = gh("api", f"repos/{repo}/pulls/{number}")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        reason = f"直前再確認の PR 再取得に失敗 — マージしない ({type(e).__name__})"
+        print(f"#{number}: {reason}")
+        return (False, reason)
+    ok, hold_reason = should_execute_merge(fresh)  # type: ignore[arg-type]
+    if not ok:
+        reason = f"直前再確認で保留 — {hold_reason}"
+        print(f"#{number}: {reason}")
+        return (False, reason)
+    if ((fresh.get("head") or {}).get("sha")) != head_sha:  # type: ignore[union-attr]
+        reason = "直前再確認で head が動いていた — 次のイベント / sweep が再評価する"
+        print(f"#{number}: {reason}")
+        return (False, reason)
     try:
         gh(
             "api",
