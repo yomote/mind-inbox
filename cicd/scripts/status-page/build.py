@@ -56,6 +56,28 @@ def gh(*args: str) -> object | None:
         return None
 
 
+def gh_lines(*args: str) -> list[str] | None:
+    """gh api を叩き、**1 行 1 値** の出力を行のリストで返す。失敗したら None。
+
+    `gh()` と分けてあるのは `--paginate` のため — `--paginate` + `--jq` は
+    **ページごとに** jq を適用して出力するので、`{t: (… | max)}` のような
+    集約を渡すと JSON オブジェクトが複数個並び、`json.loads` が必ず落ちる。
+    ページを跨いで集約するには「1 行 1 値で吐かせて Python 側で畳む」しかない。
+    """
+    try:
+        out = subprocess.run(
+            ["gh", *args], capture_output=True, text=True, timeout=60, check=True
+        )
+        return [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+    ) as e:
+        print(f"WARN: gh {' '.join(args)} 失敗: {e}", file=sys.stderr)
+        return None
+
+
 def parse(ts: str | None) -> datetime | None:
     if not ts:
         return None
@@ -187,14 +209,32 @@ def trace_time(trace: dict) -> tuple[datetime | None, str, bool]:
         times = [t for t in times if t is not None]
         return (max(times) if times else None), where, True
     if kind == "issue_comment":
+        # 心拍を数える対象を **絞れる** ようにしてある (`body_contains`)。
+        # 絞らないと、人間や別の自動化が同じ Issue にコメントしただけで時刻が進み、
+        # **自動化が止まっていても 🟢 に戻る** (沈黙 = 未発火 の前提が壊れる)。
+        # また `--paginate` が無いと 1 ページ目 (100 件) しか見ないため、
+        # 常設の心拍は 100 件を超えた時点で更新が止まり、**動いていても恒久的に 🔴**
+        # になる (1 日 3 件なら約 34 日で到達)。どちらも静かに間違う側に倒れる。
         n = trace["issue"]
-        got = gh(
+        marker = trace.get("body_contains")
+        jq = ".[]"
+        if marker:
+            jq += f' | select(.body | contains("{marker}"))'
+        jq += " | .created_at"
+        lines = gh_lines(
             "api",
+            "--paginate",
             f"repos/{{owner}}/{{repo}}/issues/{n}/comments?per_page=100",
             "--jq",
-            "{t: ([.[].created_at] | max)}",
+            jq,
         )
         where = f"Issue #{n} のコメント"
+        if marker:
+            where += f" (`{marker}` を含むもの)"
+        if lines is None:
+            return None, where, False
+        stamps = [t for t in (parse(ln) for ln in lines) if t is not None]
+        return (max(stamps) if stamps else None), where, True
     elif kind == "issue_label":
         got = gh(
             "api",
