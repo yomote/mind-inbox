@@ -5,6 +5,7 @@ import type { ChatMessage, ExtractionResult, Problem, ProblemFilter, TriageInput
 import { trpc } from "../trpc/client";
 import type { AppRouter } from "../trpc/client";
 import { useMock } from "./http";
+import { reportStubbedResponse } from "./stubStatus";
 
 /**
  * Problem / Mention の api 層（Phase C で mock→real を結線）。
@@ -91,10 +92,13 @@ export async function extractMentions(
 ): Promise<ExtractionResult> {
   if (useMock) return mock.extractMentions(sessionId);
   try {
-    return await trpc.consultation.extract.mutate({
+    const result = await trpc.consultation.extract.mutate({
       sessionId,
       messages: messages.map((m) => ({ role: m.role, text: m.text })),
     });
+    // stub 応答の可視化 (#146): stub の抽出結果が本物のふりをしてレビュー画面に並ばない。
+    reportStubbedResponse(result.stubbed);
+    return result;
   } catch (err) {
     // 理由を失わない。呼び出し側が文面と復帰導線を出し分けられるようにする。
     const token = err instanceof TRPCClientError ? String(err.message) : "";

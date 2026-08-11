@@ -1,5 +1,5 @@
 /**
- * [L1] セッションタイトル自動生成のプロパティテスト (fast-check / #259 のフロント実証)。
+ * [単体] セッションタイトル自動生成のプロパティテスト (fast-check / #259 のフロント実証)。
  * 仕様: docs/design/domain_rules.md §2。
  *
  * 無いと何が静かに通るか: タイトルは表示されるだけの文字列なので、空・複数行・
@@ -14,7 +14,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { SESSION_TITLE_MAX, deriveSessionTitle } from "./sessionTitle";
 
-describe("[L1] deriveSessionTitle (property)", () => {
+describe("[単体] deriveSessionTitle (property)", () => {
   it("どんな入力でも空にならない", () => {
     fc.assert(
       fc.property(fc.string({ unit: "grapheme", maxLength: 100 }), (text) => {

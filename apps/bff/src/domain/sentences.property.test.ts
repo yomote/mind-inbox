@@ -1,13 +1,18 @@
 /**
- * [L1] TTS 文分割のプロパティテスト (fast-check / #259 の 1 本目)。
- * 仕様: docs/design/domain_rules.md §1。
+ * [単体] TTS 文分割のプロパティベーステスト (fast-check / #259 の 1 本目)。
+ * 仕様: docs/design/domain_rules.md §1 と ADR 0024「TTS の文分割は BFF が単独で所有する」。
+ * `prefetchTts` / `planTts` (apps/bff/src/tts/ttsService.ts) の責務:
+ *   - 分割はキャッシュキーの生成器を兼ねる。プリフェッチ (途中経過テキスト) が
+ *     合成した文が、最終合成でも同じ文字列として現れなければならない
+ *   - フロントは planTts の返した文を 1 つずつ投げ返す。返した文がさらに割れて
+ *     別のキャッシュキーになってはならない
  *
  * 無いと何が静かに通るか: 例ベースのテスト (sentences.test.ts) は代表例しか見ない。
- * 分割規則の変更が「文字を落とす / 増やす / 並びを変える」退行 (読み上げが本文と
- * 食い違う) を起こしても、例に無い組み合わせなら緑のまま通る。往復性質は全入力に
- * ついて内容保存を固定する。
+ * 分割規則の変更が「読み上げ内容の一部が黙って消える / 増える / 並びが変わる」
+ * 「プリフェッチと最終合成のキャッシュキーがズレて先行合成が無効化される」退行を
+ * 起こしても、例に無い入力の組み合わせなら緑のまま通る。
  *
- * 発見の記録: strategy.md の性質候補は「分割して連結すると元の文字列に戻る」だったが、
+ * 発見の記録: 性質候補は「分割して連結すると元の文字列に戻る」だったが、
  * 現行実装は**空白のみの断片を捨てる** (例: "a。 \n b。" の間の空白断片) ため、
  * 厳密な往復は「空白のみ断片が生じない入力」でだけ成り立つ。全入力で成り立つのは
  * 「元の文字列から空白のみ断片だけを除いたものとの厳密一致」— domain_rules.md §1 に
@@ -21,10 +26,7 @@
 
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { splitTtsSentences } from "./sentences";
-
-/** sentences.ts の MIN_SENTENCE_CHARS と同値 (仕様: domain_rules.md §1)。 */
-const MIN_SENTENCE_CHARS = 8;
+import { MIN_SENTENCE_CHARS, splitTtsSentences } from "./sentences";
 
 // 空白を含まない本文文字 (絵文字 = サロゲートペアも含める) と区切り文字。
 // アルファベットを絞るのは shrink を効かせるため (落ちたときの反例が読める)。
@@ -57,7 +59,7 @@ const expectedJoined = (text: string): string =>
     .filter((piece) => piece.trim() !== "")
     .join("");
 
-describe("[L1] splitTtsSentences (property)", () => {
+describe("[単体] splitTtsSentences (property)", () => {
   it("空白のみ断片が生じない入力では、分割して連結すると元の文字列に戻る (往復)", () => {
     fc.assert(
       fc.property(wsFreeText, (text) => {
@@ -115,6 +117,31 @@ describe("[L1] splitTtsSentences (property)", () => {
     fc.assert(
       fc.property(anyText, (text) => {
         expect(splitTtsSentences(text).length === 0).toBe(text.trim() === "");
+      }),
+    );
+  });
+
+  it("分割済みの文をもう一度分割しても変わらない (投げ返された文のキャッシュキーがズレない)", () => {
+    // 仕様 (#251 由来): planTts の返した文をフロントが 1 つずつ /api/tts へ投げ返す。
+    // そこで再分割が起きて別の文になると、プリフェッチ済みキャッシュにヒットしない。
+    fc.assert(
+      fc.property(anyText, (text) => {
+        for (const sentence of splitTtsSentences(text)) {
+          expect(splitTtsSentences(sentence)).toEqual([sentence]);
+        }
+      }),
+    );
+  });
+
+  it("途中経過で確定した文は、最終テキストの分割にそのまま現れる (先行合成が必ずヒットする)", () => {
+    // 仕様 (ADR 0024 の核 / #251 由来): prefetchTts は途中経過テキストの「末尾以外」を
+    // 確定文として合成する。ストリームが伸びても確定文の切り出しが変わらなければ、
+    // 最終合成 (synthesizeTts) は同じキャッシュキーで必ずヒットする。
+    fc.assert(
+      fc.property(anyText, anyText, (prefix, rest) => {
+        const completed = splitTtsSentences(prefix).slice(0, -1);
+        const full = splitTtsSentences(prefix + rest);
+        expect(full.slice(0, completed.length)).toEqual(completed);
       }),
     );
   });

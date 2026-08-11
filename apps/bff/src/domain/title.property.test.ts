@@ -1,5 +1,5 @@
 /**
- * [L1] セッションタイトル導出のプロパティテスト (fast-check / #259)。
+ * [単体] セッションタイトル導出のプロパティテスト (fast-check / #259)。
  * 仕様: docs/design/domain_rules.md §2。
  *
  * 無いと何が静かに通るか: タイトルは画面に出続けるだけの文字列なので、空になっても
@@ -14,7 +14,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_TITLE, TITLE_MAX_CHARS, deriveTitle } from "./title";
 
-describe("[L1] deriveTitle (property)", () => {
+describe("[単体] deriveTitle (property)", () => {
   it("どんな入力でも空にならない", () => {
     fc.assert(
       fc.property(fc.string({ unit: "grapheme", maxLength: 100 }), (concern) => {

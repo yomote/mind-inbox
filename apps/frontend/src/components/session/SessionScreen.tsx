@@ -1,6 +1,7 @@
 import { Paper, Stack, Typography } from "@mui/material";
 import type { ConsultationSession } from "../../api";
 import type { TtsStatus } from "../../voice/useTextToSpeech";
+import { deriveMascotState } from "./mascotState";
 import { SessionComposer } from "./SessionComposer";
 import { SessionControls } from "./SessionControls";
 import { SessionMessages } from "./SessionMessages";
@@ -46,7 +47,10 @@ export function SessionScreen({
       <Stack spacing={2}>
         <Typography fontWeight={700}>{session.title}</Typography>
 
-        <SessionMessages messages={session.messages} />
+        <SessionMessages
+          messages={session.messages}
+          mascotState={deriveMascotState(loading, ttsStatus)}
+        />
 
         <SessionComposer
           value={draftMessage}

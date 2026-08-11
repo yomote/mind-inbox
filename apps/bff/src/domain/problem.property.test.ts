@@ -1,5 +1,5 @@
 /**
- * [L1] Problem 集約ルール (追記 / 統合 / 派生フィールド) のプロパティテスト (#259)。
+ * [単体] Problem 集約ルール (追記 / 統合 / 派生フィールド) のプロパティテスト (#259)。
  * 仕様: docs/design/domain_model.md §2.2 / §4.2 / §6 と docs/design/domain_rules.md §3。
  *
  * 無いと何が静かに通るか: mentionCount / lastMentionedAt は派生フィールドなので、
@@ -83,7 +83,7 @@ const arbGrouping = fc.record({
 
 // ---- properties ------------------------------------------------------------
 
-describe("[L1] appendMention (property)", () => {
+describe("[単体] appendMention (property)", () => {
   it("mentionCount は常に mentions.length と一致する (ai-agent の申告値に依存しない)", () => {
     fc.assert(
       fc.property(arbProblem(anyIso), arbMention(anyIso), (existing, mention) => {
@@ -144,7 +144,7 @@ describe("[L1] appendMention (property)", () => {
   });
 });
 
-describe("[L1] problemFromMention (property)", () => {
+describe("[単体] problemFromMention (property)", () => {
   it("新規 Problem は open で立ち、mentionCount は grouping の申告値でなく必ず 1", () => {
     fc.assert(
       fc.property(arbMention(anyIso), arbGrouping, (mention, grouping) => {
@@ -159,7 +159,7 @@ describe("[L1] problemFromMention (property)", () => {
   });
 });
 
-describe("[L1] mergeProblems (property)", () => {
+describe("[単体] mergeProblems (property)", () => {
   it("統合は Mention を 1 件も失わず・増やさず、mentionCount が実体と一致する", () => {
     fc.assert(
       fc.property(arbProblem(anyIso), arbProblem(anyIso), (target, source) => {
@@ -198,7 +198,7 @@ describe("[L1] mergeProblems (property)", () => {
   });
 });
 
-describe("[L1] withDerived (property)", () => {
+describe("[単体] withDerived (property)", () => {
   it("lastMentionedAt は mentions の最大 createdAt、mentionCount は件数に一致する", () => {
     fc.assert(
       fc.property(arbProblem(anyIso), (problem) => {

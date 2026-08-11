@@ -14,7 +14,7 @@
 const SENTENCE_END = /[。．！？!?\n]+/g;
 
 /** これより短い断片は隣の文に併合する (「はい。」単独合成の不自然さ・往復増を防ぐ)。 */
-const MIN_SENTENCE_CHARS = 8;
+export const MIN_SENTENCE_CHARS = 8;
 
 /**
  * テキストを読み上げ単位の「文」に分割する。区切り文字は文側に残す。
