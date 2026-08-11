@@ -25,6 +25,9 @@ vi.mock("../clients/aiAgentClient", async (importOriginal) => ({
   extract: vi.fn(),
   createPlan: vi.fn(),
   approve: vi.fn(),
+  // stub モード判定は環境 (AI_AGENT_BASE_URL) を読むので、test では明示的に制御する
+  // (既定は「実 ai-agent が居る」= false)。
+  isStubMode: vi.fn(() => false),
 }));
 
 import {
@@ -32,6 +35,7 @@ import {
   approve as approveAiAgent,
   createPlan as createPlanAiAgent,
   extract as extractAiAgent,
+  isStubMode,
   sendChatMessage,
 } from "../clients/aiAgentClient";
 import {
@@ -125,6 +129,7 @@ function newExtraction(problemId = "prob-1"): ExtractionResult {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(isStubMode).mockReturnValue(false);
 });
 
 // ---- consultation.start ----------------------------------------------------
@@ -832,6 +837,44 @@ describe("[単体] consultation.extract — draft commit (#283 / ADR 0039 D1/D3)
     const problem = await caller.problem.get({ id: "prob-1" });
     expect(problem.mentions.map((m) => m.id)).toEqual(["men-1", "men-a", "men-b"]);
     expect(problem.mentionCount).toBe(3);
+  });
+
+  it("marks the committed draft as stubbed while the BFF is in stub mode (server-side判定)", async () => {
+    // 無いと: stub の preview を確定すると確定結果に stubbed が乗らず、フロントの
+    //         reportStubbedResponse(undefined) が実応答扱いにして**警告バナーを消す**。
+    //         永続化された「[stub] 困りごと」が本物の抽出結果のふりをする (#146 が潰した状態の復活)。
+    //         draft 経路は ai-agent を呼ばないので応答由来のフラグを持てない = ここでしか守れない。
+    const draft = { items: newExtraction("prob-1").items };
+
+    vi.mocked(isStubMode).mockReturnValue(true);
+    const stubbed = await makeCaller().consultation.extract({ sessionId: "s1", draft });
+    expect(stubbed.stubbed).toBe(true);
+
+    // 実 ai-agent が居る環境では立たない (正常時にバナーが出続けない)
+    vi.mocked(isStubMode).mockReturnValue(false);
+    const real = await makeCaller().consultation.extract({ sessionId: "s2", draft });
+    expect(real.stubbed).toBeUndefined();
+    // 判定は draft の中身に依存しない (クライアントに偽装させない)
+    expect(extractAiAgent).not.toHaveBeenCalled();
+  });
+
+  it("is idempotent — re-committing the same draft leaves stored data unchanged", async () => {
+    // 無いと: 確定応答が失われてユーザーが「この内容で確定」を押し直すと、同じ Mention が
+    //         二重に入り mentionCount まで増える。例外は出ず、詳細画面の言及回数と
+    //         タイムラインが静かに水増しされる (#283 Codex P2)。
+    //         Mention は不変・追記専用 (domain_model.md §2.1) なので同 ID の再投入は no-op が正。
+    await fc.assert(
+      fc.asyncProperty(arbExtractedItems, async (items) => {
+        const { caller, problemRepo } = makeCallerWithRepos();
+        await problemRepo.upsert(makeProblem({ id: "prob-existing-0" }));
+
+        await caller.consultation.extract({ sessionId: "s1", draft: { items } });
+        const afterFirst = await problemRepo.list();
+
+        await caller.consultation.extract({ sessionId: "s1", draft: { items } });
+        expect(await problemRepo.list()).toEqual(afterFirst);
+      }),
+    );
   });
 
   it("counts a vanished 'existing' target as new (preview 後・確定前に消された場合)", async () => {

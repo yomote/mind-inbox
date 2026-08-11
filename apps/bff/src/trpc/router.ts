@@ -9,6 +9,7 @@ import {
   createPlan as createPlanAiAgent,
   ExtractError,
   extract as extractAiAgent,
+  isStubMode,
   sendChatMessage,
   type StubMarked,
 } from "../clients/aiAgentClient";
@@ -107,21 +108,32 @@ async function materializeExtraction(
   // (でないと 1 つの Problem が「新規 1 件」かつ「既存に追加 1 件」に二重計上される)。
   const createdHere = new Set<string>();
   const outcomes: MaterializedOutcome[] = [];
+  /** このバッチで作った Problem への追記は「新規」の一部として数える。 */
+  const outcomeFor = (problemId: string): MaterializedOutcome => ({
+    kind: createdHere.has(problemId) ? "new" : "existing",
+    problemId,
+  });
 
   for (const { mention, grouping } of result.items) {
-    if (grouping.kind === "existing") {
-      const existing = await repo.get(grouping.problemId);
-      if (existing) {
-        await repo.upsert(appendMention(existing, mention));
-        outcomes.push({
-          kind: createdHere.has(grouping.problemId) ? "new" : "existing",
-          problemId: grouping.problemId,
-        });
-        continue;
-      }
-      // 既存が見つからない（候補集合との齟齬 / preview 後・確定前に dismiss 等で消された）
-      // → 取りこぼさず新規として作る。**実績は "new"** としてここで数える
+    const target = await repo.get(grouping.problemId);
+
+    // **冪等**: 同じ draft を再送しても蓄積データを変えない (#283)。確定応答が失われて
+    // ユーザーが「この内容で確定」を押し直すのは普通に起きるが、Mention は不変・追記専用
+    // (domain_model.md §2.1) なので、同じ Mention ID が既に入っていれば書くことは何も無い。
+    // 無いと同じ Mention が二重に入り mentionCount まで増える (静かなデータ破損)。
+    if (target?.mentions.some((m) => m.id === mention.id)) {
+      outcomes.push(outcomeFor(grouping.problemId));
+      continue;
     }
+
+    if (grouping.kind === "existing" && target) {
+      await repo.upsert(appendMention(target, mention));
+      outcomes.push(outcomeFor(grouping.problemId));
+      continue;
+    }
+
+    // new、または existing だが対象が見つからない（候補集合との齟齬 / preview 後・
+    // 確定前に dismiss 等で消された）→ 取りこぼさず新規として作る。**実績は "new"**
     const created = problemFromMention(mention, grouping);
     await repo.upsert(created);
     createdHere.add(created.id);
@@ -482,12 +494,17 @@ const consultationRouter = router({
           (input.draft ? ` draft=${input.draft.items.length}` : ""),
       );
       // 再抽出しない: draft があれば下書きをそのまま確定する (ADR 0039 D1/D3)。
-      const extracted = input.draft
+      const extracted: StubMarked<ExtractionResult> = input.draft
         ? {
             sessionId: input.sessionId,
             items: input.draft.items,
             newProblemCount: 0,
             updatedProblemCount: 0,
+            // draft 経路は ai-agent を呼ばないので応答由来の stub フラグを持てない。
+            // **サーバ側の条件 (AI_AGENT_BASE_URL の有無) で判定する** (#283 / #146)。
+            // クライアント申告を信じるとフラグを落とす偽装で「本物のふりをした stub」が
+            // 復活するため、draft の内容には一切依存させない。
+            ...(isStubMode() ? { stubbed: true as const } : {}),
           }
         : await runExtraction(
             "consultation.extract",
