@@ -1355,24 +1355,35 @@ resource cosmosDataRoleAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRole
   }
 }
 
-// ai-agent MI にも同じ data plane ロールを付ける (#188)。触るのは sessions /
-// approvals / checkpoints — 「機微データへの到達経路を増やさない」(#86 系譜) の観点は
-// ADR 0030 D4 の見直しとして受け入れ済み: 経路はキーではなく MI + RBAC で、
-// アカウントキーは disableLocalAuth: true で存在しない。
-resource cosmosDataRoleAssignmentAiAgent 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-11-15' = if (enableCosmos && enableAiAgentAca) {
-  parent: cosmosAccount
-  name: guid(cosmosAccountName, aiAgentContainerAppName, cosmosDataContributorRoleId)
-  properties: {
-    roleDefinitionId: '${cosmosAccountResourceId}/sqlRoleDefinitions/${cosmosDataContributorRoleId}'
-    principalId: aiAgentContainerApp.?identity.?principalId ?? ''
-    scope: cosmosAccountResourceId
+// ai-agent MI にも同じ data plane ロールを付ける (#188)。スコープは**アカウント全体では
+// なく短命データ用コンテナ (sessions / approvals / checkpoints) 単位**に限定する —
+// problems / history (機微データ) は ADR 0030 D4 のとおり BFF のみが触る。D4 は覆さず、
+// 権限を用途に一致させることで整合させる (PR #261 Codex P1)。
+// 経路はキーではなく MI + RBAC で、アカウントキーは disableLocalAuth: true で存在しない。
+// 必要操作 (read/upsert/query/delete items) はコンテナスコープの Data Contributor で
+// 全て満たされる (コンテナの作成は bicep が担い、実行時に create しない — cosmos.py 参照)。
+// NOTE: 既存環境にアカウント全体スコープの旧割り当てが残っている場合、incremental
+// デプロイでは消えないので手で削除する (az cosmosdb sql role assignment delete)。
+@batchSize(1)
+resource cosmosDataRoleAssignmentAiAgent 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-11-15' = [
+  for c in cosmosAiAgentContainers: if (enableCosmos && enableAiAgentAca) {
+    parent: cosmosAccount
+    name: guid(cosmosAccountName, aiAgentContainerAppName, cosmosDataContributorRoleId, c.name)
+    properties: {
+      roleDefinitionId: '${cosmosAccountResourceId}/sqlRoleDefinitions/${cosmosDataContributorRoleId}'
+      principalId: aiAgentContainerApp.?identity.?principalId ?? ''
+      // コンテナ単位スコープ (/dbs/<db>/colls/<container>)
+      scope: '${cosmosAccountResourceId}/dbs/${cosmosDatabaseName}/colls/${c.name}'
+    }
+    // Cosmos の sqlRoleAssignments は同一アカウントで並列作成できない (409 conflict)
+    // ことがあるため、BFF 分に続けて @batchSize(1) で 1 つずつ直列に作る。
+    // スコープ先のコンテナが先に存在している必要があるため TTL コンテナ群にも依存。
+    dependsOn: [
+      cosmosDataRoleAssignment
+      cosmosAiAgentTtlContainers
+    ]
   }
-  // Cosmos の sqlRoleAssignments は同一アカウントで並列作成できない (409 conflict)
-  // ことがあるため、BFF 分に続けて直列に作る。
-  dependsOn: [
-    cosmosDataRoleAssignment
-  ]
-}
+]
 
 // -------------------- Static Web Apps (frontend) --------------------
 var staticSiteRepoProps = (staticSiteRepositoryUrl != '')
