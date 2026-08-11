@@ -60,6 +60,30 @@ RG=<your-rg> DEPLOYMENT=<deployment-name> ./scripts/deploy/deploy-all.sh
 `deploy-all.sh` は成果物デプロイ専用です（IaC は実行しません）。
 Entra 認証の有効化/更新は、先に `main-config.bicep` デプロイを実行してください。
 
+## ロール割り当ての「養子縁組」(provision.sh / #262)
+
+`provision.sh` の bootstrap は、ai-agent MI → Cognitive Services OpenAI User の
+ロール割り当てを **既存のものに合わせて宣言し直す**。理由は、割り当ての一意性が
+名前ではなく `principal + role + scope` で決まるため。スクリプト時代に作られた
+ランダム GUID 名の割り当てが残っている環境で bicep が別名で同じ組み合わせを宣言すると、
+ARM が `RoleAssignmentExists` を返して **bootstrap ごと落ちる**（= dev が古いまま止まる）。
+
+解決は 2 段構え。**1 段目が空振りしても止まらない**ことが要点:
+
+1. `az role assignment list --scope <OpenAI アカウント>` の結果から、
+   `principal / role / scope` が一致する既存名を選ぶ。判定は
+   [`role_assignment.py`](role_assignment.py) の純粋関数（テスト済み・**大文字小文字は無視**。
+   ARM が返す scope の綴りは揺れるため素の `==` は当てにならない）
+2. それでも `RoleAssignmentExists` で落ちたら、ARM のエラー本文が返す既存 ID を
+   ダッシュ付き GUID に直して **1 度だけデプロイをやり直す**
+
+ログには必ずどちらを通ったかが出る（`==> 既存ロール割り当てを養子縁組: ...` /
+`==> RoleAssignmentExists — ARM が返した既存 ID ... でやり直します`）。
+どちらも出ずに落ちている場合は、養子縁組ではなく**別の原因**を疑うこと。
+
+削除→再作成で名前を揃える案は採らない: 削除に Owner 相当の権限が要る上、
+剥奪〜再付与の間 ai-agent が OpenAI を呼べない瞬断が出る。
+
 ## Cleanup Environment
 
 ```bash
