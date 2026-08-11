@@ -38,8 +38,22 @@ NO_TOOL_CLASSIFICATION = {
 }
 
 
-class RoutedChatService:
-    """classify (JSON) と respond (応答文) を呼び出し内容で振り分ける fake。"""
+class _FakeResponse:
+    """MAF ChatResponse / ChatResponseUpdate の最小 fake (.text だけ使う)。"""
+
+    def __init__(self, text: str):
+        self.text = text
+
+
+class RoutedChatClient:
+    """classify (JSON) と respond (応答文) を呼び出し内容で振り分ける fake MAF chat client。
+
+    fixture 置き換え (M1-5 / #82): 旧 fake は SK の kernel.get_service("chat") +
+    ChatHistory インターフェース (FakeKernel + RoutedChatService) を模していた。
+    SK 依存除去に伴い、同じ振り分けロジックを MAF BaseChatClient の
+    get_response(messages, stream=..., options=...) の形で提供する。
+    検証意図 (分類プロンプトには JSON、応答生成には応答文を返す) は不変。
+    """
 
     CLASSIFY_MARKER = "Respond with this exact JSON structure"
 
@@ -47,32 +61,29 @@ class RoutedChatService:
         self._classification = classification
         self._reply = reply
 
-    async def get_chat_message_content(self, chat_history, settings):
-        is_classify = any(
-            self.CLASSIFY_MARKER in str(m.content) for m in chat_history.messages
+    def get_response(self, messages, *, stream=False, options=None, **kwargs):
+        if stream:
+            return self._stream()
+        return self._respond(messages)
+
+    async def _respond(self, messages) -> _FakeResponse:
+        is_classify = any(self.CLASSIFY_MARKER in (m.text or "") for m in messages)
+        return _FakeResponse(
+            json.dumps(self._classification) if is_classify else self._reply
         )
-        return json.dumps(self._classification) if is_classify else self._reply
 
-    async def get_streaming_chat_message_content(self, chat_history, settings):
-        yield self._reply
-
-
-class FakeKernel:
-    def __init__(self, service: RoutedChatService):
-        self._service = service
-
-    def get_service(self, name: str) -> RoutedChatService:
-        return self._service
+    async def _stream(self):
+        yield _FakeResponse(self._reply)
 
 
 class TestApprovalCheckpointMapping:
     async def test_l1_approval_request_id_maps_to_maf_checkpoint(
         self, session_repo, approval_repo
     ):
-        kernel = FakeKernel(RoutedChatService(APPROVAL_CLASSIFICATION))
+        client = RoutedChatClient(APPROVAL_CLASSIFICATION)
 
         res = await run_workflow(
-            "s-map", "返信して", session_repo, approval_repo, kernel
+            "s-map", "返信して", session_repo, approval_repo, client
         )
 
         assert res.requires_approval is True
@@ -93,13 +104,13 @@ class TestResumeAfterApproval:
     async def test_l1_approved_resume_executes_tool_and_responds(
         self, session_repo, approval_repo
     ):
-        kernel = FakeKernel(RoutedChatService(APPROVAL_CLASSIFICATION))
+        client = RoutedChatClient(APPROVAL_CLASSIFICATION)
 
         res = await run_workflow(
-            "s-ok", "返信して", session_repo, approval_repo, kernel
+            "s-ok", "返信して", session_repo, approval_repo, client
         )
         reply = await resume_after_approval(
-            res.approval_request_id, True, session_repo, approval_repo, kernel
+            res.approval_request_id, True, session_repo, approval_repo, client
         )
 
         assert reply == "対応しました。"
@@ -108,21 +119,21 @@ class TestResumeAfterApproval:
         assert record.status == "approved"
 
         history = await session_repo.get("s-ok")
-        contents = [str(m.content) for m in history.messages]
+        contents = [m.text for m in history.messages]
         assert any("Tool result (send_reply)" in c for c in contents)
-        assert history.messages[-1].role.value == "assistant"
+        assert history.messages[-1].role == "assistant"
         assert contents[-1] == "対応しました。"
 
     async def test_l1_rejected_resume_cancels_without_tool(
         self, session_repo, approval_repo
     ):
-        kernel = FakeKernel(RoutedChatService(APPROVAL_CLASSIFICATION))
+        client = RoutedChatClient(APPROVAL_CLASSIFICATION)
 
         res = await run_workflow(
-            "s-ng", "返信して", session_repo, approval_repo, kernel
+            "s-ng", "返信して", session_repo, approval_repo, client
         )
         reply = await resume_after_approval(
-            res.approval_request_id, False, session_repo, approval_repo, kernel
+            res.approval_request_id, False, session_repo, approval_repo, client
         )
 
         assert reply == "操作はキャンセルされました。他にご用件はありますか？"
@@ -131,50 +142,50 @@ class TestResumeAfterApproval:
         assert record.status == "rejected"
 
         history = await session_repo.get("s-ng")
-        contents = [str(m.content) for m in history.messages]
+        contents = [m.text for m in history.messages]
         assert not any("Tool result" in c for c in contents)
-        assert history.messages[-1].role.value == "assistant"
+        assert history.messages[-1].role == "assistant"
         assert contents[-1] == reply
 
     async def test_l1_resolved_approval_releases_checkpoint_storage(
         self, session_repo, approval_repo
     ):
-        kernel = FakeKernel(RoutedChatService(APPROVAL_CLASSIFICATION))
+        client = RoutedChatClient(APPROVAL_CLASSIFICATION)
 
         res = await run_workflow(
-            "s-release", "返信して", session_repo, approval_repo, kernel
+            "s-release", "返信して", session_repo, approval_repo, client
         )
         assert get_pending_checkpoint_storage(res.approval_request_id) is not None
 
         await resume_after_approval(
-            res.approval_request_id, True, session_repo, approval_repo, kernel
+            res.approval_request_id, True, session_repo, approval_repo, client
         )
 
         assert get_pending_checkpoint_storage(res.approval_request_id) is None
 
     async def test_l1_resume_unknown_id_raises(self, session_repo, approval_repo):
-        kernel = FakeKernel(RoutedChatService(APPROVAL_CLASSIFICATION))
+        client = RoutedChatClient(APPROVAL_CLASSIFICATION)
 
         with pytest.raises(ValueError, match="Approval not found"):
             await resume_after_approval(
-                "no-such-id", True, session_repo, approval_repo, kernel
+                "no-such-id", True, session_repo, approval_repo, client
             )
 
     async def test_l1_resume_twice_raises_already_processed(
         self, session_repo, approval_repo
     ):
-        kernel = FakeKernel(RoutedChatService(APPROVAL_CLASSIFICATION))
+        client = RoutedChatClient(APPROVAL_CLASSIFICATION)
 
         res = await run_workflow(
-            "s-twice", "返信して", session_repo, approval_repo, kernel
+            "s-twice", "返信して", session_repo, approval_repo, client
         )
         await resume_after_approval(
-            res.approval_request_id, True, session_repo, approval_repo, kernel
+            res.approval_request_id, True, session_repo, approval_repo, client
         )
 
         with pytest.raises(ValueError, match="Approval already processed"):
             await resume_after_approval(
-                res.approval_request_id, True, session_repo, approval_repo, kernel
+                res.approval_request_id, True, session_repo, approval_repo, client
             )
 
 
@@ -182,11 +193,11 @@ class TestCheckpointCleanup:
     async def test_l1_completed_run_without_approval_retains_no_checkpoints(
         self, session_repo, approval_repo
     ):
-        kernel = FakeKernel(RoutedChatService(NO_TOOL_CLASSIFICATION))
+        client = RoutedChatClient(NO_TOOL_CLASSIFICATION)
         before = dict(_pending_run_storages)
 
         res = await run_workflow(
-            "s-clean", "こんにちは", session_repo, approval_repo, kernel
+            "s-clean", "こんにちは", session_repo, approval_repo, client
         )
 
         assert res.requires_approval is False
