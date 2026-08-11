@@ -39,7 +39,17 @@ GitHub MCP ツール（`mcp__github__*`。ToolSearch で `select:` して読み�
 2. **Open PR 一覧** — `list_pull_requests` (state open, fields: number/title/**body**/head/base/labels/updated_at)。`body` は `closes/refs #n` を読むため（PR → レーンの紐づけに使う）。
 3. **PR の変更ファイル** — 「apps/ を触る PR が何本か」(Step 3) を出すときだけ、対象 PR に `pull_request_read` (method: `get_files`)。**PR 数が多い時は全件叩かない** — 数えた本数と、数えられなかった本数を両方書く。
 4. **今週の目標 (milestone)** — Issue の `milestone` から期限が直近の open milestone を取る。無ければ「未設定」と書く（勝手に代役を立てない）。
-5. **dev への到達状況** — `actions_list` (method: `list_workflow_runs`, resource_id: `deploy.yml`) の最新 / 最後に成功した run。赤なら「未到達 + 理由」と書く。**ここを省くと「工場は動いたがプロダクトは届いていない」が隠れる**（ADR 0043 D1）。
+5. **dev への到達状況** — `actions_list` (method: `list_workflow_runs`, resource_id: `deploy.yml`)。**「成功 run があった」= 到達ではない**（下記）。**ここを省くと「工場は動いたがプロダクトは届いていない」が隠れる**（ADR 0043 D1）。
+
+   > **⚠️ 成功 run だけで到達と判定しない。** `deploy.yml` は緑でもデプロイしていないことがある:
+   >
+   > | ケース | run の結果 | 実際 |
+   > | --- | --- | --- |
+   > | OIDC 未設定 (`AZURE_*` Variables が欠けている) | **成功** | 全ステップ skip = **未デプロイ** |
+   > | push で `AUTO_DEPLOY_ENABLED != true` | **成功** | 自動デプロイ未解禁で skip = **未デプロイ** |
+   > | 手動 `workflow_dispatch` の `action=down` | **成功** | **環境を撤収した**（到達どころか消えている） |
+   >
+   > 判定手順: 対象 run の `event` と入力 (`down` を除外) を見たうえで、`actions_list` (method: `list_workflow_jobs`) で **`Provision + deploy (up)` と `Smoke test（認可と疎通の実測）` が `skipped` ではなく `success`** であることを確認する。確認できたものだけを「到達」と書き、それ以外は**理由つきで「未到達」**（`未デプロイ (自動デプロイ未解禁)` / `未デプロイ (OIDC 未設定)` / `撤収済み (down)` / `失敗`）と書く。ジョブまで引けなかったときは「**未取得**」とし、成功 run の存在だけで到達と書かない。
 6. **直近マージ PR** — `list_pull_requests` (state closed, sort updated desc, perPage 10) から `merged_at` のあるものを数件。
 7. **レーン定義** — `cicd/scripts/status-page/streams.json` を読む（レーンの名前・目標・分類基準。工場の終了条件もここ）。
 
@@ -90,7 +100,7 @@ Issue を `stream:*` ラベルでレーンに振り分ける。**レーンは st
 
 - Open Issue 総数 / レーン別残件数 / **未分類 n 件**（Step 1-1 のラベルから）
 - open PR 数と、そのうち**プロダクト（apps/ を触る）が何本か**（Step 1-3 の `get_files`。全件叩かなかった場合は「n 本中 m 本を確認」と書く。工場の稼働量をプロダクトの前進と取り違えない — ADR 0043 D1）
-- **dev に届いているか**（Step 1-5 の deploy run。届いていないなら「未到達 + 理由」）
+- **dev に届いているか**（Step 1-5。**成功 run の存在ではなく、実際に up + smoke が走ったか**で判定する。届いていないなら「未到達 + 理由」/ 判定材料を引けなければ「未取得」）
 - 直近マージ PR（何を進めたか 1 行）
 
 > **整合チェック（必須）**: 「Open Issue 総数 = 全レーン合計 + 未分類」が成り立つこと。食い違ったら数え落としがあるので原因を書く。数字の信頼性がこの skill の根幹。
@@ -110,7 +120,7 @@ Issue を `stream:*` ラベルでレーンに振り分ける。**レーンは st
 1. {レーン名} が {何で} 止まっている → {裁定の内容}。推奨 **{X}**。先送りすると {Y} が止まったまま
 2. …
 
-**今週の目標**: {milestone or「未設定」} / **dev で触れるもの**: {直近デプロイ到達 or「未到達（理由）」}
+**今週の目標**: {milestone or「未設定」} / **dev で触れるもの**: {到達した commit or「未到達（理由）」or「未取得」}
 
 **戦況**
 | レーン | 残 | 走っているもの | 詰まり | 次の一手 |
