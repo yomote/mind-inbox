@@ -9,6 +9,7 @@
 
 from product_status import (
     DEPLOY_STEP,
+    FAILURE_COMMENT_MARKER,
     MARKER_STEP,
     TEARDOWN_STEP,
     classify_prs,
@@ -19,6 +20,7 @@ from product_status import (
     parse_steps,
     pick_milestone,
     render,
+    unrecovered_since,
 )
 
 _PEND = {"needs_human": [], "prs": [], "proposed": []}
@@ -176,6 +178,95 @@ def test_単体_Issueが古くその後に成功デプロイがあれば赤に�
     )
     assert dev["ok"] is not False, "復旧済みなのに古い Issue で赤を出している"
     assert "⚠️" not in render({"dev": dev}, _PEND)
+
+
+def _collect_issue_at(bot_times, human_times, issue_at="2099-04-01T00:00:00Z"):
+    """collect を「open な deploy Issue あり」で走らせ、未復旧の証拠時刻を返す。
+
+    gh_lines の fake は **jq が bot と固定文言で絞っているときだけ** bot の時刻を
+    返す (絞っていなければ人間のコメントも混ぜて返す)。こうしておくと、
+    フィルタを外す退行がそのままテストの失敗になる。
+    """
+    seen = []
+
+    def fake_gh(*args):
+        url = args[1] if len(args) > 1 else ""
+        if "labels=ci-failure" in url:
+            return [{"n": 262, "t": "[ci-failure] deploy が落ちている", "at": issue_at}]
+        if "/status" in url:
+            return {"s": "success"}
+        return []
+
+    def fake_gh_lines(*args):
+        if "/comments" not in " ".join(args):
+            return []
+        seen.append(args)
+        jq = args[args.index("--jq") + 1]
+        assert "--paginate" in args, "コメントを 1 ページ目しか見ていない"
+        filtered = '"Bot"' in jq and FAILURE_COMMENT_MARKER in jq
+        return list(bot_times) if filtered else [*bot_times, *human_times]
+
+    data = collect(fake_gh, fake_gh_lines, lambda *a: [])
+    assert len(seen) == 1, "コメント取得は open な deploy Issue のときだけ 1 回"
+    return data
+
+
+def test_単体_閉じ損ねたIssueでも再発の追記があれば赤を保持する():
+    """close の失敗 (`|| true`) で Issue が残ったまま再障害になった場合。
+
+    無いと何が静かに通るか:
+        created_at は**初回の障害**で固定される。閉じ損ね → 成功デプロイ →
+        再障害の追記、という並びだと「Issue は成功デプロイより古い」と読めてしまい、
+        **現に落ちているのに ⚠️ が消える** (PR #281 Codex P2)。
+    """
+    data = _collect_issue_at(
+        bot_times=["2099-04-20T00:00:00Z"],  # 再障害の追記 (成功デプロイより新しい)
+        human_times=[],
+        issue_at="2099-04-01T00:00:00Z",  # 初回の障害 (成功デプロイより古い)
+    )
+    deployed = _run("success", "completed", "2099-04-10T00:00:00Z", rid=300)
+    dev = dev_state(
+        [deployed],
+        deploy_issue=262,
+        run_steps=lambda r: {"deployed": True, "attempted": True},
+        deploy_issue_at=data["dev_issue_at"],
+    )
+    assert dev["ok"] is False, "再発の追記を見ておらず、赤が消えている"
+    assert "⚠️" in render({"dev": dev}, _PEND)
+
+
+def test_単体_人間のコメントでは未復旧時刻が進まない():
+    """人間が古い Issue に一言書いただけで赤が復活しないこと。"""
+    data = _collect_issue_at(
+        bot_times=[],  # bot の失敗追記は無い (= 初回の障害のまま)
+        human_times=["2099-04-20T00:00:00Z"],  # 人間のコメントだけが新しい
+        issue_at="2099-04-01T00:00:00Z",
+    )
+    assert data["dev_issue_at"] == "2099-04-01T00:00:00Z", (
+        "人間のコメントで未復旧時刻が進んでいる"
+    )
+    deployed = _run("success", "completed", "2099-04-10T00:00:00Z", rid=301)
+    dev = dev_state(
+        [deployed],
+        deploy_issue=262,
+        run_steps=lambda r: {"deployed": True, "attempted": True},
+        deploy_issue_at=data["dev_issue_at"],
+    )
+    assert dev["ok"] is not False
+    assert "⚠️" not in render({"dev": dev}, _PEND)
+
+
+def test_単体_追記の無いIssueは作成時刻にフォールバックする():
+    assert unrecovered_since("2099-01-01T00:00:00Z", []) == "2099-01-01T00:00:00Z"
+    assert unrecovered_since("2099-01-01T00:00:00Z", None) == "2099-01-01T00:00:00Z"
+    # 取得できた追記のうち **最新** を採る (順不同で来ても)
+    assert (
+        unrecovered_since(
+            "2099-01-01T00:00:00Z",
+            ["2099-01-05T00:00:00Z", "2099-01-09T00:00:00Z", "2099-01-07T00:00:00Z"],
+        )
+        == "2099-01-09T00:00:00Z"
+    )
 
 
 def test_単体_成功デプロイより古い失敗は赤にしない():

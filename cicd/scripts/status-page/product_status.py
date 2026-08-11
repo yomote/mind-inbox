@@ -26,6 +26,22 @@ PLAN_ISSUE = 280
 
 GATE_MARK = {"success": "🟢", "failure": "🔴", "error": "🔴", "pending": "🟡"}
 
+# deploy.yml のステップ名 (実デプロイ / 撤収 / 経路突入の痕跡)。
+# **名前を変えたらここも追随すること** (deploy.yml 側にもその旨のコメントがある)。
+DEPLOY_STEP = "Provision + deploy (up)"
+TEARDOWN_STEP = "Tear down (cleanup-env)"
+# guard を通過して「デプロイ経路に入った」ことだけを記録する no-op ステップ。
+# Azure login や IMAGE_TAG 解決で落ちると DEPLOY_STEP は skipped になるため、
+# DEPLOY_STEP だけでは「試みたが失敗した」と「そもそも走らなかった」が区別できない
+# (PR #281 Codex P2-b)。marker は失敗し得る処理より**前**に置いてある。
+MARKER_STEP = "デプロイ経路に入った (marker)"
+
+# report-failure (.github/actions/report-failure/action.yml) が「まだ落ちている」
+# 追記に使う固定文言。**変えたら action.yml 側のコメントの指示どおりここも直すこと。**
+# これで「再発の時刻」を測る — Issue の created_at は初回の障害で固定されるため、
+# 閉じ損ねた Issue に再発が追記された場合を取り違える (PR #281 Codex P2)。
+FAILURE_COMMENT_MARKER = "🔴 まだ落ちています"
+
 
 def _fmt_jst(iso: str | None) -> str:
     if not iso:
@@ -42,6 +58,22 @@ def _fmt_due(iso: str | None) -> str:
 
 
 # --- 判定 (純関数。テストはここを直接叩く) -------------------------------
+
+
+def unrecovered_since(
+    issue_created_at: str | None, failure_comments: object
+) -> str | None:
+    """deploy が「いつから未復旧か」を返す。
+
+    report-failure は同じ Issue に失敗を**追記**するので、`created_at` は
+    **初回の障害で固定**される。close は `|| true` で握り潰されうるため、
+    「閉じ損ねた Issue → 成功デプロイ → 再障害の追記」という並びでは
+    created_at (初回) が成功デプロイより古くなり、**現に再障害中でも赤が消える**
+    (PR #281 Codex P2)。追記があればその**最新時刻**を採り、無ければ (初回の障害・
+    取得失敗) created_at に戻す。
+    """
+    times = [t for t in (failure_comments or []) if isinstance(t, str) and t]
+    return max(times) if times else issue_created_at
 
 
 def parse_steps(steps: object) -> dict | None:
@@ -80,15 +112,6 @@ def pick_milestone(milestones: object) -> dict | None:
     return ok[0] if ok else None
 
 
-# deploy.yml のステップ名 (実デプロイ / 撤収 / 経路突入の痕跡)。
-# **名前を変えたらここも追随すること** (deploy.yml 側にもその旨のコメントがある)。
-DEPLOY_STEP = "Provision + deploy (up)"
-TEARDOWN_STEP = "Tear down (cleanup-env)"
-# guard を通過して「デプロイ経路に入った」ことだけを記録する no-op ステップ。
-# Azure login や IMAGE_TAG 解決で落ちると DEPLOY_STEP は skipped になるため、
-# DEPLOY_STEP だけでは「試みたが失敗した」と「そもそも走らなかった」が区別できない
-# (PR #281 Codex P2-b)。marker は失敗し得る処理より**前**に置いてある。
-MARKER_STEP = "デプロイ経路に入った (marker)"
 # 実デプロイの痕跡を steps で確認する run の上限 (1 run = 1 API 呼び出し)。
 # 自動デプロイ未解禁などで skip が延々続く場合に API を叩き続けないための箍。
 # 「今 dev に載っている commit」を探す成功 run 側 (ANCHOR) と、「直近のデプロイが
@@ -112,7 +135,8 @@ def dev_state(
       deployed  = デプロイ処理が**完走**した / attempted = デプロイ処理が**走った**
       (失敗も含む)。attempted が無い辞書では deployed で代用する。
     deploy_issue / deploy_issue_at: open な deploy の ci-failure Issue の番号と
-      **作成時刻**。deploy が緑になれば自動で閉じる (ADR 0035 D2) ので、
+      **いつから未復旧か** (= bot の失敗追記の最新時刻。無ければ Issue の作成時刻 /
+      `unrecovered_since`)。deploy が緑になれば自動で閉じる (ADR 0035 D2) ので、
       「open のまま = まだ復旧していない」を run の取得窓に依存せず言える。
 
     conclusion == success を信用しない理由 (PR #281 Codex P2):
@@ -220,8 +244,9 @@ def dev_state(
     # 古い失敗で赤を出さない)。痕跡 = ok を決めた成功 run / 実デプロイ完走 (anchor)。
     if ok is not False:
         failed_push = next((r for r in pushes if r.get("c") == "failure"), None)
-        # Issue は「今の失敗の始まり」を指す created_at で比べる (更新時刻だと
-        # 人間のコメントでも進み、復旧後まで赤を引きずりうる)
+        # Issue 側は「いつから未復旧か」(bot の失敗追記の最新 / 無ければ作成時刻)。
+        # updated_at を使わないのは、人間のコメントでも進んで復旧後まで赤を
+        # 引きずるため (`unrecovered_since` の docstring 参照)
         evidence = max(
             (failed_push.get("t") or "") if failed_push else "",
             deploy_issue_at or "",
@@ -380,6 +405,21 @@ def collect(gh, gh_lines, gh_objects) -> dict:
         )
         if hit:
             deploy_issue, deploy_issue_at = hit.get("n"), hit.get("at")
+            # **open な deploy Issue があるときだけ** 1 回だけ追加で叩く。
+            # bot (report-failure) の失敗追記だけを拾う — 人間のコメントで
+            # 時刻が進むと、復旧後も赤を引きずる
+            deploy_issue_at = unrecovered_since(
+                deploy_issue_at,
+                gh_lines(
+                    "api",
+                    "--paginate",
+                    f"repos/{{owner}}/{{repo}}/issues/{deploy_issue}/comments?per_page=100",
+                    "--jq",
+                    '.[] | select(.user.type == "Bot")'
+                    f' | select(.body | contains("{FAILURE_COMMENT_MARKER}"))'
+                    " | .created_at",
+                ),
+            )
 
     # 一覧そのものも全ページ取る — 50 件で切ると 51 件目以降が分類以前に
     # 「進行中」から静かに消える (PR #281 Codex P2)
@@ -425,6 +465,9 @@ def collect(gh, gh_lines, gh_objects) -> dict:
         "goal": goal,
         "goal_items": goal_items,
         "dev": dev_state(runs, deploy_issue, _run_steps, deploy_issue_at),
+        # 「いつから未復旧か」— 描画では使わないが、判定の根拠として外に出す
+        # (取得したものは隠さない / テストもここを見る)
+        "dev_issue_at": deploy_issue_at,
         "prs": prs,
         "p1": p1,
     }
