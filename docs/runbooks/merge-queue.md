@@ -57,6 +57,11 @@
 - 原因: merge_group の checkout は queue の一時 branch = **PR が改変したコード**。`pull_request` イベントと違い fork でも GITHUB_TOKEN が read-only に落ちないため、write 権限 (statuses / pull-requests 等) を持つ job で PR 由来のスクリプトを実行すると門の迂回 (偽 status) や改ざんに使える (PR #271 Codex P1)
 - 対処: リポジトリのスクリプトを実行する job は `ref: main` の信頼版 checkout で実行するか (review-gate の `gate-merge-group` job が例)、write を落として投稿系は別 job に分離する (`test.yml` の `pr-comment` job が例)
 
+### queue 有効化後、マージが二重に走らないか
+
+- review-gate には**マージ執行**もある (ADR 0040 D1 / #253 — 受け入れ済み + auto-merge 武装済みの PR を workflow 自身がマージする)。merge_group の run は執行しない (`gate-merge-group` は `contents: write` を持たない) ので queue と衝突しない。PR 側経路 (`gate-trusted` / sweep) の執行は queue 有効化後も残る — auto-merge の有効化がそのまま queue 投入になるため実害は無い想定だが、**実測で二重・競合が見えたら ADR 0042 D4 の未決として 0040 D1 側を畳む**
+- ストール検知 (全緑 2h 未マージ / needs-human・Proposed ADR の 48h) は queue の外側の失敗モードなので、queue 有効化後も残す
+
 ### merge group で review-gate が 🔴「merge_group ref から PR を解決できない」
 
 - 原因: queue の一時 branch ref (`gh-readonly-queue/<base>/pr-<N>-<sha>`) の形式が変わったか、想定外の ref。安全側で failure にしている (静かに通さない)

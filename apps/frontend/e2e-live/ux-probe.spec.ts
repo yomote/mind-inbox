@@ -172,7 +172,11 @@ async function lastAssistantBubble(page: Page): Promise<{ text: string; streamin
     // ラベル "ガイド" とキャレットは表示上の飾りなので応答文から除く。
     // キャレットを残すと judge の採点入力が汚れ、後段の getByText(excerpt) も
     // 確定後の Paper (キャレットなし) と一致しなくなる。
-    text: raw.replace(/^\s*ガイド\s*/, "").split(STREAMING_CARET).join("").trim(),
+    text: raw
+      .replace(/^\s*ガイド\s*/, "")
+      .split(STREAMING_CARET)
+      .join("")
+      .trim(),
     streaming: raw.includes(STREAMING_CARET),
   };
 }

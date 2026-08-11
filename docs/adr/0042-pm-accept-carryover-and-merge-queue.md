@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-08-11
 - Deciders: yomote (PO) / PM セッション (PO 裁定 2026-08-11 を受けた実装側 ADR)
-- Related: [ADR 0036](0036-merge-gate-as-required-check-and-pm-cadence.md) (マージの門 — 本 ADR はその運用改訂。D1 の pm-accept 失効規則を狭め、Considered Options D の merge queue を採用に転じる) / [ADR 0035](0035-role-split-across-agents-and-actions.md) (役割分担)
+- Related: [ADR 0036](0036-merge-gate-as-required-check-and-pm-cadence.md) (マージの門 — 本 ADR はその運用改訂。D1 の pm-accept 失効規則を狭め、Considered Options D の merge queue を採用に転じる) / [ADR 0040](0040-project-continuity-three-layers.md) D1 (マージ**執行**とストール検知 — 本 ADR は**受け入れ判定**側で、分担は D4 参照) / [ADR 0035](0035-role-split-across-agents-and-actions.md) (役割分担)
 
 Technical Story: 2026-08-11 の実害 — PR #243 が「追いつき競争」で 4 周 (base 追随 → pm-accept 失効 → 再受け入れ → 別 PR がマージされてまた out-of-date)。#260 / #261 / #263 が同時周回して互いの pm-accept を無効化し合った。queue 有効化の設定作業は needs-human Issue #269。
 
@@ -64,9 +64,26 @@ merge_group イベントの checkout は queue の一時 branch = **PR が改変
 
 - **review-gate の merge_group 判定は専用 job に分離し、`ref: main` で checkout した信頼版スクリプトだけを実行する** (判定材料は全て API 経由 — queue ref の作業ツリー自体が不要)。permissions は `contents: read` + `statuses: write` のみ (`pull-requests: write` は持たない — advisory は merge_group で投稿しないため)
 - **未信頼コード (PR 由来の npm / pnpm スクリプト) を実行する job には write を持たせない** — `test.yml` の workflow permissions を `contents: read` に落とし、PR への sticky コメント投稿は未信頼コードを実行しない別 job (`pr-comment`、`pull-requests: write` のみ) へ artifact 経由で分離した
-- `pull_request` イベント側の review-gate は従来どおり PR 版 `check.py` を実行する — fork PR は token が read-only で偽 status を貼れず、same-repo PR の作者は信頼境界の内側 (単一アカウント運用)。挙動を変えないことを選び、理由を workflow コメントに明記
+- `pull_request` イベント側の review-gate は従来どおり PR 版 `check.py` を実行する (PR #258 / ADR 0040 D1 が導入した `gate-pr` job — `contents: write` を持たず `REVIEW_GATE_EXECUTE_MERGE=false`)。fork PR は token が read-only で偽 status を貼れず、same-repo PR の作者は信頼境界の内側 (単一アカウント運用)。挙動を変えないことを選ぶ
 - auto-improve-guard / adr-number-guard の merge_group 経路はリポジトリのスクリプトを実行しない (インライン bash + git / gh API のみ) かつ read 権限のみで、この穴の対象外
 - 帰結: **required check の workflow に merge_group を足すときは「queue ref のコードを write 権限で実行していないか」を必ず確認する** (Runbook の Common Issues に追記)
+
+本項は PR #258 (ADR 0040 D1) が同じ理由で入れた job 分離 (`gate-pr` / `gate-trusted` / `sweep` — イベントの由来で権限を分ける) と**同じ原則の merge_group への拡張**であり、`gate-merge-group` はその 4 本目にあたる。
+
+### D4 — マージ**執行** (ADR 0040 D1) との分担: 受け入れ判定は 0042、実行は 0040 / queue
+
+PR #258 (ADR 0040 D1) は「review-gate 自身が受け入れ済み・auto-merge 武装済みの PR をマージまで実行する + ストール検知」を入れた。本 ADR とは**排他ではなく補完**で、層が違う:
+
+| 層 | 担当 | 内容 |
+| --- | --- | --- |
+| **受け入れ判定** (何をマージしてよいか) | 本 ADR (0042) | pm-accept の引き継ぎ。判定は `evaluate_gate` → `decide` の 1 経路に置くので、**マージ執行側のマージ直前フル再評価にも同じ引き継ぎが効く** (「追随しただけの PR」が執行の直前で門を閉じられない) |
+| **実行** (いつ誰がマージを叩くか) | ADR 0040 D1 / Merge Queue | イベント経路 (`gate-trusted`) と 30 分毎 sweep がマージ API を叩く。queue 有効化後は queue が直列化してマージする |
+
+重複の整理:
+
+- **merge_group の run はマージ執行を行わない** (`REVIEW_GATE_EXECUTE_MERGE` 相当を無効化し、job も `contents: write` を持たない) — queue がマージするので二重機構にしない
+- **PR 側経路のマージ執行は残す** — queue 有効化前 (#269 まで) はそれが唯一の自動マージ経路であり、有効化後も「auto-merge 武装 = queue 投入」の入口として整合する。queue 有効化後に不要と実測できたら 0040 D1 側の改訂として畳む (未決)
+- **ストール検知 (0040 D1) は残す** — queue は「入った PR」の直列化しかせず、「auto-merge 未武装で全緑のまま放置」「needs-human / Proposed ADR の 48h 停滞」は queue の外側の失敗モード。重複しない
 
 ### Positive Consequences
 
@@ -111,15 +128,17 @@ merge_group イベントの checkout は queue の一時 branch = **PR が改変
 2. 受け入れ済み PR に main をマージで追随させても review-gate が緑のまま、description に「pm-accept を \<sha\> から引き継ぎ (差分不変)」が出る (実測)
 3. 受け入れ後に実装コミットを積むと従来どおり赤に戻り、「引き継ぎ不成立」の理由が description に出る (実測)
 4. [L1] テスト: 引き継ぎの成立 / 実装コミット混入 / 非 main マージ / evil merge (差分変化) / rebase / 判定不能の各ケース (`cicd/scripts/review-gate/test_check.py`)
+5. 引き継ぎで緑になった PR が**マージ執行 (ADR 0040 D1) の直前フル再評価でも緑のまま**マージされる (実測 — 判定が `evaluate_gate` の 1 経路にあることの動作確認)
 
 ## 未決
 
 - merge queue の設定値 (merge method = squash / 並行ビルド数 / タイムアウト) — #269 で PO が設定するときに初期値を決め、実測で調整
 - up-to-date 必須 (strict) を queue 有効化後に外すか — queue が同じ保証を持つため外せるはずだが、#269 の設定作業とセットで判断
 - `iac-validate` など paths フィルタ付き workflow を required に入れる場合の merge_group 対応 (現状 required は上の 5 check のみという前提)
+- **queue 有効化後に PR 側経路のマージ執行 (ADR 0040 D1) を畳むか** — queue がマージを直列実行するなら二重だが、queue 未投入の PR (auto-merge 未武装) には効いている。実測してから 0040 側の改訂で判断 (D4)
 
 ## Links
 
-- 関連 ADR: [0036](0036-merge-gate-as-required-check-and-pm-cadence.md) / [0035](0035-role-split-across-agents-and-actions.md) / [0031](0031-agent-reaches-outside-via-github-actions.md)
+- 関連 ADR: [0036](0036-merge-gate-as-required-check-and-pm-cadence.md) / [0040](0040-project-continuity-three-layers.md) / [0035](0035-role-split-across-agents-and-actions.md) / [0031](0031-agent-reaches-outside-via-github-actions.md)
 - Runbook: [merge-queue.md](../runbooks/merge-queue.md)
 - needs-human: Issue #269 (queue 有効化)
