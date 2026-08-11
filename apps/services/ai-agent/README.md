@@ -101,10 +101,13 @@ curl -X POST https://${FQDN}/chat \
 
 ## 環境変数
 
-| 変数名                    | 必須 | 説明                                                            |
-| ------------------------- | ---- | --------------------------------------------------------------- |
-| `AZURE_OPENAI_ENDPOINT`   | △    | Azure OpenAI エンドポイント（ACA では managed identity で取得） |
-| `AZURE_OPENAI_DEPLOYMENT` | -    | モデルデプロイ名（デフォルト: `gpt-4o`）                        |
-| `OPENAI_API_KEY`          | △    | OpenAI API キー（Azure を使わない場合）                         |
-| `USE_MANAGED_IDENTITY`    | -    | ACA での managed identity 使用フラグ（デフォルト: `false`）     |
-| `LOG_LEVEL`               | -    | ログレベル（デフォルト: `INFO`）                                |
+| 変数名                                                                                      | 必須 | 説明                                                                                                                                                                                                       |
+| ------------------------------------------------------------------------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AZURE_OPENAI_ENDPOINT`                                                                     | △    | Azure OpenAI エンドポイント（ACA では managed identity で取得）                                                                                                                                            |
+| `AZURE_OPENAI_DEPLOYMENT`                                                                   | -    | モデルデプロイ名（デフォルト: `gpt-4o`）                                                                                                                                                                   |
+| `OPENAI_API_KEY`                                                                            | △    | OpenAI API キー（Azure を使わない場合）                                                                                                                                                                    |
+| `USE_MANAGED_IDENTITY`                                                                      | -    | ACA での managed identity 使用フラグ（デフォルト: `false`）                                                                                                                                                |
+| `LOG_LEVEL`                                                                                 | -    | ログレベル（デフォルト: `INFO`）                                                                                                                                                                           |
+| `COSMOS_ENDPOINT`                                                                           | -    | Cosmos DB エンドポイント（#188 / ADR 0030）。**未設定なら in-memory で動く**（ローカル既定）。設定時はセッション・承認レコード・MAF checkpoint を TTL 付きコンテナへ永続化（認証は Managed Identity のみ） |
+| `COSMOS_DATABASE`                                                                           | -    | Cosmos DB データベース名（デフォルト: `mindinbox`）                                                                                                                                                        |
+| `COSMOS_SESSIONS_CONTAINER` / `COSMOS_APPROVALS_CONTAINER` / `COSMOS_CHECKPOINTS_CONTAINER` | -    | コンテナ名（デフォルト: `sessions` / `approvals` / `checkpoints`。bicep の宣言と揃える）                                                                                                                   |
