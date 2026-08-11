@@ -1,6 +1,6 @@
 # プロジェクト継続性を 3 層 (機構化された完遂 / 当番 PM / 窓口 PM) で保証する
 
-- Status: Proposed
+- Status: Accepted (briefing #8 2026-08-11 で PO 承認)
 - Date: 2026-08-11
 - Deciders: PO (yomote) / PM セッション
 
