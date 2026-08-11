@@ -1,6 +1,6 @@
 # AI Agent Service
 
-Azure OpenAI を使ったチャットエージェント。FastAPI + Semantic Kernel で実装。
+Azure OpenAI を使ったチャットエージェント。FastAPI + Microsoft Agent Framework (MAF / ADR 0016) で実装。
 
 ## エンドポイント
 
