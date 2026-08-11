@@ -17,14 +17,15 @@
 #
 # **定常状態では AI を呼ばない** — マーカー Problem が既にあれば `problem.list` の
 # 読み取りだけで判定が終わる。マーカーが 1 件も無いとき (初回 / データ消去後) だけ、
-# 唯一の書き込み経路である `consultation.extract` を 1 回使って種を置く。
+# 唯一の書き込み経路である `consultation.extract` で種を置く (実 AI の判定ぶれに
+# 備えて 0 件なら少数回リトライする — #232)。
 #
 # 保存先のパーティションは **このスクリプトを実行した主体の userId** (CI なら gha-oidc SP、
 # 手動なら実行した人間) になる。PO 本人の履歴を汚さない代わりに、**PO の目に見える
 # データが残っているかまでは見ていない** — 見ているのは「BFF ↔ Cosmos の往復が
 # プロセスの寿命を越えて成立しているか」。
 #
-# 初回実行は「前回のマーカーが無い」ので **PASS 扱いで seed だけ置く** (ここだけ AI を 1 回呼ぶ)。
+# 初回実行は「前回のマーカーが無い」ので **PASS 扱いで seed だけ置く** (ここだけ AI を呼ぶ)。
 # 2 回目以降が本番の検証になり、以降は読み取りだけで済む。
 set -uo pipefail
 
@@ -137,24 +138,37 @@ case "$kind" in
     ;;
 esac
 
-# マーカーが無いときだけ種を置く。**唯一の書き込み経路が extract なので AI を 1 回呼ぶ** —
+# マーカーが無いときだけ種を置く。**唯一の書き込み経路が extract なので AI を呼ぶ** —
 # 定常状態 (SURVIVED) では通らないので、日々のコストはゼロのまま。
+#
+# 渡す文は「AI が困りごとと判定する実際の悩み文」でなければならない (#232 の教訓:
+# 「監視のための固定文です」というメタ文を渡したら、抽出 AI が正しく 0 件と判定して
+# 種が一度も置けず、プローブが恒久的に赤くなった)。判定は実 AI なのでぶれる —
+# 0 件が返ったら少数回リトライする。話題は golden-path.sh の抽出文 (レビュー待ち /
+# 会議) と重ねない — 同じ話題だと既存 Problem へグルーピングされうるため。
 if [[ "$kind" == "SEED" ]]; then
-  echo "== 2. マーカーを作る (extract を 1 回だけ使う) =="
+  echo "== 2. マーカーを作る (extract で種を置く) =="
   STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   MARKER_TITLE="$MARKER_PREFIX $STAMP"
 
-  extract_body="$(curl -s -m 180 -X POST -H "$A" -H "Content-Type: application/json" \
-    -d "$(python3 -c "
+  SEED_ATTEMPTS="${SEED_ATTEMPTS:-3}"
+  new_id=""
+  for attempt in $(seq 1 "$SEED_ATTEMPTS"); do
+    extract_body="$(curl -s -m 180 -X POST -H "$A" -H "Content-Type: application/json" \
+      -d "$(python3 -c "
 import json
 print(json.dumps({
     'sessionId': 'persistence-probe',
-    'messages': [{'role': 'user', 'text': '永続化の実測用マーカーです。これは監視のための固定文です。'}],
+    'messages': [
+        {'role': 'user', 'text': '毎晩の運用記録の整理を手作業でやっていて、時間を取られてつらいです。'},
+        {'role': 'assistant', 'text': 'どのあたりが一番負担ですか。'},
+        {'role': 'user', 'text': '転記作業に毎回 30 分かかるのが負担で、自動化する時間も取れずに困っています。'},
+    ],
 }))
 ")" \
-    "$H/api/trpc/consultation.extract")"
+      "$H/api/trpc/consultation.extract")"
 
-  new_id="$(python3 -c "
+    new_id="$(python3 -c "
 import json, sys
 try:
     items = json.load(sys.stdin)['result']['data']['items']
@@ -163,8 +177,18 @@ except Exception:
     print('')
 " <<<"$extract_body")"
 
+    [[ -n "$new_id" ]] && break
+    if [[ "$attempt" -lt "$SEED_ATTEMPTS" ]]; then
+      echo "INFO- 抽出が困りごとを返さなかった (attempt $attempt/$SEED_ATTEMPTS) — 再試行します: $(echo "$extract_body" | head -c 200)"
+      sleep 5
+    fi
+  done
+
   if [[ -z "$new_id" ]]; then
-    ng "マーカーの種を作れなかった: $(echo "$extract_body" | head -c 300)"
+    # ここに来るのは (a) transport / 認証 / Cosmos が壊れて応答自体が異常、または
+    # (b) 実 AI が上の悩み文から $SEED_ATTEMPTS 回連続で 1 件も抽出できない、のどちらか。
+    # (b) なら golden-path.sh の step 6 (抽出) も赤いはず — 突き合わせて切り分けること。
+    ng "マーカーの種を作れなかった ($SEED_ATTEMPTS 回試行): $(echo "$extract_body" | head -c 300)"
   else
     # AI が付けたタイトルを、次回 run が見つけられる決定的な名前に上書きする。
     rename_body="$(curl -s -m 120 -X POST -H "$A" -H "Content-Type: application/json" \
@@ -191,6 +215,6 @@ echo "== Result =="
 if [[ "$FAIL" == "0" ]]; then
   echo "PASS — 永続化プローブ"
 else
-  echo "FAIL — 永続化が壊れている。Cosmos の結線 (COSMOS_ENDPOINT / MI のロール割り当て) を疑うこと"
+  echo "FAIL — 永続化プローブが通らない。problem.list が読めない/マーカーが消えたなら Cosmos の結線 (COSMOS_ENDPOINT / MI のロール割り当て) を、種が置けないなら抽出 (golden-path.sh step 6 と突き合わせ) を疑うこと"
   exit 1
 fi
