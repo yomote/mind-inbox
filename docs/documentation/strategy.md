@@ -27,17 +27,17 @@
 
 ## 2. 真実の所在マトリクス
 
-| 領域                  | 真実 (single source of truth)       | 派生物                                                      |
-| --------------------- | ----------------------------------- | ----------------------------------------------------------- |
-| UI 仕様               | **MDX (`docs/frontend/ui_specs/`)** | preview コンポーネント / mockApi.ts / 実装                  |
-| BFF API (tRPC)        | **TS の zod schema**                | OpenAPI (`docs/api/bff-trpc.yaml` 自動生成)                 |
-| AI Agent / VOICEVOX   | **FastAPI コード (pydantic)**       | OpenAPI 生成は未整備 (#9 未完。生成物・CI ゲートとも無い)   |
-| アーキテクチャ判断    | **ADR (`docs/adr/`)**               | CLAUDE.md 内のリンクのみ                                    |
-| 運用手順              | **Runbook (`docs/runbooks/`)**      | (なし)                                                      |
-| 実行状態 (計画・進捗) | **GitHub Issues + Projects**        | docs へのリンクのみ (設計内容は board に書かない, ADR 0011) |
-| コンセプト            | `docs/concept_deck.md`              | (現状維持)                                                  |
-| 基本設計              | `docs/design/`                      | (現状維持)                                                  |
-| テスト戦略            | `docs/testing/strategy.md`          | (現状維持)                                                  |
+| 領域                  | 真実 (single source of truth)         | 派生物                                                                                                                                                                                                      |
+| --------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| UI 仕様               | **MDX (`docs/frontend/ui_specs/`)**   | preview コンポーネント / mockApi.ts / 実装                                                                                                                                                                  |
+| BFF API (tRPC)        | **TS の zod schema**                  | OpenAPI (`docs/api/bff-trpc.yaml` 自動生成)                                                                                                                                                                 |
+| AI Agent / VOICEVOX   | **FastAPI コード (pydantic)**         | OpenAPI 生成は未整備 (#9 未完。生成物・CI ゲートとも無い)                                                                                                                                                   |
+| アーキテクチャ判断    | **ADR (`docs/adr/`)**                 | CLAUDE.md 内のリンクのみ                                                                                                                                                                                    |
+| 運用手順              | **Runbook (`docs/runbooks/`)**        | (なし)                                                                                                                                                                                                      |
+| 実行状態 (計画・進捗) | **GitHub Issues (`stream:*` ラベル)** | status ページの戦況図 (実データから自動生成) / docs へのリンクのみ (設計内容は Issue に書かない, ADR 0011 / [0044](../adr/0044-stream-lanes-as-the-project-map.md))。**Projects board は退役 — 再建しない** |
+| コンセプト            | `docs/concept_deck.md`                | (現状維持)                                                                                                                                                                                                  |
+| 基本設計              | `docs/design/`                        | (現状維持)                                                                                                                                                                                                  |
+| テスト戦略            | `docs/testing/strategy.md`            | (現状維持)                                                                                                                                                                                                  |
 
 ### 乖離した時のルール
 

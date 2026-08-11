@@ -32,12 +32,21 @@ Mind Inbox の「今どこまで進み・次に何をやるか」を **GitHub �
 
 GitHub MCP ツール（`mcp__github__*`。ToolSearch で `select:` して読み込む）で以下を取得。repo は `yomote/mind-inbox`。
 
-1. **Open Issue 一覧** — `list_issues` (state OPEN, perPage 100, fields: number/title/labels/updated_at)。
-2. **Open PR 一覧** — `list_pull_requests` (state open, fields: number/title/head/base/updated_at)。
-3. **直近マージ PR** — `list_pull_requests` (state closed, sort updated desc, perPage 10) から `merged_at` のあるものを数件。
-4. **レーン定義** — `cicd/scripts/status-page/streams.json` を読む（レーンの名前・目標・分類基準。工場の終了条件もここ）。
+**出力する項目の根拠は必ず引く**（引けなかった項目は推測せず「未取得」と書く）:
+
+1. **Open Issue 一覧** — `list_issues` (state OPEN, perPage 100, fields: number/title/labels/**milestone**/updated_at)。レーン所属・詰まり・次の一手・今週の目標の根拠。
+2. **Open PR 一覧** — `list_pull_requests` (state open, fields: number/title/**body**/head/base/labels/updated_at)。`body` は `closes/refs #n` を読むため（PR → レーンの紐づけに使う）。
+3. **PR の変更ファイル** — 「apps/ を触る PR が何本か」(Step 3) を出すときだけ、対象 PR に `pull_request_read` (method: `get_files`)。**PR 数が多い時は全件叩かない** — 数えた本数と、数えられなかった本数を両方書く。
+4. **今週の目標 (milestone)** — Issue の `milestone` から期限が直近の open milestone を取る。無ければ「未設定」と書く（勝手に代役を立てない）。
+5. **dev への到達状況** — `actions_list` (method: `list_workflow_runs`, resource_id: `deploy.yml`) の最新 / 最後に成功した run。赤なら「未到達 + 理由」と書く。**ここを省くと「工場は動いたがプロダクトは届いていない」が隠れる**（ADR 0043 D1）。
+6. **直近マージ PR** — `list_pull_requests` (state closed, sort updated desc, perPage 10) から `merged_at` のあるものを数件。
+7. **レーン定義** — `cicd/scripts/status-page/streams.json` を読む（レーンの名前・目標・分類基準。工場の終了条件もここ）。
 
 > Issue 番号は変わりうるので**ラベルで発見**する（番号をこの skill に固定しない）。レーン所属 = `stream:*` ラベル、人間待ち = `needs-human`、優先 = `P1`。
+>
+> **PR → レーンの紐づけ**: PR 本文の `closes/refs #n` から Issue の `stream:*` を引くのが第一。取れないものは「未紐づけ PR」として末尾に列挙する（黙って落とさない）。
+>
+> **重い取得 (3 / 5) を省いてよい**。ただし省いたら該当項目を「未取得」と明記する — 推測値を数字として出さない。
 
 ### Step 1.5 — 「🙋 あなたの番」を集める (ADR 0020 / 0044 D3)
 
@@ -75,8 +84,9 @@ Issue を `stream:*` ラベルでレーンに振り分ける。**レーンは st
 
 ### Step 3 — 数字を計算
 
-- Open Issue 総数 / レーン別残件数 / **未分類 n 件**
-- open PR 数と、そのうち**プロダクト（apps/ を触る）が何本か**（工場の稼働量をプロダクトの前進と取り違えない — ADR 0043 D1）
+- Open Issue 総数 / レーン別残件数 / **未分類 n 件**（Step 1-1 のラベルから）
+- open PR 数と、そのうち**プロダクト（apps/ を触る）が何本か**（Step 1-3 の `get_files`。全件叩かなかった場合は「n 本中 m 本を確認」と書く。工場の稼働量をプロダクトの前進と取り違えない — ADR 0043 D1）
+- **dev に届いているか**（Step 1-5 の deploy run。届いていないなら「未到達 + 理由」）
 - 直近マージ PR（何を進めたか 1 行）
 
 > **整合チェック（必須）**: 「Open Issue 総数 = 全レーン合計 + 未分類」が成り立つこと。食い違ったら数え落としがあるので原因を書く。数字の信頼性がこの skill の根幹。
