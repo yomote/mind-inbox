@@ -1,21 +1,49 @@
 """
-Workflow engine using Semantic Kernel.
+/chat・/approve のオーケストレーション — Microsoft Agent Framework (MAF) graph Workflow。
 
-State transitions:
-  RECEIVE → CLASSIFY → RETRIEVE_IF_NEEDED → PLAN
-       → APPROVAL_IF_NEEDED  (side-effecting tool: pause, return to caller)
-       → EXECUTE_TOOL → RESPOND
+v1 の自前 7 状態 FSM (RECEIVE→CLASSIFY→RETRIEVE_IF_NEEDED→PLAN→APPROVAL_IF_NEEDED
+→EXECUTE_TOOL→RESPOND) を MAF の graph Workflow に写した (ADR 0016 / M1-3)。
+
+グラフ (エッジ配送は MAF の型付きメッセージルーティング):
+
+    receive → classify → retrieve → plan ─┬→ execute_tool → respond → finish
+                                          └────────────────────────→ finish
+                                            (却下時: FinalReply 直行)
+
+- **HITL 承認**: plan executor が MAF 標準の request-response 機構
+  (`ctx.request_info` + `@response_handler`) で中断する。中断時点の全状態は
+  MAF checkpoint (superstep 境界で自動保存) が保持する。
+- **approvalRequestId は checkpoint 参照への写像**: FastAPI 境界の薄いアダプタ
+  (`run_workflow` / `resume_after_approval`) が request_id → checkpoint_id の
+  対応を `ApprovalRecord` に記録し、API 契約 (requiresApproval /
+  approvalRequestId) を v1 と不変に保つ。/approve は checkpoint から
+  `workflow.run(responses=..., checkpoint_id=...)` で再開する。
+- **ストリーミング**: respond executor がトークンを intermediate output として
+  yield し、アダプタが ChatStreamDelta へ写す (契約は #120 / ADR 0024 のまま)。
 """
 
-from __future__ import annotations
+# NOTE: `from __future__ import annotations` を使わない — MAF の @handler /
+# @response_handler はデコレート時に実型の annotation を検査するため、
+# PEP 563 の文字列 annotation では登録に失敗する。
 
 import json
 import logging
+import uuid
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Optional, Union
+from typing import Never, Optional, Union
 
+from agent_framework import (
+    CheckpointStorage,
+    Executor,
+    InMemoryCheckpointStorage,
+    Workflow,
+    WorkflowBuilder,
+    WorkflowContext,
+    WorkflowEvent,
+    handler,
+    response_handler,
+)
+from pydantic import BaseModel
 from semantic_kernel import Kernel
 from semantic_kernel.contents import ChatHistory
 
@@ -34,15 +62,31 @@ from .tools import execute_tool, is_side_effecting
 
 logger = logging.getLogger(__name__)
 
+_WORKFLOW_NAME = "mind-inbox-chat-turn"
 
-class WorkflowState(str, Enum):
-    RECEIVE = "RECEIVE"
-    CLASSIFY = "CLASSIFY"
-    RETRIEVE_IF_NEEDED = "RETRIEVE_IF_NEEDED"
-    PLAN = "PLAN"
-    APPROVAL_IF_NEEDED = "APPROVAL_IF_NEEDED"
-    EXECUTE_TOOL = "EXECUTE_TOOL"
-    RESPOND = "RESPOND"
+_REJECTION_REPLY = "操作はキャンセルされました。他にご用件はありますか？"
+
+
+# checkpoint storage は run ごとに新品を作る。プロセス共有の 1 個にすると、
+# 承認と無関係な全ターンの checkpoint が削除経路なしに溜まり続ける
+# (PR #243 レビュー指摘 / 1 GiB レプリカでメモリを圧迫)。承認待ちで中断した
+# run の storage だけを registry に保持し、/approve の解決で解放する。
+# TODO(PoC): in-memory checkpoint はプロセス再起動で消える。#188 で MAF 公式の
+# CosmosCheckpointStorage (agent-framework-azure-cosmos) へ差し替える際は
+# 共有ストア + document TTL 掃除の構成になる (この registry は不要になる)。
+def _new_checkpoint_storage() -> CheckpointStorage:
+    return InMemoryCheckpointStorage()
+
+
+_pending_run_storages: dict[str, CheckpointStorage] = {}
+
+
+def get_pending_checkpoint_storage(approval_id: str) -> Optional[CheckpointStorage]:
+    """承認待ち run の checkpoint storage (解決済み・不明 ID は None)。"""
+    return _pending_run_storages.get(approval_id)
+
+
+# ── Session history helpers (v1 から不変の防御仕様) ───────────────────────────
 
 
 async def _get_or_create_session(
@@ -95,6 +139,9 @@ async def _append_user_message_once(
         return
     history.add_user_message(message)
     await session_repo.save(session_id, history)
+
+
+# ── LLM helpers (v1 から不変: 分類プロンプト / 壊れた JSON → 安全側 no-op) ────
 
 
 async def _classify(message: str, kernel: Kernel) -> dict:
@@ -184,85 +231,382 @@ async def _respond_stream(
             yield text
 
 
-@dataclass
-class _TurnPlan:
-    """RESPOND 直前までの共通前段 (RECEIVE〜EXECUTE_TOOL) の結果。
+# ── Workflow messages (executor 間で流れる型 = エッジ配送のルーティングキー) ──
 
-    run_workflow (一括) と run_workflow_stream (SSE) が同じ状態遷移を共有する
-    ための内部表現。approval が入っている場合は RESPOND せずそれを返す。
-    """
 
-    history: ChatHistory
+class ChatTurn(BaseModel):
+    """workflow への入力 (start executor が受ける)。"""
+
+    session_id: str
+    message: str
+
+
+class ClassifiedTurn(BaseModel):
+    session_id: str
+    message: str
+    needs_retrieval: bool = False
+    needs_tool: bool = False
+    tool_name: Optional[str] = None
+    tool_args: dict = {}
+
+
+class PlannedTurn(BaseModel):
+    session_id: str
+    needs_retrieval: bool = False
+    needs_tool: bool = False
+    tool_name: Optional[str] = None
+    tool_args: dict = {}
     rag_context: str = ""
-    citations: list[str] = field(default_factory=list)
-    approval: Optional[ChatResponse] = None
-
-
-async def _prepare_respond(
-    session_id: str,
-    message: str,
-    session_repo: SessionRepository,
-    approval_repo: ApprovalRepository,
-    kernel: Kernel,
-) -> _TurnPlan:
-    """RECEIVE → CLASSIFY → RETRIEVE_IF_NEEDED → PLAN → APPROVAL_IF_NEEDED → EXECUTE_TOOL。"""
-    logger.info("Workflow[RECEIVE] session=%s", session_id)
-    history = await _get_or_create_session(session_id, session_repo)
-    await _append_user_message_once(session_id, message, history, session_repo)
-
-    logger.info("Workflow[CLASSIFY]")
-    classification = await _classify(message, kernel)
-
-    rag_context = ""
     citations: list[str] = []
 
-    if classification.get("needs_retrieval"):
-        logger.info("Workflow[RETRIEVE_IF_NEEDED]")
-        results = await retrieve(message)
-        rag_context = "\n".join(r.content for r in results)
-        citations = [r.source for r in results]
 
-    logger.info("Workflow[PLAN]")
-    tool_name: Optional[str] = classification.get("tool_name")
-    tool_args: dict = classification.get("tool_args") or {}
-    needs_tool = bool(classification.get("needs_tool") and tool_name)
+class ApprovalRequest(BaseModel):
+    """HITL request_info の payload。checkpoint に pending として保存される。"""
 
-    if needs_tool and is_side_effecting(tool_name):
-        logger.info("Workflow[APPROVAL_IF_NEEDED] tool=%s", tool_name)
-        record = ApprovalRecord(
-            session_id=session_id,
-            plan=Plan(
+    session_id: str
+    plan: Plan
+    rag_context: str = ""
+    citations: list[str] = []
+
+
+class ApprovalDecision(BaseModel):
+    """HITL の応答型 (/approve の approved を写す)。"""
+
+    approved: bool
+
+
+class ToolInvocation(BaseModel):
+    session_id: str
+    tool_name: Optional[str] = None
+    tool_args: dict = {}
+    rag_context: str = ""
+    citations: list[str] = []
+
+
+class RespondRequest(BaseModel):
+    session_id: str
+    rag_context: str = ""
+    citations: list[str] = []
+
+
+class FinalReply(BaseModel):
+    session_id: str
+    reply: str
+    citations: list[str] = []
+
+
+# ── Executors (旧 FSM の各状態を 1 executor に写す) ───────────────────────────
+
+
+class ReceiveExecutor(Executor):
+    """RECEIVE: セッション確保 + user 発言の冪等追加。"""
+
+    def __init__(self, session_repo: SessionRepository):
+        super().__init__(id="receive")
+        self._session_repo = session_repo
+
+    @handler
+    async def receive(self, turn: ChatTurn, ctx: WorkflowContext[ChatTurn]) -> None:
+        logger.info("Workflow[RECEIVE] session=%s", turn.session_id)
+        history = await _get_or_create_session(turn.session_id, self._session_repo)
+        await _append_user_message_once(
+            turn.session_id, turn.message, history, self._session_repo
+        )
+        await ctx.send_message(turn)
+
+
+class ClassifyExecutor(Executor):
+    """CLASSIFY: LLM でツール・RAG 要否を判定。"""
+
+    def __init__(self, kernel: Kernel):
+        super().__init__(id="classify")
+        self._kernel = kernel
+
+    @handler
+    async def classify(
+        self, turn: ChatTurn, ctx: WorkflowContext[ClassifiedTurn]
+    ) -> None:
+        logger.info("Workflow[CLASSIFY]")
+        classification = await _classify(turn.message, self._kernel)
+        tool_name = classification.get("tool_name")
+        await ctx.send_message(
+            ClassifiedTurn(
+                session_id=turn.session_id,
+                message=turn.message,
                 needs_retrieval=bool(classification.get("needs_retrieval")),
+                needs_tool=bool(classification.get("needs_tool") and tool_name),
                 tool_name=tool_name,
-                tool_args=tool_args,
-                is_side_effecting=True,
-            ),
-            rag_context=rag_context,
+                tool_args=classification.get("tool_args") or {},
+            )
         )
-        await approval_repo.save(record)
-        return _TurnPlan(
-            history=history,
-            rag_context=rag_context,
-            citations=citations,
-            approval=ChatResponse(
-                reply=f"「{tool_name}」を実行するには承認が必要です。実行してよろしいですか？",
-                requires_approval=True,
-                approval_request_id=record.id,
+
+
+class RetrieveExecutor(Executor):
+    """RETRIEVE_IF_NEEDED: 必要なら RAG 検索してコンテキストを付与。"""
+
+    def __init__(self):
+        super().__init__(id="retrieve")
+
+    @handler
+    async def retrieve_if_needed(
+        self, turn: ClassifiedTurn, ctx: WorkflowContext[PlannedTurn]
+    ) -> None:
+        rag_context = ""
+        citations: list[str] = []
+        if turn.needs_retrieval:
+            logger.info("Workflow[RETRIEVE_IF_NEEDED]")
+            results = await retrieve(turn.message)
+            rag_context = "\n".join(r.content for r in results)
+            citations = [r.source for r in results]
+        await ctx.send_message(
+            PlannedTurn(
+                session_id=turn.session_id,
+                needs_retrieval=turn.needs_retrieval,
+                needs_tool=turn.needs_tool,
+                tool_name=turn.tool_name,
+                tool_args=turn.tool_args,
+                rag_context=rag_context,
                 citations=citations,
-            ),
+            )
         )
 
-    if needs_tool:
-        logger.info("Workflow[EXECUTE_TOOL] tool=%s", tool_name)
-        try:
-            tool_result = await execute_tool(tool_name, tool_args)
-            history.add_system_message(f"Tool result ({tool_name}): {tool_result}")
-        except Exception as exc:
-            logger.error("Tool execution failed: %s", exc)
-            history.add_system_message(f"Tool error: {exc}")
-        await session_repo.save(session_id, history)
 
-    return _TurnPlan(history=history, rag_context=rag_context, citations=citations)
+class PlanExecutor(Executor):
+    """PLAN + APPROVAL_IF_NEEDED: 副作用ツールは MAF の request-response で中断する。
+
+    `ctx.request_info` が pending request として checkpoint に残り、workflow は
+    IDLE_WITH_PENDING_REQUESTS で停止する。応答 (`ApprovalDecision`) は /approve
+    経由で `workflow.run(responses=...)` により `on_approval_decision` へ届く。
+    """
+
+    def __init__(self, session_repo: SessionRepository):
+        super().__init__(id="plan")
+        self._session_repo = session_repo
+
+    @handler
+    async def plan(
+        self, turn: PlannedTurn, ctx: WorkflowContext[ToolInvocation]
+    ) -> None:
+        logger.info("Workflow[PLAN]")
+        if turn.needs_tool and is_side_effecting(turn.tool_name):
+            logger.info("Workflow[APPROVAL_IF_NEEDED] tool=%s", turn.tool_name)
+            await ctx.request_info(
+                ApprovalRequest(
+                    session_id=turn.session_id,
+                    plan=Plan(
+                        needs_retrieval=turn.needs_retrieval,
+                        tool_name=turn.tool_name,
+                        tool_args=turn.tool_args,
+                        is_side_effecting=True,
+                    ),
+                    rag_context=turn.rag_context,
+                    citations=turn.citations,
+                ),
+                ApprovalDecision,
+                request_id=str(uuid.uuid4()),
+            )
+            return
+        await ctx.send_message(
+            ToolInvocation(
+                session_id=turn.session_id,
+                tool_name=turn.tool_name if turn.needs_tool else None,
+                tool_args=turn.tool_args,
+                rag_context=turn.rag_context,
+                citations=turn.citations,
+            )
+        )
+
+    @response_handler
+    async def on_approval_decision(
+        self,
+        request: ApprovalRequest,
+        decision: ApprovalDecision,
+        ctx: WorkflowContext[ToolInvocation | FinalReply],
+    ) -> None:
+        if not decision.approved:
+            logger.info("Workflow[APPROVAL_IF_NEEDED] rejected")
+            history = await _get_or_create_session(
+                request.session_id, self._session_repo
+            )
+            history.add_assistant_message(_REJECTION_REPLY)
+            await self._session_repo.save(request.session_id, history)
+            await ctx.send_message(
+                FinalReply(session_id=request.session_id, reply=_REJECTION_REPLY)
+            )
+            return
+        logger.info(
+            "Workflow[APPROVAL_IF_NEEDED] approved tool=%s", request.plan.tool_name
+        )
+        await ctx.send_message(
+            ToolInvocation(
+                session_id=request.session_id,
+                tool_name=request.plan.tool_name,
+                tool_args=request.plan.tool_args,
+                rag_context=request.rag_context,
+                citations=request.citations,
+            )
+        )
+
+
+class ExecuteToolExecutor(Executor):
+    """EXECUTE_TOOL: ツール実行 (無ければ素通し)。結果/失敗は履歴に残す。"""
+
+    def __init__(self, session_repo: SessionRepository):
+        super().__init__(id="execute_tool")
+        self._session_repo = session_repo
+
+    @handler
+    async def execute_tool_if_needed(
+        self, invocation: ToolInvocation, ctx: WorkflowContext[RespondRequest]
+    ) -> None:
+        if invocation.tool_name:
+            logger.info("Workflow[EXECUTE_TOOL] tool=%s", invocation.tool_name)
+            history = await _get_or_create_session(
+                invocation.session_id, self._session_repo
+            )
+            try:
+                tool_result = await execute_tool(
+                    invocation.tool_name, invocation.tool_args
+                )
+                history.add_system_message(
+                    f"Tool result ({invocation.tool_name}): {tool_result}"
+                )
+            except Exception as exc:
+                logger.error("Tool execution failed: %s", exc)
+                history.add_system_message(f"Tool error: {exc}")
+            await self._session_repo.save(invocation.session_id, history)
+        await ctx.send_message(
+            RespondRequest(
+                session_id=invocation.session_id,
+                rag_context=invocation.rag_context,
+                citations=invocation.citations,
+            )
+        )
+
+
+class RespondExecutor(Executor):
+    """RESPOND: 最終応答を生成。stream 時はトークンを intermediate output で流す。"""
+
+    def __init__(self, session_repo: SessionRepository, kernel: Kernel, stream: bool):
+        super().__init__(id="respond")
+        self._session_repo = session_repo
+        self._kernel = kernel
+        self._stream = stream
+
+    @handler
+    async def respond(
+        self, req: RespondRequest, ctx: WorkflowContext[FinalReply, str]
+    ) -> None:
+        logger.info("Workflow[RESPOND]%s", " streaming" if self._stream else "")
+        history = await _get_or_create_session(req.session_id, self._session_repo)
+        if self._stream:
+            parts: list[str] = []
+            async for token in _respond_stream(history, self._kernel, req.rag_context):
+                parts.append(token)
+                await ctx.yield_output(token)
+            reply = "".join(parts)
+        else:
+            reply = await _respond(history, self._kernel, req.rag_context)
+        history.add_assistant_message(reply)
+        await self._session_repo.save(req.session_id, history)
+        await ctx.send_message(
+            FinalReply(session_id=req.session_id, reply=reply, citations=req.citations)
+        )
+
+
+class FinishExecutor(Executor):
+    """終端: FinalReply を API 契約の ChatResponse として workflow output に出す。"""
+
+    def __init__(self):
+        super().__init__(id="finish")
+
+    @handler
+    async def finish(
+        self, msg: FinalReply, ctx: WorkflowContext[Never, ChatResponse]
+    ) -> None:
+        await ctx.yield_output(ChatResponse(reply=msg.reply, citations=msg.citations))
+
+
+def _build_chat_workflow(
+    session_repo: SessionRepository,
+    kernel: Kernel,
+    *,
+    stream: bool,
+    checkpoint_storage: CheckpointStorage,
+) -> Workflow:
+    """1 ターン分の chat workflow を組む。
+
+    stream フラグは respond executor の LLM 呼び出し方 (一括/逐次) だけを変え、
+    グラフ構造 (= checkpoint の graph signature) は同一に保つ — /chat で中断した
+    checkpoint を /approve (非 stream) で再開できるのはこのため。
+    """
+    receive = ReceiveExecutor(session_repo)
+    classify = ClassifyExecutor(kernel)
+    retrieve_exec = RetrieveExecutor()
+    plan = PlanExecutor(session_repo)
+    execute = ExecuteToolExecutor(session_repo)
+    respond = RespondExecutor(session_repo, kernel, stream=stream)
+    finish = FinishExecutor()
+    return (
+        WorkflowBuilder(
+            name=_WORKFLOW_NAME,
+            start_executor=receive,
+            checkpoint_storage=checkpoint_storage,
+            output_from=[finish],
+            intermediate_output_from=[respond],
+        )
+        .add_edge(receive, classify)
+        .add_edge(classify, retrieve_exec)
+        .add_edge(retrieve_exec, plan)
+        .add_edge(plan, execute)
+        .add_edge(plan, finish)  # 却下時: FinalReply が finish へ直行
+        .add_edge(execute, respond)
+        .add_edge(respond, finish)
+        .build()
+    )
+
+
+# ── FastAPI 境界の薄いアダプタ (API 契約は v1 と不変) ─────────────────────────
+
+
+async def _find_checkpoint_id(
+    storage: CheckpointStorage, request_id: str
+) -> Optional[str]:
+    """pending の approval request を保持する checkpoint を探す (写像の実体)。"""
+    checkpoints = await storage.list_checkpoints(workflow_name=_WORKFLOW_NAME)
+    matching = [
+        cp for cp in checkpoints if request_id in cp.pending_request_info_events
+    ]
+    if not matching:
+        logger.warning("No checkpoint found for approval request %s", request_id)
+        return None
+    return max(matching, key=lambda cp: cp.timestamp).checkpoint_id
+
+
+async def _record_approval_request(
+    event: WorkflowEvent,
+    approval_repo: ApprovalRepository,
+    storage: CheckpointStorage,
+) -> ChatResponse:
+    """MAF の request_info event を API 契約 (requiresApproval 応答) へ写す。"""
+    request: ApprovalRequest = event.data
+    record = ApprovalRecord(
+        id=event.request_id,
+        session_id=request.session_id,
+        plan=request.plan,
+        rag_context=request.rag_context,
+        checkpoint_id=await _find_checkpoint_id(storage, event.request_id),
+    )
+    await approval_repo.save(record)
+    if record.checkpoint_id is not None:
+        # 承認待ちの run だけ storage を生かしておく (/approve の解決で解放)
+        _pending_run_storages[record.id] = storage
+    return ChatResponse(
+        reply=f"「{request.plan.tool_name}」を実行するには承認が必要です。実行してよろしいですか？",
+        requires_approval=True,
+        approval_request_id=record.id,
+        citations=request.citations,
+    )
 
 
 async def run_workflow(
@@ -272,17 +616,21 @@ async def run_workflow(
     approval_repo: ApprovalRepository,
     kernel: Kernel,
 ) -> ChatResponse:
-    plan = await _prepare_respond(
-        session_id, message, session_repo, approval_repo, kernel
+    storage = _new_checkpoint_storage()
+    workflow = _build_chat_workflow(
+        session_repo, kernel, stream=False, checkpoint_storage=storage
     )
-    if plan.approval is not None:
-        return plan.approval
+    result = await workflow.run(ChatTurn(session_id=session_id, message=message))
 
-    logger.info("Workflow[RESPOND]")
-    reply = await _respond(plan.history, kernel, plan.rag_context)
-    plan.history.add_assistant_message(reply)
-    await session_repo.save(session_id, plan.history)
-    return ChatResponse(reply=reply, citations=plan.citations)
+    requests = result.get_request_info_events()
+    if requests:
+        return await _record_approval_request(requests[0], approval_repo, storage)
+
+    # 承認なしで完了した run の checkpoint は storage ごとここで破棄される
+    outputs = result.get_outputs()
+    if not outputs:
+        raise RuntimeError("Chat workflow completed without producing a response")
+    return outputs[-1]
 
 
 async def run_workflow_stream(
@@ -294,28 +642,40 @@ async def run_workflow_stream(
 ) -> AsyncIterator[Union[ChatStreamDelta, ChatStreamDone]]:
     """run_workflow のストリーミング版 (#120 / ADR 0024)。
 
-    RESPOND だけを LLM ストリーミングで逐次 yield し、完了時に従来 /chat と
-    同一形の ChatResponse を ChatStreamDone で返す。承認が要るターンは
-    逐次配信するものが無いので done のみを返す。履歴保存は一括版と同じ
-    タイミング (全文確定後) で行う。
+    RESPOND のトークン (intermediate output) を ChatStreamDelta として逐次 yield
+    し、完了時に従来 /chat と同一形の ChatResponse を ChatStreamDone で返す。
+    承認が要るターンは逐次配信するものが無いので done のみを返す。
     """
-    plan = await _prepare_respond(
-        session_id, message, session_repo, approval_repo, kernel
+    storage = _new_checkpoint_storage()
+    workflow = _build_chat_workflow(
+        session_repo, kernel, stream=True, checkpoint_storage=storage
     )
-    if plan.approval is not None:
-        yield ChatStreamDone(response=plan.approval)
+
+    request_event: Optional[WorkflowEvent] = None
+    final_response: Optional[ChatResponse] = None
+    async for event in workflow.run(
+        ChatTurn(session_id=session_id, message=message), stream=True
+    ):
+        if event.type == "intermediate" and isinstance(event.data, str):
+            yield ChatStreamDelta(text=event.data)
+        elif event.type == "request_info":
+            # checkpoint は superstep 境界で書かれるため、ここでは控えるだけに
+            # して write 完了後 (ループを抜けた後) に写像を記録する
+            request_event = event
+        elif event.type == "output" and isinstance(event.data, ChatResponse):
+            final_response = event.data
+
+    if request_event is not None:
+        yield ChatStreamDone(
+            response=await _record_approval_request(
+                request_event, approval_repo, storage
+            )
+        )
         return
 
-    logger.info("Workflow[RESPOND] streaming")
-    parts: list[str] = []
-    async for token in _respond_stream(plan.history, kernel, plan.rag_context):
-        parts.append(token)
-        yield ChatStreamDelta(text=token)
-
-    reply = "".join(parts)
-    plan.history.add_assistant_message(reply)
-    await session_repo.save(session_id, plan.history)
-    yield ChatStreamDone(response=ChatResponse(reply=reply, citations=plan.citations))
+    if final_response is None:
+        raise RuntimeError("Chat workflow completed without producing a response")
+    yield ChatStreamDone(response=final_response)
 
 
 async def resume_after_approval(
@@ -330,30 +690,26 @@ async def resume_after_approval(
         raise ValueError(f"Approval not found: {approval_id!r}")
     if record.status != "pending":
         raise ValueError(f"Approval already processed: {record.status!r}")
+    if not record.checkpoint_id:
+        raise ValueError(f"Approval checkpoint not found: {approval_id!r}")
+
+    # 解決に入る時点で registry から解放する (成功・失敗どちらでも再試行は
+    # status チェックで弾かれるため、checkpoint を保持し続ける理由がない)
+    storage = _pending_run_storages.pop(approval_id, None)
+    if storage is None:
+        raise ValueError(f"Approval checkpoint not found: {approval_id!r}")
 
     record.status = "approved" if approved else "rejected"
     await approval_repo.save(record)
 
-    history = await _get_or_create_session(record.session_id, session_repo)
-
-    if not approved:
-        reply = "操作はキャンセルされました。他にご用件はありますか？"
-        history.add_assistant_message(reply)
-        await session_repo.save(record.session_id, history)
-        return reply
-
-    plan = record.plan
-    logger.info("Workflow[EXECUTE_TOOL] post-approval tool=%s", plan.tool_name)
-    try:
-        tool_result = await execute_tool(plan.tool_name, plan.tool_args)
-        history.add_system_message(f"Tool result ({plan.tool_name}): {tool_result}")
-    except Exception as exc:
-        logger.error("Post-approval tool execution failed: %s", exc)
-        history.add_system_message(f"Tool error: {exc}")
-    await session_repo.save(record.session_id, history)
-
-    logger.info("Workflow[RESPOND] post-approval")
-    reply = await _respond(history, kernel, record.rag_context)
-    history.add_assistant_message(reply)
-    await session_repo.save(record.session_id, history)
-    return reply
+    workflow = _build_chat_workflow(
+        session_repo, kernel, stream=False, checkpoint_storage=storage
+    )
+    result = await workflow.run(
+        responses={approval_id: ApprovalDecision(approved=approved)},
+        checkpoint_id=record.checkpoint_id,
+    )
+    outputs = result.get_outputs()
+    if not outputs:
+        raise RuntimeError("Chat workflow resume completed without a response")
+    return outputs[-1].reply
