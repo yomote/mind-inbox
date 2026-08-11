@@ -12,17 +12,17 @@
 | 対象                        | ファイル                                                       | 性質                                                                                                                                                                                                 |
 | --------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 文分割 (1 本目)             | `apps/bff/src/domain/sentences.property.test.ts`               | 往復 (内容保存 = 参照モデルと厳密一致) / 空白のみの文を出さない / 2 文以上なら全文 8 文字以上 / 空配列 ⇔ 空白のみ入力 / 冪等 (再分割不変) / 途中確定文の安定 (後ろ 2 つは #251 と重複導入になり統合) |
-| タイトル導出                | `apps/bff/src/domain/title.property.test.ts`                   | 空にならない / 長さ ≤ 26+1 / 短い入力は不変 / **サロゲート切断 (it.fails = 未決の穴)**                                                                                                               |
-| Problem 集約                | `apps/bff/src/domain/problem.property.test.ts`                 | mentionCount = mentions.length (全経路) / 再言及で必ず open / Mention を失わない / 統合の和集合性 / **lastMentionedAt の導出不一致 (it.fails = 未決の穴)**                                           |
-| フロント純粋ロジック (実証) | `apps/frontend/src/consultation/sessionTitle.property.test.ts` | 空にならない / 長さ上限 / 必ず 1 行                                                                                                                                                                  |
+| タイトル導出                | `apps/bff/src/domain/title.property.test.ts`                   | 空にならない / 長さ ≤ 26+1 書記素 / 短い入力は不変 / 書記素境界で切る = サロゲート・結合文字を壊さない (2026-08-11 PO 裁定で確定・昇格済み)                                                          |
+| Problem 集約                | `apps/bff/src/domain/problem.property.test.ts`                 | mentionCount = mentions.length (全経路) / 再言及で必ず open / Mention を失わない / 統合の和集合性 / lastMentionedAt = 常に最大 createdAt (2026-08-11 PO 裁定で確定・昇格済み)                        |
+| フロント純粋ロジック (実証) | `apps/frontend/src/consultation/sessionTitle.property.test.ts` | 空にならない / 長さ上限 (書記素) / 書記素境界で切る / 必ず 1 行                                                                                                                                      |
 
 ## 2. 有効性の評価 — 「1 本入れて確かめる」の答え
 
 **結論: 有効。導入作業そのものが仕様の穴を 3 つ見つけた** (例ベーステストが何ヶ月も緑のまま素通りしていた領域)。
 
 1. **文分割の往復は成り立っていなかった** — 「分割して連結すると元に戻る」を書いた瞬間に反例 (空白のみ断片は捨てられる) が出た。性質候補の文言を「空白を除いた内容の保存」に補正し、[domain_rules.md §1](../design/domain_rules.md) に現行仕様として明文化
-2. **タイトルは「26 文字以下」ではなかった** — 実際は 26 + 省略記号 = 27。さらに UTF-16 コードユニット切りなので**絵文字入りの発話でタイトルが壊れる** (「�」表示)。未決として it.fails で固定
-3. **lastMentionedAt の導出が経路で食い違う** — 追記は「新 Mention の createdAt を無条件採用」(過去日時で逆行する)、relink/merge は「max を再計算」。未決として it.fails で固定
+2. **タイトルは「26 文字以下」ではなかった** — 実際は 26 + 省略記号 = 27。さらに UTF-16 コードユニット切りなので**絵文字入りの発話でタイトルが壊れる** (「�」表示)。未決として it.fails で固定 → **2026-08-11 PO 裁定「文字境界で安全に切る」で書記素 (grapheme) 境界に確定・修正し、通常の it に昇格** (domain_rules.md §2)
+3. **lastMentionedAt の導出が経路で食い違う** — 追記は「新 Mention の createdAt を無条件採用」(過去日時で逆行する)、relink/merge は「max を再計算」。未決として it.fails で固定 → **2026-08-11 PO 裁定「常に全 Mention の createdAt の最大値」で確定・修正し、通常の it に昇格** (domain_rules.md §3)
 
 つまり期待どおり「**プロパティは仕様が無いと書けない**」が働いた: 性質を書こうとする → 仕様が曖昧なことが分かる → 仕様を書く (or 未決として記録する)、のループが 1 周目から回った。
 
@@ -84,5 +84,5 @@ fast-check の **model-based testing** (`fc.commands`) + `renderHook` で「操�
 ## 5. 次にやるなら (未着手)
 
 - Python 側 (`hypothesis`): ai-agent の JSON 抽出・正規化 (`app/` のパース層) が同じ入場条件を満たす。導入は別 Issue で
-- `it.fails` 2 件の裁定 (サロゲート切断 / lastMentionedAt) → 直して通常の it へ昇格
+- ~~`it.fails` 2 件の裁定 (サロゲート切断 / lastMentionedAt) → 直して通常の it へ昇格~~ 済 (2026-08-11 PO 裁定 → 修正・昇格済み。上記 §2 参照)
 - echoGate の時刻列プロパティ (§4.1) — 書く価値はあるが #259 のスコープ外とした
