@@ -36,9 +36,23 @@ def emit(value):
     else:
         print(value if isinstance(value, str) else json.dumps(value))
 
-if "/runs" in url:
-    emit([{"c": "success", "s": "completed",
-           "t": "2099-01-01T00:00:00Z", "u": "https://example.test/run"}])
+# プロダクトの現在地 (product_status.py / Issue #280) が読む口。
+# ここに列挙が無い形が返ると「(未検証: …)」がページに出て、
+# test_L1_痕跡が取れたら未検証にしない が落ちる — わざとそうしてある
+# (新しい取得口を足したら stub にも足す、を強制する)。
+if "/milestones?" in url:
+    emit([{"n": 1, "t": "今週: テスト目標", "due": "2099-01-08T00:00:00Z",
+           "u": "https://example.test/milestone/1"}])
+elif "milestone=" in url:
+    emit([{"n": 187, "t": "目標に紐づく Issue", "s": "open", "pr": False}])
+elif "labels=ci-failure" in url:
+    emit([])
+elif "labels=P1" in url:
+    emit([{"n": 42, "t": "次の候補になる Issue", "c": "2099-01-01T00:00:00Z",
+           "labels": ["P1"], "pr": False}])
+elif "/runs" in url:
+    emit([{"c": "success", "s": "completed", "t": "2099-01-01T00:00:00Z",
+           "sha": "abc1234def5678", "e": "push", "u": "https://example.test/run"}])
 elif "needs-human" in url or "pulls" in url:
     emit([])
 elif "/comments" in url or "labels=" in url or "select(.title" in jqf:
