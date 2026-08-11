@@ -25,9 +25,11 @@ UC-01 の「段1 抽出 → 段2 グルーピング」の結果をユーザー�
 
 - 「N件見つけた」見出し（新規 / 既存に追加の内訳）
 - 各 Mention カード:
-  - 🆕 新規 Problem / 🔁 既存に追加（グルーピング結果）バッジ
+  - 新規 Problem / 既存に追加（グルーピング結果）バッジ。アイコンは `@mui/icons-material` を
+    Chip の `icon` prop で表示する: 新規 = `FiberNew`、既存に追加 = `Repeat`
+    （絵文字は使わない — [共通規約](./README.mdx)）
   - 主テーマチップ
-  - `🔁 N回目` バッジ（再出現の気づき / UC-03）・`再燃` バッジ（resolved/shelved から復活）
+  - `N回目` バッジ（`Repeat` アイコン + `N回目`。再出現の気づき / UC-03）・`再燃` バッジ（resolved/shelved から復活）
   - 困りごとの本文（`statement`）と元発話の引用（`excerpt`）
   - 感情チップ（`affect` の valence で色分け）
   - その場トリアージ: 新規に対する「これは違う（却下）」
