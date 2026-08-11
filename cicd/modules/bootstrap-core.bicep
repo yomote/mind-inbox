@@ -1201,8 +1201,20 @@ var cognitiveServicesOpenAiUserRoleId = subscriptionResourceId(
   '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
 )
 
+// 既存割り当ての「養子縁組」(#262)。deploy-ai-agent.sh 時代の az role assignment create は
+// 名前を指定せずランダム GUID 名で作っていたため、bicep が guid() 名で同じ
+// principal+role+scope を宣言すると ARM が RoleAssignmentExists で拒否する
+// (割り当ての一意性は名前ではなく principal+role+scope)。provision.sh が実行時に
+// 既存の名前を解決してこのパラメータへ渡し、bicep はその名前で宣言する — properties が
+// 同一なので no-op 更新となり冪等。削除→再作成で名前を揃える案は採らない
+// (削除に Owner 相当の権限が要る上、剥奪〜再付与の間 ai-agent が OpenAI を呼べない瞬断が出る)。
+@description('ai-agent MI → Cognitive Services OpenAI User の既存ロール割り当て名 (GUID)。空なら guid() で新規作成。既存環境では provision.sh が解決して渡す (#262)。')
+param aiAgentOpenAiRoleAssignmentName string = ''
+
 resource aiAgentOpenAiRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableOpenAi && enableAiAgentAca) {
-  name: guid(resourceGroup().id, openAiAccountName, aiAgentContainerAppName, 'openai-user')
+  name: empty(aiAgentOpenAiRoleAssignmentName)
+    ? guid(resourceGroup().id, openAiAccountName, aiAgentContainerAppName, 'openai-user')
+    : aiAgentOpenAiRoleAssignmentName
   scope: openAiAccount
   properties: {
     roleDefinitionId: cognitiveServicesOpenAiUserRoleId
