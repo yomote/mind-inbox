@@ -7,9 +7,13 @@ InMemory* は dev/test stub であり、本番は SQL/Cosmos に置き換わる�
 ここで test しないこと:
 - 単発の get/save (= dict 操作の wrapper) — 本番 repository 実装時の対象
 - 並行アクセスの一貫性 — InMemory は単一プロセス前提
+
+fixture 置き換え (M1-5 / #82): SK 依存除去に伴い、履歴 fixture を SK ChatHistory
+から app.history.ChatHistory (MAF Message ベース / 追記 API は同形) へ差し替えた。
+検証意図は不変。
 """
 
-from semantic_kernel.contents import ChatHistory
+from app.history import ChatHistory
 
 from app.schemas import ApprovalRecord, Plan
 
