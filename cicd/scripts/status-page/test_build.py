@@ -46,7 +46,8 @@ else:
 """
 
 
-def _run(tmp_path: pathlib.Path, defs: dict | None = None) -> str:
+def _run(tmp_path: pathlib.Path, defs: dict | None = None,
+         ux_data: dict[str, list[dict]] | None = None) -> str:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     gh = bin_dir / "gh"
@@ -54,28 +55,95 @@ def _run(tmp_path: pathlib.Path, defs: dict | None = None) -> str:
     gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
 
     env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    env.pop("UX_DATA_DIR", None)  # 外の環境に依存させない
     if defs is not None:
         # 性質のテストは **その時点の watchers.json に依存させない**。
         # 定義から 1 行消しただけでテストが落ちるのは、守りたい性質がずれている印。
         dpath = tmp_path / "watchers.json"
         dpath.write_text(json.dumps(defs, ensure_ascii=False))
         env["STATUS_PAGE_WATCHERS"] = str(dpath)
+    if ux_data is not None:
+        # データブランチ checkout の模倣 (probes/ evals/ の月別 JSONL — ADR 0040)
+        root = tmp_path / "uxdata"
+        for sub, items in ux_data.items():
+            (root / sub).mkdir(parents=True, exist_ok=True)
+            (root / sub / "2099-01.jsonl").write_text(
+                "".join(json.dumps(o, ensure_ascii=False) + "\n" for o in items))
+        env["UX_DATA_DIR"] = str(root)
     out = tmp_path / "out"
     subprocess.run([sys.executable, str(BUILD), str(out)], env=env, check=True,
                    capture_output=True, text=True)
     return (out / "index.html").read_text()
 
 
+def _mech(recorded_at: str, avg: int = 4100, mx: int = 9162, warn: int = 0) -> dict:
+    return {
+        "kind": "ux-eval-mech",
+        "recordedAt": recorded_at,
+        "metrics": {
+            "latency": {"sendToReplyVisibleMs": {"avgMs": avg, "maxMs": mx}},
+            "warnings": {"latency": warn, "functional": 0, "other": 0},
+            "thresholds": {"warnReplyVisibleMs": 10000},
+        },
+    }
+
+
+FRESH_UX_DATA = {
+    "probes": [{"kind": "ux-probe-record", "recordedAt": "2099-01-01T00:00:00Z",
+                "probeId": "p1", "record": {}}],
+    "evals": [_mech("2099-01-01T01:00:00Z", warn=1),
+              {"kind": "ux-judge-score", "recordedAt": "2099-01-01T02:00:00Z",
+               "total": 11, "max": 12, "verdict": "green"}],
+}
+
+
 def test_L1_痕跡が取れたら未検証にしない(tmp_path):
-    html = _run(tmp_path)
+    html = _run(tmp_path, ux_data=FRESH_UX_DATA)
     assert "取得できませんでした" not in html, (
         "gh がスカラー文字列をクォート無しで返す件で、痕跡があるのに未検証になっている"
     )
 
 
 def test_L1_取得できたものは緑になる(tmp_path):
-    html = _run(tmp_path)
+    html = _run(tmp_path, ux_data=FRESH_UX_DATA)
     assert "🟢" in html
+
+
+def test_L1_UXデータが取れないときは未検証として出す(tmp_path):
+    """データブランチが fetch できなかった run で、トレンドと trace を
+    「異常なし」に見せないこと (取れなかった ≠ 観測ゼロ)。"""
+    html = _run(tmp_path, ux_data=None)  # UX_DATA_DIR なし = fetch 失敗と同じ
+    assert "未検証" in html
+    assert "data/ux-observations" in html
+
+
+def test_L1_UXトレンドはSVGとデータ表になる(tmp_path):
+    html = _run(tmp_path, ux_data=FRESH_UX_DATA)
+    assert "<svg" in html
+    assert "9162" in html  # max がデータ表に出る
+    assert "11/12" in html  # LLM 採点の行
+    assert "🟢" in html
+
+
+def test_L1_traceはkindで絞って判定する(tmp_path):
+    """機械計測 (ux-eval-mech) だけ動いて LLM 採点 (ux-judge-score) が止まった状態を
+    検出できること。
+
+    無いと何が静かに通るか:
+        Issue コメント時代の trace は kind を区別せず、機械計測が毎朝積まれる限り
+        LLM 採点が何日止まっても緑に見えた (ADR 0037 Negative Consequences)。
+        kind フィルタが壊れると同じ穴が静かに戻る。
+    """
+    html = _run(tmp_path, defs={
+        "workflows": [],
+        "routines": [
+            {"name": "採点の痕跡", "what": "x",
+             "trace": {"kind": "data_branch", "record_kind": "ux-judge-score"},
+             "expect_hours": 50},
+        ],
+    }, ux_data={"evals": [_mech("2099-01-01T01:00:00Z")]})  # 機械計測しか無い
+    assert "痕跡が 1 件もありません" in html
+    assert "🔴" in html
 
 
 def test_L1_痕跡を残さない自動化は判定不能のまま残る(tmp_path):
