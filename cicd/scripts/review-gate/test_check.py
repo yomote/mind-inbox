@@ -600,6 +600,67 @@ def test_l1_マージ直前の再取得に失敗したらマージしない(monk
     assert not merged and "再取得に失敗" in reason
 
 
+# ---- #258 (マージ執行) と ADR 0042 (pm-accept 引き継ぎ) の合流点 ----
+
+
+def _stub_gate_io(monkeypatch, comments: list[dict], carryover) -> list[dict]:
+    """evaluate_gate の I/O (files / comments / スレッド / Codex / 引き継ぎ) を差し替える。
+    戻り値は compute_carryover が呼ばれた記録 (呼ばれなかったことも見たいので list)。"""
+    carryover_calls: list[dict] = []
+
+    def fake_gh(*args):
+        path = args[1]
+        if path.endswith("/files"):
+            return [{"filename": "docs/x.md"}]
+        if path.endswith("/comments"):
+            return comments
+        raise AssertionError(f"想定外の gh 呼び出し: {args}")
+
+    monkeypatch.setattr(check, "gh", fake_gh)
+    monkeypatch.setattr(check, "fetch_unresolved_threads", lambda *a: 0)
+    monkeypatch.setattr(check, "fetch_codex_present", lambda *a: True)
+    monkeypatch.setattr(
+        check,
+        "compute_carryover",
+        lambda repo, pr, pairs: carryover_calls.append(pr) or carryover,
+    )
+    return carryover_calls
+
+
+def test_l1_引き継ぎはマージ直前のフル再評価でも効く(monkeypatch) -> None:
+    """引き継ぎ判定を evaluate_gate に置く (= マージ執行の再評価も同じ関数を通る)
+    という設計を固定する。
+
+    無いと何が静かに通るか: 引き継ぎをイベント経路だけに置き直すと、
+    reverify_and_merge の再評価が引き継ぎを見ずに「PM 受け入れが無い」と判断し、
+    緑の status を failure に**訂正して**マージを止める — PM から見えるのは
+    「一度緑になった PR が 30 分後に赤に戻る」で、ADR 0042 が消したはずの
+    追いつき競争が sweep 側にだけ残る。赤方向の退行なので門は破れず、
+    テストが無ければ誰も気づかない。
+    """
+    pr = _mergeable_pr(head={"sha": "abc1234def5678"})
+    carried = check.Carryover(ok=True, accepted_short="aaa1111")
+    calls = _stub_gate_io(monkeypatch, comments=[], carryover=carried)
+
+    ev = check.evaluate_gate("o/r", 1, "abc1234def5678", pr)
+    assert ev.verdict.ok, "引き継ぎ成立なら再評価も緑 (failure へ訂正しない)"
+    assert "pm-accept を aaa1111 から引き継ぎ" in ev.verdict.description
+    assert calls == [pr], "引き継ぎ判定に渡すのは評価中の PR そのもの"
+
+
+def test_l1_直接の受け入れがあるとき引き継ぎ判定は呼ばれない(monkeypatch) -> None:
+    """API 節約 (ADR 0042) の実装契約。無いと何が静かに通るか: compare API を
+    毎回 2 往復以上叩くようになり、sweep が open PR 数に比例して重くなる
+    (レート制限に触れて sweep 全体が落ちる = マージの下限保証が消える) —
+    判定結果は同じなのでテストが無ければ気づけない。"""
+    accepted = [{"body": "[pm-accept] abc1234", "author_association": "OWNER"}]
+    calls = _stub_gate_io(monkeypatch, comments=accepted, carryover=None)
+
+    ev = check.evaluate_gate("o/r", 1, "abc1234def5678")
+    assert ev.verdict.ok
+    assert calls == [], "現 head への直接の受け入れがあるなら compare API を叩かない"
+
+
 def test_l1_sweepはpm_acceptが消えたprをマージしない(monkeypatch) -> None:
     """Codex P1 (PR #258): gate が success を貼った後に [pm-accept] コメントが
     削除されても issue_comment.deleted は購読外で status は緑のまま残る。
