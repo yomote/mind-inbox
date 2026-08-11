@@ -23,6 +23,12 @@ VOICEVOX_TIER="${VOICEVOX_TIER:-cpu}"
 # CD (deploy.yml) は build-images の直近成功 run から sha-<full-sha> を解決して渡してくる。
 # 未指定なら各 deploy スクリプトの既定 (latest) に落ちる（スクリプト側が WARN を出す）。
 IMAGE_TAG="${IMAGE_TAG:-}"
+# コンテナ image の座標 (PR #261): 既定は deploy-*.sh と同じ ghcr.io/yomote/mind-inbox。
+# fork 等で IMAGE_REGISTRY / IMAGE_REPO を差し替えた実行でも、bicep (bootstrap) と
+# 子スクリプト (deploy-ai-agent / deploy-voicevox-wrapper) が同じ座標を見るよう
+# ここで解決して両方に渡す (ズレると bootstrap が存在しない image の pull で止まる)。
+IMAGE_REGISTRY="${IMAGE_REGISTRY:-ghcr.io}"
+IMAGE_REPO="${IMAGE_REPO:-yomote/mind-inbox}"
 # Entra 認証(main-config)はUAMI事前準備が要るのでここでは有効化しない（個人デモは匿名SWAで可）。
 # true でも実際の有効化はせず案内ログのみ出す（変数名はその挙動を表す）。
 PRINT_ENTRA_AUTH_HINT="${PRINT_ENTRA_AUTH_HINT:-false}"
@@ -64,7 +70,7 @@ echo "==> [2/5] Bootstrap infra (main-bootstrap.bicep) — voicevoxTier=$VOICEVO
 # 解決済みなら bicep にも同じ sha タグを渡し、bicep 適用が稼働 image を過去に
 # 戻さないようにする (ADR 0025)。未指定なら bicep 既定 (latest) — 直後の
 # deploy-*.sh が従来どおり収束させる。
-BOOTSTRAP_IMAGE_ARGS=()
+BOOTSTRAP_IMAGE_ARGS=(-p "ghcrImageRepository=${IMAGE_REGISTRY}/${IMAGE_REPO}")
 if [[ -n "$IMAGE_TAG" ]]; then
   BOOTSTRAP_IMAGE_ARGS+=(-p "containerImageTag=$IMAGE_TAG")
 fi
@@ -81,6 +87,8 @@ if [[ "$PRINT_ENTRA_AUTH_HINT" == "true" ]]; then
   echo "==> [hint] Entra 認証(main-config) は UAMI 事前準備が要る。手順は iac/README §3 を参照（ここでは有効化しない）"
 fi
 
+# image 座標は bicep に渡したものと同じ値を子スクリプトにも届ける (常に非空なので無条件)。
+export IMAGE_REGISTRY IMAGE_REPO
 # IMAGE_TAG が来ていれば子スクリプト (deploy-voicevox-wrapper / deploy-ai-agent) に届ける。
 # 空のまま export すると子側の既定 (latest) が効かなくなるため、指定時のみ export する。
 if [[ -n "$IMAGE_TAG" ]]; then

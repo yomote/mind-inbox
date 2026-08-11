@@ -112,6 +112,9 @@ param enableAiAgentAca bool = false
 @description('ai-agent / voicevox-wrapper の image タグ。CD (provision.sh) は build-images の sha-<full-sha> を渡す (ADR 0025)。既定 latest は CD 外の初回 bootstrap 用フォールバック。')
 param containerImageTag string = 'latest'
 
+@description('image 座標のベース (<registry>/<owner>/<repo>)。この下に /ai-agent, /voicevox-wrapper がある。CD (provision.sh) は IMAGE_REGISTRY / IMAGE_REPO から解決した値を渡し、deploy-*.sh と座標がズレないようにする (PR #261 Codex P2)。既定は本家 ghcr の座標。')
+param ghcrImageRepository string = 'ghcr.io/yomote/mind-inbox'
+
 // -------------------- VOICEVOX Wrapper Container App --------------------
 @description('Enable VOICEVOX Wrapper on Azure Container Apps.')
 param enableVoicevoxWrapperAca bool = false
@@ -179,6 +182,7 @@ module infra '../modules/bootstrap-core.bicep' = {
     enableAiAgentAca: enableAiAgentAca
     enableVoicevoxWrapperAca: enableVoicevoxWrapperAca
     containerImageTag: containerImageTag
+    ghcrImageRepository: ghcrImageRepository
     enableCosmos: enableCosmos
     cosmosLocation: cosmosLocation
     enableCosmosFreeTier: enableCosmosFreeTier
