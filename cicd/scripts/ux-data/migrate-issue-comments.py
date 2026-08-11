@@ -18,7 +18,8 @@ json.loads が元の文字に戻すので、ここで特別扱いは要らない
 
 使い方:
     migrate-issue-comments.py <out_dir> <comments.json>...
-      comments.json = [{"body": str, "created_at": ISO8601}, ...] (gh api の出力)
+      comments.json = [{"body": str, "created_at": ISO8601,
+                        "login": str, "author_association": str}, ...] (gh api の出力)
       out_dir       = payload ファイル (NNNN-<kind>.json) を書き出す先
 
 stdout には書き出した payload のパスを 1 行 1 件で出す (診断は stderr)。
@@ -38,6 +39,62 @@ from pathlib import Path
 # 取り込む kind (それ以外の JSON ブロックは移行対象外として読み飛ばす)
 KINDS = {"ux-probe-record", "ux-eval-mech", "ux-judge-score"}
 
+# 移行を許す投稿者 (PR #260 Codex P1 指摘): #162/#127 は誰でもコメントできるため、
+# 投稿者を見ないと第三者のコメントが観測データとして永続化される。正規の記録は
+# workflow (github-actions[bot]) と PO/PM (リポジトリ OWNER) しか投稿していない。
+TRUSTED_LOGINS = {"github-actions[bot]"}
+TRUSTED_ASSOCIATIONS = {"OWNER"}
+
+
+def _is_trusted(comment: dict) -> bool:
+    return (
+        comment.get("login") in TRUSTED_LOGINS
+        or comment.get("author_association") in TRUSTED_ASSOCIATIONS
+    )
+
+
+def _numeric_or_none(value) -> bool:
+    return value is None or (
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+    )
+
+
+def _valid_shape(obj: dict) -> bool:
+    """kind ごとの下流 (ux_eval / status-page trend) が触る形を検証する。
+
+    型だけ偽装したデータ (例: avgMs が文字列) が描画側の TypeError で
+    status-page を止めるのを移行時点で防ぐ (PR #260 Codex P1)。
+    """
+    kind = obj.get("kind")
+    if kind == "ux-probe-record":
+        return isinstance(obj.get("record"), dict)
+    if kind == "ux-eval-mech":
+        metrics = obj.get("metrics")
+        if metrics is None:
+            return (
+                True  # 欠落は下流で欠測扱い。偽装で問題になるのは「在るのに型が違う」
+            )
+        if not isinstance(metrics, dict):
+            return False
+        latency = metrics.get("latency") or {}
+        if not isinstance(latency, dict):
+            return False
+        for stat in latency.values():
+            if not isinstance(stat, dict):
+                return False
+            if not all(_numeric_or_none(v) for v in stat.values()):
+                return False
+        warnings = metrics.get("warnings") or {}
+        thresholds = metrics.get("thresholds") or {}
+        if not isinstance(warnings, dict) or not isinstance(thresholds, dict):
+            return False
+        return all(_numeric_or_none(v) for v in thresholds.values())
+    if kind == "ux-judge-score":
+        scores = obj.get("scores")
+        return scores is None or isinstance(scores, dict)
+    return False
+
+
 _FENCE = re.compile(r"```json\s*(.*?)```", re.DOTALL)
 
 EXIT_OK = 0
@@ -53,8 +110,12 @@ def extract_observations(comments: list) -> list[dict]:
 
     1 コメントに複数の対象ブロックがあれば全部取り込む (実運用では 1 つだが、
     切り捨てると静かにデータが欠ける)。壊れたブロック・対象外 kind は読み飛ばす。
+    信頼できない投稿者のコメントと、下流が触る形を満たさないブロックは
+    件数を報告した上で捨てる (静かに混入させない / 静かに欠けさせない)。
     """
     found: list[tuple[str, dict]] = []
+    untrusted = 0
+    malformed = 0
     for comment in comments:
         if not isinstance(comment, dict):
             continue
@@ -62,15 +123,40 @@ def extract_observations(comments: list) -> list[dict]:
         created = comment.get("created_at")
         if not isinstance(body, str) or not isinstance(created, str):
             continue
+        if not _is_trusted(comment):
+            if any(
+                json.loads(b).get("kind") in KINDS
+                for b in _FENCE.findall(body)
+                if _loads_dict(b)
+            ):
+                untrusted += 1
+            continue
         for block in _FENCE.findall(body):
             try:
                 obj = json.loads(block)
             except json.JSONDecodeError:
                 continue
-            if isinstance(obj, dict) and obj.get("kind") in KINDS:
-                found.append((created, {**obj, "recordedAt": created}))
+            if not (isinstance(obj, dict) and obj.get("kind") in KINDS):
+                continue
+            if not _valid_shape(obj):
+                malformed += 1
+                continue
+            found.append((created, {**obj, "recordedAt": created}))
+    if untrusted:
+        log(
+            f"信頼できない投稿者の観測風コメントを {untrusted} 件捨てた (login/author_association を確認)"
+        )
+    if malformed:
+        log(f"形の壊れた観測ブロックを {malformed} 件捨てた (kind ごとのスキーマ検証)")
     found.sort(key=lambda pair: pair[0])
     return [payload for _, payload in found]
+
+
+def _loads_dict(block: str) -> bool:
+    try:
+        return isinstance(json.loads(block), dict)
+    except json.JSONDecodeError:
+        return False
 
 
 def run(out_dir: Path, comment_files: list[Path]) -> int:

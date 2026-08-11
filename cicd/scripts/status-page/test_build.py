@@ -46,8 +46,11 @@ else:
 """
 
 
-def _run(tmp_path: pathlib.Path, defs: dict | None = None,
-         ux_data: dict[str, list[dict]] | None = None) -> str:
+def _run(
+    tmp_path: pathlib.Path,
+    defs: dict | None = None,
+    ux_data: dict[str, list[dict]] | None = None,
+) -> str:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     gh = bin_dir / "gh"
@@ -68,11 +71,17 @@ def _run(tmp_path: pathlib.Path, defs: dict | None = None,
         for sub, items in ux_data.items():
             (root / sub).mkdir(parents=True, exist_ok=True)
             (root / sub / "2099-01.jsonl").write_text(
-                "".join(json.dumps(o, ensure_ascii=False) + "\n" for o in items))
+                "".join(json.dumps(o, ensure_ascii=False) + "\n" for o in items)
+            )
         env["UX_DATA_DIR"] = str(root)
     out = tmp_path / "out"
-    subprocess.run([sys.executable, str(BUILD), str(out)], env=env, check=True,
-                   capture_output=True, text=True)
+    subprocess.run(
+        [sys.executable, str(BUILD), str(out)],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     return (out / "index.html").read_text()
 
 
@@ -89,11 +98,24 @@ def _mech(recorded_at: str, avg: int = 4100, mx: int = 9162, warn: int = 0) -> d
 
 
 FRESH_UX_DATA = {
-    "probes": [{"kind": "ux-probe-record", "recordedAt": "2099-01-01T00:00:00Z",
-                "probeId": "p1", "record": {}}],
-    "evals": [_mech("2099-01-01T01:00:00Z", warn=1),
-              {"kind": "ux-judge-score", "recordedAt": "2099-01-01T02:00:00Z",
-               "total": 11, "max": 12, "verdict": "green"}],
+    "probes": [
+        {
+            "kind": "ux-probe-record",
+            "recordedAt": "2099-01-01T00:00:00Z",
+            "probeId": "p1",
+            "record": {},
+        }
+    ],
+    "evals": [
+        _mech("2099-01-01T01:00:00Z", warn=1),
+        {
+            "kind": "ux-judge-score",
+            "recordedAt": "2099-01-01T02:00:00Z",
+            "total": 11,
+            "max": 12,
+            "verdict": "green",
+        },
+    ],
 }
 
 
@@ -134,14 +156,21 @@ def test_L1_traceはkindで絞って判定する(tmp_path):
         LLM 採点が何日止まっても緑に見えた (ADR 0037 Negative Consequences)。
         kind フィルタが壊れると同じ穴が静かに戻る。
     """
-    html = _run(tmp_path, defs={
-        "workflows": [],
-        "routines": [
-            {"name": "採点の痕跡", "what": "x",
-             "trace": {"kind": "data_branch", "record_kind": "ux-judge-score"},
-             "expect_hours": 50},
-        ],
-    }, ux_data={"evals": [_mech("2099-01-01T01:00:00Z")]})  # 機械計測しか無い
+    html = _run(
+        tmp_path,
+        defs={
+            "workflows": [],
+            "routines": [
+                {
+                    "name": "採点の痕跡",
+                    "what": "x",
+                    "trace": {"kind": "data_branch", "record_kind": "ux-judge-score"},
+                    "expect_hours": 50,
+                },
+            ],
+        },
+        ux_data={"evals": [_mech("2099-01-01T01:00:00Z")]},
+    )  # 機械計測しか無い
     assert "痕跡が 1 件もありません" in html
     assert "🔴" in html
 
@@ -153,16 +182,21 @@ def test_L1_痕跡を残さない自動化は判定不能のまま残る(tmp_pat
         沈黙を「異常なし」と表示してしまう。2026-08-10 に無人の仕組みが 4 本とも
         止まっていたのに気づけなかった原因そのもの。
     """
-    html = _run(tmp_path, defs={
-        "workflows": [],
-        "routines": [{
-            "name": "異常時しか喋らない見張り",
-            "what": "赤いときだけ Issue を立てる",
-            "trace": {"kind": "issue_label", "label": "nonexistent-label"},
-            "expect_hours": 2,
-            "trace_only_on_anomaly": True,
-        }],
-    })
+    html = _run(
+        tmp_path,
+        defs={
+            "workflows": [],
+            "routines": [
+                {
+                    "name": "異常時しか喋らない見張り",
+                    "what": "赤いときだけ Issue を立てる",
+                    "trace": {"kind": "issue_label", "label": "nonexistent-label"},
+                    "expect_hours": 2,
+                    "trace_only_on_anomaly": True,
+                }
+            ],
+        },
+    )
     # 元のテストは watchers.json の note (データ) の文字列を見ていた。
     # それだと定義を 1 行消しただけで落ちる一方、**ロジックが壊れても気づけない**。
     # 見るのは build.py の振る舞い: 痕跡を残さない watcher は緑にせず、既定の説明を出す。
@@ -179,3 +213,41 @@ def test_L1_定義ファイルが読める():
     assert isinstance(defs["routines"], list)
     for w in defs["workflows"]:
         assert w.get("id", "").endswith(".yml"), w
+
+
+def test_l1_型を偽装したmech行でもトレンド描画が落ちない() -> None:
+    """無いと何が静かに通るか: 蓄積に混入した非数値の avgMs 1 行で trend_svg が
+    TypeError になり、status-page 全体の生成が止まり続ける (PR #260 Codex P1)。"""
+    import importlib.util
+    from datetime import datetime, timezone
+
+    spec = importlib.util.spec_from_file_location("status_page_build", BUILD)
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    now = datetime(2026, 8, 11, tzinfo=timezone.utc)
+    observations = [
+        {
+            "kind": "ux-eval-mech",
+            "recordedAt": "2026-08-10T08:20:00Z",
+            "metrics": {
+                "latency": {"sendToReplyVisibleMs": {"avgMs": "4100", "maxMs": None}},
+                "warnings": {"latency": True},
+                "thresholds": {"warnReplyVisibleMs": "10000"},
+            },
+        },
+        {
+            "kind": "ux-eval-mech",
+            "recordedAt": "2026-08-11T08:20:00Z",
+            "metrics": {
+                "latency": {"sendToReplyVisibleMs": {"avgMs": 4100, "maxMs": 9162}},
+                "warnings": {"latency": 0},
+                "thresholds": {"warnReplyVisibleMs": 10000},
+            },
+        },
+    ]
+    points = build._trend_points(observations, now)
+    assert points[0]["avg"] is None  # 偽装行は欠測扱い
+    assert points[0]["warn"] == 0  # bool は int に数えない
+    assert points[1]["avg"] == 4100.0
+    svg = build.trend_svg(points, points[1]["threshold"])
+    assert svg.startswith("<svg")

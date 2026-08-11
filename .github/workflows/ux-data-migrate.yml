@@ -33,11 +33,11 @@ jobs:
           # jq -s で 1 つの配列に束ね直す (ux-eval.yml 旧実装と同じ手筋)
           gh api --paginate \
             "repos/$GITHUB_REPOSITORY/issues/$PROBE_RECORD_ISSUE/comments?per_page=100" \
-            --jq '.[] | {body: .body, created_at: .created_at}' \
+            --jq '.[] | {body: .body, created_at: .created_at, login: .user.login, author_association: .author_association}' \
             | jq -s '.' > /tmp/records.json
           gh api --paginate \
             "repos/$GITHUB_REPOSITORY/issues/$SCOREBOARD_ISSUE/comments?per_page=100" \
-            --jq '.[] | {body: .body, created_at: .created_at}' \
+            --jq '.[] | {body: .body, created_at: .created_at, login: .user.login, author_association: .author_association}' \
             | jq -s '.' > /tmp/scoreboard.json
           echo "#$PROBE_RECORD_ISSUE: $(jq 'length' /tmp/records.json) 件 / #$SCOREBOARD_ISSUE: $(jq 'length' /tmp/scoreboard.json) 件"
 

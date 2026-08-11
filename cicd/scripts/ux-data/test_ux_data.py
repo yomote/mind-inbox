@@ -63,7 +63,10 @@ def test_l1_kindとrecordedAtで月別ファイルに振り分ける(tmp_path) -
         tmp_path,
         "mech.json",
         _payload(
-            "ux-eval-mech", recordedAt="2026-07-31T23:00:00Z", probeRunId="1", runId=None
+            "ux-eval-mech",
+            recordedAt="2026-07-31T23:00:00Z",
+            probeRunId="1",
+            runId=None,
         ),
     )
     assert append_mod.append(data, probe) == 0
@@ -226,12 +229,14 @@ def test_l1_旧コメントを時系列順のpayloadに変換しrecordedAtを付
         + json.dumps({"kind": "ux-probe-record", "probeId": "p1", "record": {}})
         + "\n```\n",
         "created_at": "2026-08-09T22:37:35Z",
+        "login": "github-actions[bot]",
     }
     newer = {
         "body": "```json\n"
         + json.dumps({"kind": "ux-eval-mech", "probeId": "p1", "probeRunId": "1"})
         + "\n```",
         "created_at": "2026-08-10T15:34:50Z",
+        "login": "github-actions[bot]",
     }
     noise = {"body": "人間の雑談", "created_at": "2026-08-10T00:00:00Z"}
     other_kind = {
@@ -265,6 +270,7 @@ def test_l1_変換したpayloadはappendでそのまま取り込める(tmp_path)
         )
         + "\n```",
         "created_at": "2026-08-10T15:42:32Z",
+        "author_association": "OWNER",
     }
     comments = _write(tmp_path, "comments.json", [comment])
     out = tmp_path / "payloads"
@@ -289,9 +295,62 @@ def test_l1_フェンス内のu0060置換はjson_loadsで元に戻る(tmp_path) 
         "\n```"
     )
     comments = _write(
-        tmp_path, "c.json", [{"body": body, "created_at": "2026-08-09T00:00:00Z"}]
+        tmp_path,
+        "c.json",
+        [
+            {
+                "body": body,
+                "created_at": "2026-08-09T00:00:00Z",
+                "login": "github-actions[bot]",
+            }
+        ],
     )
     out = tmp_path / "payloads"
     assert migrate_mod.run(out, [comments]) == 0
     payload = json.loads(next(out.glob("*.json")).read_text(encoding="utf-8"))
     assert payload["record"]["turns"][0]["assistantText"] == "`code`"
+
+
+def test_l1_信頼できない投稿者の観測コメントは移行しない(tmp_path) -> None:
+    """無いと何が静かに通るか: #162/#127 は誰でもコメントできるため、第三者が
+    kind 付き JSON を投稿するだけで偽の観測が正史 (データブランチ) に永続化される
+    (PR #260 Codex P1)。"""
+    forged = {
+        "body": "```json\n"
+        + json.dumps({"kind": "ux-eval-mech", "probeId": "evil", "probeRunId": "666"})
+        + "\n```",
+        "created_at": "2026-08-10T12:00:00Z",
+        "login": "attacker",
+        "author_association": "NONE",
+    }
+    comments = _write(tmp_path, "comments.json", [forged])
+    out = tmp_path / "payloads"
+    assert migrate_mod.run(out, [comments]) == 0
+    assert list(out.glob("*.json")) == []
+
+
+def test_l1_型を偽装したmech観測は移行しない(tmp_path) -> None:
+    """無いと何が静かに通るか: avgMs を文字列にした観測が通ると、status-page の
+    描画が数値比較で TypeError になりページ生成が止まり続ける (PR #260 Codex P1)。"""
+    forged = {
+        "body": "```json\n"
+        + json.dumps(
+            {
+                "kind": "ux-eval-mech",
+                "probeId": "p1",
+                "probeRunId": "2",
+                "metrics": {
+                    "latency": {
+                        "sendToReplyVisibleMs": {"avgMs": "4100", "maxMs": 9000}
+                    }
+                },
+            }
+        )
+        + "\n```",
+        "created_at": "2026-08-10T12:00:00Z",
+        "login": "github-actions[bot]",
+    }
+    comments = _write(tmp_path, "comments.json", [forged])
+    out = tmp_path / "payloads"
+    assert migrate_mod.run(out, [comments]) == 0
+    assert list(out.glob("*.json")) == []
