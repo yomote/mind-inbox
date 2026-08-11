@@ -70,6 +70,51 @@ def test_単体_未反映のマージ数はpushのrunで数える():
     assert dev_state(runs)["behind"] == 1
 
 
+def test_単体_guard_skipの緑で直前のdeploy失敗を隠さない():
+    """デプロイ失敗の**次の** push が guard skip で緑になっても赤警告を消さない。
+
+    無いと何が静かに通るか:
+        ok を「最新 push の conclusion」で決めると、失敗の翌 push が skip された
+        瞬間に ⚠️ と ci-failure Issue へのリンクが消え、古い commit と未反映本数
+        だけが並ぶ。**壊れているのに壊れて見えない**表示になる (PR #281 Codex P2)。
+    """
+    skipped = _run("success", "completed", "2099-01-03T00:00:00Z", rid=70)
+    failed = _run("failure", "completed", "2099-01-02T00:00:00Z", rid=71)
+    deployed = _run(
+        "success", "completed", "2099-01-01T00:00:00Z", sha="feed5678abcd", rid=72
+    )
+    steps = {
+        70: {"deployed": False, "attempted": False, "torn_down": False},  # guard skip
+        71: {"deployed": False, "attempted": True, "torn_down": False},  # 試みて失敗
+        72: {"deployed": True, "attempted": True, "torn_down": False},
+    }
+    dev = dev_state(
+        [skipped, failed, deployed],
+        deploy_issue=262,
+        run_steps=lambda r: steps[r["id"]],
+    )
+    assert dev["ok"] is False, "guard skip の緑を「直近のデプロイ結果」として読んでいる"
+    html = render({"dev": dev}, _PEND)
+    assert "⚠️" in html
+    assert "更新が届いていない" in html
+    assert "#262" in html
+    assert "feed567" in html  # 載っているのは最後に完走した commit
+
+
+def test_単体_デプロイを試みたpushが見つからないときは緑とも赤とも書かない():
+    """guard skip だけが続く区間では ok を断定しない (未検証側に倒す)。"""
+    runs = [
+        _run("success", "completed", f"2099-01-0{i}T00:00:00Z", rid=80 + i)
+        for i in (3, 2, 1)
+    ]
+    dev = dev_state(runs, run_steps=lambda r: {"deployed": False, "attempted": False})
+    assert dev["ok"] is None
+    html = render({"dev": dev}, _PEND)
+    assert "実デプロイの痕跡がありません" in html
+    assert "⚠️" not in html
+    assert "反映済み" not in html
+
+
 def test_単体_手動downのrunが最新でも反映済みにしない():
     """workflow_dispatch の down は run success でも「デプロイ」ではなく「撤収」。
 

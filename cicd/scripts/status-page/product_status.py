@@ -58,37 +58,50 @@ def pick_milestone(milestones: object) -> dict | None:
 # deploy.yml のステップ名 (実デプロイ / 撤収の痕跡)。名前を変えたらここも追随すること
 DEPLOY_STEP = "Provision + deploy (up)"
 TEARDOWN_STEP = "Tear down (cleanup-env)"
-# 実デプロイの痕跡を steps で確認する成功 run の上限 (1 run = 1 API 呼び出し)。
-# 自動デプロイ未解禁などで skip 成功が延々続く場合に API を叩き続けないための箍
+# 実デプロイの痕跡を steps で確認する run の上限 (1 run = 1 API 呼び出し)。
+# 自動デプロイ未解禁などで skip が延々続く場合に API を叩き続けないための箍。
+# 「今 dev に載っている commit」を探す成功 run 側 (ANCHOR) と、「直近のデプロイが
+# 通ったか」を見る push run 側 (OK) で別枠にしてある — 同じ枠にすると、赤が
+# 連続したときに ok の判定だけで予算を使い切り、載っている commit を見失う
+# (実データで deploy が 13 連敗していた 2026-08-11 がまさにその形)。
 MAX_STEP_CHECKS = 6
+MAX_OK_CHECKS = 3
 
 
 def dev_state(runs: object, deploy_issue: int | None = None, run_steps=None) -> dict:
     """deploy.yml の run 履歴から「dev がどの commit の状態か」を判定する。
 
     runs: 新しい順の [{id, c: conclusion, s: status, t: created_at, sha, e: event, u}]。
-    run_steps: run dict → {"deployed": bool, "torn_down": bool} | None (取得失敗)。
+    run_steps: run dict → {"deployed", "attempted", "torn_down"} | None (取得失敗)。
+      deployed  = デプロイ処理が**完走**した / attempted = デプロイ処理が**走った**
+      (失敗も含む)。attempted が無い辞書では deployed で代用する。
 
     conclusion == success を信用しない理由 (PR #281 Codex P2):
         deploy.yml には **run が success でも実デプロイが走っていない経路** がある —
         push の guard skip (OIDC 未設定 / AUTO_DEPLOY_ENABLED 未設定) と、
-        workflow_dispatch の down (撤収)。全 completed run を候補にすると、
-        dev が古いまま / 撤収済みでも「最新の main が反映済み」と出てしまう。
-        そこで run の jobs API から「Provision + deploy (up)」/
-        「Tear down (cleanup-env)」ステップの完走を確認して判定する。
+        workflow_dispatch の down (撤収)。conclusion をそのまま読むと 2 通りに嘘をつく:
+        (a) dev が古いまま / 撤収済みでも「最新の main が反映済み」と出る、
+        (b) **デプロイ失敗の次の push が guard skip で緑になると赤警告が消える**
+        (直前の失敗と ci-failure Issue が隠れる)。そこで run の jobs API から
+        「Provision + deploy (up)」/「Tear down (cleanup-env)」の痕跡を見て、
+        **今 dev に載っている commit (deployed)** と
+        **直近にデプロイを試みた push の結果 (attempted)** を別々に決める。
 
     判定の限界 (API から取れる範囲の最善):
       - workflow_dispatch の inputs (up/down) は runs API に出ない → steps で識別する
-      - run_steps 未指定 (None) のときは「push の成功 run = デプロイ」と近似し、
-        workflow_dispatch はデプロイとも撤収とも数えない (最小の近似)
+      - run_steps 未指定 (None) のときは「push = デプロイを試みた / push の成功 run =
+        デプロイ完走」と近似し、workflow_dispatch はどちらにも数えない (最小の近似)
       - run が failure でも provision までは完走している (smoke / golden-path で
         落ちた) 場合、dev の実体は更新されている可能性があるが、「実環境で通る
         ところまで確かめられた状態」を dev の状態と定義し、成功 run だけを
         反映済みとみなす (保守側に倒す)
+      - 痕跡を確認できないまま予算 (MAX_*_CHECKS) を使い切ったら、
+        **緑とも赤とも断定しない** (ok=None / anchor=None = 未検証側に倒す)
 
     返り値:
       fetched       run 履歴が読めたか (False なら以降のキーは無い)
-      ok            直近の完了 **push** run が緑か (無ければ None)
+      ok            **直近にデプロイを試みた push** が緑か (判定できなければ None)
+      has_push      完了した push run が 1 本でもあるか (ok=None の理由の区別用)
       last_success  実デプロイが完走した最後の run | None
       down          last_success より新しい撤収 (down) run | None
       verify_failed 実デプロイの痕跡確認 (jobs API) に失敗したか
@@ -99,13 +112,43 @@ def dev_state(runs: object, deploy_issue: int | None = None, run_steps=None) -> 
         return {"fetched": False}
     done = [r for r in runs if isinstance(r, dict) and r.get("s") == "completed"]
     pushes = [r for r in done if r.get("e") == "push"]
-    latest_push = pushes[0] if pushes else None
 
     def _default_steps(r: dict) -> dict:
-        return {"deployed": r.get("e") == "push", "torn_down": False}
+        return {
+            "deployed": r.get("e") == "push" and r.get("c") == "success",
+            "attempted": r.get("e") == "push",
+            "torn_down": False,
+        }
 
     check = run_steps or _default_steps
-    anchor, down, verify_failed = None, None, False
+    cache: dict = {}
+    verify_failed = False
+
+    def info_for(r: dict):
+        """1 run につき jobs API は 1 回だけ (ok 判定と anchor 探索で共有する)。"""
+        nonlocal verify_failed
+        key = r.get("id") if r.get("id") is not None else id(r)
+        if key not in cache:
+            got = check(r)
+            if not isinstance(got, dict):
+                verify_failed = True
+                got = None
+            cache[key] = got
+        return cache[key]
+
+    # (1) 直近に**デプロイを試みた** push の結果 = ok。guard skip の緑は読み飛ばす —
+    # 飛ばさないと、失敗の次の push が skip されただけで赤警告が消える
+    ok = None
+    for r in pushes[:MAX_OK_CHECKS]:
+        info = info_for(r)
+        if info is None:
+            break
+        if info.get("attempted", info.get("deployed")):
+            ok = r.get("c") == "success"
+            break
+
+    # (2) 今 dev に載っている commit = 実デプロイが完走した最後の成功 run
+    anchor, down = None, None
     checked = 0
     for r in done:
         if r.get("c") != "success":
@@ -114,9 +157,8 @@ def dev_state(runs: object, deploy_issue: int | None = None, run_steps=None) -> 
             # 打ち切り。「痕跡が見つからない」側に倒す (反映済みとは書かない)
             break
         checked += 1
-        info = check(r)
-        if not isinstance(info, dict):
-            verify_failed = True
+        info = info_for(r)
+        if info is None:
             break
         if info.get("torn_down"):
             down = r
@@ -136,7 +178,8 @@ def dev_state(runs: object, deploy_issue: int | None = None, run_steps=None) -> 
         )
     return {
         "fetched": True,
-        "ok": (latest_push.get("c") == "success") if latest_push else None,
+        "ok": ok,
+        "has_push": bool(pushes),
         "last_success": anchor,
         "down": down,
         "verify_failed": verify_failed,
@@ -228,10 +271,16 @@ def collect(gh, gh_lines, gh_objects) -> dict:
     )
 
     def _run_steps(run: dict) -> dict | None:
-        """run の jobs API から実デプロイ / 撤収ステップの完走を確認する。
+        """run の jobs API から実デプロイ / 撤収ステップの痕跡を確認する。
 
         deploy.yml は run success でも実デプロイが走らない経路 (guard skip / down)
-        を持つため、conclusion では判定できない (dev_state の docstring 参照)。"""
+        を持つため、conclusion では判定できない (dev_state の docstring 参照)。
+
+        deployed  = デプロイ処理が **success** で完走した (= dev にこれが載る)
+        attempted = デプロイ処理が **走った** (success / failure。skip でも未実行でもない)
+                    → 「直近のデプロイが通ったか」はこちらで判定する。走った run の
+                    結果だけを見ないと、失敗の次の push が skip されただけで赤が消える
+        """
         rid = run.get("id")
         if rid is None:
             return None
@@ -243,14 +292,14 @@ def collect(gh, gh_lines, gh_objects) -> dict:
         )
         if not isinstance(got, dict) or not isinstance(got.get("steps"), list):
             return None
-        succeeded = {
-            s.get("n")
-            for s in got["steps"]
-            if isinstance(s, dict) and s.get("c") == "success"
-        }
+        by_name: dict = {}
+        for s in got["steps"]:
+            if isinstance(s, dict) and s.get("n") not in by_name:
+                by_name[s.get("n")] = s.get("c")
         return {
-            "deployed": DEPLOY_STEP in succeeded,
-            "torn_down": TEARDOWN_STEP in succeeded,
+            "deployed": by_name.get(DEPLOY_STEP) == "success",
+            "attempted": by_name.get(DEPLOY_STEP) in ("success", "failure"),
+            "torn_down": by_name.get(TEARDOWN_STEP) == "success",
         }
 
     ci_fail = gh(
@@ -383,8 +432,6 @@ def _dev_html(dev: dict) -> str:
     last = dev.get("last_success")
     behind = dev.get("behind", 0)
     issue = dev.get("issue")
-    if dev.get("ok") is None:
-        return "<p>完了した deploy (main への push) がまだありません</p>"
     state = None
     if last is not None:
         tail = (
@@ -396,7 +443,13 @@ def _dev_html(dev: dict) -> str:
             f"<p>dev は {_fmt_jst(last['t'])} JST の commit "
             f"<code>{html.escape((last.get('sha') or '')[:7])}</code> の状態{tail}</p>"
         )
-    if not dev["ok"]:
+    # 「実デプロイの痕跡が無い」= guard skip (自動デプロイ未解禁 / OIDC 未設定) が
+    # 続いている。緑とも赤とも書かない
+    no_trace = (
+        "<p>直近の push に実デプロイの痕跡がありません"
+        " (自動デプロイ未解禁 / guard skip の可能性 — dev は古いままかもしれません)</p>"
+    )
+    if dev.get("ok") is False:
         since = _fmt_jst(last["t"]) + " JST" if last else "—"
         ref = f" — {_issue_link(issue)}" if issue else ""
         warn = (
@@ -404,14 +457,11 @@ def _dev_html(dev: dict) -> str:
             f" (deploy 赤{ref})</p>"
         )
         return warn + (state or "<p>実デプロイが完走した run が見つかりません</p>")
-    if state is None:
-        # run は緑なのに実デプロイの痕跡が無い = guard skip (自動デプロイ未解禁 /
-        # OIDC 未設定) が続いている。「反映済み」と読ませない
-        return (
-            "<p>直近の成功 run に実デプロイの痕跡がありません"
-            " (自動デプロイ未解禁 / guard skip の可能性 — dev は古いままかもしれません)</p>"
-        )
-    return state
+    if dev.get("ok") is None:
+        if not dev.get("has_push"):
+            return "<p>完了した deploy (main への push) がまだありません</p>"
+        return no_trace + (state or "")
+    return state or no_trace
 
 
 def _pr_items(prs: list, note: str = "") -> str:
