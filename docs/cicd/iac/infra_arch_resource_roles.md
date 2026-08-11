@@ -8,7 +8,7 @@
 | cae-dev-mindbox | microsoft.app/managedenvironments | rg-dev-mind-inbox | Container app environment | Shared runtime/network for Container Apps |
 | oai-dev-mindbox | microsoft.cognitiveservices/accounts | rg-dev-mind-inbox | Azure OpenAI account | GPT-4o for AI Agent inference |
 | spch-dev-mindbox | microsoft.cognitiveservices/accounts | rg-dev-mind-inbox | Azure Speech (STT) | Server-side speech-to-text (F0). BFF issues short-lived tokens via managed identity; the browser streams audio to Speech directly over WebSocket (ADR 0023) |
-| cosmos-dev-mindbox | microsoft.documentdb/databaseaccounts | rg-dev-mind-inbox | Problem persistence store (Cosmos DB) | Single persistence store behind the BFF for Problem / history data; short-lived items expire via native TTL (ADR 0030) |
+| cosmos-dev-mindbox | microsoft.documentdb/databaseaccounts | rg-dev-mind-inbox | Problem persistence store (Cosmos DB) | Single persistence store behind the BFF for Problem data (ADR 0030); no TTL is set — items persist until explicitly deleted. history container remains provisioned but unreferenced since ADR 0034 |
 | law-dev-mindbox-ops | microsoft.operationalinsights/workspaces | rg-dev-mind-inbox | Central Log Analytics workspace | Aggregates logs/metrics from BFF, Container Apps, and platform |
 | stdevmindboxfunc | microsoft.storage/storageaccounts | rg-dev-mind-inbox | Function runtime storage | Required by Azure Functions for state/queues/triggers |
 | asp-dev-mindbox-func | microsoft.web/serverfarms | rg-dev-mind-inbox | Function App Service plan | Compute capacity for the BFF Function App |
