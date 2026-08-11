@@ -287,6 +287,20 @@ az deployment group create \
   (または §4 の deploy スクリプト群) を続けて実行して収束させること。ロール付与も
   `deploy-ai-agent.sh` が冪等に再確認するため、万一 (手動削除等で) 消えていても
   この手順で復旧する。
+- その際、deploy スクリプトは `DEPLOYMENT` (既定 `main-bootstrap`) のデプロイ outputs から
+  リソース名を解決するため、**上のとおり `-n main-complete` でデプロイした場合は
+  `DEPLOYMENT=main-complete` を渡すこと**。既定のまま実行すると、初回は outputs が
+  取得できず失敗し、古い `main-bootstrap` デプロイが残る環境では別構成の outputs で
+  誤ったリソースを更新しうる。
+
+  ```bash
+  cd cicd
+  RG=<rg-name> DEPLOYMENT=main-complete IMAGE_TAG=sha-<full-sha> ./scripts/deploy/deploy-voicevox-wrapper.sh
+  RG=<rg-name> DEPLOYMENT=main-complete IMAGE_TAG=sha-<full-sha> ./scripts/deploy/deploy-ai-agent.sh
+  RG=<rg-name> DEPLOYMENT=main-complete ./scripts/deploy/deploy-all.sh
+  # provision.sh で収束させる場合も同様 (bicep 再適用も同じデプロイ名で上書きされる):
+  # RG=<rg-name> DEPLOYMENT=main-complete ./cicd/scripts/deploy/provision.sh
+  ```
 
 ---
 
