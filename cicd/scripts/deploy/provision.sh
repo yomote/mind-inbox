@@ -23,6 +23,12 @@ VOICEVOX_TIER="${VOICEVOX_TIER:-cpu}"
 # CD (deploy.yml) は build-images の直近成功 run から sha-<full-sha> を解決して渡してくる。
 # 未指定なら各 deploy スクリプトの既定 (latest) に落ちる（スクリプト側が WARN を出す）。
 IMAGE_TAG="${IMAGE_TAG:-}"
+# コンテナ image の座標 (PR #261): 既定は deploy-*.sh と同じ ghcr.io/yomote/mind-inbox。
+# fork 等で IMAGE_REGISTRY / IMAGE_REPO を差し替えた実行でも、bicep (bootstrap) と
+# 子スクリプト (deploy-ai-agent / deploy-voicevox-wrapper) が同じ座標を見るよう
+# ここで解決して両方に渡す (ズレると bootstrap が存在しない image の pull で止まる)。
+IMAGE_REGISTRY="${IMAGE_REGISTRY:-ghcr.io}"
+IMAGE_REPO="${IMAGE_REPO:-yomote/mind-inbox}"
 # Entra 認証(main-config)はUAMI事前準備が要るのでここでは有効化しない（個人デモは匿名SWAで可）。
 # true でも実際の有効化はせず案内ログのみ出す（変数名はその挙動を表す）。
 PRINT_ENTRA_AUTH_HINT="${PRINT_ENTRA_AUTH_HINT:-false}"
@@ -60,18 +66,60 @@ az group update -n "$RG" --set "tags.deployedAtEpoch=$(date +%s)" -o none >/dev/
   || echo "WARN: deployedAtEpoch タグの記録に失敗（デプロイは続行。記録用途のみ）" >&2
 
 echo "==> [2/5] Bootstrap infra (main-bootstrap.bicep) — voicevoxTier=$VOICEVOX_TIER"
+# ai-agent / vv-wrap の Container App は #188 で bicep 管理になった。IMAGE_TAG が
+# 解決済みなら bicep にも同じ sha タグを渡し、bicep 適用が稼働 image を過去に
+# 戻さないようにする (ADR 0025)。未指定なら bicep 既定 (latest) — 直後の
+# deploy-*.sh が従来どおり収束させる。
+BOOTSTRAP_EXTRA_ARGS=(-p "ghcrImageRepository=${IMAGE_REGISTRY}/${IMAGE_REPO}")
+if [[ -n "$IMAGE_TAG" ]]; then
+  BOOTSTRAP_EXTRA_ARGS+=(-p "containerImageTag=$IMAGE_TAG")
+fi
+
+# ai-agent MI → OpenAI User ロール割り当ての「養子縁組」(#262):
+# deploy-ai-agent.sh 時代の az role assignment create は名前を指定せずランダム GUID 名で
+# 作っていたため、bicep (PR #261) が guid() 名で同じ principal+role+scope を宣言すると
+# ARM が RoleAssignmentExists で毎回拒否する。既存の名前を実行時に解決して bicep へ渡し、
+# その名前で宣言させる (削除→再作成は Owner 相当の削除権限が要る上、剥奪〜再付与の間に
+# ai-agent が OpenAI を呼べない瞬断が出るため採らない)。
+# 初回 (Container App 未作成で principalId が取れない) は既存割り当ても無いので、
+# パラメータを渡さず従来どおり guid() で新規作成させる。
+# 名前の組み立ては bicep の命名規約 toLower('ca-{env}-{app から -_ を除去}-ai-agent') と同一。
+APP_CLEAN="$(printf '%s' "$APP_NAME" | tr -d '_-' | tr '[:upper:]' '[:lower:]')"
+AI_AGENT_CA_NAME="ca-${ENVIRONMENT}-${APP_CLEAN}-ai-agent"
+OPENAI_ACCOUNT_NAME="oai-${ENVIRONMENT}-${APP_CLEAN}"
+ROLE_OPENAI_USER="5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"
+AI_AGENT_PRINCIPAL_ID="$(az containerapp show -g "$RG" -n "$AI_AGENT_CA_NAME" \
+  --query 'identity.principalId' -o tsv 2>/dev/null || true)"
+OPENAI_SCOPE="$(az cognitiveservices account show -g "$RG" -n "$OPENAI_ACCOUNT_NAME" \
+  --query 'id' -o tsv 2>/dev/null || true)"
+if [[ -n "$AI_AGENT_PRINCIPAL_ID" && -n "$OPENAI_SCOPE" ]]; then
+  # --scope は継承分 (RG/サブスクリプション階層) も返すため、同一 scope のものだけ拾う
+  EXISTING_ROLE_ASSIGNMENT_NAME="$(az role assignment list \
+    --assignee "$AI_AGENT_PRINCIPAL_ID" \
+    --role "$ROLE_OPENAI_USER" \
+    --scope "$OPENAI_SCOPE" \
+    --query "[?scope=='${OPENAI_SCOPE}'] | [0].name" -o tsv 2>/dev/null || true)"
+  if [[ -n "$EXISTING_ROLE_ASSIGNMENT_NAME" ]]; then
+    echo "==> 既存ロール割り当てを養子縁組: aiAgentOpenAiRoleAssignmentName=$EXISTING_ROLE_ASSIGNMENT_NAME"
+    BOOTSTRAP_EXTRA_ARGS+=(-p "aiAgentOpenAiRoleAssignmentName=$EXISTING_ROLE_ASSIGNMENT_NAME")
+  fi
+fi
+
 az deployment group create \
   -g "$RG" \
   -n "$DEPLOYMENT" \
   -f "$IAC_DIR/main-bootstrap.bicep" \
   -p @"$IAC_DIR/main-bootstrap.parameters.json" \
   -p appName="$APP_NAME" environmentName="$ENVIRONMENT" voicevoxTier="$VOICEVOX_TIER" \
+  ${BOOTSTRAP_EXTRA_ARGS[@]+"${BOOTSTRAP_EXTRA_ARGS[@]}"} \
   -o none
 
 if [[ "$PRINT_ENTRA_AUTH_HINT" == "true" ]]; then
   echo "==> [hint] Entra 認証(main-config) は UAMI 事前準備が要る。手順は iac/README §3 を参照（ここでは有効化しない）"
 fi
 
+# image 座標は bicep に渡したものと同じ値を子スクリプトにも届ける (常に非空なので無条件)。
+export IMAGE_REGISTRY IMAGE_REPO
 # IMAGE_TAG が来ていれば子スクリプト (deploy-voicevox-wrapper / deploy-ai-agent) に届ける。
 # 空のまま export すると子側の既定 (latest) が効かなくなるため、指定時のみ export する。
 if [[ -n "$IMAGE_TAG" ]]; then

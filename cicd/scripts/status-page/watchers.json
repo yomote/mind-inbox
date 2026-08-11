@@ -18,9 +18,15 @@
     {
       "id": "ux-eval.yml",
       "name": "毎朝の UX 機械計測",
-      "what": "前夜のプローブ記録からレイテンシ統計・往復数・警告数を抽出して #127 に積む (LLM 採点は PM tick — traces 欄)",
+      "what": "前夜のプローブ記録からレイテンシ統計・往復数・警告数を抽出してデータブランチ data/ux-observations に積む (ADR 0041。LLM 採点は PM tick — traces 欄)",
       "expect_hours": 26,
       "critical": true
+    },
+    {
+      "id": "ux-data-migrate.yml",
+      "name": "UX 観測の過去データ移行 (one-shot)",
+      "what": "旧蓄積 (#162/#127 のコメント) をデータブランチの JSONL に取り込む (ADR 0041 D7。初期移行の 1 回きり)",
+      "expect": "必要なときだけ (手動)"
     },
     {
       "id": "debt-check.yml",
@@ -93,26 +99,38 @@
       "expect_hours": 26
     }
   ],
-  "routines": [],
-  "traces": [
+  "routines": [
     {
-      "name": "UX プローブ記録の運搬",
-      "what": "毎朝のプローブ記録を Issue へ自動投稿する (採点の入力)",
+      "name": "当番 PM tick (1 日 3 回)",
+      "what": "claude.ai の Routine が毎回新セッションで発火し、open PR の掃き出し (受け入れ済みのマージ)・レビュー滞留の追従・needs-human の集計を回して Issue #254 に巡回レポートを残す (ADR 0040 D2)",
       "trace": {
         "kind": "issue_comment",
-        "issue": 162
+        "issue": 254,
+        "body_contains": "🙋 あなたの番"
+      },
+      "expect_hours": 16,
+      "note": "見ているのは「16 時間以上の継続停止」。発火は 08:00 / 13:00 / 18:00 JST で通常の最大間隔は 14h なので、単一の鮮度しきい値では **真ん中のスロット 1 回だけの欠落(間隔 10h) は捕まえられない** — スロット単位の判定が要るなら別途 (#275)。trace はレポート冒頭のマーカー「🙋 あなたの番」を含むコメントだけを数える。絞らないと人間のコメント 1 本で 🟢 に戻り、沈黙 = 未発火 の前提が壊れる。Routine の実体は claude.ai 側にありリポジトリから起動状態を読めないため、痕跡でのみ生死を判定する。"
+    }
+  ],
+  "traces": [
+    {
+      "name": "UX プローブ記録の蓄積 (data branch)",
+      "what": "毎朝のプローブ記録をデータブランチ data/ux-observations の probes/*.jsonl に追記する (採点の入力 / ADR 0041)",
+      "trace": {
+        "kind": "data_branch",
+        "record_kind": "ux-probe-record"
       },
       "expect_hours": 26
     },
     {
-      "name": "UX LLM 採点 (PM tick → #127 コメント)",
-      "what": "PM セッションの日次 tick が subagent (ux-reviewer) で rubric 採点し #127 に積む (ADR 0037)",
+      "name": "UX LLM 採点 (PM tick → data branch)",
+      "what": "PM セッションの日次 tick が subagent (ux-reviewer) で rubric 採点し、データブランチの evals/*.jsonl に積む (ADR 0037 / 0040)",
       "trace": {
-        "kind": "issue_comment",
-        "issue": 127
+        "kind": "data_branch",
+        "record_kind": "ux-judge-score"
       },
       "expect_hours": 50,
-      "note": "expect 50h は週末スキップ許容。既知の穴: この trace はコメントの kind を区別しないため、ux-eval.yml の機械計測コメントでも緑になる — LLM 採点だけが止まった状態を検出できない (ADR 0037 Negative Consequences。塞ぐには build.py に kind フィルタが要る)。"
+      "note": "expect 50h は週末スキップ許容。kind で絞って判定するため、機械計測 (ux-eval-mech) だけ動いて LLM 採点が止まった状態も検出できる (Issue コメント時代の既知の穴 — ADR 0037 Negative Consequences — は ADR 0041 D6 で解消)。"
     }
   ]
 }

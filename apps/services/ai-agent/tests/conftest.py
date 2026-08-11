@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from azure.cosmos.exceptions import CosmosResourceNotFoundError
 
 from app.repositories import InMemoryApprovalRepository, InMemorySessionRepository
 
@@ -15,6 +16,83 @@ def session_repo() -> InMemorySessionRepository:
 @pytest.fixture
 def approval_repo() -> InMemoryApprovalRepository:
     return InMemoryApprovalRepository()
+
+
+class FakeCosmosContainer:
+    """azure.cosmos.aio ContainerProxy の最小 fake (#188)。
+
+    Cosmos リポジトリと MAF CosmosCheckpointStorage が使う操作
+    (read_item / upsert_item / delete_item / query_items) だけを、
+    dict をストアにして再現する。TTL は再現しない (それは実環境の検証 =
+    ADR 0030 動作検証 4 の領域)。
+    """
+
+    def __init__(self) -> None:
+        self.items: dict[str, dict] = {}
+
+    async def read_item(self, item: str, partition_key: str) -> dict:
+        if item not in self.items:
+            raise CosmosResourceNotFoundError(
+                status_code=404, message=f"{item} not found"
+            )
+        return dict(self.items[item])
+
+    async def upsert_item(self, body: dict) -> dict:
+        stored = {**body, "_rid": "fake-rid", "_etag": "fake-etag", "_ts": 0}
+        self.items[body["id"]] = stored
+        return dict(stored)
+
+    async def delete_item(self, item: str, partition_key: str) -> None:
+        if item not in self.items:
+            raise CosmosResourceNotFoundError(
+                status_code=404, message=f"{item} not found"
+            )
+        del self.items[item]
+
+    def query_items(self, query: str, parameters=None, partition_key=None, **kwargs):
+        """checkpoint storage が使う 2 種のクエリ (checkpoint_id / workflow_name 絞り込み) を再現。"""
+        params = {p["name"]: p["value"] for p in (parameters or [])}
+
+        async def _iter():
+            docs = list(self.items.values())
+            if "@checkpoint_id" in params:
+                docs = [
+                    d
+                    for d in docs
+                    if d.get("checkpoint_id") == params["@checkpoint_id"]
+                ]
+            if "@workflow_name" in params:
+                docs = [
+                    d
+                    for d in docs
+                    if d.get("workflow_name") == params["@workflow_name"]
+                ]
+            docs.sort(key=lambda d: d.get("timestamp") or "")
+            for d in docs:
+                yield dict(d)
+
+        return _iter()
+
+
+@pytest.fixture
+def fake_cosmos_container() -> FakeCosmosContainer:
+    return FakeCosmosContainer()
+
+
+@pytest.fixture
+def cosmos_mode(monkeypatch, fake_cosmos_container):
+    """COSMOS_ENDPOINT がある構成 (= Cosmos 実装が選ばれる) を fake で再現する。
+
+    実 CosmosClient は作らない: app.cosmos.get_container を fake 容器に差し替える。
+    """
+    from app import cosmos
+    from app.config import get_settings
+
+    monkeypatch.setenv("COSMOS_ENDPOINT", "https://fake-cosmos.example:443/")
+    get_settings.cache_clear()
+    monkeypatch.setattr(cosmos, "get_container", lambda name: fake_cosmos_container)
+    yield fake_cosmos_container
+    get_settings.cache_clear()
 
 
 @pytest.fixture

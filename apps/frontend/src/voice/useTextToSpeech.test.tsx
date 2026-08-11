@@ -68,12 +68,12 @@ beforeEach(() => {
   resetUnlockedAudioForTest();
   // 逐次再生 (#185) は 1 文の再生完了を待って次へ進むので、jsdom でも「鳴り終わった」
   // ことにしないとキューが進まない。再生成功 = 直後に ended、として扱う。
-  playSpy = vi
-    .spyOn(window.HTMLMediaElement.prototype, "play")
-    .mockImplementation(function (this: HTMLMediaElement) {
-      queueMicrotask(() => this.onended?.(new Event("ended")));
-      return Promise.resolve();
-    });
+  playSpy = vi.spyOn(window.HTMLMediaElement.prototype, "play").mockImplementation(function (
+    this: HTMLMediaElement,
+  ) {
+    queueMicrotask(() => this.onended?.(new Event("ended")));
+    return Promise.resolve();
+  });
   // 既定は「BFF が 1 文として割った」= 従来と同じ全文 1 本の合成。
   vi.mocked(ttsPlanFetch).mockImplementation(async (text: string) => planResponse([text]));
   revokeSpy = vi.fn<(url: string) => void>();
@@ -116,6 +116,40 @@ describe("[L1] useTextToSpeech — 合成経路の選択", () => {
 
     expect(speak).toHaveBeenCalledTimes(1);
     expect(playSpy).not.toHaveBeenCalled();
+  });
+
+  it("stop 後に届いた 204 (plan) は再生も劣化警告も起こさない (停止済み合成の復活防止)", async () => {
+    // 無いと: 前の応答の ttsPlanFetch が飛んでいる間に stop() (新しい相談の開始で
+    // stopTts が走った状況) しても、204 分岐が世代チェックの前に speakWithBrowser を
+    // 呼ぶため、停止済みの旧応答のブラウザ読み上げと劣化警告 (error) が新しい空の
+    // セッションで復活する退行が静かに通る (clearTransient の後に error が再セットされる)。
+    const speak = stubSpeechSynthesis();
+    let resolvePlan!: (res: Response) => void;
+    vi.mocked(ttsPlanFetch).mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolvePlan = resolve;
+        }),
+    );
+
+    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    let speakPromise!: Promise<void>;
+    act(() => {
+      speakPromise = result.current.speak("旧セッションの応答");
+    });
+    // plan の往復中に停止する (新しい相談の開始)
+    act(() => {
+      result.current.stop();
+    });
+    // 停止の**後**に 204 (VOICEVOX 未構成) が届く
+    await act(async () => {
+      resolvePlan(stubResponse());
+      await speakPromise;
+    });
+
+    expect(speak).not.toHaveBeenCalled(); // 旧応答のブラウザ読み上げが始まらない
+    expect(result.current.error).toBeNull(); // 劣化警告も復活しない
+    expect(result.current.status).toBe("idle");
   });
 
   it("standalone (mock デモ) は BFF を叩かずブラウザ読み上げに直行する", async () => {

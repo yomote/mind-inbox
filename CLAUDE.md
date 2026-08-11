@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### まず読む戦略 doc
 
-- **テスト戦略**: [`docs/testing/strategy.md`](docs/testing/strategy.md) — L0〜L4 のテスト階層 / 書く・書かない判断基準 / PR・Issue テンプレ運用
+- **テスト戦略**: [`docs/testing/strategy.md`](docs/testing/strategy.md) — 4 層 (契約 / 単体 / スモーク / E2E) のテスト階層 / 書く・書かない判断基準 / PR・Issue テンプレ運用
 - **ドキュメント戦略**: [`docs/documentation/strategy.md`](docs/documentation/strategy.md) — 真実の所在 (UI = MDX / API = OpenAPI / 判断 = ADR / 手順 = Runbook) / 生成物 commit ルール
 - **プロダクト設計 (v1)**: [`docs/design/`](docs/design/requirements.md) — [要件](docs/design/requirements.md) → [ユースケース](docs/design/use_cases.md) → [ドメインモデル](docs/design/domain_model.md) → [v1 実装計画 (archive)](docs/design/archive/implementation_plan_v1.md) → [v2 計画](docs/design/implementation_plan_v2.md)。**Problem 中心 2層モデル (Mention → Problem)** が v1 の核 (ADR 0007)
 - **アーキテクチャ判断 (ADR)**: [`docs/adr/`](docs/adr/README.md) — 過去の構成/技術選択の不変記録。覆す前に必ず読む。主要: [0001 tRPC](docs/adr/0001-bff-as-trpc-not-rest.md) / [0002 Container Apps](docs/adr/0002-container-apps-not-aks.md) / [0003 2-phase Bicep](docs/adr/0003-two-phase-bicep.md) / [0004 mockApi 真実](docs/adr/0004-mockapi-as-frontend-truth.md) / [0005 MDX 真実](docs/adr/0005-mdx-ui-spec-as-truth.md) / [0007 Problem 中心 2層](docs/adr/0007-problem-centric-two-layer-domain-model.md) / [0008 PR レビュー Routine](docs/adr/0008-pr-review-via-cloud-routine.md) / [0011 Projects=実行ダッシュボード](docs/adr/0011-github-projects-as-execution-dashboard.md) / [0013 常設 dev 環境+自動デプロイ](docs/adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) / [0014 理解ゲート+デブリーフ](docs/adr/0014-design-comprehension-gate-and-debrief.md) / [0018 動作検証をループに組み込む](docs/adr/0018-runtime-verification-in-the-loop.md) / [0019 独立 judge (security/QA/release)](docs/adr/0019-independent-judge-agents-security-qa-release.md) / [0020 HITL 選択肢形式+needs-human](docs/adr/0020-hitl-choice-format-and-needs-human-queue.md) / [0021 hub-and-spoke セッション運用](docs/adr/0021-parent-session-as-pm-orchestrator.md)
@@ -27,8 +27,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 正典: [`docs/testing/strategy.md`](docs/testing/strategy.md)。毎回効く要点だけ:
 
-- **L2 結合を主戦場に、L1 単体は絞る**。テスト名に `[L0]`/`[L1]`/`[L2]`/`[L3]` プレフィックスを付ける (§1.3)
-- **「無いと何が静かに通るか?」を 1 文で書けないテストは書かない** (§1.2)
+- **4 層 (契約 / 単体 / スモーク / E2E) で守る** (§2)。単体は入場条件「壊れても例外が出ず、データが静かに間違う」を満たすところだけに書き、**例ではなく性質 (プロパティ) で書くのが既定** (§2.2 / §3)。新規テスト名に `[契約]`/`[単体]`/`[スモーク]`/`[E2E]` プレフィックス (§1.3 — 既存の `[L0]`〜`[L3]` の読み替えと移行は §6)
+- **「無いと何が静かに通るか?」を 1 文で書けないテストは書かない** (§1.2)。**仕様を指せないテストも書かない — 「仕様がない」と言う** (§3.4)
 - **状態・副作用を持つ新モジュールはテストファーストで切る。テストが書けない構成は設計の警報** (§1.4)
 - `npm run test:fast` をローカルで緑にしてから PR を出す
 - **自動テストが緑でも「動かせば見つかる」層は残る** — 実際に叩いた結果を PR に貼る。「設定したか」ではなく**振る舞い**で書く ([ADR 0018](docs/adr/0018-runtime-verification-in-the-loop.md))。UI 変更はローカル (mock + 認証なし) でブラウザ確認する
@@ -45,7 +45,8 @@ user の意思決定と技術学習をループに組み込む仕組み ([ADR 00
 - **リリースは「リリース PR (`main → release`)」で表現し、そこで `release-gate` skill を通す** — 実装セッション自身に Go/No-Go を判定させず、独立 judge (いずれも新品コンテキストの subagent: security-reviewer / qa-reviewer / biz-owner-reviewer / release-judge) に判定させる。**判断は [ADR 0019](docs/adr/0019-independent-judge-agents-security-qa-release.md)、運用手順は [Runbook](docs/runbooks/review-agents.md)、各 judge の観点は `.github/claude/*-rubric.md` (+ 共通規約 `_common.md`) が正典**。main への機能 PR / dev の日常 auto-deploy は対象外。blocker はリリース PR のスレッド + ブランチ保護でマージ不可。🟢 でも merge / deploy は人間
 - **user (PO) の指示の出し方へのフィードバックは `po-feedback` skill** — 実セッションの証拠ベースで辛口レビュー。debrief の締めに 1 コーナーとして回すのが既定
 - **人間の確認は選択肢形式・宿題は needs-human キュー** ([ADR 0020](docs/adr/0020-hitl-choice-format-and-needs-human-queue.md)) — 解釈確認・設計選択・承認は散文に埋めず AskUserQuestion (クリック選択式) で出す。人間にしかできない宿題 (web UI 設定・ADR Accept 等) は発生時点で `needs-human` ラベルの Issue に積む。`/status` は冒頭に「🙋 あなたの番」(needs-human 残 + Proposed ADR 残) を必ず出す。未確認のまま進む場合はその旨を明示して記録を残す
-- **セッションは hub-and-spoke で運用する** ([ADR 0021](docs/adr/0021-parent-session-as-pm-orchestrator.md)) — user の対話窓口は親 (PM) セッション 1 本。独立した並行作業は親が子セッションへ分配する (起票プロンプトに対象 Issue / 完遂条件 / **触ってはいけないファイル境界** / CLAUDE.md 参照を必ず含める)。子は user に直接報告せず PR / Issue / needs-human に残し、親が GitHub のライブ状態から集約して報告する。design-gate 対象の設計判断は子に分配せず親でゲートを通してから分配する。**親はタイトル `[PM]` 接頭辞で常に 1 本・使い捨てローテーション** (節目やコンテキスト劣化時に次代を起動し `/status` で復元、旧親は `[PM-retired]` にして archive)。親のタイトルは **`[PM] Mind Inbox ハブ (YYYY-MM-DD〜)`** (user が一覧で窓口を見つけるため。**変更はエージェントから叩けない**ので user に貼る形で渡す)。子の命名規約は無い。
+- **セッションは hub-and-spoke で運用する** ([ADR 0021](docs/adr/0021-parent-session-as-pm-orchestrator.md)) — user の対話窓口は親 (PM) セッション 1 本。独立した並行作業は親が子セッションへ分配する (起票プロンプトに対象 Issue / 完遂条件 / **触ってはいけないファイル境界** / CLAUDE.md 参照を必ず含める)。子は user に直接報告せず PR / Issue / needs-human に残し、親が GitHub のライブ状態から集約して報告する。design-gate 対象の設計判断は子に分配せず親でゲートを通してから分配する。**窓口は常に 1 本・使い捨てローテーション** (節目やコンテキスト劣化時に次代を開いて移り、旧窓口は退役)。タイトル `[PM] Mind Inbox ハブ (YYYY-MM-DD〜)` / 旧窓口の `[PM-retired]` 化は**推奨・必須ではない** (2026-08-11 PO 決定 — 下の既定 PM 化により「一覧からタイトルで窓口を探す」必要が「素で開いた最新セッションが窓口」に変わったため。ADR 0021 条項 6 の運用改訂として**次回 debrief で裁定する** — ADR 0040 は報告会 #8 (2026-08-11) でこの条項を含まずに Accept されたため、裁定先は 0040 ではなく ADR 0021 の運用改訂として残っている)。タイトル変更はエージェントから叩けないので、付ける場合は user が貼る。子の命名規約は無い。
+- **user が対話で開いた新セッションは、既定で窓口 PM として振る舞う** (2026-08-11 PO 決定) — 起票パケット (対象 Issue / 完遂条件 / ファイル境界) や当番 Routine のプロンプトを与えられていない対話セッションは、user の最初のメッセージが何であれ (挨拶だけでも)、窓口 PM の運転から始める: GitHub のライブ状態 (open PR / needs-human / Proposed ADR / 自動起票 Issue) を復元し、冒頭「🙋 あなたの番」付きの /status 報告を出してから用件に入る。**起動プロンプトのコピペも `[PM]` タイトルの付与も不要** (タイトル規約は上の項のとおり推奨どまり)。複数の対話セッションを同時に開かないのは user 側の運用前提 (開いてしまった場合、古い方は続けず閉じる)
 - **分配の基準は「作業の大きさ」** ([ADR 0033](docs/adr/0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) / 2026-08-10 改訂) — この実行環境では `create_session` が承認ゲートで弾かれ子セッションを起動できない。**レビュー指摘への対応・1〜2 ファイルの修正・設定調整は親が直接書く**。**新規モジュール / 複数ファイル / 調査を伴う / 並行したい作業は subagent (`isolation: "worktree"`) に出す** — 出す理由は独立性ではなく**親のコンテキストの経済**(実装者とレビュアーの分離は Codex が担う / ADR 0035 D4)。**user にクリックを肩代わりさせない**。`create_session` が通る環境では子セッションへ分配してよい。subagent への指示文は起票パケットの要件 (対象 Issue / 完遂条件 / **触ってはいけないファイル境界** / CLAUDE.md 参照) をそのまま満たすこと
 - セッション記録は [`docs/debrief/journal.md`](docs/debrief/journal.md)
 
@@ -97,7 +98,7 @@ npm run lint      # ESLint
 pnpm --dir apps/frontend install
 VITE_USE_MOCK=true pnpm --dir apps/frontend dev   # BFF も認証も不要のモック
 pnpm --dir apps/frontend test                     # vitest
-pnpm --dir apps/frontend test:e2e                 # Playwright (L3 / mock)
+pnpm --dir apps/frontend test:e2e                 # Playwright (旧 L3 mock — 廃止方針、新規シナリオを足さない / strategy.md §6.3)
 pnpm --dir apps/frontend build                    # tsc -b && vite build
 ```
 

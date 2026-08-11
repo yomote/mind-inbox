@@ -1,7 +1,6 @@
 import { Box, Button, Chip, Divider, Paper, Stack, Typography } from "@mui/material";
-import AutoAwesomeRoundedIcon from "@mui/icons-material/AutoAwesomeRounded";
-import ReplayRoundedIcon from "@mui/icons-material/ReplayRounded";
-import LocalFireDepartmentRoundedIcon from "@mui/icons-material/LocalFireDepartmentRounded";
+import FiberNewIcon from "@mui/icons-material/FiberNew";
+import RepeatIcon from "@mui/icons-material/Repeat";
 import type { ExtractionResult } from "../../api";
 import { AFFECT_COLOR } from "./problemShared";
 
@@ -14,7 +13,7 @@ type ExtractReviewScreenProps = {
 
 /**
  * 抽出結果レビュー（UC-01 の段1+段2 の提示）。
- * 「N件見つけた」+ 🆕新規 / 🔁既存に追加 + 再出現の気づき + その場トリアージ（却下）。
+ * 「N件見つけた」+ 新規（FiberNew）/ 既存に追加（Repeat）+ 再出現の気づき + その場トリアージ（却下）。
  * docs/frontend/ui_specs/extract-review.mdx が真実。
  */
 export function ExtractReviewScreen({
@@ -58,14 +57,16 @@ export function ExtractReviewScreen({
                           <Chip
                             size="small"
                             color="primary"
-                            icon={<AutoAwesomeRoundedIcon />}
+                            // data-testid は明示する — MUI の自動付与は production ビルドで
+                            // 剥がれるため、E2E (production 配信) で検証できない
+                            icon={<FiberNewIcon data-testid="FiberNewIcon" />}
                             label="新規"
                           />
                         ) : (
                           <Chip
                             size="small"
                             color="secondary"
-                            icon={<ReplayRoundedIcon />}
+                            icon={<RepeatIcon data-testid="RepeatIcon" />}
                             label="既存に追加"
                           />
                         )}
@@ -74,8 +75,8 @@ export function ExtractReviewScreen({
                           <Chip
                             size="small"
                             color="warning"
-                            icon={<LocalFireDepartmentRoundedIcon />}
-                            label={`🔁 ${grouping.mentionCount}回目`}
+                            icon={<RepeatIcon data-testid="RepeatIcon" />}
+                            label={`${grouping.mentionCount}回目`}
                           />
                         )}
                         {grouping.reignited && <Chip size="small" color="warning" label="再燃" />}
