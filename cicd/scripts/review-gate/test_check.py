@@ -7,13 +7,25 @@
 
 from check import (
     CODEX_RETRIGGER_MARKER,
+    MERGE_STALL_HOURS,
+    MERGE_STALL_MARKER,
+    all_check_runs_green,
     codex_present_in,
     decide,
     has_pm_accept,
+    human_queue_issues,
     is_code_pr,
     is_codex_review_result,
+    is_proposed_adr,
+    is_stale,
+    latest_iso,
+    merge_failure_reason,
     minutes_between,
+    needs_image_build,
+    review_gate_success_at,
     sensitive_paths,
+    should_execute_merge,
+    should_notify_again,
     should_request_security_review,
     should_retrigger_codex,
     still_unposted,
@@ -267,3 +279,159 @@ def test_l1_codex既着の判定はloginでも絞る() -> None:
         [], [("github-actions[bot]", "`@codex review` を投稿してください")], "codex"
     )
     assert not codex_present_in([], [("yomote", CODEX_CLEAN_REVIEW)], "codex")
+
+
+# ---- マージ執行 / ストール検知 (ADR 0040 D1 / Issue #253) ----
+
+
+def _mergeable_pr(**overrides) -> dict:
+    """マージ執行の全条件が揃った既定値からの差分で書く (advisory のテストと同じ流儀)。"""
+    pr = {
+        "number": 1,
+        "state": "open",
+        "draft": False,
+        "merged": False,
+        "merged_at": None,
+        "base": {"ref": "main"},
+        "auto_merge": {"merge_method": "squash"},
+        "labels": [],
+    }
+    pr.update(overrides)
+    return pr
+
+
+def test_l1_マージ執行はauto_merge武装済みのprだけ() -> None:
+    """無いと何が静かに通るか: 対象判定の退行は「PM が受け入れていない PR を
+    機械が勝手にマージする」方向に倒れうる。マージ自体は成功してしまうので、
+    誰も気づかないまま未受け入れコードが main に入る (ADR 0040 D1 の設計の要)。"""
+    ok, _ = should_execute_merge(_mergeable_pr())
+    assert ok
+    assert not should_execute_merge(_mergeable_pr(auto_merge=None))[0], (
+        "auto-merge 未武装 = PM の受け入れ意思表示が無い — 対象を広げない"
+    )
+
+
+def test_l1_リリースprとneeds_human_prはマージ執行しない() -> None:
+    """無いと何が静かに通るか: リリース PR (main → release) は「judge 🟢 でも
+    merge は人間」(ADR 0019)、needs-human は「必ず人間が押す」(CLAUDE.md の
+    常設承認の例外)。ここが緩むと人間の門が機械に破られる。"""
+    ok, reason = should_execute_merge(_mergeable_pr(base={"ref": "release"}))
+    assert not ok and "main" in reason
+    ok, reason = should_execute_merge(_mergeable_pr(labels=[{"name": "needs-human"}]))
+    assert not ok and "needs-human" in reason
+    # 無関係なラベルは止めない
+    assert should_execute_merge(_mergeable_pr(labels=[{"name": "bug"}]))[0]
+
+
+def test_l1_closed_merged_draftはマージ執行しない() -> None:
+    assert not should_execute_merge(_mergeable_pr(state="closed"))[0]
+    assert not should_execute_merge(_mergeable_pr(merged=True))[0]
+    # sweep は list API (merged ブール無し / merged_at のみ) の PR を渡す
+    assert not should_execute_merge(_mergeable_pr(merged_at="2026-08-11T00:00:00Z"))[0]
+    assert not should_execute_merge(_mergeable_pr(draft=True))[0]
+
+
+def test_l1_マージ失敗の翻訳は405と409を正常系として区別する() -> None:
+    """無いと何が静かに通るか: 405/409 (他 check 未完・base 遅れ) を想定外扱いに
+    すると sweep が 30 分毎にノイズを吐く。逆に全部を正常系に丸めると
+    権限退行 (404) がログから読めず、マージ執行が沈黙したまま誰も気づかない。"""
+    assert "405" in merge_failure_reason("gh: Pull Request is not mergeable (HTTP 405)")
+    assert "409" in merge_failure_reason("gh: Head branch was modified (HTTP 409)")
+    assert "権限" in merge_failure_reason("gh: Not Found (HTTP 404)")
+    assert "想定外" in merge_failure_reason("connection reset by peer")
+
+
+def test_l1_review_gate_statusの抽出はsuccessのときだけ時刻を返す() -> None:
+    """無いと何が静かに通るか: pending/failure でも時刻が返ると、sweep が
+    門の赤い PR にマージを試み続ける (405 連発のログノイズ + 門の意味の希薄化)。"""
+    ok = {
+        "context": "review-gate",
+        "state": "success",
+        "updated_at": "2026-08-11T00:00:00Z",
+    }
+    assert review_gate_success_at([ok]) == "2026-08-11T00:00:00Z"
+    assert review_gate_success_at([{**ok, "state": "failure"}]) is None
+    assert review_gate_success_at([{**ok, "state": "pending"}]) is None
+    assert review_gate_success_at([{**ok, "context": "other-check"}]) is None
+    assert review_gate_success_at([]) is None
+
+
+def test_l1_check_runの全緑判定は走行中と失敗を緑に数えない() -> None:
+    """無いと何が静かに通るか: 走行中や失敗を緑に倒すと「全 required check 🟢 の
+    まま未マージ」でない PR にストール通知が付き、通知が狼少年化する。"""
+    green = {"status": "completed", "conclusion": "success"}
+    assert all_check_runs_green([green, {**green, "conclusion": "skipped"}])
+    assert all_check_runs_green([{**green, "conclusion": "neutral"}])
+    assert not all_check_runs_green(
+        [green, {"status": "in_progress", "conclusion": None}]
+    )
+    assert not all_check_runs_green([{**green, "conclusion": "failure"}])
+    # check run ゼロは緑 (required の本体 review-gate は commit status 側で見る)
+    assert all_check_runs_green([])
+
+
+def test_l1_ストール判定は閾値ちょうどで発火する() -> None:
+    assert not is_stale(
+        "2026-08-11T00:00:00Z", "2026-08-11T01:59:00Z", MERGE_STALL_HOURS
+    )
+    assert is_stale("2026-08-11T00:00:00Z", "2026-08-11T02:00:00Z", MERGE_STALL_HOURS)
+    assert is_stale("2026-08-09T00:00:00Z", "2026-08-11T00:00:00Z", 48.0)
+    assert not is_stale("2026-08-10T00:00:01Z", "2026-08-12T00:00:00Z", 48.0)
+
+
+def test_l1_latest_isoは最新時刻を返しnoneと空を無視する() -> None:
+    assert latest_iso(["2026-08-11T00:00:00Z", "2026-08-11T02:00:00Z", None, ""]) == (
+        "2026-08-11T02:00:00Z"
+    )
+    assert latest_iso([None, ""]) is None
+
+
+def test_l1_時限系の再通知は24hクールダウンで抑止される() -> None:
+    """無いと何が静かに通るか: ストール通知は状態が続く限り毎 sweep (30 分毎) 条件を
+    満たすため、抑止が壊れると 1 日 48 連投になる。逆に「一度きり」(still_unposted
+    方式) に倒すと、直らないストールが 2 日目から沈黙する (Issue #253 のマーカー方式)。"""
+    now = "2026-08-11T12:00:00Z"
+    recent = [(f"{MERGE_STALL_MARKER}\n🕰 stalled", "2026-08-11T00:00:00Z")]
+    old = [(f"{MERGE_STALL_MARKER}\n🕰 stalled", "2026-08-10T11:00:00Z")]
+    assert should_notify_again(MERGE_STALL_MARKER, [], now), "初回は通知する"
+    assert not should_notify_again(MERGE_STALL_MARKER, recent, now), "12h 前 → 黙る"
+    assert should_notify_again(MERGE_STALL_MARKER, old, now), "25h 前 → 再通知"
+    # 複数あれば最新でみる (古い通知が残っていても連投しない)
+    assert not should_notify_again(MERGE_STALL_MARKER, old + recent, now)
+    # マーカー無しコメントはクールダウンに数えない
+    assert should_notify_again(MERGE_STALL_MARKER, [("普通のコメント", now)], now)
+
+
+def test_l1_proposed_adrの判定はstatus行だけを見る() -> None:
+    """無いと何が静かに通るか: 本文中の引用 (「Status: Proposed で入れる」等の運用
+    説明) まで拾うと、Accepted 済み ADR が永遠に停滞通知され続ける。逆に行頭
+    形式を取りこぼすと、承認待ちキューが静かに沈む (ADR 0040 D1 の検知対象)。"""
+    assert is_proposed_adr("# ADR\n\n- Status: Proposed\n- Date: 2026-08-11\n")
+    assert is_proposed_adr("- Status: Proposed (debrief 待ち)\n")
+    assert not is_proposed_adr("- Status: Accepted (design-gate 承認)\n")
+    assert not is_proposed_adr("エージェント起案の ADR は Status: Proposed で入れる\n")
+    assert not is_proposed_adr("- Status: Superseded by 0041\n")
+
+
+def test_l1_needs_human停滞の対象はissueだけでprを除く() -> None:
+    """無いと何が静かに通るか: issues API は PR も混ぜて返す。除かないと
+    needs-human ラベルの PR (人間が押す担当) にまで 48h 停滞コメントが付き、
+    「PR は必ず人間が押す」運用の通知が二重化する。"""
+    issue = {"number": 1, "updated_at": "2026-08-01T00:00:00Z"}
+    pr = {
+        "number": 2,
+        "updated_at": "2026-08-01T00:00:00Z",
+        "pull_request": {"url": "x"},
+    }
+    assert human_queue_issues([issue, pr]) == [issue]
+
+
+def test_l1_image_buildの補償dispatchはpush触発のpaths写像() -> None:
+    """無いと何が静かに通るか: GITHUB_TOKEN のマージ push は build-images の push
+    トリガーを起動しない。写像が欠けると image ソースの変更が ghcr に積まれず、
+    次の deploy が古い image を差し替え続ける (#107 の据え置きが形を変えて再発)。"""
+    assert needs_image_build(["apps/services/ai-agent/app/main.py"])
+    assert needs_image_build(["apps/services/voicevox/app/main.py"])
+    assert needs_image_build([".github/workflows/build-images.yml"])
+    assert not needs_image_build(["apps/bff/src/x.ts", "docs/x.md"])
+    assert not needs_image_build([])

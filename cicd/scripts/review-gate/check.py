@@ -2,11 +2,12 @@
 """マージの門 (review-gate) — PR がマージ可能かを判定して commit status を貼る (ADR 0036)。
 
 使い方:
-    python3 cicd/scripts/review-gate/check.py <pr_number>    # 門の判定 + advisory
+    python3 cicd/scripts/review-gate/check.py <pr_number>    # 門の判定 + advisory + マージ執行
     python3 cicd/scripts/review-gate/check.py --advisory-sweep
-      # schedule 用: open PR (base=main) を列挙して advisory だけ適用する。
-      # status は貼らない。イベント駆動だけだと「push 直後は猶予内 → その後
-      # イベントが来ない」で advisory が一度も発火しないため (PR #238 P1 指摘)
+      # schedule 用: open PR (base=main) を列挙して advisory とマージ執行・
+      # ストール検知を適用する。status は貼らない。イベント駆動だけだと
+      # 「push 直後は猶予内 → その後イベントが来ない」で advisory が一度も
+      # 発火しないため (PR #238 P1 指摘)
       要: `gh` が認証済み (Actions では GH_TOKEN を渡す) / GITHUB_REPOSITORY
 
 仕組み:
@@ -37,6 +38,27 @@
     workflow の per-PR concurrency で 2 重投稿を塞ぐ。イベントが来ない PR は
     schedule の advisory sweep (--advisory-sweep) が拾う。
 
+さらにマージまで執行する (ADR 0040 D1 / Issue #253):
+    GitHub の auto-merge は「最後の required check を GITHUB_TOKEN が緑にする」と
+    発火しない (GITHUB_TOKEN 起点のイベントは後続自動化に連鎖しない — PR #247 が
+    全条件 🟢 のまま 18 分放置された実測)。review-gate の success status がまさに
+    その「最後の緑」になるため、workflow 自身がマージまで執行する:
+    - success status を貼った直後、**auto-merge が有効化されている PR に限り**
+      squash マージ API を叩く (有効化 = PM の受け入れ意思表示。対象を広げない)。
+      405/409 等 (他 check 未完・base 遅れ・競合) は黙ってスキップし、理由をログに出す
+    - schedule sweep も同じマージ試行を行う (最悪 30 分でマージされる下限保証)
+    - リリース PR (base ≠ main) / needs-human ラベル付き PR は対象外
+    - GITHUB_TOKEN のマージ push は deploy.yml 等の push トリガーも起動しない
+      (同じ連鎖抑止) ため、マージ後に workflow_dispatch (GITHUB_TOKEN の例外) で
+      build-images / deploy を明示的に叩いて補償する
+
+ストール検知 (同じ sweep 内 / ADR 0040 D1):
+    - 全 check 🟢 + auto-merge 有効なのに 2 時間以上未マージ → PR にコメントで記録
+      (マージ試行が失敗し続けている異常の可視化)
+    - needs-human ラベルの open Issue / `Status: Proposed` の ADR が 48 時間以上
+      更新なし → @yomote メンション付きで通知 (Issue へコメント / ADR は集約 Issue)
+    - 再通知は「最後の通知から 24 時間」のクールダウンで抑止 (マーカー + 投稿時刻)
+
 規律 (status-page / ops-inspect と同じ):
     取れなかったものを「合格」と書かない。取得に失敗したら error status を貼って終わる。
 """
@@ -50,6 +72,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 
 PM_ACCEPT_MARKER = "[pm-accept]"
 # 受け入れとして数えるコメントの投稿者。**このリポジトリは public なので、
@@ -196,6 +219,153 @@ def codex_present_in(
     return any(
         is_codex_login(login, pattern) and is_codex_review_result(body)
         for login, body in issue_comments
+    )
+
+
+# ---- マージ執行 / ストール検知 (ADR 0040 D1 / Issue #253) ----
+
+MERGE_STALL_MARKER = "<!-- merge-stall-alert -->"
+HUMAN_STALL_MARKER = "<!-- human-stall-alert -->"
+ADR_STALL_MARKER = "<!-- adr-stall-tracker -->"
+NEEDS_HUMAN_LABEL = "needs-human"
+HUMAN_MENTION = "@yomote"
+# 全 check 🟢 + auto-merge 有効のまま未マージをストールと見なすまでの時間
+MERGE_STALL_HOURS = 2.0
+# needs-human Issue / Proposed ADR を停滞と見なすまでの時間
+HUMAN_STALL_HOURS = 48.0
+# 時限系通知の再通知クールダウン (最後の通知からこの時間は黙る)
+RENOTIFY_COOLDOWN_HOURS = 24.0
+# check run をマージ可と数える conclusion (GitHub の分岐保護と同じ扱い)
+GREEN_CONCLUSIONS = ("success", "neutral", "skipped")
+# GITHUB_TOKEN のマージ push では起動しない push トリガー workflow の補償対象
+IMAGE_BUILD_PREFIXES = ("apps/services/ai-agent/", "apps/services/voicevox/")
+IMAGE_BUILD_WORKFLOW = ".github/workflows/build-images.yml"
+# ADR の Status 行 (MADR 形式の「- Status: Proposed」のみ拾う。本文中の引用は拾わない)
+_PROPOSED_STATUS_PATTERN = re.compile(r"(?m)^-\s*Status:\s*Proposed\b")
+
+
+def pr_has_label(pr: dict, name: str) -> bool:
+    return any((label or {}).get("name") == name for label in (pr.get("labels") or []))
+
+
+def should_execute_merge(pr: dict) -> tuple[bool, str]:
+    """この PR にマージ API を叩いてよいか (実行するか, 理由) を返す。
+
+    auto-merge の有効化 = PM の受け入れ意思表示、という設計を守る —
+    ここが True を返すのは **PM が auto-merge を武装した PR だけ**。
+    武装していない PR をマージ対象に広げない (ADR 0040 D1)。
+    """
+    if pr.get("state") != "open":
+        return (False, "open でない")
+    if pr.get("merged") or pr.get("merged_at"):
+        return (False, "マージ済み")
+    if pr.get("draft"):
+        return (False, "draft")
+    if (pr.get("base") or {}).get("ref") != "main":
+        return (False, "base が main でない (リリース PR 等は門の対象外)")
+    if not pr.get("auto_merge"):
+        return (False, "auto-merge 未武装 (PM の受け入れ意思表示が無い)")
+    if pr_has_label(pr, NEEDS_HUMAN_LABEL):
+        return (False, f"{NEEDS_HUMAN_LABEL} ラベル付き (人間が押す)")
+    return (True, "auto-merge 有効")
+
+
+def merge_failure_reason(error_text: str) -> str:
+    """マージ API の失敗をログ向けの理由に翻訳する (純関数)。
+
+    405/409 は「まだマージできない」だけの正常系 (他 check 未完・base 遅れ・競合)
+    なので黙ってスキップする — ただし理由はログに残す (Issue #253)。
+    """
+    if "405" in error_text:
+        return "405: まだマージできない (他 required check 未完 / 保護ルール未達)"
+    if "409" in error_text:
+        return "409: head SHA が動いた — 次のイベント / sweep が再評価する"
+    if "404" in error_text:
+        return "404: PR が見えない (権限不足 — permissions: contents: write を確認)"
+    head = " ".join(error_text.split())[:200]
+    return f"想定外の失敗: {head}"
+
+
+def review_gate_success_at(statuses: list[dict]) -> str | None:
+    """combined status の statuses 列から review-gate=success の updated_at を返す。
+
+    success でない (pending / failure / 不在) なら None — 呼び出し側は
+    マージ試行もストール判定もしない。
+    """
+    for status in statuses:
+        if status.get("context") == STATUS_CONTEXT and status.get("state") == "success":
+            return status.get("updated_at")
+    return None
+
+
+def all_check_runs_green(check_runs: list[dict]) -> bool:
+    """head SHA の check run が全部緑 (success/neutral/skipped で完了) か。
+
+    走行中 (status != completed) が 1 つでもあれば False — 「全 required check 🟢
+    なのに未マージ」のストール判定に使うので、未完を緑側に倒さない。
+    check run ゼロは True (required の本体 review-gate は commit status 側で見る)。
+    """
+    return all(
+        run.get("status") == "completed" and run.get("conclusion") in GREEN_CONCLUSIONS
+        for run in check_runs
+    )
+
+
+def latest_iso(timestamps: list[str | None]) -> str | None:
+    """ISO 8601 時刻列の最新を返す (None / 空文字は無視)。"""
+    present = [t for t in timestamps if t]
+    if not present:
+        return None
+    return max(present, key=lambda t: datetime.fromisoformat(t.replace("Z", "+00:00")))
+
+
+def is_stale(updated_at_iso: str, now_iso: str, threshold_hours: float) -> bool:
+    """updated_at から threshold_hours 以上経過しているか (ストール / 停滞判定)。"""
+    return minutes_between(updated_at_iso, now_iso) >= threshold_hours * 60.0
+
+
+def should_notify_again(
+    marker: str,
+    comments: list[tuple[str, str]],
+    now_iso: str,
+    cooldown_hours: float = RENOTIFY_COOLDOWN_HOURS,
+) -> bool:
+    """時限系通知を再投稿してよいか。comments は (本文, created_at) の列。
+
+    advisory の「1 PR 1 回きり」(still_unposted) と違い、ストール通知は状態が
+    続く限り再通知したい — ただし 30 分毎の sweep がそのまま吠えると 1 日
+    48 連投になるため、**最後の通知から cooldown_hours は黙る** (Issue #253)。
+    """
+    posted_times = [created_at for body, created_at in comments if marker in body]
+    last = latest_iso(posted_times)  # type: ignore[arg-type]
+    if last is None:
+        return True
+    return minutes_between(last, now_iso) >= cooldown_hours * 60.0
+
+
+def is_proposed_adr(text: str) -> bool:
+    """ADR 本文が `- Status: Proposed` (MADR の Status 行) を持つか。
+
+    行頭の Status 行だけを見る — 本文・引用中の「Status: Proposed」で
+    Accepted 済み ADR を停滞と誤検知しない。
+    """
+    return bool(_PROPOSED_STATUS_PATTERN.search(text))
+
+
+def human_queue_issues(issues: list[dict]) -> list[dict]:
+    """issues API の結果から Issue だけを返す (PR を除く)。
+
+    needs-human の停滞通知の対象は「open Issue」(Issue #253)。issues API は
+    PR も混ぜて返すため、pull_request キーの有無で落とす。
+    """
+    return [issue for issue in issues if "pull_request" not in issue]
+
+
+def needs_image_build(changed_paths: list[str]) -> bool:
+    """マージ後に build-images.yml の dispatch が要るか (push トリガーの paths を写像)。"""
+    return any(
+        p.startswith(IMAGE_BUILD_PREFIXES) or p == IMAGE_BUILD_WORKFLOW
+        for p in changed_paths
     )
 
 
@@ -430,16 +600,283 @@ def maybe_post_advisories(
             )
 
 
+def fetch_comments_with_times(repo: str, number: int) -> list[tuple[str, str]]:
+    """(本文, created_at) の列。時限系通知のクールダウン判定 (should_notify_again) 用。"""
+    comments = gh("api", f"repos/{repo}/issues/{number}/comments", "--paginate")
+    return [
+        ((c.get("body") or ""), (c.get("created_at") or ""))  # type: ignore[union-attr]
+        for c in comments
+    ]
+
+
+def try_merge(repo: str, number: int, head_sha: str) -> tuple[bool, str]:
+    """squash マージ API を叩く。(成功したか, 失敗理由) を返す。
+
+    sha を渡す — 判定に使った head から動いていたら GitHub 側が 409 で弾く
+    (見ていないコミットをマージしない)。405/409 等は正常系のスキップとして
+    ログに理由を出すだけで run は落とさない (Issue #253)。
+    """
+    try:
+        gh(
+            "api",
+            "-X",
+            "PUT",
+            f"repos/{repo}/pulls/{number}/merge",
+            "-f",
+            "merge_method=squash",
+            "-f",
+            f"sha={head_sha}",
+        )
+    except subprocess.CalledProcessError as e:
+        reason = merge_failure_reason(f"{e.stderr or ''} {e.stdout or ''}")
+        print(f"#{number}: マージせずスキップ — {reason}")
+        return (False, reason)
+    except subprocess.TimeoutExpired:
+        # 結果不明のままリトライすると 2 重マージは無い (2 回目は 405) が、
+        # ここでは静かに次の sweep へ譲る
+        print(f"#{number}: マージ API がタイムアウト — 次の sweep に任せる")
+        return (False, "マージ API タイムアウト")
+    print(f"#{number}: 🔀 マージ実行 (squash / sha {head_sha[:SHORT_SHA_LEN]})")
+    return (True, "")
+
+
+def dispatch_workflow(
+    repo: str, workflow: str, inputs: dict[str, str] | None = None
+) -> None:
+    args = [
+        "api",
+        "-X",
+        "POST",
+        f"repos/{repo}/actions/workflows/{workflow}/dispatches",
+        "-f",
+        "ref=main",
+    ]
+    for key, value in (inputs or {}).items():
+        args += ["-f", f"inputs[{key}]={value}"]
+    gh(*args)
+    print(f"workflow_dispatch: {workflow} を起動した")
+
+
+def post_merge_followup(repo: str, changed_paths: list[str]) -> None:
+    """GITHUB_TOKEN のマージ push は push トリガー workflow を起動しない —
+    まさに #253 の原因と同じ連鎖抑止が、今度はマージの下流 (build-images /
+    deploy) で起きる。workflow_dispatch は GITHUB_TOKEN でも起動できる
+    (公式の例外) ので、push トリガー相当を明示的に叩いて補償する。
+
+    - build-images: マージした PR が image のソースに触れたときだけ (paths の写像)
+    - deploy: AUTO_DEPLOY_ENABLED=true のときだけ (push 経路と同じゲートを尊重する。
+      dispatch の action=up は本来ゲート対象外なので、ここで見ないと未解禁のまま
+      公開 URL へ自動デプロイしてしまう)
+    dispatch の失敗は隠さない — 例外を上げて run を赤にする (マージ自体は済んでいる)。
+    """
+    if needs_image_build(changed_paths):
+        dispatch_workflow(repo, "build-images.yml")
+    if (os.environ.get("AUTO_DEPLOY_ENABLED", "") or "").lower() == "true":
+        dispatch_workflow(
+            repo,
+            "deploy.yml",
+            {"action": "up", "environment": "dev", "voicevox": "cpu"},
+        )
+    else:
+        print(
+            "AUTO_DEPLOY_ENABLED != true — deploy の dispatch はしない (push 経路と同じゲート)"
+        )
+
+
+def maybe_execute_merge(
+    repo: str, number: int, pr: dict, head_sha: str, changed_paths: list[str]
+) -> bool:
+    """マージ執行の入口 (イベント駆動 / sweep 共用)。マージできたら True。"""
+    ok, reason = should_execute_merge(pr)
+    if not ok:
+        print(f"#{number}: マージ執行の対象外 — {reason}")
+        return False
+    merged, _ = try_merge(repo, number, head_sha)
+    if merged:
+        post_merge_followup(repo, changed_paths)
+    return merged
+
+
+def maybe_report_merge_stall(
+    repo: str, number: int, head_sha: str, gate_success_at: str, now_iso: str
+) -> None:
+    """マージ試行が失敗した PR について「全 check 🟢 のまま 2h 超」を可視化する。
+
+    マージ執行が黙ってスキップし続ける失敗モード (原因: 保護ルールの想定外・
+    権限退行など) は、放置すると #247 の 18 分どころか無期限に戻る。
+    check が全部緑になった時刻から MERGE_STALL_HOURS 過ぎても open なら
+    PR にコメントで記録する (クールダウン RENOTIFY_COOLDOWN_HOURS)。
+    """
+    combined = gh("api", f"repos/{repo}/commits/{head_sha}/status")
+    if combined.get("state") != "success":  # type: ignore[union-attr]
+        return
+    payload = gh("api", f"repos/{repo}/commits/{head_sha}/check-runs?per_page=100")
+    check_runs = payload.get("check_runs") or []  # type: ignore[union-attr]
+    if not all_check_runs_green(check_runs):
+        return
+    green_since = latest_iso(
+        [gate_success_at] + [run.get("completed_at") for run in check_runs]
+    )
+    if green_since is None or not is_stale(green_since, now_iso, MERGE_STALL_HOURS):
+        return
+    comments = fetch_comments_with_times(repo, number)
+    if not should_notify_again(MERGE_STALL_MARKER, comments, now_iso):
+        return
+    hours = minutes_between(green_since, now_iso) / 60.0
+    post_comment(
+        repo,
+        number,
+        f"{MERGE_STALL_MARKER}\n"
+        f"🕰 **全 check 🟢 + auto-merge 有効のまま {hours:.1f} 時間マージされていません。**"
+        " review-gate のマージ執行 (ADR 0040 D1 / #253) が失敗し続けている異常の可視化です。"
+        " 直近のマージ試行の失敗理由は review-gate の run ログを参照してください"
+        " (次の通知は 24 時間後)。",
+    )
+    print(f"#{number}: ストール通知を投稿した ({hours:.1f}h)")
+
+
+def fetch_last_commit_iso(repo: str, path: str) -> str | None:
+    """path の最終 commit 日時 (main)。checkout は depth=1 で git log が使えないため API で取る。"""
+    commits = gh("api", f"repos/{repo}/commits?path={path}&sha=main&per_page=1")
+    if not commits:
+        return None
+    return commits[0]["commit"]["committer"]["date"]  # type: ignore[index]
+
+
+def local_proposed_adrs(adr_dir: str = "docs/adr") -> list[str]:
+    """checkout (schedule 実行なら main) から Status: Proposed の ADR パスを集める。"""
+    root = Path(adr_dir)
+    if not root.is_dir():
+        return []
+    return sorted(
+        str(p)
+        for p in root.glob("*.md")
+        if is_proposed_adr(p.read_text(encoding="utf-8"))
+    )
+
+
+def notify_stale_proposed_adrs(
+    repo: str, stale: list[tuple[str, str]], open_issues: list[dict], now_iso: str
+) -> None:
+    """停滞 Proposed ADR を needs-human キューの集約 Issue で通知する。
+
+    ADR には「該当 Issue」が無いため、マーカー付きの集約 Issue を 1 本
+    find-or-create する (needs-human ラベル = 人間の宿題キューに載る)。
+    直近 24h 以内に close された集約 Issue があれば作り直さない —
+    PO が「見た」と閉じた直後に 30 分で再起票するノイズを防ぐ。
+    """
+    listed = "\n".join(f"- `{path}` (最終更新 {when})" for path, when in stale)
+    body = (
+        f"{ADR_STALL_MARKER}\n"
+        f"⏰ {HUMAN_MENTION} `Status: Proposed` のまま **48 時間以上更新の無い ADR** があります。"
+        "debrief で Accept/Reject してください (ADR 0014 / 検知は review-gate sweep — #253):\n"
+        f"{listed}\n\n"
+        "解消したらこの Issue を close してください (状態が続く限り 24h クールダウンで再通知します)。"
+    )
+    tracker = next(
+        (
+            i
+            for i in human_queue_issues(open_issues)
+            if ADR_STALL_MARKER in (i.get("body") or "")
+        ),
+        None,
+    )
+    if tracker is not None:
+        number = tracker["number"]
+        comments = fetch_comments_with_times(repo, number)
+        # Issue 本文のマーカーは起票時刻の証拠にならないので、本文の created_at も
+        # クールダウンに数える (起票直後の sweep がコメントを重ねるのを防ぐ)
+        comments.append((tracker.get("body") or "", tracker.get("created_at") or ""))
+        if should_notify_again(ADR_STALL_MARKER, comments, now_iso):
+            post_comment(repo, number, body)
+            print(f"#{number}: Proposed ADR 停滞の再通知を投稿した ({len(stale)} 件)")
+        return
+    recently_closed = gh(
+        "api",
+        f"repos/{repo}/issues?state=closed&per_page=30&sort=updated&direction=desc",
+    )
+    for issue in human_queue_issues(recently_closed):  # type: ignore[arg-type]
+        closed_at = issue.get("closed_at")
+        if (
+            ADR_STALL_MARKER in (issue.get("body") or "")
+            and closed_at
+            and not is_stale(closed_at, now_iso, RENOTIFY_COOLDOWN_HOURS)
+        ):
+            print(
+                f"#{issue['number']}: 集約 Issue が 24h 以内に close 済み — 再起票しない"
+            )
+            return
+    created = gh(
+        "api",
+        f"repos/{repo}/issues",
+        "-f",
+        "title=⏰ Proposed ADR の停滞 (48h 超) — debrief 待ち",
+        "-f",
+        f"body={body}",
+        "-f",
+        f"labels[]={NEEDS_HUMAN_LABEL}",
+    )
+    print(
+        f"#{created.get('number')}: Proposed ADR 停滞の集約 Issue を起票した ({len(stale)} 件)"
+    )  # type: ignore[union-attr]
+
+
+def sweep_human_queue(repo: str, now_iso: str) -> None:
+    """needs-human Issue / Proposed ADR の 48h 停滞を検知して通知する (ADR 0040 D1)。"""
+    open_needs_human = gh(
+        "api",
+        f"repos/{repo}/issues?state=open&labels={NEEDS_HUMAN_LABEL}&per_page=100",
+        "--paginate",
+    )
+    for issue in human_queue_issues(open_needs_human):  # type: ignore[arg-type]
+        number = issue["number"]
+        if not is_stale(issue.get("updated_at") or now_iso, now_iso, HUMAN_STALL_HOURS):
+            continue
+        comments = fetch_comments_with_times(repo, number)
+        if not should_notify_again(HUMAN_STALL_MARKER, comments, now_iso):
+            continue
+        post_comment(
+            repo,
+            number,
+            f"{HUMAN_STALL_MARKER}\n"
+            f"⏰ {HUMAN_MENTION} この needs-human Issue は **48 時間以上更新がありません**。"
+            "人間にしかできない宿題が停滞しています (検知: review-gate sweep — #253。"
+            "対応不要なら close してください。次の通知は 24 時間後)。",
+        )
+        print(f"#{number}: needs-human 停滞の通知を投稿した")
+    stale_adrs: list[tuple[str, str]] = []
+    for path in local_proposed_adrs():
+        last = fetch_last_commit_iso(repo, path)
+        if last is None:
+            print(
+                f"{path}: main に commit が見つからない (未マージの ADR?) — 停滞判定せず skip"
+            )
+            continue
+        if is_stale(last, now_iso, HUMAN_STALL_HOURS):
+            stale_adrs.append((path, last))
+    if stale_adrs:
+        notify_stale_proposed_adrs(repo, stale_adrs, open_needs_human, now_iso)  # type: ignore[arg-type]
+    else:
+        print("Proposed ADR の 48h 停滞なし")
+
+
 def run_advisory_sweep(repo: str) -> int:
-    """open PR (base=main) に advisory だけを適用する (PR #238 P1 指摘への対処)。
+    """open PR (base=main) に advisory とマージ執行・ストール検知を適用する。
 
     review-gate はイベント駆動のみのため、opened/synchronize 直後の run では
     経過が猶予 (既定 10 分) 未満で投稿されず、その後イベントが無ければ二度と
     評価されない — advisory が狙った失敗モード (Codex 沈黙 = イベントが来ない)
     でまさに発火しない。schedule (30 分毎) からこのモードを回して塞ぐ。
     status は貼らない (門の判定はイベント駆動の run が持つ)。
-    API 呼び出しは open PR 数に比例 (PR あたり最大 4 往復 + 投稿)。
+
+    マージ執行 (ADR 0040 D1 / #253) もここで再試行する — イベント駆動の
+    マージ試行は「review-gate が最後の緑になった」場合しか成功しない
+    (test.yml が後から緑になってもイベントは来ない) ため、sweep の再試行が
+    「最悪 30 分でマージされる」下限保証を持つ。あわせて機械判定できる
+    ストール (全 check 🟢 のまま 2h / needs-human・Proposed ADR の 48h) を通知する。
+    API 呼び出しは open PR 数に比例 (PR あたり最大 6 往復 + 投稿)。
     """
+    now_iso = datetime.now(timezone.utc).isoformat()
     prs = gh(
         "api", f"repos/{repo}/pulls?state=open&base=main&per_page=100", "--paginate"
     )
@@ -447,6 +884,25 @@ def run_advisory_sweep(repo: str) -> int:
     print(f"advisory sweep: open PR {len(prs)} 件中 対象 {len(targets)} 件")  # type: ignore[arg-type]
     for pr in targets:
         number = pr["number"]
+        # --- マージ執行 + ストール検知 (auto-merge 武装済み + review-gate 🟢 のみ) ---
+        armed, skip_reason = should_execute_merge(pr)
+        if armed:
+            head_sha = pr["head"]["sha"]
+            combined = gh("api", f"repos/{repo}/commits/{head_sha}/status")
+            gate_success = review_gate_success_at(combined.get("statuses") or [])  # type: ignore[union-attr]
+            if gate_success is None:
+                print(f"#{number}: review-gate が success でない — マージ試行せず")
+            else:
+                merged, _ = try_merge(repo, number, head_sha)
+                if merged:
+                    files = gh(
+                        "api", f"repos/{repo}/pulls/{number}/files", "--paginate"
+                    )
+                    post_merge_followup(repo, [f["filename"] for f in files])  # type: ignore[union-attr]
+                    continue  # マージ済み PR に advisory はもう要らない
+                maybe_report_merge_stall(repo, number, head_sha, gate_success, now_iso)
+        else:
+            print(f"#{number}: マージ執行の対象外 — {skip_reason}")
         comment_bodies = fetch_comment_bodies(repo, number)
         # 両マーカー投稿済みならこの PR にやることは無い — files 取得を省く
         if not still_unposted(
@@ -473,6 +929,7 @@ def run_advisory_sweep(repo: str) -> int:
             code_pr=code_pr,
             codex_present=codex_present,
         )
+    sweep_human_queue(repo, now_iso)
     return 0
 
 
@@ -560,6 +1017,14 @@ def main() -> int:
     print(
         f"review-gate → {'🟢' if verdict.ok else '🔴'} {verdict.description} (sha {head_sha[:7]})"
     )
+    if verdict.ok:
+        # マージ執行 (ADR 0040 D1 / #253): この success status が「最後の required
+        # check の緑」だった場合、GITHUB_TOKEN 起点のため GitHub の auto-merge は
+        # 発火しない。auto-merge を武装済みの PR に限り、自分でマージまで執行する。
+        # 405 (他 check 未完) 等は黙ってスキップ — sweep (30 分毎) が再試行する。
+        merged = maybe_execute_merge(repo, number, pr, head_sha, changed_paths)
+        if merged:
+            return 0  # マージ済み — advisory 投稿は不要
     # 合否の後に advisory (ADR 0038)。ここで失敗しても status は貼れているが、
     # run は赤にして「投稿できなかったこと」を隠さない
     maybe_post_advisories(
