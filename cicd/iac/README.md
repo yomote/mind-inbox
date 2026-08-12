@@ -254,12 +254,16 @@ RG=<rg-name> ./scripts/env/cleanup-env.sh
 オプション:
 
 ```bash
-# 同じ名前で作り直すために soft-delete の残骸を退ける
-# （再 provision が名前衝突で失敗したときの手当て）
+# 再 provision が名前衝突で失敗したときの手当て。
+# ★ 衝突した種類のフラグ「だけ」を立てる — 巻き添えで purge すると、
+#   衝突していない種類の soft-delete による救済まで永久に失う
 cd cicd
-RG=<rg-name> \
-  PURGE_DELETED_KEYVAULTS=true PURGE_DELETED_COGNITIVE_SERVICES=true \
-  ./scripts/env/cleanup-env.sh
+
+# OpenAI / Speech (Cognitive Services) が衝突した場合
+RG=<rg-name> PURGE_DELETED_COGNITIVE_SERVICES=true ./scripts/env/cleanup-env.sh
+
+# Key Vault が衝突した場合
+RG=<rg-name> PURGE_DELETED_KEYVAULTS=true ./scripts/env/cleanup-env.sh
 ```
 
 ### B. Complete モードで整理（要注意）

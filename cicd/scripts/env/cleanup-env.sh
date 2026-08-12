@@ -48,10 +48,19 @@ removes the only recovery path, so it must be asked for explicitly. Turn it on w
 you need to recreate a resource under the SAME name and the soft-deleted twin is in
 the way -- that is the only case that needs it.
 
+Enable ONLY the flag for the resource type that actually conflicted. Setting both
+"just in case" purges a type you did not need to purge, throwing away its recovery
+path for nothing.
+
 Examples:
+  # Default: delete the RG, keep every soft-deleted twin recoverable
   RG=rg-dev-mind-inbox ./scripts/env/cleanup-env.sh
-  # Recreating under the same names? Clear the soft-deleted residue first:
-  RG=rg-dev-mind-inbox PURGE_DELETED_COGNITIVE_SERVICES=true PURGE_DELETED_KEYVAULTS=true ./scripts/env/cleanup-env.sh
+
+  # Re-provision hit a name conflict on OpenAI / Speech (Cognitive Services):
+  RG=rg-dev-mind-inbox PURGE_DELETED_COGNITIVE_SERVICES=true ./scripts/env/cleanup-env.sh
+
+  # Re-provision hit a name conflict on Key Vault:
+  RG=rg-dev-mind-inbox PURGE_DELETED_KEYVAULTS=true ./scripts/env/cleanup-env.sh
 EOF
 }
 
@@ -359,16 +368,24 @@ else
   echo "Keeping Log Analytics workspace(s) recoverable (FORCE_DELETE_LOG_ANALYTICS=false)."
 fi
 
+# 名前衝突が起きたときの手当てを案内する。**衝突した種類のフラグだけ**を出すこと —
+# 「とりあえず全部立てる」を案内すると、衝突していない種類の soft-delete まで
+# 巻き添えで purge され、必要のない復旧経路を永久に失う (ADR 0046 D6 の趣旨に反する)。
 if [[ "$PURGE_DELETED_KEYVAULTS" != "true" || "$PURGE_DELETED_COGNITIVE_SERVICES" != "true" ]]; then
-  cat <<'EOF'
-
-NOTE: soft-deleted twins are being left in place on purpose (ADR 0046 D6).
-If a later re-provision fails with a name conflict (e.g. "already exists in
-soft-deleted state" / FlagMustBeSetForRestore), that is the expected symptom.
-Re-run this script with the purge flags on:
-  PURGE_DELETED_KEYVAULTS=true PURGE_DELETED_COGNITIVE_SERVICES=true
-
-EOF
+  echo ""
+  echo "NOTE: soft-deleted twins are being left in place on purpose (ADR 0046 D6)."
+  echo "If a later re-provision fails with a name conflict (e.g. \"already exists in"
+  echo "soft-deleted state\" / FlagMustBeSetForRestore), that is the expected symptom."
+  echo "Re-run this script with ONLY the flag matching the resource type that conflicted:"
+  if [[ "$PURGE_DELETED_COGNITIVE_SERVICES" != "true" ]]; then
+    echo "  OpenAI / Speech (Cognitive Services) conflicted -> PURGE_DELETED_COGNITIVE_SERVICES=true"
+  fi
+  if [[ "$PURGE_DELETED_KEYVAULTS" != "true" ]]; then
+    echo "  Key Vault conflicted                            -> PURGE_DELETED_KEYVAULTS=true"
+  fi
+  echo "Do NOT set both unless both actually conflicted -- purging a type you did not"
+  echo "need to purge throws away its only recovery path."
+  echo ""
 fi
 
 if rg_exists; then
