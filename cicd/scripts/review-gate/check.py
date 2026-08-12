@@ -122,7 +122,24 @@ DEFAULT_RETRIGGER_MINUTES = 10.0
 
 # security review を自動指名する敏感パス (初期セット — ADR 0038)。
 # prefix 一致するもの:
-SENSITIVE_PREFIXES = ("cicd/iac/", ".github/workflows/", ".github/actions/")
+#
+# 2026-08-12 追加の 3 つは、いずれも「特権 workflow の *中身* は敏感なのに、
+# それが呼ぶスクリプトと宣言は敏感でない」という穴を塞ぐもの (PO 指摘):
+#   - cicd/github/           … ブランチ保護・required check 等の**宣言**。
+#                              ここが弱まると apply でリポジトリの保護が下がる
+#   - cicd/scripts/github-settings/ … 管理系 API を叩き、device flow で
+#                              アカウント全体 repo スコープのトークンを扱う実体。
+#                              PR #347 はこの穴のため無審査で main に入った
+#   - cicd/scripts/review-gate/ … マージの門そのもの。**PR が自分の門を緩められる**
+#                              経路 (#331) なので、変更は必ず人の目を通す
+SENSITIVE_PREFIXES = (
+    "cicd/iac/",
+    "cicd/github/",
+    "cicd/scripts/github-settings/",
+    "cicd/scripts/review-gate/",
+    ".github/workflows/",
+    ".github/actions/",
+)
 # apps/bff/src/** のうち、パスに認証・トークン・CORS の匂いがあるもの
 # (機構で判定できる近似。取り逃しは release-gate の security-reviewer が持つ):
 _SENSITIVE_BFF_PATTERN = re.compile(r"auth|token|cors", re.IGNORECASE)
