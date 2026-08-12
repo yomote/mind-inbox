@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 > **`AGENTS.md` との関係**: Codex など `AGENTS.md` を読むエージェント向けに、実装時に効く規約だけを抜き出した [`AGENTS.md`](AGENTS.md) を置いている。**このファイルが正典**で、規約を変えたら AGENTS.md も同じ PR で直す (食い違うと、別系統のエージェントが違うルールで実装する)。
 
+**成果物は日本語で書く** — PR タイトル・本文、コミットメッセージ、コードコメント、ドキュメント、Issue コメント。コード中の識別子は英語。
+
 ## Working in this repo
 
 ### まず読む戦略 doc
@@ -28,13 +30,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### テスト方針 (要点)
 
-正典: [`docs/testing/strategy.md`](docs/testing/strategy.md)。毎回効く要点だけ:
+正典: [`docs/testing/strategy.md`](docs/testing/strategy.md)。毎回効く要点と、実装時の規律 (§ 付きは strategy.md の該当節):
 
 - **4 層 (契約 / 単体 / スモーク / E2E) で守る** (§2)。単体は入場条件「壊れても例外が出ず、データが静かに間違う」を満たすところだけに書き、**例ではなく性質 (プロパティ) で書くのが既定** (§2.2 / §3)。新規テスト名に `[契約]`/`[単体]`/`[スモーク]`/`[E2E]` プレフィックス (§1.3 — 既存の `[L0]`〜`[L3]` の読み替えと移行は §6)
 - **「無いと何が静かに通るか?」を 1 文で書けないテストは書かない** (§1.2)。**仕様を指せないテストも書かない — 「仕様がない」と言う** (§3.4)
-- **状態・副作用を持つ新モジュールはテストファーストで切る。テストが書けない構成は設計の警報** (§1.4)
+- **状態・副作用を持つ新モジュールはテストファーストで切る。テストが書けない構成は設計の警報** (§1.4)。**判定はシェルや workflow の中に埋めず、純粋関数に切り出してテストする**
+- **テストが本当に効くか確かめる (ミューテーション)** — 判定の 1 行を壊してテストが落ちることを確認してから「テスト済み」と言う。データの文字列を assert しているだけのテストは、ロジックが壊れても気づけない
 - `npm run test:fast` をローカルで緑にしてから PR を出す
 - **自動テストが緑でも「動かせば見つかる」層は残る** — 実際に叩いた結果を PR に貼る。「設定したか」ではなく**振る舞い**で書く ([ADR 0018](docs/adr/0018-runtime-verification-in-the-loop.md))。UI 変更はローカル (mock + 認証なし) でブラウザ確認する
+- **取れなかったものを「異常なし」と書かない** (このリポジトリで最も繰り返している事故) — 取得・検証に失敗したら成功と区別できる形で出す (`未検証: 理由` / status を error にする / run を落とす)。握り潰し (`2>/dev/null` / `|| true` / 空の catch) を足すときは、**それで何が見えなくなるか**をコメントに書く
 
 ### 理解ゲートとデブリーフ (ループ運用)
 
@@ -84,6 +88,8 @@ npm run test:fast   # bff / frontend / ai-agent / scripts を並列
 npm run lint        # eslint + ruff + markdownlint
 npm test            # test:contract → test:fast → test:e2e
 ```
+
+`cicd/scripts/` 配下の Python テストは `npm run test:scripts` に登録する (登録しないと CI で走らない)。
 
 ### BFF (Azure Functions + tRPC)
 

@@ -91,7 +91,7 @@ uv run --directory apps/services/ai-agent pytest   # Python は uv
 ## 触ってはいけないもの
 
 - **`Status: Accepted` の ADR 本文** (上記)
-- **`apps/frontend/src/api/mockApi.ts` を「テストごとに別 mock」に増やすこと** —
+- **`apps/frontend/src/mockApi.ts` を「テストごとに別 mock」に増やすこと** —
   mock 兼テスト fixture として 1 つに保つ (ADR 0004)
 - **生成物の手書き** — `docs/cicd/iac/infra_arch.svg`、OpenAPI スキーマ
 - **stub fallback の破壊** — `AI_AGENT_BASE_URL` / `VOICEVOX_BASE_URL` 未設定でも BFF は
