@@ -68,6 +68,10 @@ for t in "${traces[@]}"; do
   packets="$(gpg --batch --list-packets "$out" 2>/dev/null || true)"
   if [ ! -s "$out" ] || ! printf '%s' "$packets" | grep -q ':pubkey enc packet:'; then
     echo "::error::出力が OpenPGP メッセージになっていません: $out"
+    # **検証に落ちたファイルを残さない。** 残すと、後続の upload ステップが
+    # `hashFiles` で「.gpg が 1 つでもあれば真」と判定して部分成果物を公開しうる
+    # (Codex P1 / PR #300)。中身が平文の可能性があるものをディスクに置かない。
+    rm -f "$out"
     exit 1
   fi
   encrypted=$((encrypted + 1))

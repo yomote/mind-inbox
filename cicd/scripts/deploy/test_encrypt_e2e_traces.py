@@ -147,6 +147,21 @@ def test_単体_平文がそのまま置かれたら落とす(tmp_path: Path):
     assert "OpenPGP" in r.stdout
 
 
+def test_単体_検証に落ちたファイルはディスクに残さない(tmp_path: Path):
+    """Codex P1 (PR #300) の回帰テスト。
+
+    無いと何が静かに通るか: 検証に落ちたファイルを残すと、後続の upload ステップが
+    `hashFiles` で「.gpg が 1 つでもあれば真」と判定して**部分成果物を公開**する。
+    残っているのが平文だった場合、実トークンがそのまま公開される。
+    """
+    key, env = _setup(tmp_path)
+    env["STUB_MODE"] = "plaintext"
+    r = _run(tmp_path, key, env)
+    assert r.returncode == 1
+    leftovers = list((tmp_path / "out").glob("*")) if (tmp_path / "out").exists() else []
+    assert leftovers == [], f"検証に落ちたファイルが残っている: {leftovers}"
+
+
 def test_単体_秘密鍵が無くて_list_packets_が非ゼロでも暗号化できていれば通す(tmp_path: Path):
     """2026-08-12 に実鍵で踏んだ失敗の回帰テスト。
 

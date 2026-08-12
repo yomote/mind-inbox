@@ -289,6 +289,7 @@ jobs:
       #
       # 鍵の準備・復号手順は cicd/keys/README.md。
       - name: E2E の trace を公開鍵で暗号化して残す
+        id: encrypt_trace
         if: always() && steps.e2e.conclusion == 'failure'
         env:
           PUBKEY: cicd/keys/e2e-artifacts.pub.asc
@@ -296,8 +297,11 @@ jobs:
           cicd/scripts/deploy/encrypt-e2e-traces.sh \
             "$PUBKEY" apps/frontend/test-results-live e2e-trace-enc
 
+      # **暗号化ステップの成功を必須にする。** hashFiles だけで判定すると、途中で
+      # 暗号化が失敗した run でも「.gpg が 1 つでもあれば」部分成果物が上がる
+      # (Codex P1 / PR #300)。outcome を条件に入れて fail closed にする。
       - name: 暗号化した trace をアップロードする
-        if: always() && steps.e2e.conclusion == 'failure' && hashFiles('e2e-trace-enc/**/*.gpg') != ''
+        if: always() && steps.e2e.conclusion == 'failure' && steps.encrypt_trace.outcome == 'success' && hashFiles('e2e-trace-enc/**/*.gpg') != ''
         uses: actions/upload-artifact@v4
         with:
           name: e2e-live-trace-${{ github.run_id }}
