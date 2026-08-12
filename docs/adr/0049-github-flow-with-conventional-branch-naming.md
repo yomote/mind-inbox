@@ -99,15 +99,19 @@ ADR 0043 D5 との接続を明文化する。
 
 - **目標寿命 3 営業日** — Trunk Based Development は短命ブランチを「hours 〜 a couple of days」とし、2 日を超えると long-lived branch 化のリスクとする。このリポジトリは日次 tick (ADR 0043 D4) で運転しているため tick 3 回分を上限に置く。**超えたら「分割するか close する」を検討する合図**であり、赤にはしない
 - **削除 (merged)**: PR が merged になった時点で head ブランチを削除する。GitHub の "Automatically delete head branches" (`delete_branch_on_merge`) を有効化して機構化する — **web UI 操作なので `needs-human` Issue に積む** (ADR 0020)。有効化されるまでは手動
-- **削除 (未マージ close)**: **この設定は merge 時にしか働かない。** 未マージのまま close した PR の head は残り続けるため、close 側は**機構化されていない**。当面は close した本人が消し、恒常化するなら「closed かつ head が残っている PR」を当番 tick か Actions が掃除する。**エージェントセッションからは ref の削除ができない実測がある** (2026-08-12 / `git push --delete` が 3 回とも失敗) ため、**実施主体は人間か Actions に限られる**
+- **削除 (未マージ close)**: **この設定は merge 時にしか働かない。** 未マージのまま close した PR の head は残り続ける。かつ**エージェントセッションからは ref の削除ができない実測がある** (2026-08-12 / `git push --delete` が 3 回とも失敗) ため、**「close した本人が消す」は close 主体がエージェントのとき成立しない**。したがって当面の規則を次の 1 つに固定する:
+  - **エージェントが未マージ PR を close するときは、head ブランチ削除の `needs-human` Issue を立ててから close する** (ADR 0020 の宿題キュー)。**引き渡しを作らずに close しない**
+  - 人間が close する場合は、同じ操作の中で head を削除する
+  - **恒久策**(「closed かつ head が残っている PR」を検知して削除する Action を必須経路にする) は [#343](https://github.com/yomote/mind-inbox/issues/343) に切り出す。それが入るまで、この規則は**機構ではなく規律**である (D7 と同じトレードオフ)
 - **判定基準は ancestry ではなく PR の状態** — squash merge で `--merged` が使えない実測 (3 本しか返らない) があるため、掃除の条件は「対応する PR が merged / closed」とする
+- **対応する PR を持たないブランチには別条件を置く** — 置き去り 115 本の大半がこれで、上の条件では**永久に選べない**。次をすべて満たすものを掃除候補とする: (a) D4 の予約名前空間でない (b) **対応する open PR が無い** (c) **tip が 30 日以上動いていない** (実測: 30 日超 22 本 / 7 日超 26 本。再開されうる直近の作業を巻き込まない側に倒す) (d) ブランチ名が Issue 番号を持つ場合、**その Issue が closed である** (open なら再開余地があるので候補から外す)。**候補の一覧化までは機械が行い、削除そのものは [#343](https://github.com/yomote/mind-inbox/issues/343) の経路に載せる**
 - 長命を許すブランチは D4 の予約名前空間のみ
 
 ### D6 — 既存 131 本は一括改名しない。規約は本 ADR マージ後に切るブランチから適用する
 
 - **一括改名しない** — 改名は「新 ref 作成 + 旧 ref 削除」であり、**この環境から ref を削除できなかった実測** (3 回全失敗) がある。削除できないまま新 ref だけ増やすと本数が倍になる
 - 既存の open PR 11 本の head ブランチ名も変えない
-- **置き去り 115 本の掃除は本 ADR の決定に含めない** — 別 Issue に切り出す。実施主体は人間 (web UI) または GitHub Actions (ADR 0031「サンドボックスの外にある事実は Actions 経由で取る」と同じ経路)。掃除の条件は D5 のとおり「対応する PR が merged / closed かつ予約名前空間でない」
+- **置き去り 115 本の掃除は本 ADR の決定に含めない** — 別 Issue に切り出す。実施主体は人間 (web UI) または GitHub Actions (ADR 0031「サンドボックスの外にある事実は Actions 経由で取る」と同じ経路)。掃除の条件は D5 のとおり (「対応する PR が merged / closed」**または**「対応する open PR が無く 30 日以上動いておらず、Issue 番号を持つならその Issue が closed」。いずれも予約名前空間でないこと)
 - 移行はしないが**計数は今日からできる** — `^(claude|codex)/[0-9]+-` に合致する本数の推移が、規約が根付いているかの唯一の観測点になる
 
 ### D7 — 当面は CI で強制しない。機構化の条件を先に決めておく
@@ -169,9 +173,9 @@ ADR 0043 D5 との接続を明文化する。
 
 ## 動作検証 (この ADR が実装されたと言える条件)
 
-1. 本 ADR マージ後に切られた作業ブランチが `^(claude|codex)/[0-9]+-` に合致している (実測: `git ls-remote --heads origin` の日付順)
+1. 本 ADR マージ後に切られた作業ブランチが、**D2 / D3 の許可パターンのいずれか**に合致している — `^(claude|codex)/[0-9]+-` (D2 / Issue 番号必須) **または** `^(feature|feat|fix|bugfix|hotfix|chore|docs|test)/` (D3 の例外 / 人間が切るもの) **または** `^dependabot/` (生成名を変えられない)。**どれにも合致しないものが 0 本であること**が条件 (実測: `git ls-remote --heads origin` の日付順)
 2. `claim/*` `data/*` に作業ブランチが切られていない
-3. **merged** な PR の head ブランチが残っていない (Automatically delete head branches 有効化後)。**未マージ close は自動削除の対象外**なので、別途「closed かつ head が残っている PR」の件数が増え続けていないこと
+3. **merged** な PR の head ブランチが残っていない (Automatically delete head branches 有効化後)。**未マージ close** については、head が残っている closed PR の**それぞれに削除の `needs-human` 引き渡しが存在する** (D5)。件数の増減ではなく**引き渡しの有無**で判定する — 件数条件では個々の head が消えなくても満たせてしまい、D5 の「PR の決着と同時に削除する」を検証できないため
 4. `git ls-remote --heads origin` の総数が減少に転じる (置き去り 115 本の掃除 Issue の完了後)
 
 ## Links
