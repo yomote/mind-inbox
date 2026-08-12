@@ -85,14 +85,27 @@ gpg --armor --export-secret-keys "mind-inbox e2e artifacts"
 ([#302](https://github.com/yomote/mind-inbox/issues/302))。管理系 RG ができるまでは
 暫定で PO の手元に置き、復号は PO が行う。
 
-## 復号して trace を見る (エージェント / PO)
+## 復号して trace を見る (**PO の管理環境でのみ**)
+
+> ⚠️ **エージェントのサンドボックスで復号しないこと。** `gpg --import` した時点で秘密鍵が
+> ディスク (`$GNUPGHOME/private-keys-v1.d/*.key`) に置かれ、**そのセッション内の任意の
+> コードが読める**。一度読み出せばセッションの外へ持ち出せるため、**鍵を交換するまでの
+> 全 artifact** が復号可能になる。サンドボックスが使い捨てであることは被害を限定しない
+> ([ADR 0045](../../docs/adr/0045-e2e-artifacts-are-secret-by-default.md) 「エージェント
+> 復号を保留する理由」/ 2026-08-12 の Codex レビュー P1)。
+>
+> **エージェント復号を有効にできるのは、鍵をサンドボックスに出さない方式** (Key Vault の
+> 非エクスポート鍵オブジェクト + `az keyvault key decrypt`、または隔離された復号ブローカー)
+> **が用意できてから**。
+
+PO の管理環境で実行する:
 
 ```bash
 # 短い GNUPGHOME を用意する (上の警告を参照)
 export GNUPGHOME=/tmp/gk; mkdir -p $GNUPGHOME; chmod 700 $GNUPGHOME
 echo "allow-loopback-pinentry" > $GNUPGHOME/gpg-agent.conf
 
-# 秘密鍵を取り込む (Key Vault から device-code ログインで取得 — ADR 0006 / 0045 D5)
+# 秘密鍵を取り込む (Key Vault から / #302 完了までは手元の控えから)
 az login --use-device-code
 az keyvault secret show --vault-name <管理系RGのVault> --name e2e-artifact-private-key \
   --query value -o tsv | gpg --batch --import
@@ -108,8 +121,11 @@ pnpm --dir apps/frontend exec playwright show-trace trace.zip
 **sha256 が元と一致**し、秘密鍵を持たない環境では `decryption failed: No secret key`
 になることを確認した。
 
-artifact の取得はエージェントからも可能 (`download_workflow_run_artifact` で署名付き
-URL を得て取得する。2026-08-12 に実測済み)。
+**エージェントが読めるのは平文で上げている証拠だけ** (スクリーンショット / `error-context.md`)。
+実際 2026-08-12 の [#293](https://github.com/yomote/mind-inbox/issues/293) は
+スクリーンショット 1 枚で原因を特定できており、trace が要る場面は限られる。
+artifact の取得自体はエージェントからも可能 (`download_workflow_run_artifact` で
+署名付き URL を得る。2026-08-12 に実測済み)。
 
 ## 鍵を替えるとき
 
