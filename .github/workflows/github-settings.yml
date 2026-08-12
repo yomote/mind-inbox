@@ -12,8 +12,12 @@
 #     リポジトリ管理権限が漏れる (#331 と同型)。だから secret に置かない
 #   - PO はスマホで作業している。ローカルでスクリプトを流す運用にできない
 #   → **Actions 上で PO 本人が device-code 認証する**。トークンはこの run の中だけに
-#     存在し、どこにも保存されない (`gh` が device flow を内蔵しているので OAuth
+#     存在し、どこにも保存されない (device flow の client_id は公開値なので OAuth
 #     アプリの登録も要らない)
+#
+# コードの出し方 (#362 で作り直した): `gh auth login --web` の対話に頼らず、
+#   device flow を自分で叩いて **コードを ::notice:: で出す**。理由は
+#   cicd/scripts/github-settings/device_login.py の冒頭 (実測つき)。
 #
 # 意図と事実の置き場 (ADR 0041 と同じ流儀 — state を Issue コメントに溜めない):
 #   - **意図 (宣言)** = main の `cicd/github/settings.yml` (人が PR で編集する)
@@ -109,39 +113,43 @@ jobs:
       # ここで PO 本人がスマホのブラウザから承認する。
       # コードはこのログに出る (機微ではない — 承認できるのは GitHub にログイン
       # している本人だけ)。トークンはログにも出力にも出さない。
+      # device flow を自分で叩く。**`gh auth login --web` は使わない** (#362):
+      #   2026-08-12 の初回実行 (run 31619029180) で、疑似端末越しの gh が
+      #   ワンタイムコードを 1 バイトも出力しないまま 12 分ハングした。
+      #   コードが出るかどうかを gh の対話実装に委ねる形をやめ、自分で出す。
+      # コードは ::notice:: で出す → run サマリにカードで出るのでモバイルでも見え、
+      #   annotation として **走行中でも API から読める** (窓口 PM が PO へ転記できる)。
       - name: device-code で認証する (PO 本人がブラウザで承認)
         id: login
-        timeout-minutes: 16
+        # コードは即座に出る。ここが長いのは PO の承認を待つ時間だけ。
+        timeout-minutes: 12
         env:
-          # gh の「ブラウザを開く」を echo に差し替える (runner にブラウザは無い)。
-          # 失敗させずに URL をログへ出すため
-          BROWSER: echo
+          # 承認したのが誰かを検証するための期待値。user_code は public な run ログに
+          # 出るので、**第三者が先に自分のアカウントで承認できてしまう** (#366 レビュー)。
+          EXPECT_LOGIN: ${{ github.repository_owner }}
         run: |
           set -uo pipefail
-          echo "::notice::スマホでこの run のログを開き、表示された 8 桁のコードを"
-          echo "::notice::https://github.com/login/device に入力して承認してください (有効期限 15 分)。"
-          echo "----------------------------------------------------------------"
-          # gh は対話端末を要求するので疑似端末 (script) を噛ませる。
-          # 入力は 2 つ: (1) 「Press Enter to open ...」への Enter
-          #             (2) 「Authenticate Git with your GitHub credentials?」への n
-          #                 (**device トークンを git に渡さない**。後段の unset と二重の守り)
-          printf '\nn\n' | timeout 900 script -qec \
-            "gh auth login --hostname github.com --git-protocol https --web --insecure-storage --scopes 'repo,read:org'" \
-            /dev/null
+          # 既存ファイルに書かない (device_login.py が O_EXCL で開く) ため、
+          # 前の run の残骸があれば先に消す
+          mkdir -p "$WORKDIR" && rm -f "$WORKDIR/token"
+          # client_id は **リポジトリ変数で差し替えられない** — 特権 workflow の
+          # 承認先を PR に残らない経路で変えられるようにしないため (#366 レビュー major)。
+          # 差し替えるなら device_login.py を PR で直す。
+          python3 cicd/scripts/github-settings/device_login.py \
+            --scopes "repo" \
+            --expect-login "$EXPECT_LOGIN" \
+            --token-out "$WORKDIR/token" \
+            --max-wait 600
           rc=$?
           if [ "$rc" -ne 0 ]; then
             echo "::error::device-code の認証が完了しませんでした (exit $rc)。"
-            echo "::error::コードの有効期限切れ / 承認されなかった場合はここで安全に終わります — **何も変更していません**。"
+            echo "::error::**何も変更していません**。もう一度 dispatch すれば新しいコードが出ます。"
             exit 1
           fi
-          # 念のため: gh が git の credential helper を仕込んでいたら外す。
-          # データブランチへの push は GITHUB_TOKEN (checkout が仕込んだ extraheader) で行う
-          git config --global --unset-all credential.helper 2>/dev/null || true
-          git config --global --unset-all "credential.https://github.com.helper" 2>/dev/null || true
-          echo "認証できました (トークンはこの run の中だけに存在します)"
 
-      # ここから先が本題。GH_TOKEN は **設定しない** — 設定すると device トークンでは
-      # なく GITHUB_TOKEN が使われ、管理系 API に届かない。
+      # ここから先が本題。device トークンは **このステップの中だけ**で env に載せる
+      # ($GITHUB_ENV に出すと以降の全ステップ — データブランチへの push を含む — に
+      #  漏れる)。GITHUB_TOKEN では管理系 API に届かないので、ここは device 側を使う。
       - name: 点検 / 適用
         id: sync
         continue-on-error: true
@@ -152,6 +160,12 @@ jobs:
         run: |
           set -uo pipefail
           mkdir -p "$WORKDIR"
+          if [ ! -s "$WORKDIR/token" ]; then
+            echo "::error::device トークンがありません (認証ステップが成功していない)"
+            exit 1
+          fi
+          export GH_TOKEN
+          GH_TOKEN="$(cat "$WORKDIR/token")"
           extra=()
           if [ "$ALLOW_WEAKENING" = "true" ]; then extra+=(--allow-weakening); fi
           python3 cicd/scripts/github-settings/sync.py \
@@ -170,12 +184,17 @@ jobs:
           exit "$rc"
 
       # 特権トークンは用が済んだら即捨てる (run が続く間も持ち歩かない)。
+      # ⚠️ これは **runner 上のコピーを消すだけ** で、GitHub 側の認可は失効しない。
+      #    public client なので revoke API (client_secret が要る) は叩けない。
+      #    完全に切るには PO が Settings → Applications → Authorized OAuth Apps で
+      #    「GitHub CLI」の grant を revoke する (ローカルの gh ログインも切れる)。
       - name: トークンを捨てる
         if: always()
         run: |
-          gh auth logout --hostname github.com 2>/dev/null || true
+          rm -f "$WORKDIR/token"
+          # gh のストアは使っていないが、将来 gh auth login に戻したときの取り残し防止
           rm -rf ~/.config/gh
-          echo "device-code のトークンを破棄しました"
+          echo "device-code のトークンの手元コピーを削除しました (GitHub 側の認可は残ります)"
 
       # 事実をデータブランチへ。push は GITHUB_TOKEN で行う (device トークンは既に破棄済み)。
       - name: 観測をデータブランチに置く
