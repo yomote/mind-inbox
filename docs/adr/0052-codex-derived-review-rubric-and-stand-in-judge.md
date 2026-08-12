@@ -62,7 +62,8 @@ Chosen option: **"Option A"**。**PO が 2026-08-12 に選択肢形式で「置�
 - **D8 起動経路として専用の PR レビュー Routine を置く** (Negative Consequences の「自動起動が無く、呼ばれなければ沈黙する」への対処)。
   - **当番 PM Routine に相乗りさせない** — [ADR 0035](0035-role-split-across-agents-and-actions.md) D3 が「**やってほしいことがそこにあるか** (意図との一致 = PM)」と「**コードとして正しいか** (意図を知らない別モデル)」を意図的に分けている。同一セッションが両方やると、分けた意味が消える
   - **[ADR 0040](0040-project-continuity-three-layers.md) の条件付き Routine の枠に載せる** — ADR 0035 D1 が Routine を 0 本にした理由は「生死が見えない」。よって (1) **発火ごとに必ず痕跡を Issue コメントに残す** (レビュー対象が 0 本でも「対象なし」と書く — 沈黙と正常を区別するため)、(2) **`watchers.json` に登録して欠落自体を状況ページが検出する**、の 2 条件を満たす形でのみ置く
-  - **Routine は `create_trigger` でエージェントが作れる** (実測) — claude.ai の web UI 設定ではないので、[ADR 0008](0008-pr-review-via-cloud-routine.md) の Negative「設定がリポジトリ管理外」は**プロンプト本文については解消していない**点に注意 (Routine の実体は依然 claude.ai 側にあり、プロンプトは git に無い。**リポジトリ側の正典は rubric で、Routine のプロンプトは「rubric を読んで回せ」に留める**)
+  - **Routine は `create_trigger` でエージェントが作れる** (実測) — claude.ai の web UI 設定が要らないので、[#90](https://github.com/yomote/mind-inbox/issues/90) / [#156](https://github.com/yomote/mind-inbox/issues/156) のような needs-human の「最後の 1 クリック」が発生しない
+  - **手順の正典は Runbook に置き、Routine のプロンプトは薄いポインタに留める** ([`review-agents.md`](../runbooks/review-agents.md) の「巡回手順」節)。理由は [ADR 0008](0008-pr-review-via-cloud-routine.md) の Negative「Routine 設定はリポジトリ管理外」がプロンプト本文について**解消していない**こと — claude.ai 側の本文は git に無いので、**手順をそこに書くと壊れても diff に出ない**。同じ理屈で subagent 定義も薄いラッパにして観点を rubric へ寄せている (`review-agents.md:41` の既存規約)。**手順変更 = Runbook の PR** であり、Routine は触らない
 
 ### なぜ急ぐか (2026-08-12 時点の詰まり)
 

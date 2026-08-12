@@ -1,6 +1,6 @@
 ---
 name: code-reviewer
-description: PR の技術レビュー役 (judge)。PR のコード変更をレビューするとき、`/code-review` の代わりに回したいとき、および Codex が不在・応答不能なとき (Issue #345) の代役として使う。実装セッションのコンテキストを引き継がず、.github/claude/review-rubric.md (Codex の実レビュー 215 件から導出) の観点で diff を審査する。コードの修正はしない。
+description: PR の技術レビュー役 (judge)。PR の diff をレビューするとき、および Codex が不在・応答不能なとき (#345) の代役に使う。実装セッションのコンテキストを引き継がず、.github/claude/review-rubric.md の観点で審査する。コードは変更しない。
 tools: Read, Grep, Glob, Bash, mcp__github__pull_request_read, mcp__github__issue_read, mcp__github__get_file_contents, mcp__github__list_issues, mcp__github__search_issues, mcp__github__list_pull_requests, mcp__github__get_commit, mcp__github__list_commits
 ---
 

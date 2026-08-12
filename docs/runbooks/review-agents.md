@@ -85,12 +85,55 @@ Routine を作らない場合も、リリース PR を開いた後に手元セ�
 
 ### PR の技術レビューを回す (Codex 停止時の代役)
 
-Codex が応答できない間 ([#345](https://github.com/yomote/mind-inbox/issues/345))、PM が `code-reviewer` subagent を起動して技術レビューを埋める ([ADR 0052](../adr/0052-codex-derived-review-rubric-and-stand-in-judge.md))。**自動起動は無いので、PR ごとに PM が呼ぶ**。
+Codex が応答できない間 ([#345](https://github.com/yomote/mind-inbox/issues/345))、`code-reviewer` subagent が技術レビューを埋める ([ADR 0052](../adr/0052-codex-derived-review-rubric-and-stand-in-judge.md))。**起動は 2 経路**: 巡回 Routine (自動 / 下記) と、PM がその場で呼ぶ手動。
+
+共通の規律:
 
 - 出力 (verdict + findings 表 + inline 本文) を PR に**投稿するのは呼び出し元** — judge は書かない
 - diff に認証・入力検証・秘密情報・インフラ (Bicep / workflow)・依存追加が含まれる場合は、あわせて security-reviewer も起動する (code-reviewer 側はセキュリティの深掘りを委譲する規約)
 - 修正 push 後は**同じ subagent を再起動して再レビュー**し、同じ指摘が再提起されないことを確認してから PM がスレッドを resolve する (CLAUDE.md の PO 決定 / 2026-08-12 改訂)
-- **Codex が復帰したら指摘者を Codex に戻す** (`REVIEW_GATE_REQUIRE_CODEX` を true へ)
+- **Codex が復帰したら指摘者を Codex に戻す** (`REVIEW_GATE_REQUIRE_CODEX` を true のまま、[巡回 Routine を退役](#巡回-routine-を退役させる-codex-復帰時))
+
+#### 巡回手順 (このリポジトリの正典 — Routine もこれを読んで従う)
+
+**ここが手順の唯一の真実。** 巡回 Routine のプロンプトは「この節を読んで従え」しか書いていない ([ADR 0052](../adr/0052-codex-derived-review-rubric-and-stand-in-judge.md) D8)。手順を変えたいときは**この節を直す** — Routine 側は触らない (`subagent 定義は薄いラッパ` と同じ理由: claude.ai 側の本文は git に無く、diff に出ないので、そこに手順を持たせると壊れても気づけない)。
+
+1. **対象を選ぶ** — open PR のうち、(a) base が `main`、(b) draft でない、(c) コード PR (`apps/` か `cicd/` に触れる)、(d) **現 head SHA に対する独立レビューがまだ無い**もの。(d) は「Codex (`chatgpt-codex-connector[bot]`) のレビューがある」か「`<!-- standin-review -->` + 現 head SHA 先頭 7 桁を含む権限保持者のコメントがある」のどちらでもない、で判定する。**古い SHA の代役レビューは無効** (push で失効する)
+   - 複数あるときは**更新が古い順に最大 3 本**。残りは痕跡に「未着手 n 本」と書く (全部やろうとして途中で力尽きるより、3 本を rubric どおり書き切る)
+2. **1 本ずつ `code-reviewer` subagent を起動する** (Agent tool / `subagent_type: code-reviewer`)。**自分で diff を読んでレビューを書かない** — judge を新品コンテキストの subagent に分けているのが独立性の担保そのもの。対象 PR 番号と head SHA を渡す
+3. **返ってきたレポートを PR に投稿する** — サマリコメント 1 本 + 行が特定できる `blocker` / `major` の inline コメント。サマリ先頭 2 行は [`review-rubric.md`](../../.github/claude/review-rubric.md) Part 6 の**必須ヘッダ**を厳守 (これが無いと `review-gate` が独立レビューとして数えず、PR は赤のまま動かない)。SHA は**投稿直前に取り直した現 head**。レビュー中に push があったらそのレビューは古い — 投稿せず次回に回す
+4. **痕跡を必ず残す** — [Issue #360](https://github.com/yomote/mind-inbox/issues/360) に先頭マーカー `<!-- pr-review-routine-tick -->` 付きコメントを 1 本。内容はレビューした PR と verdict / findings 件数 (severity 別) / 未着手の残り本数 / 異常。**対象 0 本の回も必ず書く** (「対象なし」)。異常ゼロで黙ると沈黙と正常が区別できず、`watchers.json` の監視が意味を失う。取れなかったものは `未検証: 理由` の形で書く
+
+**やらないこと**: 実装・修正の push・マージ・auto-merge の武装・`[pm-accept]` の投稿・スレッドの **resolve** (判定は judge、操作は PM / rubric R10)・リリース PR (`main → release`) のレビュー (release-gate の担当)・設計判断。dependabot PR は rubric の C1 / C6 だけ見て短く済ませる (rubric は人が書いたコードから導出しており、依存更新 PR での振る舞いは未観測)。
+
+**詰まったら**: subagent が起動できない / GitHub に到達できない等で回らないときは、**推測で「異常なし」と書かず** #360 に何がどこで止まったかを書いて終了する (マーカー付きコメントは必ず残す)。ツール権限で止まったなら必要なツール名も残す。
+
+#### 巡回 Routine の登録 (登録済み / 再作成が必要なときだけ)
+
+**登録済み** — `trig_01C4DFF8wkLnxnLeoM8QmE2b` / 6 時間毎 / 毎回新セッション。`create_trigger` MCP でエージェントが作成できたため、[#90](https://github.com/yomote/mind-inbox/issues/90) や [#156](https://github.com/yomote/mind-inbox/issues/156) と違い **web UI の手作業は不要**。生死は状況ページの Routine 行 (`watchers.json` の痕跡監視) で見る。
+
+再作成するときの**プロンプト (貼り付け用 — これで全文)**:
+
+```text
+yomote/mind-inbox の PR レビュー巡回 (代役 judge) を実行して。
+あなたは使い捨ての新品セッションで、user との対話窓口ではない。
+
+手順は docs/runbooks/review-agents.md の
+「巡回手順 (このリポジトリの正典 — Routine もこれを読んで従う)」節が正典。
+まず CLAUDE.md とその節を読み、書かれているとおりに実行する。
+このプロンプトに手順を再掲しない (二重管理で片方が古くなるため)。
+
+あなたの役割は技術レビュー (judge) だけ。実装・マージ・受け入れ・resolve はしない。
+```
+
+**プロンプトを太らせないこと。** 手順を Routine 側に書くと、git に無い本文が正典になり、壊れても diff に出ない。
+
+#### 巡回 Routine を退役させる (Codex 復帰時)
+
+1. `delete_trigger` で `trig_01C4DFF8wkLnxnLeoM8QmE2b` を消す (または `update_trigger` で `enabled: false`)
+2. `cicd/scripts/status-page/watchers.json` の `routines` から該当エントリを消す — **消さないと痕跡が止まって永久に 🔴 になる**
+3. `#360` に退役した旨をコメントして close する
+4. `REVIEW_GATE_REQUIRE_CODEX` は `true` のまま (門の条件は「独立レビューが 1 本」で、担い手が Codex に戻るだけ)
 
 ### 単発でレビューだけ欲しい
 
