@@ -10,12 +10,14 @@ on:
     paths:
       - "cicd/iac/**"
       - "cicd/modules/**"
+      - "cicd/bicepconfig.json"
       - ".github/workflows/iac-validate.yml"
   push:
     branches: [main]
     paths:
       - "cicd/iac/**"
       - "cicd/modules/**"
+      - "cicd/bicepconfig.json"
 
 permissions:
   contents: read
@@ -27,13 +29,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # main-entra.bicep は Microsoft Graph Bicep 拡張 (`extension microsoftGraphV1`) を使う。
+      # 拡張の構文には Bicep v0.36.1 以降が要るので、同梱版が古い場合に備えて upgrade する。
+      # https://learn.microsoft.com/en-us/graph/templates/bicep/quickstart-install-bicep-tools
       - name: az bicep version
-        run: az bicep version || az bicep install
+        run: |
+          az bicep install || true
+          az bicep upgrade || true
+          az bicep version
 
       - name: Build all bicep entrypoints
         run: |
           set -euo pipefail
-          for f in cicd/iac/main-bootstrap.bicep cicd/iac/main-config.bicep; do
+          for f in cicd/iac/main-bootstrap.bicep cicd/iac/main-config.bicep cicd/iac/main-entra.bicep; do
             echo "==> az bicep build $f"
             az bicep build --file "$f" --stdout > /dev/null
           done

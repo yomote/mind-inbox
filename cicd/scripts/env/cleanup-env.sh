@@ -4,11 +4,14 @@ set -euo pipefail
 RG="${RG:-rg-dev-mind-inbox}"
 CONFIG_DEPLOYMENT="${CONFIG_DEPLOYMENT:-main-config}"
 BOOTSTRAP_DEPLOYMENT="${BOOTSTRAP_DEPLOYMENT:-main-bootstrap}"
-DELETE_ENTRA_APP="${DELETE_ENTRA_APP:-true}"
+# 破壊の既定は「救済を残す」側に倒す (ADR 0046 D5/D6)。
+# soft-delete を purge すると復旧手段が消えるため、purge は明示的に頼まれた時だけ行う。
+# Entra アプリ登録は RG ではなくテナントのオブジェクトなので、RG の撤収では消さない。
+DELETE_ENTRA_APP="${DELETE_ENTRA_APP:-false}"
 NO_WAIT="${NO_WAIT:-true}"
-PURGE_DELETED_KEYVAULTS="${PURGE_DELETED_KEYVAULTS:-true}"
-PURGE_DELETED_COGNITIVE_SERVICES="${PURGE_DELETED_COGNITIVE_SERVICES:-true}"
-FORCE_DELETE_LOG_ANALYTICS="${FORCE_DELETE_LOG_ANALYTICS:-true}"
+PURGE_DELETED_KEYVAULTS="${PURGE_DELETED_KEYVAULTS:-false}"
+PURGE_DELETED_COGNITIVE_SERVICES="${PURGE_DELETED_COGNITIVE_SERVICES:-false}"
+FORCE_DELETE_LOG_ANALYTICS="${FORCE_DELETE_LOG_ANALYTICS:-false}"
 PURGE_WAIT_SECONDS="${PURGE_WAIT_SECONDS:-1800}"
 
 declare -a KEYVAULT_TARGETS=()
@@ -33,17 +36,31 @@ Environment variables:
   RG                              Resource group name (default: rg-dev-mind-inbox)
   CONFIG_DEPLOYMENT               Config deployment name to inspect for auth outputs (default: main-config)
   BOOTSTRAP_DEPLOYMENT            Bootstrap deployment name fallback (default: main-bootstrap)
-  DELETE_ENTRA_APP                true|false. Delete auto-created Entra app registration first (default: true)
+  DELETE_ENTRA_APP                true|false. Delete auto-created Entra app registration first (default: false)
   NO_WAIT                         true|false. Pass --no-wait to az group delete (default: true)
-  FORCE_DELETE_LOG_ANALYTICS      true|false. Force-delete LA workspaces before RG delete (default: true)
-  PURGE_DELETED_KEYVAULTS         true|false. Purge soft-deleted Key Vaults after RG deletion (default: true)
-  PURGE_DELETED_COGNITIVE_SERVICES true|false. Purge soft-deleted CS / OpenAI accounts after RG deletion (default: true)
+  FORCE_DELETE_LOG_ANALYTICS      true|false. Force-delete LA workspaces before RG delete (default: false)
+  PURGE_DELETED_KEYVAULTS         true|false. Purge soft-deleted Key Vaults after RG deletion (default: false)
+  PURGE_DELETED_COGNITIVE_SERVICES true|false. Purge soft-deleted CS / OpenAI accounts after RG deletion (default: false)
   PURGE_WAIT_SECONDS              Max seconds to wait for RG deletion / soft-deleted state (default: 1800)
 
+Destructive options default to OFF (ADR 0046 D5/D6). Purging soft-deleted resources
+removes the only recovery path, so it must be asked for explicitly. Turn it on when
+you need to recreate a resource under the SAME name and the soft-deleted twin is in
+the way -- that is the only case that needs it.
+
+Enable ONLY the flag for the resource type that actually conflicted. Setting both
+"just in case" purges a type you did not need to purge, throwing away its recovery
+path for nothing.
+
 Examples:
+  # Default: delete the RG, keep every soft-deleted twin recoverable
   RG=rg-dev-mind-inbox ./scripts/env/cleanup-env.sh
-  RG=rg-dev-mind-inbox DELETE_ENTRA_APP=false ./scripts/env/cleanup-env.sh
-  RG=rg-dev-mind-inbox PURGE_DELETED_COGNITIVE_SERVICES=false ./scripts/env/cleanup-env.sh
+
+  # Re-provision hit a name conflict on OpenAI / Speech (Cognitive Services):
+  RG=rg-dev-mind-inbox PURGE_DELETED_COGNITIVE_SERVICES=true ./scripts/env/cleanup-env.sh
+
+  # Re-provision hit a name conflict on Key Vault:
+  RG=rg-dev-mind-inbox PURGE_DELETED_KEYVAULTS=true ./scripts/env/cleanup-env.sh
 EOF
 }
 
@@ -329,25 +346,46 @@ purge_deleted_cognitive_services() {
 if [[ "$DELETE_ENTRA_APP" == "true" ]]; then
   delete_auto_created_entra_app
 else
-  echo "Skipping Entra app deletion because DELETE_ENTRA_APP=false"
+  echo "Keeping the Entra app registration (DELETE_ENTRA_APP=false)."
+  echo "  It is a tenant object, not an RG resource -- the RG teardown does not own it (ADR 0046 D5)."
 fi
 
 if [[ "$PURGE_DELETED_KEYVAULTS" == "true" ]]; then
   capture_key_vault_targets
 else
-  echo "Skipping Key Vault purge because PURGE_DELETED_KEYVAULTS=false"
+  echo "Keeping soft-deleted Key Vault(s) (PURGE_DELETED_KEYVAULTS=false) -- recovery stays possible."
 fi
 
 if [[ "$PURGE_DELETED_COGNITIVE_SERVICES" == "true" ]]; then
   capture_cognitive_services_targets
 else
-  echo "Skipping Cognitive Services purge because PURGE_DELETED_COGNITIVE_SERVICES=false"
+  echo "Keeping soft-deleted Cognitive Services / OpenAI account(s) (PURGE_DELETED_COGNITIVE_SERVICES=false) -- recovery stays possible."
 fi
 
 if [[ "$FORCE_DELETE_LOG_ANALYTICS" == "true" ]]; then
   force_delete_log_analytics_workspaces
 else
-  echo "Skipping Log Analytics force-delete because FORCE_DELETE_LOG_ANALYTICS=false"
+  echo "Keeping Log Analytics workspace(s) recoverable (FORCE_DELETE_LOG_ANALYTICS=false)."
+fi
+
+# 名前衝突が起きたときの手当てを案内する。**衝突した種類のフラグだけ**を出すこと —
+# 「とりあえず全部立てる」を案内すると、衝突していない種類の soft-delete まで
+# 巻き添えで purge され、必要のない復旧経路を永久に失う (ADR 0046 D6 の趣旨に反する)。
+if [[ "$PURGE_DELETED_KEYVAULTS" != "true" || "$PURGE_DELETED_COGNITIVE_SERVICES" != "true" ]]; then
+  echo ""
+  echo "NOTE: soft-deleted twins are being left in place on purpose (ADR 0046 D6)."
+  echo "If a later re-provision fails with a name conflict (e.g. \"already exists in"
+  echo "soft-deleted state\" / FlagMustBeSetForRestore), that is the expected symptom."
+  echo "Re-run this script with ONLY the flag matching the resource type that conflicted:"
+  if [[ "$PURGE_DELETED_COGNITIVE_SERVICES" != "true" ]]; then
+    echo "  OpenAI / Speech (Cognitive Services) conflicted -> PURGE_DELETED_COGNITIVE_SERVICES=true"
+  fi
+  if [[ "$PURGE_DELETED_KEYVAULTS" != "true" ]]; then
+    echo "  Key Vault conflicted                            -> PURGE_DELETED_KEYVAULTS=true"
+  fi
+  echo "Do NOT set both unless both actually conflicted -- purging a type you did not"
+  echo "need to purge throws away its only recovery path."
+  echo ""
 fi
 
 if rg_exists; then
