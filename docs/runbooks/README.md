@@ -25,6 +25,7 @@
 | [`review-agents.md`](review-agents.md)                         | リリース PR で独立 judge (security / QA / biz-owner / release) を回す                     |
 | [`ux-probe-judge.md`](ux-probe-judge.md)                       | UX プローブの記録を採点する / 採点 Routine を運用する                                     |
 | [`ops-inspect.md`](ops-inspect.md)                             | サンドボックス外の事実 (Azure の実態 / egress の外) をエージェントが取る                  |
+| [`github-settings.md`](github-settings.md)                     | GitHub の設定 (ブランチ保護 / secret scanning / Dependabot) を宣言から点検・適用する      |
 | [`github-projects-setup.md`](github-projects-setup.md)         | **退役** — board は再建しない (ADR 0044。地図は `stream:*` ラベル / 見る手段は `/status`) |
 
 ## 新しく書くとき
