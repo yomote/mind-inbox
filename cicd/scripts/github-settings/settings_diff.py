@@ -521,8 +521,23 @@ def normalize_security(
             out["secret_scanning_push_protection"] = missing
         else:
             for name in ("secret_scanning", "secret_scanning_push_protection"):
-                status = (analysis.get(name) or {}).get("status")
-                out[name] = ENABLED if status == ENABLED else DISABLED
+                node = analysis.get(name)
+                if not isinstance(node, dict) or "status" not in node:
+                    # **キー単位で欠ける場合も同じ扱いにする** — オブジェクトごと
+                    # 欠けるときだけ未検証にすると、`{"dependabot_security_updates":
+                    # {...}}` だけが返る応答で `secret_scanning: disabled` を事実として
+                    # 書いてしまう (穴が半分残る)。
+                    # **未検証: GitHub が実際にキー単位で省くかは測れていない**
+                    # (この環境から管理系 API に届かない / Issue #372 の UNKNOWN)。
+                    # 測れないので**安全側 = 読めなかったと書く**方に倒している。
+                    # もし実運用で恒常的に欠けると分かったら、宣言側で `unmanaged` と
+                    # 書けば「比較しない (ただしレポートに毎回名前が出る)」に逃がせる
+                    out[name] = Unavailable(
+                        f"security_and_analysis.{name} が応答にありません "
+                        "(admin 権限が無い可能性)"
+                    )
+                    continue
+                out[name] = ENABLED if node.get("status") == ENABLED else DISABLED
 
     if isinstance(vulnerability_alerts, Unavailable):
         out["dependabot_alerts"] = vulnerability_alerts
@@ -750,7 +765,13 @@ def _security_operation(
 
 
 def build_plan(declaration: dict, report: Report, repo: str) -> tuple[Operation, ...]:
-    """差分から適用計画を作る。**順序が安全性**を持つ (module docstring 参照)。"""
+    """差分から適用計画を作る。**順序が安全性**を持つ (module docstring 参照)。
+
+    endpoint は `repos/{repo}/...` と `.../branches/{branch}/...` の**両方**を
+    文字列連結で組む。片方だけ検証しても意味が無い (`repo` が `../victim/x` なら
+    ブランチ名が正しくてもパスはリポジトリの外に出る) ので、**ここで両方落とす**。
+    """
+    validate_repository(repo)
     by_path: dict[str, list[Finding]] = {}
     for finding in report.findings:
         by_path.setdefault(finding.path, []).append(finding)

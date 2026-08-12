@@ -308,17 +308,49 @@ def test_単体_宣言のブランチ名は検証される():
 
 
 def test_単体_計画のAPIパスは対象リポジトリの外に出ない():
-    """ブランチ名の検証は**書き込みのパスを組む直前でも**効く。
+    """endpoint は `repos/{repo}/branches/{branch}/...` と**両方**を連結して組む。
 
-    validate_declaration を通さない dict が build_plan に渡る経路ができても、
-    別リポジトリを指す endpoint が組み上がってはいけない。
+    validate_declaration / main() を通さない値が `build_plan` に渡る経路ができても、
+    別リポジトリを指す endpoint が組み上がってはいけない。**ブランチ名だけ検証しても
+    意味が無い** — `repo` が `../victim/x` なら、ブランチ名が正しくてもパスは
+    リポジトリの外に出る (PR #379 の代役レビュー major 1)。
     """
+    # (a) ブランチ名側
     sneaky = minimal_declaration()
     spec = sneaky["branch_protection"].pop("main")
     sneaky["branch_protection"]["../../../../repos/victim/repo/branches/main"] = spec
     report = diff_settings(sneaky, {"security": {}, "branch_protection": {}})
     with pytest.raises(DeclarationError):
         build_plan(sneaky, report, REPO)
+
+    # (b) repo 側 — **差分の有無に関わらず**入口で落ちる (計画が空でも組ませない)
+    declaration = validate_declaration(minimal_declaration())
+    nothing = {
+        "security": {
+            name: choices[0] for name, (choices, _p) in SECURITY_FIELDS.items()
+        },
+        "branch_protection": {"main": normalize_branch_protection(None)},
+    }
+    drifted = diff_settings(declaration, nothing)
+    in_sync = diff_settings(
+        declaration,
+        {
+            "security": dict(declaration["security"]),
+            "branch_protection": {
+                "main": normalize_branch_protection(
+                    as_get_shape(
+                        branch_protection_payload(
+                            declaration["branch_protection"]["main"]
+                        )
+                    )
+                )
+            },
+        },
+    )
+    for bad_repo in ("../../../victim/repo", "../victim/x", "owner/../victim", "owner"):
+        for rep in (drifted, in_sync):
+            with pytest.raises(DeclarationError):
+                build_plan(declaration, rep, bad_repo)
 
     # 正常な宣言では、endpoint は必ず対象リポジトリの下に閉じている
     rng = random.Random(606)
@@ -975,6 +1007,16 @@ def test_単体_security_and_analysisが読めないときdisabledと断定し�
         {"full_name": "owner/repo"},  # キーごと無い (admin でない呼び出し)
         {"security_and_analysis": None},  # null で返る
         None,
+        # **中のキーだけ欠ける**場合も同じ (オブジェクトごと欠ける場合しか見ないと
+        # 穴が半分残る — PR #379 の代役レビュー minor)
+        {"security_and_analysis": {}},
+        {
+            "security_and_analysis": {
+                "dependabot_security_updates": {"status": "enabled"}
+            }
+        },
+        {"security_and_analysis": {"secret_scanning": None}},
+        {"security_and_analysis": {"secret_scanning": {}}},  # status が無い
     ):
         out = normalize_security(
             repo_doc, True, {"enabled": True}, {"state": "configured"}
@@ -986,7 +1028,12 @@ def test_単体_security_and_analysisが読めないときdisabledと断定し�
 
     # 読めているなら今までどおり disabled と書く (未検証で埋め尽くさない)
     out = normalize_security(
-        {"security_and_analysis": {"secret_scanning": {"status": "disabled"}}},
+        {
+            "security_and_analysis": {
+                "secret_scanning": {"status": "disabled"},
+                "secret_scanning_push_protection": {"status": "disabled"},
+            }
+        },
         True,
         {"enabled": True},
         {"state": "configured"},

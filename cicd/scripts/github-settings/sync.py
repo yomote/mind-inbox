@@ -125,6 +125,8 @@ def parse_json(raw: str) -> dict | None:
 
 
 def read_security(repo: str) -> dict:
+    # 読み取りでもパスを組む以上、ここでも落とす (main() の検証を前提にしない)
+    validate_repository(repo)
     rc, out, err = gh_api(f"repos/{repo}")
     repo_doc: dict | Unavailable
     if rc != 0 or parse_json(out) is None:
@@ -164,6 +166,7 @@ def read_branch_protection(repo: str, branch: str) -> dict | Unavailable:
     # 読み取りでもパスを組む以上、名前は検証してから使う (宣言は既に
     # validate_declaration を通っているが、ここを素通しにすると
     # 「検証したのは呼び出し元だから」という前提が 1 箇所でも崩れた瞬間に破れる)
+    validate_repository(repo)
     validate_branch_name(branch)
     rc, out, err = gh_api(f"repos/{repo}/branches/{branch}/protection")
     if rc == 0:
