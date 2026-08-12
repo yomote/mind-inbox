@@ -5,8 +5,19 @@
 #   PO はスマホから Azure Cloud Shell を開くが、**ペーストが効かない**。
 #   打つ量を最小にするため、短い URL で取れる場所に置く。作業が終わったら消してよい。
 #
-# 使い方 (Azure Cloud Shell / Bash):
-#   bash <(curl -sL https://raw.githubusercontent.com/yomote/mind-inbox/ops/inspect/ro.sh)
+# 使い方 (Azure Cloud Shell / Bash) — **必ず commit sha で固定して取ること**:
+#   bash <(curl -sL https://raw.githubusercontent.com/yomote/mind-inbox/<commit-sha>/ro.sh)
+#
+#   sha は GitHub の ro.sh のページで `y` を押す (Copy permalink) と URL に入る。
+#
+#   ブランチ名 (`ops/inspect`) で取ってはいけない。**このスクリプトは PO 自身の
+#   device-code ログイン (ADR 0006 — PO の Azure 権限をそのまま継承) の下で走る**一方、
+#   `ops/inspect` は調査のたびに直 push する運用のためブランチ保護が無い。
+#   ブランチ名で always-latest を取ると、このブランチに push できる者が中身を
+#   書き換えた瞬間、次の実行で **read-only の範囲を超えて PO の全権限で任意コマンドが
+#   走る**。「書き込み系のロールを付けない」という下の安全設計は、実行者が人間に
+#   変わることで無意味化する。sha で固定すれば、読んだものと走るものが一致する。
+#   (この経路のトレードオフ全体は ADR 0047 に記録した)
 #
 # 何をするか (すべて冪等 — 既にあるものは作り直さない):
 #   1. アプリ登録 gha-oidc-readonly-mind-inbox

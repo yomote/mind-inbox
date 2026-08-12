@@ -376,11 +376,18 @@ jobs:
                   echo '```' >> "$OUT"; head -c 500 /tmp/err.txt >> "$OUT"; echo '```' >> "$OUT"
                   fail "Cost Management query が失敗した (429 か権限不足。Cost Management Reader が要る)"
                 else
-                  printf '%s' "$RESP" | python3 - "$OUT" <<'PY'
+                  # 応答は **ファイル経由**で渡し、集計の成否を必ず bash 側で受け取る。
+                  # `python3 - "$OUT" <<'PY'` は stdin をプログラムに占有させるので、
+                  # パイプで渡したつもりの応答は届かず json.load(sys.stdin) が EOF を
+                  # 読んで必ず落ちる。このスクリプトは (意図的に) set -e を使わないため、
+                  # 落ちても STATUS は初期値 ok のまま残り、**コストを 1 円も取れて
+                  # いないのに機械可読ブロックが "ok" を返す**。冒頭の規律
+                  # 「取得できなかったことを『異常なし』と書かない」に正面から反する。
+                  cat > /tmp/costsum.py <<'PY'
           import json, sys
 
-          d = json.load(sys.stdin)
-          out = open(sys.argv[1], "a")
+          d = json.load(open(sys.argv[1]))
+          out = open(sys.argv[2], "a")
           props = d.get("properties", {})
           cols = [c["name"] for c in props.get("columns", [])]
           rows = props.get("rows", [])
@@ -401,6 +408,15 @@ jobs:
               out.write("| %s | %.2f |\n" % (name, float(r[ci] or 0)))
           print("OK %.2f" % total)
           PY
+                  printf '%s' "$RESP" > /tmp/costresp.json
+                  if ! SUMMARY=$(python3 /tmp/costsum.py /tmp/costresp.json "$OUT" 2>/tmp/costerr.txt); then
+                    echo '```' >> "$OUT"; head -c 500 /tmp/costerr.txt >> "$OUT"; echo '```' >> "$OUT"
+                    fail "コスト集計が異常終了した (上の details を見ること)"
+                  else
+                    case "$SUMMARY" in
+                      NOKEY*) fail "コストを集計できなかった (Cost 列が無いか当月の行が 0 件 — 本文の列名を見ること)" ;;
+                    esac
+                  fi
                 fi
               fi
               ;;

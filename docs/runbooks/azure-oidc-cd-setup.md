@@ -88,6 +88,30 @@ main マージで常設 dev に自動反映させるには、リポジトリ **S
 
 テナントとサブスクリプションは既存の `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` を流用する。
 
+上の 1〜4 は `ro.sh` が冪等にやる。Azure Cloud Shell (Bash) から、**必ず commit sha で固定して**実行する:
+
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/yomote/mind-inbox/<commit-sha>/ro.sh)
+```
+
+sha は GitHub の `ro.sh` のページで `y` を押す (Copy permalink) と URL に入る。
+
+> **ブランチ名 (`ops/inspect`) で取ってはいけない。** このスクリプトは PO 自身の Azure 権限
+> ([ADR 0006](../adr/0006-azure-access-via-device-code.md) の device-code ログイン) の下で走る一方、
+> `ops/inspect` は調査のたびに直 push する運用のため**ブランチ保護が無い**。ブランチ名で
+> always-latest を取ると、このブランチに push できる者が中身を差し替えた瞬間、次の実行で
+> read-only の枠を超えて PO の全権限で任意コマンドが走る。
+
+### この構成のトレードオフ ([ADR 0047](../adr/0047-readonly-investigation-identity-on-unprotected-branch.md) — Proposed)
+
+`ops/inspect` に保護を掛けると「調査のたびに直 push して dispatch する」という用途が成立しないため、
+**保護なしのまま受容している**。つまり**このリポジトリに push できる主体は、read-only の Azure
+資格情報 (Reader / Cost Management Reader / Log Analytics Reader) を実質的に取得できる**。
+Log Analytics には相談ログや例外詳細が載りうるので、「read-only だから無害」ではない。
+
+受容の条件は ADR 0047 に 4 つ書いてある (書き込みロールを足さない / workflow は読むだけ /
+`ro.sh` は sha 固定 / **共同作業者が増えたら再判断**)。条件を外すときは ADR を先に改訂すること。
+
 ### どう使われるか
 
 `ops-inspect.yml` の guard が ref を見て使い分ける。
