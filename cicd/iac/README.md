@@ -360,10 +360,17 @@ gh secret list -R yomote/mind-inbox   # GITHUB_TOKEN は表示されない（自
 
 | スクリプト | 何を設定しているか |
 | --- | --- |
-| `cicd/scripts/deploy/deploy-ai-agent.sh` | Container App の環境変数（`--set-env-vars`）/ **OpenAI ロール付与**（`az role assignment create`） |
-| `cicd/scripts/deploy/deploy-voicevox-wrapper.sh` | Container App の環境変数 |
+| `cicd/scripts/deploy/deploy-ai-agent.sh` | Container App の環境変数（`--set-env-vars`）/ 認証ゲート（`az containerapp auth ... update`） |
+| `cicd/scripts/deploy/deploy-voicevox-wrapper.sh` | Container App の環境変数 / 認証ゲート |
 | `cicd/scripts/deploy/deploy-backend.sh` | Function App の appsettings（`az functionapp config appsettings set`） |
-| `cicd/scripts/deploy/provision.sh` | `manageAiAgentOpenAiRoleAssignment=false` — **bicep に宣言させない逃げ道**（PR #290 の応急処置。本治療は PR #292） |
+
+> **ロール割り当てはこの表に載りません（本 PR で撤去済み）。** 以前は `deploy-ai-agent.sh` が
+> `az role assignment create` で OpenAI User を付与し、`provision.sh` が
+> `manageAiAgentOpenAiRoleAssignment=false` という「bicep に宣言させない逃げ道」を渡していました。
+> **どちらも削除済み**で、**持ち主は bicep 1 本**です（`bootstrap-core.bicep` の
+> `aiAgentOpenAiRoleAssignment` が `guid()` の決定的名で宣言する）。
+> **この表を見てシェル側に付与を足し戻さないでください** — それが #262 で dev を 9 回落とした
+> 二重宣言の再導入になります。前提は [1. 前提](#1-前提)（古い手動割り当てが残っていないこと）。
 
 **確認する**（実環境の実際の値を読む）:
 
