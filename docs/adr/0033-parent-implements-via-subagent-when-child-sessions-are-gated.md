@@ -1,10 +1,12 @@
 # 0033. 子セッションを起動できない環境では、親が subagent で実装を回す (ADR 0021 条項の改訂)
 
-- Status: Accepted (2026-08-10 / 対話にて PO 承認。**2026-08-10 に実態へ合わせて D1 を改訂**)
+- Status: Accepted (2026-08-10 / 対話にて PO 承認。**2026-08-10 に実態へ合わせて D1 を改訂**) — **一部 Superseded by [0048](0048-child-sessions-are-usable-again-with-a-one-way-poke-channel.md)**
 - Date: 2026-08-09
 - Deciders: omoteforlab (方向は 2026-08-09 の対話で選択肢形式により選択。Accept は debrief で)
 - Consulted: —
 - Informed: —
+
+> **⚠️ 前提が崩れている (2026-08-12)**: 本 ADR の土台である「この実行環境では `create_session` が承認ゲートで弾かれる」は**もう成り立たない**。子セッションは起動でき、D3 が自ら定めた復帰条件が満たされた。**D1 の分配表は [ADR 0048](0048-child-sessions-are-usable-again-with-a-one-way-poke-channel.md) D1 が置き換えている** (判断軸は「作業の大きさ」から「往復の回数」へ)。以下は当時の判断記録として残す — 現在の規約として読まないこと。
 
 Technical Story: 2026-08-09、PM セッションが「あなたの番」を 3 件出したところ、PO から **「そんなの自動で自分でできんじゃないの? 私は面倒くさいんです」** という指摘を受けた。
 
