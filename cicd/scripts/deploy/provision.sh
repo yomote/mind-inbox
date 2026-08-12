@@ -60,7 +60,27 @@ need python3
 az account show >/dev/null
 
 echo "==> [1/5] Resource group: $RG ($LOCATION)"
-az group create -n "$RG" -l "$LOCATION" >/dev/null
+# CD の SP は **RG スコープ**の権限しか持たない (#46)。RG の作成はサブスクリプション
+# レベルの書き込みなので、常設 dev (ADR 0013) の日常経路では **呼ばない**。
+# 既存なら何もしない = CD がサブスクリプションスコープを要求しない、が要点。
+#
+# RG が無い場合だけ作成を試みる: device-code の人間セッション (Owner 相当) から
+# 初回構築するときはここで作れた方が早い。CD から実行された場合は権限が無いので
+# ここで落ちるが、それは「RG が消えている」という異常であって、黙って RG を
+# 作り直すべき状況ではない (原因を見ずに再構築すると別の事故を隠す)。
+if az group show -n "$RG" -o none 2>/dev/null; then
+  echo "    既存の RG を再利用 (作成は行わない)"
+else
+  echo "    RG が存在しないので作成を試みます"
+  az group create -n "$RG" -l "$LOCATION" >/dev/null || {
+    echo "ERROR: RG '$RG' が存在せず、作成もできませんでした。" >&2
+    echo "       CD の SP は RG スコープの権限しか持ちません (#46)。RG が消えている場合は" >&2
+    echo "       人間が device-code セッションで作り直してください:" >&2
+    echo "         RG=$RG ./cicd/scripts/cloud-env/setup-oidc.sh" >&2
+    echo "       (手順: docs/runbooks/azure-oidc-cd-setup.md)" >&2
+    exit 1
+  }
+fi
 # 最終デプロイ時刻を RG タグに記録する（「この環境はいつのものか」を後から追える）。
 # 夜間 teardown の最小生存時間ガードで使っていたが、ADR 0013 で自動 teardown 自体を廃止したため
 # 現在は記録用途のみ。失敗してもデプロイは続行する。
