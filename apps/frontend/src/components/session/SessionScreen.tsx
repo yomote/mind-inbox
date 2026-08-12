@@ -1,6 +1,10 @@
-import { Paper, Stack, Typography } from "@mui/material";
-import type { ConsultationSession } from "../../api";
+import * as React from "react";
+import { Badge, Box, Paper, Stack, Tab, Tabs, Typography } from "@mui/material";
+import type { ConsultationSession, ExtractionResult } from "../../api";
 import type { TtsStatus } from "../../voice/useTextToSpeech";
+import { deriveMascotState } from "./mascotState";
+import { LivePreviewPane } from "./LivePreviewPane";
+import type { PreviewStatus } from "./LivePreviewPane";
 import { SessionComposer } from "./SessionComposer";
 import { SessionControls } from "./SessionControls";
 import { SessionMessages } from "./SessionMessages";
@@ -16,6 +20,14 @@ type SessionScreenProps = {
   ttsStatus?: TtsStatus;
   ttsEnabled: boolean;
   voiceError: string | null;
+  /**
+   * 2 ペイン (#187 / ADR 0039): 右に「整理されつつある困りごと」の下書きを出すか。
+   * BFF `consultation.preview` が無い環境 (real 未結線) では従来の 1 ペインのまま。
+   */
+  previewEnabled?: boolean;
+  preview?: ExtractionResult | null;
+  previewStatus?: PreviewStatus;
+  onRefreshPreview?: () => void;
   onDraftMessageChange: (value: string) => void;
   onSendMessage: () => void;
   onToggleTtsEnabled: () => void;
@@ -33,6 +45,10 @@ export function SessionScreen({
   ttsStatus,
   ttsEnabled,
   voiceError,
+  previewEnabled = false,
+  preview = null,
+  previewStatus = "idle",
+  onRefreshPreview,
   onDraftMessageChange,
   onSendMessage,
   onToggleTtsEnabled,
@@ -41,12 +57,37 @@ export function SessionScreen({
   onPause,
   onExtract,
 }: SessionScreenProps) {
-  return (
+  // モバイル (md 未満) は 2 ペインが成立しないのでタブ切替 (ADR 0039 D4)。
+  // md 以上では両ペインを常時表示し、タブ UI 自体を出さない。
+  const [activeTab, setActiveTab] = React.useState<"dialogue" | "preview">("dialogue");
+  const previewCount = preview?.items.length ?? 0;
+  // 対話タブを見ている間に下書きが**更新されたら**バッジで知らせる (D4 / §5.8)。
+  //
+  // 「見た」の基準は**更新そのもの** (= preview オブジェクトの世代) であって件数ではない。
+  // 件数比較にすると「件数据え置きで中身だけ変わった更新」(カードの statement や
+  // 回数が変わる / 1 件が別の困りごとに差し替わる) が通知されない (PR #282 再レビュー P2-b)。
+  const [seenPreview, setSeenPreview] = React.useState<ExtractionResult | null>(null);
+  const hasUnseenPreview = activeTab !== "preview" && preview !== null && preview !== seenPreview;
+
+  // プレビュータブを開いている間の更新は、その場で見えているので既読にする。
+  React.useEffect(() => {
+    if (activeTab === "preview") setSeenPreview(preview);
+  }, [activeTab, preview]);
+
+  const handleTabChange = (_: React.SyntheticEvent, next: "dialogue" | "preview") => {
+    setActiveTab(next);
+    if (next === "preview") setSeenPreview(preview);
+  };
+
+  const dialoguePane = (
     <Paper sx={{ p: 3, borderRadius: 3 }}>
       <Stack spacing={2}>
         <Typography fontWeight={700}>{session.title}</Typography>
 
-        <SessionMessages messages={session.messages} />
+        <SessionMessages
+          messages={session.messages}
+          mascotState={deriveMascotState(loading, ttsStatus)}
+        />
 
         <SessionComposer
           value={draftMessage}
@@ -66,8 +107,59 @@ export function SessionScreen({
           onCrisisSupport={onCrisisSupport}
           onPause={onPause}
           onExtract={onExtract}
+          // 右ペインで下書きが見えている環境では、抽出は「確認の一手」(ADR 0039 D3)。
+          extractLabel={previewEnabled ? "この内容で確定" : "困りごとを抽出"}
+          // 確定は表示中の下書きをそのまま保存する操作 (再抽出しない — PR #282 P1)。
+          // 下書きがまだ無い間は対象が無いので押せない (§5.8)。
+          extractDisabled={previewEnabled && preview === null}
         />
       </Stack>
     </Paper>
+  );
+
+  if (!previewEnabled) return dialoguePane;
+
+  return (
+    <Stack spacing={1.5}>
+      <Tabs
+        value={activeTab}
+        onChange={handleTabChange}
+        variant="fullWidth"
+        sx={{ display: { xs: "flex", md: "none" } }}
+      >
+        <Tab value="dialogue" label="対話" />
+        <Tab
+          value="preview"
+          data-testid="preview-tab"
+          // 未読状態の機械検証点 (§5.8)。E2E / 単体が「更新の通知が出ているか」を読める。
+          data-preview-unseen={hasUnseenPreview ? "true" : "false"}
+          label={
+            <Badge color="secondary" variant="dot" invisible={!hasUnseenPreview}>
+              整理中 {previewCount}
+            </Badge>
+          }
+        />
+      </Tabs>
+
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: { xs: "1fr", md: "minmax(0, 3fr) minmax(0, 2fr)" },
+          gap: 2,
+          alignItems: "start",
+        }}
+      >
+        <Box sx={{ display: { xs: activeTab === "dialogue" ? "block" : "none", md: "block" } }}>
+          {dialoguePane}
+        </Box>
+        <Box sx={{ display: { xs: activeTab === "preview" ? "block" : "none", md: "block" } }}>
+          <LivePreviewPane
+            preview={preview}
+            status={previewStatus}
+            onRefresh={onRefreshPreview ?? (() => {})}
+          />
+        </Box>
+      </Box>
+    </Stack>
   );
 }

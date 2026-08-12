@@ -14,6 +14,11 @@ on:
     branches: [main]
     paths:
       - "docs/adr/**"
+  # merge queue の一時 branch でも required check を報告する (ADR 0042)。
+  # merge_group に paths フィルタは効かない (push / pull_request 限定) ため常に走る —
+  # ADR 変更の無い merge group では「衝突なし」で緑になるだけ。副産物として、
+  # 同じ番号を採った 2 PR が同一 queue に載った場合も HEAD 側の重複検査で捕まる。
+  merge_group:
 
 permissions:
   contents: read
@@ -31,7 +36,8 @@ jobs:
 
       - name: 番号の重複を検査
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # merge_group では base_sha = queue の合流先 (main tip または先行 group の head)
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: |
           set -euo pipefail
 

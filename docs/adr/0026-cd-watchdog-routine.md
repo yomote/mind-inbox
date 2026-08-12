@@ -1,6 +1,6 @@
 # 0026. CD の赤は毎時の watchdog Routine が検知し、診断と fix PR まで無人で進める
 
-- Status: Accepted
+- Status: Superseded by [0035](0035-role-split-across-agents-and-actions.md) (2026-08-10)
 - Date: 2026-08-08
 - Deciders: omoteforlab (方向は 2026-08-08 の対話で承認。2026-08-09 の報告会 #4 で Accept)
 - Consulted: —

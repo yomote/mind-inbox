@@ -1,0 +1,62 @@
+# UX 観測の過去データ移行 (one-shot / ADR 0041 D7)。
+#
+# Issue コメント時代 (ADR 0029 / 0037) の蓄積 — 記録 #162 と スコアボード #127 の
+# コメント — をデータブランチ data/ux-observations の JSONL に取り込む。
+# 手動 (workflow_dispatch) 専用。**再実行しても安全** (同一観測は append.py が
+# スキップする) だが、役目は初期移行の 1 回きり。移行完了後の #162 / #127 の
+# クローズ手順は docs/runbooks/ux-probe-judge.md を参照。
+name: ux-data-migrate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write # データブランチへ push する
+  issues: read # 旧蓄積 Issue のコメントを読む
+
+env:
+  PROBE_RECORD_ISSUE: "162" # 旧: 記録の置き場 (ADR 0029)
+  SCOREBOARD_ISSUE: "127" # 旧: スコアボード
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 旧蓄積 Issue のコメント一覧を取得
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # --paginate はページごとに別の JSON 配列を吐くので、.[] で行に崩してから
+          # jq -s で 1 つの配列に束ね直す (ux-eval.yml 旧実装と同じ手筋)
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/issues/$PROBE_RECORD_ISSUE/comments?per_page=100" \
+            --jq '.[] | {body: .body, created_at: .created_at, login: .user.login, author_association: .author_association}' \
+            | jq -s '.' > /tmp/records.json
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/issues/$SCOREBOARD_ISSUE/comments?per_page=100" \
+            --jq '.[] | {body: .body, created_at: .created_at, login: .user.login, author_association: .author_association}' \
+            | jq -s '.' > /tmp/scoreboard.json
+          echo "#$PROBE_RECORD_ISSUE: $(jq 'length' /tmp/records.json) 件 / #$SCOREBOARD_ISSUE: $(jq 'length' /tmp/scoreboard.json) 件"
+
+      - name: payload に変換 (recordedAt = コメントの created_at)
+        run: |
+          python3 cicd/scripts/ux-data/migrate-issue-comments.py \
+            /tmp/payloads /tmp/records.json /tmp/scoreboard.json
+
+      - name: データブランチへ追記 (無ければ orphan で作成 / 1 commit)
+        run: |
+          shopt -s nullglob
+          payloads=(/tmp/payloads/*.json)
+          if [ "${#payloads[@]}" -eq 0 ]; then
+            echo "::warning::移行対象が 0 件でした — 旧 Issue のコメント取得を確認してください"
+            exit 0
+          fi
+          ./cicd/scripts/ux-data/append-observation.sh "${payloads[@]}"
+          {
+            echo "### 移行完了"
+            echo "- 変換 payload: ${#payloads[@]} 件 (重複はスキップされる)"
+            echo "- 追記先ブランチ: data/ux-observations"
+          } >> "$GITHUB_STEP_SUMMARY"

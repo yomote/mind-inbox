@@ -1,6 +1,6 @@
 # 0008. PR レビューは Claude Code on the web の Routine で行う (API キー Actions / 管理版 Code Review を採らない)
 
-- Status: Accepted
+- Status: Superseded by [0035](0035-role-split-across-agents-and-actions.md) (2026-08-10)
 - Date: 2026-06-27
 - Deciders: omoteforlab
 - Consulted: —

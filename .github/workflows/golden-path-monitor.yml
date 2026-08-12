@@ -17,8 +17,8 @@ on:
 
 permissions:
   id-token: write # OIDC トークン取得に必須
-  contents: read
-  issues: write # プローブ記録を蓄積 Issue #162 へ投稿する (ADR 0029)
+  contents: write # プローブ記録をデータブランチ data/ux-observations へ追記する (ADR 0041)
+  issues: write # 失敗時の自己通報 (report-failure)
 
 env:
   RG: rg-dev-mind-inbox
@@ -131,13 +131,12 @@ jobs:
           print(f"summary written for {files[-1]}")
           EOF
 
-      # 記録 JSON は artifact と Issue コメントの両方に残す (ADR 0029 / #160)。
+      # 記録 JSON は artifact とデータブランチの両方に残す (ADR 0029 → ADR 0041)。
       # artifact = 障害調査用の一次情報 (人間が gh で取る)。
-      # Issue コメント = 毎朝の採点 Routine の入力 (agent が MCP で読む)。
-      # agent セッションからは artifact をダウンロードできない (ダウンロード先の
-      # *.blob.core.windows.net が egress ポリシーで拒否される) ため、artifact だけでは
-      # 採点ループが起動しない。リポジトリへの commit は monitor に contents:write を
-      # 与える必要があり引き続き不採用 (判断は PR #123 M0 を参照)。
+      # データブランチ data/ux-observations = 毎朝の採点の入力 (ux-eval.yml と
+      # PM tick が読む)。agent セッションからは artifact をダウンロードできない
+      # (ダウンロード先の *.blob.core.windows.net が egress ポリシーで拒否される) が、
+      # git の fetch/push は通るため、データブランチなら採点ループが agent だけで閉じる。
       - name: UX プローブ記録を artifact として保存
         if: always() && steps.guard.outputs.run == 'true'
         uses: actions/upload-artifact@v4
@@ -147,55 +146,83 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
-      # 投稿に失敗しても monitor 自体は赤くしない (この workflow の役目はゴールデンパスの
-      # 死活であって記録の運搬ではない)。代わりに warning annotation を残し、翌朝の採点
-      # Routine が「材料なし」を報告することで二重に気づけるようにする。
-      - name: UX プローブ記録を蓄積 Issue へ投稿 (採点 Routine の入力)
+      # 追記に失敗しても monitor 自体は赤くしない (この workflow の役目はゴールデンパスの
+      # 死活であって記録の運搬ではない)。代わりに warning annotation を残し、翌朝の
+      # ux-eval.yml が「材料なし」で赤くなることで二重に気づけるようにする。
+      - name: UX プローブ記録をデータブランチへ追記 (採点の入力 / ADR 0041)
         if: always() && steps.guard.outputs.run == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PROBE_RECORD_ISSUE: "162"
         run: |
           PROBE_JSON="$(ls -1 apps/frontend/probe-results/*.json 2>/dev/null | sort | tail -1 || true)"
           if [ -z "$PROBE_JSON" ]; then
-            echo "::notice::UX プローブ記録なし — 蓄積 Issue への投稿をスキップ"
+            echo "::notice::UX プローブ記録なし — データブランチへの追記をスキップ"
             exit 0
           fi
 
           # 終了コードは必ずコマンド単体の直後に取る (PR #157 レビュー指摘と同じ理由)
           set +e
-          python3 cicd/scripts/ux-probe/probe-record-comment.py format "$PROBE_JSON" > /tmp/probe-comment.md
+          python3 cicd/scripts/ux-probe/probe-record-comment.py envelope "$PROBE_JSON" > /tmp/probe-envelope.json
           rc=$?
           set -e
 
           if [ "$rc" -ne 0 ]; then
-            echo "::warning::プローブ記録をコメント化できませんでした (exit $rc) — artifact から調査してください"
+            echo "::warning::プローブ記録を封筒化できませんでした (exit $rc) — artifact から調査してください"
             exit 0
           fi
 
-          # 投稿も同じく warning に丸める。`run:` は既定で `bash -eo pipefail` なので、
-          # ここを裸で呼ぶとレート制限や一時的な 5xx で run 全体が failure になり、
-          # ゴールデンパスの死活監視としては偽陽性になる (ADR 0026 の watchdog にも波及する)。
+          # 追記の失敗も warning に丸める。`run:` は既定で `bash -eo pipefail` なので、
+          # ここを裸で呼ぶと一時的な push 失敗で run 全体が failure になり、
+          # ゴールデンパスの死活監視としては偽陽性になる。
           set +e
-          gh issue comment "$PROBE_RECORD_ISSUE" -R "$GITHUB_REPOSITORY" -F /tmp/probe-comment.md
+          ./cicd/scripts/ux-data/append-observation.sh /tmp/probe-envelope.json
           rc=$?
           set -e
 
           if [ "$rc" -ne 0 ]; then
-            echo "::warning::記録の投稿に失敗しました (exit $rc) — artifact から調査してください"
+            echo "::warning::記録の追記に失敗しました (exit $rc) — artifact から調査してください"
           fi
 
-      # 落ちたときの一次情報 (trace / screenshot)。緑のときは不要
-      - name: E2E レポートを artifact として保存 (失敗時のみ)
+      # 落ちたときの一次情報。緑のときは不要。
+      #
+      # ⚠️ **trace / HAR を素で上げてはいけない** (ADR 0045)。この workflow は
+      # deploy.yml と同じ `test:e2e:live` を **実 BFF アクセストークン**で走らせて
+      # おり、`playwright.live.config.ts` の retain-on-failure が生成する trace には
+      # そのトークンが入る。**このリポジトリは public** で artifact はサインイン済み
+      # ユーザーなら誰でも取得できるため、ディレクトリを丸ごと上げると毎朝の失敗の
+      # たびに実トークンが公開される (2026-08-12 の Codex レビューで発覚)。
+      #
+      # 上げるのは秘密ゼロを実測で確認したものだけ: スクリーンショット (画像) と
+      # error-context.md (aria スナップショット)。playwright-report/ も trace を
+      # 同梱しうるので**含めない**。
+      - name: E2E の失敗証拠を残す (失敗時のみ / trace は除外)
         if: failure() && steps.guard.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: playwright-live-report-${{ github.run_id }}
           path: |
-            apps/frontend/playwright-report/
-            apps/frontend/test-results-live/
+            apps/frontend/test-results-live/**/*.png
+            apps/frontend/test-results-live/**/error-context.md
           if-no-files-found: ignore
           retention-days: 14
+
+      # trace 本体は公開鍵で暗号化してから残す (deploy.yml と同じ経路 / ADR 0045)。
+      # 公開鍵が無い間は何も残さず warning を出す (fail closed)。
+      - name: E2E の trace を公開鍵で暗号化して残す
+        id: encrypt_trace
+        if: failure() && steps.guard.outputs.run == 'true'
+        env:
+          PUBKEY: cicd/keys/e2e-artifacts.pub.asc
+        run: |
+          cicd/scripts/deploy/encrypt-e2e-traces.sh \
+            "$PUBKEY" apps/frontend/test-results-live e2e-trace-enc
+
+      - name: 暗号化した trace をアップロードする
+        if: failure() && steps.guard.outputs.run == 'true' && steps.encrypt_trace.outcome == 'success' && hashFiles('e2e-trace-enc/**/*.gpg') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-live-trace-${{ github.run_id }}
+          path: e2e-trace-enc/**/*.gpg
+          retention-days: 14
+          if-no-files-found: error
 
       # 落ちたことに気づける唯一の経路。別の見張りを置かず、落ちた当人が Issue を立てる
       # (ADR 0035 D2)。緑になれば同じ Issue を自分で閉じるので、Issue 一覧が現在の状態を表す。

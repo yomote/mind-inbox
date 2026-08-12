@@ -287,8 +287,7 @@ NAME_OVERRIDES = [
         "Compute capacity for the BFF Function App"),
     # Data & secrets
     ("microsoft.documentdb/databaseaccounts", "cosmos-", "Problem persistence store (Cosmos DB)",
-        "Single persistence store behind the BFF for Problem / history data; "
-        "short-lived items expire via native TTL (ADR 0030)"),
+        "Single persistence store behind the BFF for Problem data (ADR 0030); no TTL is set — items persist until explicitly deleted. history container remains provisioned but unreferenced since ADR 0034"),
     ("microsoft.sql/servers/databases", "master", "(SQL system DB)",
         "Default master DB; not used by the application"),
     ("microsoft.sql/servers/databases", "sqldb-", "Application database (provisioned, not wired)",

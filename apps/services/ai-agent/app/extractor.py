@@ -22,9 +22,9 @@ import uuid
 from datetime import datetime, timezone
 
 from agent_framework import BaseChatClient
-from semantic_kernel.contents import ChatHistory
 
 from .agents import complete
+from .history import ChatHistory
 from .repositories import SessionRepository
 from .schemas import (
     THEMES,
@@ -105,11 +105,10 @@ def _format_history(history: ChatHistory) -> str:
     """ChatHistory をテキストに整形する。system メッセージは除外する。"""
     lines = []
     for msg in history.messages:
-        role_name = getattr(msg.role, "value", str(msg.role)).lower()
-        if "system" in role_name:
+        if msg.role == "system":
             continue
-        label = "ユーザー" if "user" in role_name else "AI"
-        lines.append(f"{label}: {msg.content}")
+        label = "ユーザー" if msg.role == "user" else "AI"
+        lines.append(f"{label}: {msg.text}")
     return "\n".join(lines)
 
 

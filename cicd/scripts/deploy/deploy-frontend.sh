@@ -68,7 +68,10 @@ resolve_frontend_build_env() {
   VITE_BFF_BASE_URL="${VITE_BFF_BASE_URL:-${func_host:+https://$func_host}}"
   VITE_ENTRA_CLIENT_ID="${VITE_ENTRA_CLIENT_ID:-$(_out functionAuthEntraClientId)}"
   VITE_ENTRA_TENANT_ID="${VITE_ENTRA_TENANT_ID:-$(_out functionAuthEntraTenantId)}"
-  export VITE_BFF_BASE_URL VITE_ENTRA_CLIENT_ID VITE_ENTRA_TENANT_ID
+  # 環境ステータスバナー (env-status-banner.mdx) が読む公開リポ。CI では GITHUB_REPOSITORY が
+  # 入る。ローカル手動デプロイでは空 = バナー無効 (秘密は含まれず、匿名 API を読むだけ)。
+  VITE_ENV_STATUS_REPO="${VITE_ENV_STATUS_REPO:-${GITHUB_REPOSITORY:-}}"
+  export VITE_BFF_BASE_URL VITE_ENTRA_CLIENT_ID VITE_ENTRA_TENANT_ID VITE_ENV_STATUS_REPO
 
   echo "VITE_BFF_BASE_URL=${VITE_BFF_BASE_URL:-(empty)}"
   if [[ -z "$VITE_BFF_BASE_URL" ]]; then

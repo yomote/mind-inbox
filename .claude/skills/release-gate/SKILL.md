@@ -1,6 +1,6 @@
 ---
 name: release-gate
-description: リリース PR (main → release) などの節目で、独立 judge (security-reviewer / qa-reviewer / biz-owner-reviewer / release-judge) を新品コンテキストで走らせるリリースゲート。開発リリースレポートを作り、security はスキャナ総動員 + 動的チェック、QA は受け入れテスト (L3) の作成・実行、ビジネスオーナーは実操作ウォークスルーをやり、release-judge が 4 レポートを突き合わせて Go/No-Go と宛先つき作業指示を出す。リリース PR が開かれたとき、user が「/release-gate」「リリースしていい?」「出荷判定して」等と言ったとき、または不可逆変更を含む deploy の直前に起動。main への機能 PR や日常の dev auto-deploy には差し込まない。判定はレポートまで — merge / deploy は人間。設計背景は ADR 0019。
+description: リリース PR (main → release) などの節目で、独立 judge (security-reviewer / qa-reviewer / biz-owner-reviewer / release-judge) を新品コンテキストで走らせるリリースゲート。開発リリースレポートを作り、security はスキャナ総動員 + 動的チェック、QA は受け入れの機械検証 (異常系スモークの作成・実行 + 実環境 E2E の結果確認)、ビジネスオーナーは実操作ウォークスルーをやり、release-judge が 4 レポートを突き合わせて Go/No-Go と宛先つき作業指示を出す。リリース PR が開かれたとき、user が「/release-gate」「リリースしていい?」「出荷判定して」等と言ったとき、または不可逆変更を含む deploy の直前に起動。main への機能 PR や日常の dev auto-deploy には差し込まない。判定はレポートまで — merge / deploy は人間。設計背景は ADR 0019。
 ---
 
 # release-gate
@@ -57,7 +57,7 @@ release-judge への入力 1 本目。commit range の実データ (git log / �
 **このセッションでは審査しない。** Agent tool で 3 役を**並列**に、新品コンテキストで起動する:
 
 1. `security-reviewer` — 「対象 ref と比較基点 (commit range)」「対象環境」を渡す。スキャナ総動員 + (起動できれば) 動的チェックの判定が返る
-2. `qa-reviewer` — 同上に加えて開発リリースレポートを渡す (受け入れマトリクスの突合対象)。**受け入れテスト (L3) の作成・実行まで**やって QA レポートが返る
+2. `qa-reviewer` — 同上に加えて開発リリースレポートを渡す (受け入れマトリクスの突合対象)。**受け入れの機械検証 (異常系スモークの作成・実行 + 実環境 E2E の結果確認) まで**やって QA レポートが返る (qa-rubric Q3 — 新規作成は異常系のみ、正常系の不足は hop 追加提案の finding)
 3. `biz-owner-reviewer` — 対象 ref を渡す。**アプリを実際に起動・操作したウォークスルー** (スクショつき違和感レポート) が返る
 
 qa-reviewer がテストを新規作成した場合、そのテストコードの扱い (commit して PR に含めるか) は user に確認する。

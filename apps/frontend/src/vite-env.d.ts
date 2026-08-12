@@ -12,6 +12,8 @@ interface ImportMetaEnv {
   readonly VITE_ENTRA_TENANT_ID?: string;
   /** BFF 呼び出し用スコープ。既定は api://<clientId>/.default。 */
   readonly VITE_ENTRA_API_SCOPE?: string;
+  /** 環境ステータスバナーが読む GitHub リポジトリ (owner/repo)。未設定ならバナー無効。 */
+  readonly VITE_ENV_STATUS_REPO?: string;
 }
 
 interface ImportMeta {

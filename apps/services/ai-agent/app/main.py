@@ -19,13 +19,12 @@ from fastapi.responses import StreamingResponse
 from .agents import get_chat_client
 from .config import get_settings
 from .extractor import ExtractionParseError, ExtractionUnavailable, extract
-from .kernel import get_kernel
 from .planner import generate_plan
 from .repositories import (
     ApprovalRepository,
-    InMemoryApprovalRepository,
-    InMemorySessionRepository,
     SessionRepository,
+    create_approval_repository,
+    create_session_repository,
 )
 from .schemas import (
     ApproveRequest,
@@ -45,10 +44,10 @@ settings = get_settings()
 logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
 logger = logging.getLogger(__name__)
 
-# PoC: モジュールレベルのシングルトン (本番動作用)
-# TODO(PoC): マルチレプリカ環境では Redis に差し替える
-_session_repo: SessionRepository = InMemorySessionRepository()
-_approval_repo: ApprovalRepository = InMemoryApprovalRepository()
+# モジュールレベルのシングルトン。実装は COSMOS_ENDPOINT の有無で選ばれる
+# (#188 / ADR 0030: あれば Cosmos 永続化、無ければ従来どおり in-memory)
+_session_repo: SessionRepository = create_session_repository()
+_approval_repo: ApprovalRepository = create_approval_repository()
 
 
 def get_session_repo() -> SessionRepository:
@@ -64,11 +63,11 @@ def get_approval_repo() -> ApprovalRepository:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting %s", settings.app_name)
-    get_kernel()  # 起動時にカーネルをロードして初回リクエストのレイテンシを下げる (M1-3 まで /chat 系が使用)
     try:
-        get_chat_client()  # MAF chat client も起動時にロード
+        # MAF chat client を起動時にロードして初回リクエストのレイテンシを下げる
+        get_chat_client()
     except Exception as exc:
-        # 資格情報なしでも起動は継続する (kernel と同じ縮退方針)。LLM 呼び出し時に失敗する
+        # 資格情報なしでも起動は継続する (stub fallback の流儀)。LLM 呼び出し時に失敗する
         logger.error("Chat client setup failed — LLM calls will fail: %s", exc)
     yield
     logger.info("Shutting down %s", settings.app_name)
@@ -89,12 +88,13 @@ async def chat(
     approval_repo: ApprovalRepository = Depends(get_approval_repo),
 ) -> ChatResponse:
     try:
+        # chat client は workflow が LLM を呼ぶ時点で遅延解決する (資格情報なし
+        # でも起動し、失敗は LLM 呼び出しで表面化する縮退挙動を保つ)
         return await run_workflow(
             req.session_id,
             req.message,
             session_repo,
             approval_repo,
-            get_kernel(),
         )
     except Exception as exc:
         logger.error("POST /chat error: %s", exc, exc_info=True)
@@ -127,7 +127,6 @@ async def chat_stream(
                 req.message,
                 session_repo,
                 approval_repo,
-                get_kernel(),
             ):
                 yield f"data: {event.model_dump_json()}\n\n"
         except Exception as exc:
@@ -189,7 +188,6 @@ async def approve(
             req.approved,
             session_repo,
             approval_repo,
-            get_kernel(),
         )
         return ApproveResponse(reply=reply)
     except ValueError as exc:

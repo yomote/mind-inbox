@@ -48,10 +48,10 @@ git status --short
 | パターン (変更検出) | 指摘内容 (Test) | 指摘内容 (Docs) |
 |---|---|---|
 | `apps/bff/local.settings.json.example` 変更, または `process.env.*` の追加 | — | `CLAUDE.md` Environment Variables 表 / `documentation/strategy.md` §2 (環境変数) |
-| `apps/bff/src/trpc/router.ts` または `apps/bff/src/trpc/routers/**` の追加・I/O 変更 | L0 契約 + L2 (router 経由テスト) — `apps/bff/**/*.{test,spec}.ts` を grep して該当 mutation がカバーされているか | `docs/api/bff-trpc.yaml` 再生成 / `CLAUDE.md` BFF: tRPC Router 節 |
-| `apps/services/ai-agent/**/*.py` の endpoint 追加・I/O 変更 (FastAPI route) | L0 契約 + L1 (パース) + L2 (FastAPI) — `apps/services/ai-agent/**/test_*.py` または `tests/` を grep | `docs/api/ai-agent.yaml` 再生成 |
-| `apps/services/voicevox/**/*.py` の endpoint 変更 | L1 + L2 | `docs/api/voicevox.yaml` 再生成 |
-| `apps/frontend/src/components/screens/**` の新規/挙動変更 | L3 シナリオに影響しないか確認 (新規 E2E は増やさない方針) | `docs/frontend/ui_specs/*.mdx` の対応 spec / `apps/frontend/src/spec/previews/` |
+| `apps/bff/src/trpc/router.ts` または `apps/bff/src/trpc/routers/**` の追加・I/O 変更 | 契約 (ai-agent とまたぐ I/O 変更なら) + 入場条件 (strategy.md §2.2「壊れても例外が出ず、データが静かに間違う」) を満たすドメインルール変更なら単体 (プロパティ優先) — `apps/bff/**/*.{test,spec}.ts` を grep。**受け渡し・ルーティングだけならテスト不要 — 代わりに Verification 欄の実測を確認** | `docs/api/bff-trpc.yaml` 再生成 / `CLAUDE.md` BFF: tRPC Router 節 |
+| `apps/services/ai-agent/**/*.py` の endpoint 追加・I/O 変更 (FastAPI route) | 契約 + 入場条件を満たすロジック (パース等) なら単体 — `apps/services/ai-agent/**/test_*.py` または `tests/` を grep。受け渡しだけならテスト不要 (Verification 実測) | `docs/api/ai-agent.yaml` 再生成 |
+| `apps/services/voicevox/**/*.py` の endpoint 変更 | 入場条件を満たすロジックのみ単体 (placeholder 解消は #2) | `docs/api/voicevox.yaml` 再生成 |
+| `apps/frontend/src/components/screens/**` の新規/挙動変更 | 異常系スモーク (`apps/frontend/e2e-uc/`) / 実環境 E2E の hop に影響しないか確認。**廃止方針の旧 L3 mock (`apps/frontend/e2e/`) に新規シナリオを足さない** (strategy.md §6.3。E2E の本数も増やさない) | `docs/frontend/ui_specs/*.mdx` の対応 spec / `apps/frontend/src/spec/previews/` |
 | `cicd/iac/**/*.bicep` でのリソース追加・命名変更 | smoke-test スクリプト側で疎通確認が必要か | `docs/runbooks/` (deploy/rollback) / `CLAUDE.md` Azure Infrastructure 節 |
 | `cicd/scripts/deploy/*.sh` または `cicd/scripts/smoke-test/*.sh` の追加・引数変更 | — | `docs/runbooks/` / `CLAUDE.md` Deployment Scripts 節 |
 | アーキテクチャ判断級の変更 (新サービス追加 / DB スキーマ変更 / 認証フロー変更 / 大幅な依存追加) | — | `docs/adr/NNNN-{slug}.md` を **実装より先に** 書く方針 (documentation/strategy.md §4.4) |
@@ -71,9 +71,15 @@ git status --short
 
 ### Step 4 — 既存テスト/docs 触れ判定
 
-Step 2 で立った各 trigger について、**diff に対応するテスト/docs ファイルが含まれているか** を `git diff main...HEAD --name-only` で確認。含まれていれば「✅ 対応あり」、無ければ「⚠️ 未対応」と分類。
+Step 2 で立った各 trigger について、**diff に対応するテスト/docs ファイルが含まれているか** を `git diff main...HEAD --name-only` で確認する。判定は trigger の性質で分岐する:
 
-例: `apps/bff/src/trpc/routers/consultation.ts` が変わった diff に `apps/bff/**/*.test.ts` が含まれない → ⚠️。
+- **無条件トリガー** (該当したら必ず対応が要る行 — 言語間 I/O 変更の契約テスト、OpenAPI 再生成、Runbook / CLAUDE.md 更新、実装より先の ADR): 対応ファイルが diff に含まれていれば「✅ 対応あり」、無ければ「⚠️ 未対応」
+- **条件付きトリガー** (入場条件・影響判定に依存する行 — 単体テストの要否、スモーク / E2E への影響確認): 対応テストが diff に有れば「✅ 対応あり」。無くても機械分類で ⚠️ にせず、**diff の中身で条件を判定する** — 入場条件 (strategy.md §2.2「壊れても例外が出ず、データが静かに間違う」) を満たすドメインルール変更か / スモーク・E2E の対象シナリオに影響するか。**満たす・影響するのにテスト/更新が無ければ「⚠️ 未対応」。満たさない・影響しない (受け渡し・ルーティング・型の詰め替えだけ等) ならテストは要求せず、PR 本文の Verification 欄に実測が貼られているか (これから貼る前提が示されているか) の確認に切り替える** — 実測の予定すら無ければ「⚠️ Verification 実測なし」
+
+例:
+
+- `apps/bff/src/trpc/routers/consultation.ts` で言及回数の導出 (ドメインルール) を変えた diff に `apps/bff/**/*.{test,spec}.ts` が含まれない → ⚠️ 未対応 (入場条件を満たすのに単体が無い)
+- 同ファイルで呼び出し先の付け替え (受け渡しだけ) の diff にテストが無い → テストは要求せず Verification 実測の確認へ。実測も無ければ ⚠️ Verification 実測なし
 
 ### Step 5 — LLM 判断 (rubric ベース)
 

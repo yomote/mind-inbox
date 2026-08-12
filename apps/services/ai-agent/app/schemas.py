@@ -69,6 +69,9 @@ class ApprovalRecord(BaseModel):
     plan: Plan
     rag_context: str = ""
     status: Literal["pending", "approved", "rejected"] = "pending"
+    # approvalRequestId (= id) → MAF checkpoint への写像 (ADR 0016 M1-3)。
+    # /approve はこの checkpoint から workflow を再開する。
+    checkpoint_id: Optional[str] = None
 
 
 # ── Plan schemas ──────────────────────────────────────────────────────────────

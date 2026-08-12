@@ -18,14 +18,22 @@ on:
   push:
     branches: [main]
   workflow_run:
-    workflows: [deploy, golden-path-monitor]
+    # 監視対象 (watchers.json で critical / 定期のもの) の完了で描き直す。
+    # ux-eval (08:20 JST) は 07:10 の schedule より後に走るため、ここに無いと
+    # 赤くなっても翌朝まで前日の緑が表示され続ける (Codex レビュー指摘 / PR #224)
+    workflows: [deploy, golden-path-monitor, ux-eval, debt-check]
     types: [completed]
   workflow_dispatch:
 
+# permissions は **書いた瞬間に、書かなかったものが none になる**。
+# 新しい API を叩くようになったらここに 1 行足すこと — 足し忘れると本番だけ
+# 403 になり、ページは落ちずに「未検証」を並べる (静かに情報が消える / PR #281)。
 permissions:
   contents: write # gh-pages に push する
-  actions: read # 他ワークフローの run 履歴を読む
+  actions: read # 他ワークフローの run 履歴 / run の jobs (実デプロイの痕跡) を読む
   issues: write # 落ちたら自分で Issue を立てる (ADR 0035 D2)
+  pull-requests: read # 「進行中」の open PR 一覧と変更ファイル (#280)
+  statuses: read # 各 PR の review-gate (commit status) の色 (#280)
 
 concurrency:
   group: status-page
@@ -37,6 +45,18 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+
+      # UX トレンド (ADR 0041 D6) の描画元。ブランチが無くても落とさない —
+      # build.py が「未検証」として出す (取れなかったを異常なしに見せない)
+      - name: UX 観測データブランチを取得 (トレンド描画用)
+        run: |
+          if git ls-remote --exit-code --heads origin data/ux-observations >/dev/null 2>&1; then
+            git fetch origin data/ux-observations
+            git worktree add /tmp/ux-data FETCH_HEAD
+            echo "UX_DATA_DIR=/tmp/ux-data" >> "$GITHUB_ENV"
+          else
+            echo "::warning::data/ux-observations がまだ無いため UX トレンドは未検証表示になります"
+          fi
 
       - name: ページを組み立てる
         env:
