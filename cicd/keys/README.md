@@ -24,7 +24,7 @@ GitHub ユーザーなら誰でもダウンロードできる。したがって 
 | ファイル | 中身 | commit する? |
 | --- | --- | --- |
 | `e2e-artifacts.pub.asc` | GPG **公開**鍵 | **する** (公開鍵は公開してよい) |
-| 秘密鍵 | — | **しない**。Claude Code 実行環境の環境変数 `E2E_ARTIFACT_PRIVATE_KEY` に置く |
+| 秘密鍵 | — | **しない**。管理系 RG の Azure Key Vault に置く (#302 完了までは暫定で PO の手元) |
 
 **公開鍵が無い間、deploy は trace を残さず `::warning::` を出して続行する**
 (ADR 0045 D6)。鍵の準備前に平文で上がる事故を構造的に防ぐため。
@@ -46,7 +46,8 @@ gpg: agent_genkey failed: No agent running
 ## 鍵を作る (作成済み)
 
 鍵ペアは 2026-08-12 に作成済み。公開鍵は `e2e-artifacts.pub.asc` として commit されて
-おり、秘密鍵は PO が環境変数へ設置する ([#301](https://github.com/yomote/mind-inbox/issues/301))。
+おり、秘密鍵の設置先は [#301](https://github.com/yomote/mind-inbox/issues/301) で扱う
+(恒久解は管理系 RG の Key Vault / [#302](https://github.com/yomote/mind-inbox/issues/302))。
 
 作り直すときの手順:
 
@@ -54,20 +55,31 @@ gpg: agent_genkey failed: No agent running
 export GNUPGHOME=/tmp/gk; mkdir -p $GNUPGHOME; chmod 700 $GNUPGHOME
 echo "allow-loopback-pinentry" > $GNUPGHOME/gpg-agent.conf
 
-# 1. 鍵ペア (パスフレーズ無し — 環境変数に入れて機械が使うため)
+# 1. 鍵ペア (パスフレーズ無し — Key Vault に入れて機械が使うため)
 gpg --batch --pinentry-mode loopback --passphrase '' \
     --quick-generate-key "mind-inbox e2e artifacts <noreply@mind-inbox.invalid>" rsa4096 encr never
 
 # 2. 公開鍵 → cicd/keys/e2e-artifacts.pub.asc として commit
 gpg --armor --export "mind-inbox e2e artifacts" > cicd/keys/e2e-artifacts.pub.asc
 
-# 3. 秘密鍵 → Claude Code 環境の環境変数 E2E_ARTIFACT_PRIVATE_KEY に貼る
-#    (あわせてパスワードマネージャにも控える。失うと過去の artifact は開けない)
+# 3. 秘密鍵 → 管理系 RG の Key Vault へ (#302 完了までは暫定で PO の手元)
+#    az keyvault secret set --vault-name <Vault> --name e2e-artifact-private-key --value @-
 gpg --armor --export-secret-keys "mind-inbox e2e artifacts"
 ```
 
-**秘密鍵は GitHub Secrets に置かない。** workflow が復号できても、public リポジトリ
-では Actions のログが公開なので出力先が無い (ADR 0045 D5)。
+**秘密鍵は GitHub Secrets にもサンドボックスの環境変数にも置かない。**
+
+- GitHub Secrets: workflow が復号できても、**public リポジトリでは Actions のログが
+  公開**なので復号結果の出力先が無い
+- 環境変数: [ADR 0031](../../docs/adr/0031-agent-reaches-outside-via-github-actions.md)
+  の「サンドボックスに長期クレデンシャルを置かない」に反する。Claude Code の公式
+  ドキュメントも「cloud environments have no dedicated secrets store, so don't add
+  API keys or other credentials」と明示している
+
+**置き場所は管理系 RG の Key Vault** (ADR 0045 D5)。環境の RG に置くと
+`cleanup-env.sh` が purge するため、撤収のたびに鍵が消える
+([#302](https://github.com/yomote/mind-inbox/issues/302))。管理系 RG ができるまでは
+暫定で PO の手元に置き、復号は PO が行う。
 
 ## 復号して trace を見る (エージェント / PO)
 
@@ -76,8 +88,10 @@ gpg --armor --export-secret-keys "mind-inbox e2e artifacts"
 export GNUPGHOME=/tmp/gk; mkdir -p $GNUPGHOME; chmod 700 $GNUPGHOME
 echo "allow-loopback-pinentry" > $GNUPGHOME/gpg-agent.conf
 
-# 秘密鍵を取り込む (エージェントは環境変数から)
-printf '%s' "$E2E_ARTIFACT_PRIVATE_KEY" | gpg --batch --import
+# 秘密鍵を取り込む (Key Vault から device-code ログインで取得 — ADR 0006 / 0045 D5)
+az login --use-device-code
+az keyvault secret show --vault-name <管理系RGのVault> --name e2e-artifact-private-key \
+  --query value -o tsv | gpg --batch --import
 
 # artifact を取得して復号
 #   artifact 名: e2e-live-trace-<run_id>  /  中身: <test-name>_trace.zip.gpg
@@ -95,6 +109,6 @@ URL を得て取得する。2026-08-12 に実測済み)。
 
 ## 鍵を替えるとき
 
-`e2e-artifacts.pub.asc` を差し替えて commit し、環境変数の秘密鍵を入れ替えるだけ。
+`e2e-artifacts.pub.asc` を差し替えて commit し、Key Vault の秘密鍵を入れ替えるだけ。
 CI 側の変更は要らない (秘密を持っていないため)。**古い鍵で暗号化済みの artifact は
 古い秘密鍵でしか開けない**点にだけ注意する (保持は 14 日)。

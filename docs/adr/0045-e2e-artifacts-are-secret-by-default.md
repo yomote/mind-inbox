@@ -41,7 +41,7 @@ Technical Story: 2026-08-12、[#293](https://github.com/yomote/mind-inbox/issues
 - **Option A: 何も上げない (現状復帰)** — 安全だが、1 日空転した状態に戻る
 - **Option B: スクラブしてから平文で上げる** — 組み込みが無いため一般的な回避策だが、失敗が公開側に倒れる
 - **Option C: artifact のアクセスを制限する** — 業界標準だが **public リポジトリでは選べない**
-- **Option D: 公開鍵で暗号化して上げ、秘密鍵はエージェントの実行環境に置く** (採用)
+- **Option D: 公開鍵で暗号化して上げ、秘密鍵は管理系 RG の Key Vault に置いて device-code で取る** (採用)
 - **Option E: 対称鍵 (GitHub Secrets のパスフレーズ)** — GitHub Secrets は**入れた値を画面から読み出せない**ため、控えを失うと過去の artifact が永久に開けない
 
 ## Decision Outcome
@@ -54,37 +54,40 @@ Chosen option: **"Option D"**。
 - **D2 平文で上げてよいのは「秘密ゼロを実測で示したもの」だけ** — 現時点ではスクリーンショット (`*.png`) と `error-context.md` の 2 種。**推測ではなく測定で示すこと** (今回は秘密を 3 経路に仕込んで 0 件を確認した)。新しい種類を平文で足すときは同じ測定を通す
 - **D3 trace は公開鍵で暗号化して上げる** — 暗号化は中身の形に依存しないので、**列挙漏れという失敗モードが存在しない**。これが Option B との決定的な差
 - **D4 公開鍵はリポジトリに commit する** (`cicd/keys/e2e-artifacts.pub.asc`) — 公開鍵は公開してよい。**CI に秘密を 1 つも増やさない**。CI が乗っ取られても過去の artifact は復号できない (暗号化しかできない)
-- **D5 秘密鍵は Claude Code 実行環境の環境変数に置く** (`E2E_ARTIFACT_PRIVATE_KEY`) — GitHub Secrets には置かない (workflow が復号できても、**public リポジトリでは Actions のログが公開**なので出力先が無い)。エージェントが手元で復号し、`playwright show-trace` に食わせる。**人間を復号のボトルネックにしない**
+- **D5 秘密鍵は管理系 RG の Azure Key Vault に置き、取得は device-code ログインで行う** — **サンドボックスにも GitHub Secrets にも置かない**。
+  - **GitHub Secrets を選ばない理由**: workflow が復号できても、**public リポジトリでは Actions のログが公開**なので復号結果の出力先が無い
+  - **環境変数を選ばない理由**: [ADR 0031](0031-agent-reaches-outside-via-github-actions.md) の「サンドボックスに長期クレデンシャルを置かない」に反する。加えて Claude Code の公式ドキュメントが「**cloud environments have no dedicated secrets store, so don't add API keys or other credentials**」と明示している ([Configure cloud environments](https://code.claude.com/docs/en/cloud-environments))
+  - **取得経路**: [ADR 0006](0006-azure-access-via-device-code.md) の device-code ログイン (`az login --use-device-code` → `az keyvault secret show`)。**静的シークレットを持たず、人間の承認を 1 回挟むだけ**で、エージェント自身が復号できる
+  - **置き場所は管理系 RG** — 環境 (`rg-{env}-mind-inbox`) の中に置くと `cleanup-env.sh` が RG 削除に加えて **Key Vault の soft-delete を purge** するため、撤収のたびに鍵が救済不能に消える ([#302](https://github.com/yomote/mind-inbox/issues/302))
+  - **#302 が完了するまでの暫定**: 管理系 RG がまだ無いため、それまでは秘密鍵を PO の手元に置く。**暫定期間中は trace の復号が PO 経由になる** (頻度は低い — 2026-08-12 の [#293](https://github.com/yomote/mind-inbox/issues/293) はスクリーンショットだけで原因が特定できた)
 - **D6 公開鍵が無い間は trace を残さず、warning を出して続行する** — 鍵の準備前に平文で上がる事故を構造的に防ぐ (fail closed)。「鍵が無いから黙って何もしない」ではなく**必ず 1 行喋る**
 - **D7 暗号化の結果を機械で検証する** — 出力ディレクトリに `.gpg` 以外のファイルが 1 つでもあれば **run を落とす**。「暗号化したつもり」で平文が混ざる事故を、成功パスの中で潰す
 - **D8 `sources: false` で spec を trace に同梱しない** — 実測で trace は**テストのソースコードを含んでいた**。spec にハードコードされた秘密がそれだけで載るため、live 設定では落とす
 
 ### なぜ gpg か
 
-GitHub の ubuntu ランナーに**最初から入っている** (`age` は導入ステップが要る)。鍵の管理は PO の手元だけで完結する。
+GitHub の ubuntu ランナーに**最初から入っている** (`age` は導入ステップが要る)。CI 側は公開鍵しか要らないので、鍵の管理は Key Vault 1 箇所で完結する。
 
-## ⚠️ D5 は ADR 0031 と緊張関係にある (PO 裁定が要る)
+## ADR 0031 との関係 — 衝突は解消した
 
-**この ADR は Accepted の [ADR 0031](0031-agent-reaches-outside-via-github-actions.md) と正面から衝突しうる。** 隠さず明記する (2026-08-12 の Codex レビュー P1 指摘)。
+初版の D5 は「秘密鍵を Claude Code 実行環境の環境変数に置く」としており、**Accepted の [ADR 0031](0031-agent-reaches-outside-via-github-actions.md) と正面から衝突していた** (2026-08-12 の Codex レビュー P1 指摘)。0031 は Decision Drivers に「サンドボックスに長期クレデンシャルを置かない」を掲げ、Option D (SP 秘密を環境変数に置く) を「ADR 0009 の『保存する秘密を作らない』を正面から崩す」として棄却している。
 
-0031 は Decision Drivers に「**秘密を増やさない — サンドボックスに長期クレデンシャルを置かない**」を掲げ、Option D (SP 秘密をサンドボックスの環境変数に置く) を「**長期クレデンシャルをサンドボックスに置くことになり、ADR 0009 の『保存する秘密を作らない』を正面から崩す**」として棄却している。**D5 はまさにその形**である。
+**さらに、Claude Code の公式ドキュメントも同じことを言っていた**:
 
-### 相違点 (被害範囲が違う)
+> Anyone who uses the environment can read the values, and **cloud environments have no dedicated secrets store, so don't add API keys or other credentials.**
 
-| | ADR 0031 が棄却した Option D | 本 ADR の D5 |
-| --- | --- | --- |
-| 鍵が守るもの | Azure サブスクリプション (Contributor) | dev の trace 1 種類 |
-| 漏れたときにできること | **Azure リソースの作成・削除・課金** | 14 日以内の暗号化 artifact を復号 → 中の**期限 1 時間の dev BFF トークン**が読める |
-| 有効期間 | 長期 (ローテーションまで) | 長期 (ローテーションまで) — **ここは同じ** |
+独立した 2 つの情報源が同じ結論だったため、**D5 を書き換えて衝突を解消した**。現在の D5 は:
 
-被害範囲は桁違いに小さいが、**「長期クレデンシャルをサンドボックスに置く」という性質そのものは同じ**である。「小さいから良い」で押し切るのは 0031 の規律を実質的に空洞化させる。
+- **保存された秘密を増やさない** — 鍵は Key Vault にあり、取得は device-code の短命トークン ([ADR 0006](0006-azure-access-via-device-code.md))
+- **サンドボックスに長期クレデンシャルを置かない** — 環境変数にも GitHub Secrets にも置かない
+- **エージェントが自力で復号できる** — 人間の承認は device-code の 1 回だけ
 
-### したがって
+つまり 0031 を supersede する必要はなく、**0006 (device-code) と 0009 (no stored secret) の延長線上に収まった**。
 
-- **本 ADR は 0031 を supersede しない。** D5 は 0031 の原則に対する**限定的な例外の提案**であり、**PO の裁定を要する** (次回 debrief)
-- 裁定までの間、D5 を前提とした実装は入るが、**鍵の設置自体が人間の作業**なので、PO が貼らない限り例外は発動しない (構造的に暴走しない)
-- **Reject された場合の代替**: ①秘密鍵を PO の手元だけに置き、trace が要るときだけ PO が復号して共有する (エージェントがボトルネックを負う代わりに 0031 を守る) ②外部 KMS / 復号ブローカーを立てる (鍵を持ち出さない。ただし新規の外部サービス依存が増える)
-- **エージェント環境を信頼する範囲を明文化していない**点も未解決。この環境変数を読めるセッションは復号できるため、実質「セッションで実行される任意のコードが鍵に到達しうる」。ここを統制する仕組み (鍵を読む主体の限定) は本 ADR では定義していない
+### 残る前提
+
+- **管理系 RG がまだ存在しない** ([#302](https://github.com/yomote/mind-inbox/issues/302))。それまでは暫定で PO の手元に置く
+- 暫定期間中は復号が PO 経由になる。**恒久解は #302 の完了時**
 
 ## Consequences
 
@@ -98,9 +101,9 @@ GitHub の ubuntu ランナーに**最初から入っている** (`age` は導�
 
 ### Negative / リスク
 
-- **秘密鍵の置き場が人間の 1 回作業になる** — Claude Code 環境の環境変数への登録は web UI 操作で、エージェントからは実行できない ([ADR 0031](0031-agent-reaches-outside-via-github-actions.md) D6 と同じ制約)。**登録されるまで trace は残らない** (D6 により平文では上がらない)
+- **管理系 RG と Key Vault の用意が要る** ([#302](https://github.com/yomote/mind-inbox/issues/302))。**用意されるまで trace は残らない** (D6 により平文では上がらない)。暫定期間は PO の手元運用
 - **秘密鍵を失うと過去の暗号化 artifact は開けない** — ただし artifact の保持は 14 日なので損失は限定的。鍵の再生成は公開鍵を差し替えるだけ
-- **エージェントの実行環境を信頼する前提に立つ** — 環境変数を読めるセッションは復号できる。裏を返せば、その環境が侵害された場合の想定被害は「dev の BFF を 1 時間叩けるトークンを含む trace が読める」まで (トークンの audience は BFF アプリで、Azure Resource Manager ではない)
+- **復号のたびに device-code の承認が要る** — 完全な無人にはならない。ただし静的シークレットを持たない代償としては軽い。想定被害も限定的で、鍵が漏れても読めるのは「dev の BFF を 1 時間叩けるトークンを含む trace」まで (トークンの audience は BFF アプリで、Azure Resource Manager ではない)
 - 暗号化された artifact は**人間がそのままでは中身を見られない** — 復号手順を Runbook に置く必要がある
 
 ### 適用範囲
