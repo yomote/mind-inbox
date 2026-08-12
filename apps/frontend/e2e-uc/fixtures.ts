@@ -77,9 +77,25 @@ export async function startConsultationAndSay(page: Page, ...utterances: string[
   }
 }
 
-/** UC-01 の基本フロー 2〜4: 抽出を走らせて結果レビューに着く。 */
+/**
+ * UC-01 の基本フロー 2〜4: 抽出を走らせて結果レビューに着く。
+ *
+ * 下書きプレビューが real でも有効になったため (#187 / ADR 0039)、セッションからの
+ * 出口ボタンは「この内容で確定」になり、**下書きが右ペインに出るまで押せない**
+ * (dialogue-session.mdx §5.8)。ここで待つのは「押せるようになるまで」であって
+ * 固定時間ではない — preview の所要時間は ai-agent 次第で変わる。
+ */
 export async function extractProblems(page: Page) {
-  await page.getByRole("button", { name: "困りごとを抽出" }).click();
+  const commit = page.getByRole("button", { name: "この内容で確定" });
+  // 自動整理は**ユーザー発話 2 往復ごと**なので、1 往復で確定へ進むシナリオでは
+  // 下書きがまだ無く disabled のまま (§5.8)。仕様どおり「今すぐ整理」で作ってから押す。
+  // 待つのは「押せるようになるまで」であって固定時間ではない — preview の所要時間は
+  // ai-agent 次第で変わる。
+  if (!(await commit.isEnabled())) {
+    await page.getByRole("button", { name: "今すぐ整理" }).click();
+  }
+  await expect(commit).toBeEnabled();
+  await commit.click();
   await expect(page).toHaveURL(/\/consultations\/current\/extract$/);
 }
 
