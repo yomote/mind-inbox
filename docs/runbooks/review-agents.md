@@ -1,8 +1,8 @@
-# 独立 judge エージェント (security / QA / release) の運用
+# 独立 judge エージェント (code / security / QA / release) の運用
 
-実装セッションとは**別コンテキスト・別役割**の審査役 3 体を、ループのどこで・どう走らせるかの手順。
-判断記録: [ADR 0019](../adr/0019-independent-judge-agents-security-qa-release.md)。
-既存の PR レビュー judge ([ADR 0008](../adr/0008-pr-review-via-cloud-routine.md) / [Runbook](claude-pr-review.md)) と役割分担して動く。
+実装セッションとは**別コンテキスト・別役割**の審査役を、ループのどこで・どう走らせるかの手順。
+判断記録: [ADR 0019](../adr/0019-independent-judge-agents-security-qa-release.md) (security / QA / biz-owner / release) / [ADR 0052](../adr/0052-codex-derived-review-rubric-and-stand-in-judge.md) (code-reviewer)。
+旧・PR レビュー Routine ([ADR 0008](../adr/0008-pr-review-via-cloud-routine.md) / [Runbook](claude-pr-review.md)) は**退役済み**で、技術レビューの担い手は Codex、その停止時 ([#345](https://github.com/yomote/mind-inbox/issues/345)) は `code-reviewer` subagent。
 
 ## Trigger
 
@@ -11,7 +11,7 @@
 ## 全体像 (どこで何が走るか)
 
 ```text
-PR 作成 → PR レビュー Routine (ADR 0008) [+ security-reviewer] → 人間 merge
+PR 作成 → 技術レビュー: Codex (@codex review) / 停止時は code-reviewer [+ security-reviewer] → merge
                                                                     │ 節目
 リリース PR (main → release) → /release-gate                        ▼
    ├─ 開発リリースレポート (事実の列挙のみ・自己判定なし)
@@ -32,6 +32,7 @@ main への機能 PR / dev の日常 auto-deploy には差し込まない。
 
 | 役割               | 一言 (**詳細は rubric が正典**)                                                                                                                           | 審査基準 (直すのはここ)                                           | subagent 定義                          |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------- |
+| code-reviewer      | 技術レビュー (Codex の代役)。宣言と参照面の乖離・並行/再送・失敗が成功に化ける経路を、反証可能な形で 1 件ずつ。**収束を宣言する**                         | [`review-rubric.md`](../../.github/claude/review-rubric.md)       | `.claude/agents/code-reviewer.md`      |
 | security-reviewer  | スキャナ総動員 + 動的チェック + 攻撃面追跡。使えなかった分は UNKNOWN 明記                                                                                 | [`security-rubric.md`](../../.github/claude/security-rubric.md)   | `.claude/agents/security-reviewer.md`  |
 | qa-reviewer        | 受け入れマトリクス + 受け入れの機械検証 (**受け入れ観点の創出の所有者** — 異常系スモークの作成・実行 + 実環境 E2E の結果確認)。プロダクトコードは触らない | [`qa-rubric.md`](../../.github/claude/qa-rubric.md)               | `.claude/agents/qa-reviewer.md`        |
 | biz-owner-reviewer | 実操作ウォークスルー (stub + Playwright、スクショつき) + 違和感                                                                                           | [`biz-owner-rubric.md`](../../.github/claude/biz-owner-rubric.md) | `.claude/agents/biz-owner-reviewer.md` |
@@ -82,21 +83,18 @@ Routine を作らない場合も、リリース PR を開いた後に手元セ�
 
 **回すのは節目だけ**: main への機能 PR・dev への日常 auto-deploy・docs のみの変更には差し込まない (CI + PR レビュー judge の守備範囲)。
 
-### PR 時にセキュリティレビューも走らせる (任意強化)
+### PR の技術レビューを回す (Codex 停止時の代役)
 
-PR レビュー Routine のプロンプト末尾 (web UI: <https://claude.ai/code/routines>) に 1 行足す:
+Codex が応答できない間 ([#345](https://github.com/yomote/mind-inbox/issues/345))、PM が `code-reviewer` subagent を起動して技術レビューを埋める ([ADR 0052](../adr/0052-codex-derived-review-rubric-and-stand-in-judge.md))。**自動起動は無いので、PR ごとに PM が呼ぶ**。
 
-```text
-6. diff に認証・入力検証・秘密情報・インフラ (Bicep/workflow)・依存追加が含まれる場合は、
-   security-reviewer subagent を起動して .github/claude/security-rubric.md での審査を受け、
-   その findings (blocker/major) もサマリに含める。
-```
+- 出力 (verdict + findings 表 + inline 本文) を PR に**投稿するのは呼び出し元** — judge は書かない
+- diff に認証・入力検証・秘密情報・インフラ (Bicep / workflow)・依存追加が含まれる場合は、あわせて security-reviewer も起動する (code-reviewer 側はセキュリティの深掘りを委譲する規約)
+- 修正 push 後は**同じ subagent を再起動して再レビュー**し、同じ指摘が再提起されないことを確認してから PM がスレッドを resolve する (CLAUDE.md の PO 決定 / 2026-08-12 改訂)
+- **Codex が復帰したら指摘者を Codex に戻す** (`REVIEW_GATE_REQUIRE_CODEX` を true へ)
 
-subagent はレビューセッション内でも新品コンテキストで起動されるため、役割分離は保たれる。
+### 単発でレビューだけ欲しい
 
-### 単発でセキュリティ / QA レビューだけ欲しい
-
-開発セッションで「security-reviewer で今の diff を見て」「QA 観点でレビューして」と言えば、Agent tool 経由で該当 subagent が起動する。**結果の verdict を実装セッションが値切らない**こと (blocker は直すか、直さない理由を user が明示的に引き受ける)。
+開発セッションで「code-reviewer で今の diff を見て」「security-reviewer で今の diff を見て」「QA 観点でレビューして」と言えば、Agent tool 経由で該当 subagent が起動する。**結果の verdict を実装セッションが値切らない**こと (blocker は直すか、直さない理由を user が明示的に引き受ける)。
 
 ## Verification
 
@@ -150,6 +148,6 @@ subagent はレビューセッション内でも新品コンテキストで起�
 ## Related
 
 - 判断記録: [ADR 0019](../adr/0019-independent-judge-agents-security-qa-release.md)
-- PR レビュー judge: [ADR 0008](../adr/0008-pr-review-via-cloud-routine.md) / [Runbook](claude-pr-review.md) / [`review-rubric.md`](../../.github/claude/review-rubric.md)
+- PR レビュー judge: [ADR 0052](../adr/0052-codex-derived-review-rubric-and-stand-in-judge.md) / [`review-rubric.md`](../../.github/claude/review-rubric.md) / 導出元の実測 [`docs/reviews/`](../reviews/README.md) — 旧経路 (**退役**): [ADR 0008](../adr/0008-pr-review-via-cloud-routine.md) / [Runbook](claude-pr-review.md)
 - テスト戦略 (4 層 [契約 / 単体 / スモーク / E2E] と QA の分担): [`docs/testing/strategy.md`](../testing/strategy.md)
 - Subagents: <https://code.claude.com/docs/en/sub-agents>
