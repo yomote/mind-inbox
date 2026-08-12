@@ -84,11 +84,23 @@ Option A は #304 自身の着手条件 (評価ゲートの設計・上限の決
 
   | Phase | 中身 | 抜けてよい条件 |
   | --- | --- | --- |
-  | **0** | [#354](https://github.com/yomote/mind-inbox/issues/354) を閉じる (LLM 採点を実在の担当へ接続する) | データブランチに `ux-judge-score` が**新しく積まれること**を実測。「載せた」で終えない |
+  | **0** | [#354](https://github.com/yomote/mind-inbox/issues/354) を閉じる (LLM 採点を実在の担当へ接続する) — **接続経路は #354 の案 A (PO が web UI で当番 Routine のプロンプトに 1 行足す)**。エージェントが専用 Routine を新設する案 D は下記のとおり実測で否決された | データブランチに `ux-judge-score` が**新しく積まれること**を実測。「載せた」で終えない |
   | **1** | 5 ペルソナ × 3 走行を `workflow_dispatch` で**手動 1 回**。自動化しない | `explores/YYYY-MM.jsonl` に 15 行積まれること |
   | **2** | 同一 commit SHA で再走し、再現率を数値で出す | 成功条件 (D7) の判定。**ここで初めて Routine 化を裁定する** |
 
   Phase 0 を飛ばすと、**記録だけが 15 倍に積み、採点されないまま残る**。しかも watchers.json は「探索は動いている」と緑を出すため、止まっていることが見えにくくなる (2026-08-12 の design-gate で PO が指摘)
+
+  **Phase 0 の経路について — 案 D (エージェントが専用 Routine を新設) は実測で否決 (2026-08-12)。** design-gate 直後に案 D を試したところ、`create_trigger` で作った Routine は**リポジトリを掴めない**ことが分かった:
+
+  | 項目 | web UI 製 (`PMルーティン`) | エージェント製 (`create_trigger`) |
+  | --- | --- | --- |
+  | `sources` (リポジトリ) | あり | **無い** — `source_url` を渡す口が無い |
+  | モデル | `claude-opus-5` | 指定不可。`claude-sonnet-5` に落ちる |
+  | MCP connector | あり | 付かない (作成時に warning) |
+
+  発火はする (`fire_trigger` で新セッションが起動することも確認) が、**repo を掴めないセッションに Runbook を読ませることはできない**。同じ形で PR レビューの代役 judge Routine も空撃ちしており (指示先の「巡回手順」節が PR #361 のブランチにしかなく main に無い状態で 6 時間ごとに発火)、2 本とも PO 裁定で削除した。
+
+  したがって **`create_trigger` は [ADR 0048](0048-child-sessions-are-usable-again-with-a-one-way-poke-channel.md) D6 の用途 (既に repo を持つ相手セッションへメッセージを届ける) 専用**とし、仕事をさせる Routine は web UI から作る (CLAUDE.md に規約として記載)
 
 ## 守るべき資源への到達経路 (全数)
 
