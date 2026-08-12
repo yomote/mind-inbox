@@ -26,12 +26,13 @@ main が活発な日はこうなる: PR を受け入れる → 別 PR がマー�
 
 - Option A: up-to-date 必須 (strict) をやめる
 - Option B: base 追随 push を bot が自動で再受け入れする
-- Option C: **pm-accept の引き継ぎ判定 + GitHub Merge Queue** (採用)
+- Option C: pm-accept の引き継ぎ判定 + GitHub Merge Queue (**初版で採用 → 2026-08-11 に実行不能と判明**)
 - Option D: WIP 上限を 1 に下げて PR を直列に流す
+- **Option E: pm-accept の引き継ぎ判定 + strict OFF** (現行案 — D2 の改訂で Option C から乗り換えた)
 
 ## Decision Outcome
 
-Chosen option: **Option C** — 2 本立てで解く。
+Chosen option: **Option E** — 「実装が変わっていない追随では受け入れを失効させない」(D1) と「そもそも追随を要らなくする」(改訂 D2) の 2 本立てで解く。**Option C との差は 2 本目だけ**で、D1 は初版から変わっていない。
 
 ### D1 — pm-accept は「実装差分が不変の main 追随」に引き継ぐ
 
@@ -53,7 +54,7 @@ review-gate (`cicd/scripts/review-gate/check.py`) の受け入れ判定を拡張
 
 **初版の D2 は実行不能だった。** Merge Queue は **organization 所有のリポジトリ向け**の機能で、`yomote/mind-inbox` は個人アカウント所有のため設定項目が UI に出ない (2026-08-11、PO が Settings → Rules → Rulesets を実際に開いて確認 — [#269 コメント](https://github.com/yomote/mind-inbox/issues/269#issuecomment-5262150635))。**前提を確認せずに手順まで書いたのは PM の落ち度**。
 
-改訂後の決定 (PO 裁定 2026-08-11):
+改訂後の決定案 (**運用としては 2026-08-11 に PO が strict OFF を実施済み。ADR としての裁定は次回 debrief** — Status が Proposed のままなのはこのため):
 
 - **直列化はしない。「Require branches to be up to date before merging」(strict) を OFF にする** — 渋滞の実体は「直列化の不在」ではなく **strict そのもの**だった。個人リポでもこれは外せる。2026-08-11 に PO が OFF にし、追いつきレースは即消滅した
 - **代償を引き受ける**: 少し古い main に対してテストされた PR が入りうる。組み合わせの破綻は**後段で捕まえる** — main の CI / dev への auto-deploy / golden-path 監視 / [#258](https://github.com/yomote/mind-inbox/issues/258) のマージ執行時のフル再評価が受け皿になる。「マージ前に完全に直列化する」を諦め、「壊れたら早く気づく」に賭ける判断
@@ -90,20 +91,20 @@ merge_group イベントの checkout は queue の一時 branch = **PR が改変
 
 本項は PR #258 (ADR 0040 D1) が同じ理由で入れた job 分離 (`gate-pr` / `gate-trusted` / `sweep` — イベントの由来で権限を分ける) と**同じ原則の merge_group への拡張**であり、`gate-merge-group` はその 4 本目にあたる。
 
-### D4 — マージ**執行** (ADR 0040 D1) との分担: 受け入れ判定は 0042、実行は 0040 / queue
+### D4 — マージ**執行** (ADR 0040 D1) との分担: 受け入れ判定は 0042、実行は 0040
 
 PR #258 (ADR 0040 D1) は「review-gate 自身が受け入れ済み・auto-merge 武装済みの PR をマージまで実行する + ストール検知」を入れた。本 ADR とは**排他ではなく補完**で、層が違う:
 
 | 層 | 担当 | 内容 |
 | --- | --- | --- |
 | **受け入れ判定** (何をマージしてよいか) | 本 ADR (0042) | pm-accept の引き継ぎ。判定は `evaluate_gate` → `decide` の 1 経路に置くので、**マージ執行側のマージ直前フル再評価にも同じ引き継ぎが効く** (「追随しただけの PR」が執行の直前で門を閉じられない) |
-| **実行** (いつ誰がマージを叩くか) | ADR 0040 D1 / Merge Queue | イベント経路 (`gate-trusted`) と 30 分毎 sweep がマージ API を叩く。queue 有効化後は queue が直列化してマージする |
+| **実行** (いつ誰がマージを叩くか) | ADR 0040 D1 | イベント経路 (`gate-trusted`) と定期 sweep がマージ API を叩く。**直列化する主体はいない** (改訂 D2) |
 
 重複の整理:
 
-- **merge_group の run はマージ執行を行わない** (`REVIEW_GATE_EXECUTE_MERGE` 相当を無効化し、job も `contents: write` を持たない) — queue がマージするので二重機構にしない
-- **PR 側経路のマージ執行は残す** — queue 有効化前 (#269 まで) はそれが唯一の自動マージ経路であり、有効化後も「auto-merge 武装 = queue 投入」の入口として整合する。queue 有効化後に不要と実測できたら 0040 D1 側の改訂として畳む (未決)
-- **ストール検知 (0040 D1) は残す** — queue は「入った PR」の直列化しかせず、「auto-merge 未武装で全緑のまま放置」「needs-human / Proposed ADR の 48h 停滞」は queue の外側の失敗モード。重複しない
+- **PR 側経路のマージ執行が唯一の自動マージ経路** — Merge Queue が使えない以上、代替は無い。**ただし 2026-08-12 時点でこの経路は 405 で弾かれ続けており実際には動いていない** ([#327](https://github.com/yomote/mind-inbox/issues/327))
+- **ストール検知 (0040 D1) は残す** — 「auto-merge 未武装で全緑のまま放置」「needs-human / Proposed ADR の 48h 停滞」を拾う層で、マージ執行とは別の失敗モードを見ている
+- **merge_group の run はマージ執行を行わない** — queue が有効化されていない現状では発火しない (将来 org へ移したときの取り決めとして残す)
 
 ### Positive Consequences
 
@@ -124,18 +125,26 @@ PR #258 (ADR 0040 D1) は「review-gate 自身が受け入れ済み・auto-merge
 ### Option A: up-to-date 必須をやめる
 
 - Good, because 追いつき競争が即消える
-- Bad, because 「古い main でテストされたものが main に入る」— semantic conflict がマージ後に露見する。merge queue が同じ問題をより良く解く
+- Bad, because 「古い main でテストされたものが main に入る」— semantic conflict がマージ後に露見する
+- **初版ではこれを「merge queue の方がより良く解く」として退けたが、queue が使えないと判明したため、改訂 D2 で D1 と組み合わせて採用に転じた (= Option E)**
 
 ### Option B: base 追随 push を bot が自動で再受け入れ
 
 - Good, because review-gate の判定は単純なまま
 - Bad, because 受け入れコメントの意味 (PM の判断の痕跡) が壊れる — bot が `[pm-accept]` を書くなら門は実質無い。「追随かどうか」の判定は結局 D1 と同じものが要る
 
-### Option C: 引き継ぎ判定 + Merge Queue (採用)
+### Option C: 引き継ぎ判定 + Merge Queue (初版で採用 → **実行不能**)
 
 - Good, because 失効規則の**意味** (実装差分への承認) を保ったまま偽陽性だけを消す
 - Good, because 直列化がサーバー側 (セッションの生死・エージェントの規律に依存しない — 「規律は破られ、機構は守られる」)
 - Bad, because 実装が繊細 (上の Negative Consequences)
+- **Fatal**: Merge Queue は organization 所有リポジトリ専用。個人アカウント所有の本リポでは設定項目自体が存在しない (2026-08-11 実測 / [#269](https://github.com/yomote/mind-inbox/issues/269))
+
+### Option E: 引き継ぎ判定 + strict OFF (現行案)
+
+- Good, because 追いつきが構造的に起きなくなる (直列化の実装も設定も要らない)
+- Good, because Option C の良い半分 (D1 の引き継ぎ判定) をそのまま引き継げる
+- Bad, because 古い main に対してテストされた PR が入りうる — **マージ前ではなくマージ後に壊れが見つかる**設計に賭けている (受け皿は main の CI / dev への auto-deploy / golden-path 監視)
 
 ### Option D: WIP 上限 1
 
