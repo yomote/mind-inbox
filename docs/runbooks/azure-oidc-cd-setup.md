@@ -102,6 +102,12 @@ sha は GitHub の `ro.sh` のページで `y` を押す (Copy permalink) と UR
 > always-latest を取ると、このブランチに push できる者が中身を差し替えた瞬間、次の実行で
 > read-only の枠を超えて PO の全権限で任意コマンドが走る。
 
+**失敗したら client ID を登録しない**。`ro.sh` はどこか 1 ステップでも失敗すると、末尾に
+「❌ 未完了のステップがあります」と失敗一覧を出して**非ゼロで終了し、登録案内を出さない**。
+資格情報やロールが欠けたまま `AZURE_CLIENT_ID_RO` を登録すると、次の `ops-inspect` が
+Azure login やクエリで落ちるまで不完全な構成に気づけないため。原因を直してそのまま再実行してよい
+(全ステップ冪等)。
+
 ### この構成のトレードオフ ([ADR 0047](../adr/0047-readonly-investigation-identity-on-unprotected-branch.md) — Proposed)
 
 `ops/inspect` に保護を掛けると「調査のたびに直 push して dispatch する」という用途が成立しないため、

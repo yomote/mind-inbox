@@ -25,11 +25,24 @@
 #   3. サービスプリンシパル
 #   4. ロール 3 つ (Reader / Cost Management Reader / Log Analytics Reader)
 # **書き込み系のロールは付けない。**
+#
+# 失敗の扱い: どこか 1 つでも失敗したら **最後に非ゼロで終了し、client ID の登録案内を出さない**。
+#   途中の失敗を握り潰して案内まで進むと、OIDC 資格情報やロールが欠けた ID を登録してしまい、
+#   次の ops-inspect が Azure login やクエリで落ちるまで不完全な構成に気づけない。
+#   全ステップ冪等なので、原因を直してそのまま再実行してよい。
 set -uo pipefail
 
 APP_NAME=gha-oidc-readonly-mind-inbox
 REPO=yomote/mind-inbox
 BRANCH=ops/inspect
+
+# 失敗したステップ名を溜める (空なら成功)。
+FAILURES=""
+fail_step() {
+  FAILURES="${FAILURES}
+  - $1"
+  echo "  ⚠️ 失敗: $1"
+}
 
 echo "== 1. アプリ登録 =="
 APP_ID=$(az ad app list --display-name "$APP_NAME" --query "[0].appId" -o tsv 2>/dev/null)
@@ -45,12 +58,16 @@ SUBJECT="repo:${REPO}:ref:refs/heads/${BRANCH}"
 if az ad app federated-credential list --id "$APP_ID" --query "[?subject=='$SUBJECT'] | [0].name" -o tsv 2>/dev/null | grep -q .; then
   echo "  既にある (subject: $SUBJECT)"
 else
-  az ad app federated-credential create --id "$APP_ID" --parameters "{
+  if az ad app federated-credential create --id "$APP_ID" --parameters "{
     \"name\": \"gha-ro-ops-inspect\",
     \"issuer\": \"https://token.actions.githubusercontent.com\",
     \"subject\": \"$SUBJECT\",
     \"audiences\": [\"api://AzureADTokenExchange\"]
-  }" >/dev/null && echo "  作成: $SUBJECT" || echo "  ⚠️ 作成に失敗 (上のエラーを確認)"
+  }" >/dev/null; then
+    echo "  作成: $SUBJECT"
+  else
+    fail_step "フェデレーション資格情報の作成 (subject: $SUBJECT) — 上のエラーを確認"
+  fi
 fi
 
 echo "== 3. サービスプリンシパル =="
@@ -63,20 +80,39 @@ else
 fi
 
 echo "== 4. ロール (read-only のみ) =="
-SUB=$(az account show --query id -o tsv)
-for R in "Reader" "Cost Management Reader" "Log Analytics Reader"; do
-  if az role assignment list --assignee "$SP_ID" --scope "/subscriptions/$SUB" \
-       --query "[?roleDefinitionName=='$R'] | [0].id" -o tsv 2>/dev/null | grep -q .; then
-    echo "  既にある: $R"
-  else
-    az role assignment create --assignee-object-id "$SP_ID" \
-      --assignee-principal-type ServicePrincipal --role "$R" \
-      --scope "/subscriptions/$SUB" >/dev/null \
-      && echo "  付与: $R" || echo "  ⚠️ 付与に失敗: $R (権限不足の可能性)"
-  fi
-done
+# サブスクリプション ID が取れないとスコープが "/subscriptions/" になり、
+# 付与先の違う (あるいは失敗する) ロール割り当てになる。取れなければロール付与ごと飛ばす。
+SUB=$(az account show --query id -o tsv) || SUB=""
+if [ -z "$SUB" ]; then
+  fail_step "サブスクリプション ID の取得 (az account show) — ロール付与を行っていない"
+else
+  for R in "Reader" "Cost Management Reader" "Log Analytics Reader"; do
+    if az role assignment list --assignee "$SP_ID" --scope "/subscriptions/$SUB" \
+         --query "[?roleDefinitionName=='$R'] | [0].id" -o tsv 2>/dev/null | grep -q .; then
+      echo "  既にある: $R"
+    else
+      if az role assignment create --assignee-object-id "$SP_ID" \
+        --assignee-principal-type ServicePrincipal --role "$R" \
+        --scope "/subscriptions/$SUB" >/dev/null; then
+        echo "  付与: $R"
+      else
+        fail_step "ロールの付与: $R (権限不足の可能性)"
+      fi
+    fi
+  done
+fi
 
 echo ""
+if [ -n "$FAILURES" ]; then
+  echo "================================================================"
+  echo " ❌ 未完了のステップがあります。この ID を登録しないでください:"
+  echo "$FAILURES"
+  echo ""
+  echo " 原因を解消してから、このスクリプトをもう一度実行してください"
+  echo " (全ステップ冪等なので、成功済みの分は作り直しません)。"
+  echo "================================================================"
+  exit 1
+fi
 echo "================================================================"
 echo " GitHub → Settings → Secrets and variables → Actions → Variables"
 echo " に、この値を AZURE_CLIENT_ID_RO として登録してください:"
