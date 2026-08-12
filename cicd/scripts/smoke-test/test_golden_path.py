@@ -40,8 +40,29 @@ exit 1
 # curl スタブ。STUB_CURL_RC の終了コードで落ちる。
 # 実 curl と同じく **接続に失敗したら http_code は 000、body は空** になるので、
 # -w '%{http_code}' 指定時だけ 000 を出し、それ以外は何も出さない。
+#
+# STUB_CURL_PARTIAL=1 のときは**部分応答**を模す — 実 curl は「ヘッダと body の
+# 途中まで受信してからタイムアウト / 切断」で **rc != 0 と http_code=200 と
+# 部分 body を同時に返す** (`-m` は転送全体の上限、`%{http_code}` は最後に
+# 受け取った応答コード)。空 body に潰すスタブではこの経路を再現できない。
 CURL_STUB = """#!/usr/bin/env bash
 rc="${STUB_CURL_RC:-0}"
+out=""
+prev=""
+for a in "$@"; do
+  [ "$prev" = "-o" ] && out="$a"
+  prev="$a"
+done
+if [ "$rc" != "0" ] && [ "${STUB_CURL_PARTIAL:-0}" = "1" ]; then
+  # 部分応答: ステータスは 200 まで確定していて、body が途中まで届いている。
+  # tts hop の判定条件 (RIFF ヘッダ + 1000 bytes 超) を **満たす** 中身にする —
+  # ここを満たさないと「rc を見なくても落ちる」ので、テストが穴を突けない。
+  if [ -n "$out" ]; then printf 'RIFF%*s' 1500 '' | tr ' ' 'x' > "$out"; fi
+  for a in "$@"; do
+    case "$a" in *'%{http_code}'*) printf '200' ;; esac
+  done
+  exit "$rc"
+fi
 if [ "$rc" != "0" ]; then
   for a in "$@"; do
     case "$a" in *'%{http_code}'*) printf '000' ;; esac
@@ -56,7 +77,7 @@ exit 0
 """
 
 
-def _run(tmp_path: Path, curl_rc: int) -> str:
+def _run(tmp_path: Path, curl_rc: int, partial: bool = False) -> str:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)  # 同じ tmp_path で rc を変えて何度も呼ぶ
     for name, body in (("az", AZ_STUB), ("curl", CURL_STUB)):
@@ -67,6 +88,7 @@ def _run(tmp_path: Path, curl_rc: int) -> str:
     env = dict(os.environ)
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["STUB_CURL_RC"] = str(curl_rc)
+    env["STUB_CURL_PARTIAL"] = "1" if partial else "0"
     proc = subprocess.run(
         ["bash", str(SCRIPT)], capture_output=True, text=True, env=env, timeout=120
     )
@@ -119,6 +141,39 @@ def test_単体_全ホップが理由を残す(tmp_path: Path) -> None:
     assert ng_lines, f"NG 行が 1 つも出ていない (スタブが効いていない):\n{out}"
     silent = [line for line in ng_lines if "rc=" not in line]
     assert not silent, "理由を残していない NG 行がある:\n" + "\n".join(silent)
+
+
+def test_単体_部分応答を成功にしない(tmp_path: Path) -> None:
+    """転送が途中で切れたのに中身が判定条件を満たす場合、OK を出さないこと。
+
+    実 curl は「ヘッダと body の途中まで受信してからタイムアウト / 切断」で
+    **rc != 0 と http_code=200 と部分 body を同時に返す**。tts hop の判定は
+    「200 + RIFF + 1000 bytes 超」なので、**切り詰められた WAV はこれを満たす** —
+    rc を見なければ壊れた音声が OK として報告される。
+
+    #310 で消えていたのが「失敗の理由」だったのに対し、ここで消えるのは
+    **失敗そのもの**なので、より悪い (偽の緑)。
+    """
+    out = _run(tmp_path, 28, partial=True)
+
+    # hop 5 の見出しから次の見出しまでを切り出す。**「tts を含む行」で絞ってはいけない** —
+    # 成功行は "OK  - VOICEVOX が WAV を返す" で tts の字が無く、偽の OK を見逃す
+    lines = out.splitlines()
+    starts = [i for i, ln in enumerate(lines) if ln.startswith("== 5.")]
+    assert starts, f"hop 5 の見出しが無い:\n{out}"
+    begin = starts[0] + 1
+    ends = [i for i in range(begin, len(lines)) if lines[i].startswith("== ")]
+    hop5 = lines[begin : (ends[0] if ends else len(lines))]
+
+    assert not any(ln.startswith("OK") for ln in hop5), (
+        "部分応答 (rc=28 / status=200 / 切り詰められた WAV) が OK になっている:\n"
+        + "\n".join(hop5)
+    )
+    assert any("rc=28" in ln for ln in hop5), (
+        "部分応答の NG 行に rc が出ていない:\n" + "\n".join(hop5)
+    )
+    # 全体としても PASS にならないこと (1 ホップでも壊れていれば FAIL)
+    assert "FAIL" in out, f"部分応答があるのに全体が PASS になっている:\n{out}"
 
 
 def test_単体_通信が成立していれば内容の問題だと分かる(tmp_path: Path) -> None:

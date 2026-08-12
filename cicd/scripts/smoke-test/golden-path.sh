@@ -42,6 +42,16 @@ run_curl() {
   CURL_OUT="$(curl "$@")"
   CURL_RC=$?
 }
+# 転送が完了しなかったか。**成功判定の前に必ず通す。**
+#
+# 実 curl は「ヘッダと body の途中まで受信してからタイムアウト / 切断」のとき、
+# **rc != 0 と http_code=200 と部分 body を同時に返す** (`-m` は転送全体の上限、
+# `%{http_code}` は最後に受け取った応答コード)。この状態で中身だけを見ると、
+# 例えば hop 5 は「200 + RIFF + 1500 bytes」で条件を満たしてしまい、
+# **壊れているのに OK が出る** — #310 で消していたのが「理由」だったのに対し、
+# ここで消えるのは「失敗そのもの」なので、より悪い。
+# したがって **rc != 0 なら中身が何であれ成功にしない**。
+incomplete() { [[ "$CURL_RC" != "0" ]]; }
 # NG 行に付ける診断。**rc の数字だけでは読めない**ので意味も添える
 curl_why() {
   case "$CURL_RC" in
@@ -104,10 +114,12 @@ A="Authorization: Bearer $TOKEN"
 
 echo "== 1. health.ping (認証チェーン) =="
 run_curl -s -o /dev/null -m 60 -w '%{http_code}' -H "$A" "$H/api/trpc/health.ping"; code="$CURL_OUT"
-if [[ "$code" == "200" ]]; then
+if [[ "$code" == "200" ]] && ! incomplete; then
   ok "health.ping 200"
 elif [[ "$code" == "000" ]]; then
   ng "health.ping に到達できていない ($(curl_why))。EasyAuth 以前にネットワークで失敗している"
+elif incomplete; then
+  ng "health.ping の応答が途中で切れている (status=$code / $(curl_why))"
 else
   ng "health.ping が $code (期待 200)。EasyAuth/audience の破損疑い"
 fi
@@ -125,8 +137,10 @@ try:
     print('ok' if (d.get('id') or d.get('sessionId')) and not assistants else 'regressed' if assistants else 'broken')
 except Exception:
     print('broken')")"
+if incomplete; then start_verdict="incomplete"; fi
 case "$start_verdict" in
   ok) ok "空 concern でセッションが作られ、挨拶なし (#241 の仕様どおり)" ;;
+  incomplete) ng "空 concern の開始が途中で切れている ($(curl_why))" ;;
   regressed) ng "撤去したはずの開始時挨拶が返っている (#241 の仕様退行): $(echo "$body" | head -c 200)" ;;
   *) ng "空 concern の開始が壊れている [$(curl_why)]: $(echo "$body" | head -c 200)" ;;
 esac
@@ -143,7 +157,9 @@ try:
 except Exception: print(0)")"
 # stub 応答 (\"[stub] received: ...\") は「AI_AGENT_BASE_URL の結線が外れている」であり、
 # 実 AI 検証としては失敗。2026-08-08 に stub がここを緑ですり抜けた実績があるため明示的に落とす
-if echo "$body" | grep -q '\[stub\]'; then
+if incomplete; then
+  ng "実 AI 応答が途中で切れている ($(curl_why) / ${#body} bytes 受信)"
+elif echo "$body" | grep -q '\[stub\]'; then
   ng "実 AI ではなく stub 応答が返っている。AI_AGENT_BASE_URL の結線が外れている"
 elif [[ "$reply_len" -gt 0 ]]; then
   ok "実 AI 応答が返る (assistant text ${reply_len} chars)"
@@ -155,7 +171,9 @@ echo "== 4. consultation.sendMessage (実 AI 対話) =="
 run_curl -s -m 180 -X POST -H "$A" -H "Content-Type: application/json" \
   -d '{"sessionId":"golden-path-probe","message":"一言だけ返してください"}' "$H/api/trpc/consultation.sendMessage"
 body="$CURL_OUT"
-if echo "$body" | grep -q '\[stub\]'; then
+if incomplete; then
+  ng "sendMessage の応答が途中で切れている ($(curl_why) / ${#body} bytes 受信)"
+elif echo "$body" | grep -q '\[stub\]'; then
   ng "sendMessage が stub 応答。AI_AGENT_BASE_URL の結線が外れている"
 elif echo "$body" | grep -q '"reply":"'; then
   ok "sendMessage が reply を返す"
@@ -171,7 +189,11 @@ code="$CURL_OUT"
 tts_bytes="$(wc -c < "$tmp")"
 # サイズ閾値はここが唯一の担当 (E2E 側は blob 消費との競合で body を読めない — #125)。
 # 「200 + RIFF ヘッダだが中身がほぼ空」の壊れ方をここで止める
-if [[ "$code" == "200" ]] && head -c 4 "$tmp" | grep -q "RIFF" && [[ "$tts_bytes" -gt 1000 ]]; then
+if incomplete && [[ "$code" != "000" ]]; then
+  # **ここが一番危ない**: 部分 WAV は RIFF ヘッダを持ちサイズ条件も満たしうるので、
+  # rc を見ないと「壊れた音声」を OK と報告してしまう
+  ng "tts の応答が途中で切れている (status=$code / $(curl_why) / ${tts_bytes} bytes 受信) — WAV として読めても転送が完了していない"
+elif [[ "$code" == "200" ]] && ! incomplete && head -c 4 "$tmp" | grep -q "RIFF" && [[ "$tts_bytes" -gt 1000 ]]; then
   ok "VOICEVOX が WAV を返す (${tts_bytes} bytes)"
 elif [[ "$code" == "200" ]]; then
   ng "tts が 200 だが WAV として不正 (${tts_bytes} bytes / RIFF=$(head -c 4 "$tmp" | grep -c RIFF || true)) — 空/破損の疑い"
@@ -200,7 +222,9 @@ import sys,json
 try:
   d=json.load(sys.stdin); print(len(d['result']['data']['items']))
 except Exception: print(-1)")"
-if [[ "$extracted" -gt 0 ]]; then
+if incomplete; then
+  ng "抽出の応答が途中で切れている ($(curl_why) / ${#body} bytes 受信)"
+elif [[ "$extracted" -gt 0 ]]; then
   ok "抽出が困りごとを $extracted 件返す"
 elif [[ "$extracted" == "0" ]]; then
   ng "抽出が 0 件。実 AI が構造化出力を返せていない疑い: $(echo "$body" | head -c 300)"
@@ -217,7 +241,9 @@ import sys,json
 try:
   d=json.load(sys.stdin); print(len(d['result']['data']))
 except Exception: print(-1)")"
-if [[ "$listed" -ge 0 ]]; then
+if incomplete; then
+  ng "一覧の応答が途中で切れている ($(curl_why) / ${#body} bytes 受信)"
+elif [[ "$listed" -ge 0 ]]; then
   ok "一覧が読める (${listed} 件)"
 else
   ng "一覧が壊れている [$(curl_why)]: $(echo "$body" | head -c 400)"
