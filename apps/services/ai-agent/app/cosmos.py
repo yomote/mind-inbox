@@ -22,8 +22,13 @@ from .config import get_settings
 @lru_cache
 def _client() -> CosmosClient:
     settings = get_settings()
+    # timeout / connection_timeout は azure-core の transport にそのまま渡る
+    # (Issue #313: 外向き HTTP に上限が無いと、詰まった 1 本が ACA のワーカーを占有する)。
     return CosmosClient(
-        url=settings.cosmos_endpoint, credential=DefaultAzureCredential()
+        url=settings.cosmos_endpoint,
+        credential=DefaultAzureCredential(),
+        timeout=settings.cosmos_request_timeout_seconds,
+        connection_timeout=settings.cosmos_request_timeout_seconds,
     )
 
 

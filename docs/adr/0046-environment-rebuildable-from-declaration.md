@@ -56,11 +56,11 @@ Chosen option: **Option A**。
 
 ### D1 — リソースをライフサイクルで 3 層に分ける
 
-| 層 | 置き場所 | 中身（`cicd/modules/bootstrap-core.bicep` の行） | 撤収の対象 |
-| --- | --- | --- | --- |
-| **持続層** | `rg-shared-mindbox`（[ADR 0045](0045-e2e-artifacts-are-secret-by-default.md) が言う「管理系 RG」の実体） | Cosmos `:1250`（ユーザーデータ）/ Azure OpenAI `:912`（アカウント + デプロイ = クォータ）/ **Speech `:952`（F0 = 1 サブスクに 1 つ）** / Log Analytics `:398`（履歴）/ **Key Vault（新設）** / バックアップ保管ストレージ（新設） | ❌ **触らない** |
-| **環境層** | `rg-dev-mind-inbox` | SWA `:1426` / Function App `:661` + Plan `:632` + Storage `:615` / Container Apps `:851,:1039,:1080` + managed environment `:834` | ✅ **壊して作り直す** |
-| **デプロイ層** | （リソースを作らない） | image の sha 差し替え / zip deploy / 静的配信 | — |
+| 層             | 置き場所                                                                                                 | 中身（`cicd/modules/bootstrap-core.bicep` の行）                                                                                                                                                                                  | 撤収の対象            |
+| -------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| **持続層**     | `rg-shared-mindbox`（[ADR 0045](0045-e2e-artifacts-are-secret-by-default.md) が言う「管理系 RG」の実体） | Cosmos `:1250`（ユーザーデータ）/ Azure OpenAI `:912`（アカウント + デプロイ = クォータ）/ **Speech `:952`（F0 = 1 サブスクに 1 つ）** / Log Analytics `:398`（履歴）/ **Key Vault（新設）** / バックアップ保管ストレージ（新設） | ❌ **触らない**       |
+| **環境層**     | `rg-dev-mind-inbox`                                                                                      | SWA `:1426` / Function App `:661` + Plan `:632` + Storage `:615` / Container Apps `:851,:1039,:1080` + managed environment `:834`                                                                                                 | ✅ **壊して作り直す** |
+| **デプロイ層** | （リソースを作らない）                                                                                   | image の sha 差し替え / zip deploy / 静的配信                                                                                                                                                                                     | —                     |
 
 **Speech を持続層に置くことで、#306 の「Speech を検証対象に含めるか」は構造的に解ける** — F0 は 1 サブスクに 1 つなので、環境層に置くと再作成のたびに枠の取り合いになる。持続層なら壊さないので競合しない。**含めない**が答えになる。
 
@@ -74,12 +74,12 @@ Chosen option: **Option A**。
 
 これが本 ADR の中心的な判断基準。**壊して作り直せるのは、作り直しても同じ名前で戻ってくるリソースだけ**。
 
-| リソース | 再作成後の**外から見える名前** | 参照している設定 |
-| --- | --- | --- |
-| Function App | `func-dev-mindbox.azurewebsites.net` — **決定的** | — |
-| **SWA** | `<ランダム語>-<ハッシュ>.azurestaticapps.net` — **生成物。作り直すと変わる** | Entra の `spa.redirectUris` / CORS |
-| **Container Apps** | `ca-dev-mindbox-ai-agent.<生成 ID>.<region>.azurecontainerapps.io` — **managed environment の既定ドメインが生成物**。CAE を作り直すと変わる | BFF の `AI_AGENT_BASE_URL` / `VOICEVOX_BASE_URL` |
-| Cosmos / OpenAI / Speech | 決定的だが**中身・クォータが戻らない** | — |
+| リソース                 | 再作成後の**外から見える名前**                                                                                                              | 参照している設定                                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| Function App             | `func-dev-mindbox.azurewebsites.net` — **決定的**                                                                                           | —                                                |
+| **SWA**                  | `<ランダム語>-<ハッシュ>.azurestaticapps.net` — **生成物。作り直すと変わる**                                                                | Entra の `spa.redirectUris` / CORS               |
+| **Container Apps**       | `ca-dev-mindbox-ai-agent.<生成 ID>.<region>.azurecontainerapps.io` — **managed environment の既定ドメインが生成物**。CAE を作り直すと変わる | BFF の `AI_AGENT_BASE_URL` / `VOICEVOX_BASE_URL` |
+| Cosmos / OpenAI / Speech | 決定的だが**中身・クォータが戻らない**                                                                                                      | —                                                |
 
 名前が生成物であるリソースを環境層に置くと、**それを参照している設定が全部追従を要求される**。
 
@@ -100,12 +100,12 @@ Chosen option: **Option A**。
 
 一次ソースで、**手作業の 5 ステップがすべて宣言可能**であることを確認した（[Graph Bicep v1.0 リファレンス](https://learn.microsoft.com/en-us/graph/templates/reference/overview)）:
 
-| 手作業のステップ | 宣言での表現 |
-| --- | --- |
-| SPA 種別でアプリ登録 | `Microsoft.Graph/applications@v1.0` の `spa.redirectUris` |
-| SP を別途作る（無いとログイン無限ループ） | `Microsoft.Graph/servicePrincipals@v1.0` |
-| トークンを v2 にする（無いと API 401） | `api.requestedAccessTokenVersion: 2` |
-| `access_as_user` スコープ公開 | `api.oauth2PermissionScopes`（`id` を固定 GUID で採る） |
+| 手作業のステップ                                 | 宣言での表現                                                                 |
+| ------------------------------------------------ | ---------------------------------------------------------------------------- |
+| SPA 種別でアプリ登録                             | `Microsoft.Graph/applications@v1.0` の `spa.redirectUris`                    |
+| SP を別途作る（無いとログイン無限ループ）        | `Microsoft.Graph/servicePrincipals@v1.0`                                     |
+| トークンを v2 にする（無いと API 401）           | `api.requestedAccessTokenVersion: 2`                                         |
+| `access_as_user` スコープ公開                    | `api.oauth2PermissionScopes`（`id` を固定 GUID で採る）                      |
 | 自己参照 delegated permission + **事前 consent** | `requiredResourceAccess` + **`Microsoft.Graph/oauth2PermissionGrants@v1.0`** |
 
 **#303 のコメントが「最後の関門」としていた事前 consent は、`oauth2PermissionGrants` が v1.0 のサポート対象なので解ける。**
@@ -179,13 +179,13 @@ purge が要るのは「同名で作り直すために soft-delete を退かす�
 
 撤去対象は調査で全数を特定した。**いずれも bicep 側に既に宣言があり、二重宣言になっている**:
 
-| スクリプト | 命令的に設定しているもの | bicep 側の宣言 |
-| --- | --- | --- |
-| `deploy-backend.sh:189-195` | `AI_AGENT_BASE_URL` / `VOICEVOX_BASE_URL` | `bootstrap-core.bicep` の Function App appSettings（値は parameters.json に**ハードコード**） |
-| `deploy-ai-agent.sh:72-77` | `AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_DEPLOYMENT` / `USE_MANAGED_IDENTITY` / `LOG_LEVEL` | Container App `:1039` の env |
-| `deploy-ai-agent.sh:131-155` | OpenAI User ロール付与 | `:1223` `aiAgentOpenAiRoleAssignment` |
-| `deploy-ai-agent.sh:197-203` / `deploy-voicevox-wrapper.sh:107-123` | **認証ゲート**（`az containerapp auth microsoft update`） | `:1133` / `:1161` `authConfigs`（[ADR 0017](0017-container-apps-access-via-auth-gate.md)） |
-| `deploy-voicevox-wrapper.sh:66-69` | `VOICEVOX_ENGINE_BASE_URL` / `LOG_LEVEL` | Container App `:1080` の env |
+| スクリプト                                                          | 命令的に設定しているもの                                                                   | bicep 側の宣言                                                                                |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `deploy-backend.sh:189-195`                                         | `AI_AGENT_BASE_URL` / `VOICEVOX_BASE_URL`                                                  | `bootstrap-core.bicep` の Function App appSettings（値は parameters.json に**ハードコード**） |
+| `deploy-ai-agent.sh:72-77`                                          | `AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_DEPLOYMENT` / `USE_MANAGED_IDENTITY` / `LOG_LEVEL` | Container App `:1039` の env                                                                  |
+| `deploy-ai-agent.sh:131-155`                                        | OpenAI User ロール付与                                                                     | `:1223` `aiAgentOpenAiRoleAssignment`                                                         |
+| `deploy-ai-agent.sh:197-203` / `deploy-voicevox-wrapper.sh:107-123` | **認証ゲート**（`az containerapp auth microsoft update`）                                  | `:1133` / `:1161` `authConfigs`（[ADR 0017](0017-container-apps-access-via-auth-gate.md)）    |
+| `deploy-voicevox-wrapper.sh:66-69`                                  | `VOICEVOX_ENGINE_BASE_URL` / `LOG_LEVEL`                                                   | Container App `:1080` の env                                                                  |
 
 **認証ゲートが二重宣言だったのは新しい発見**。[ADR 0017](0017-container-apps-access-via-auth-gate.md) の「Container Apps は組み込み認証で閉じる」は守るべき資源（OpenAI の課金）に直結する門なので、**宣言とスクリプトのどちらが勝つかが曖昧なまま放置してはいけない**（[ADR 0018](0018-runtime-verification-in-the-loop.md) の「到達経路を全部数える」）。
 
@@ -294,17 +294,17 @@ ADR 0013 は「オンデマンド teardown をやめて常設にする」と決�
 
 「設定したか」ではなく**振る舞い**で書く:
 
-| 判断 | 確かめ方 | 何が言えたら緑か |
-| --- | --- | --- |
-| D3 Entra 宣言 | 環境層を壊して `provision.sh` → **ブラウザで dev にログイン** | ログインが通り、`/api/trpc/*` が 200。**手作業をゼロ回**挟んでいる |
-| D3 クライアント ID 固定 | 再構築の前後で `appId` を比較 | **同一**。redirect URI は新 SWA ホスト名に更新されている |
-| D5 アプリ登録が消えない | 再構築後に `az ad app show --id <appId>` | 存在する |
-| D6 purge 安全弁 | `cleanup-env.sh` を既定で実行し、Key Vault の soft-delete を確認 | **soft-delete が残っている**（purge されていない） |
-| D7 宣言だけで結線 | bicep 適用**だけ**を行い、deploy スクリプトを**通さずに** `/api/health` 相当を叩く | ai-agent / VOICEVOX の FQDN が入っており応答する |
-| D2 CAE 再作成後の追従 | CAE を作り直した後、BFF の `AI_AGENT_BASE_URL` を読む | **新しい生成ドメイン**が入っている（parameters.json の古い FQDN ではない） |
-| D7 認証ゲート | 再構築後、ai-agent の ingress を**トークン無しで**叩く | **401**（[ADR 0017](0017-container-apps-access-via-auth-gate.md) の門が宣言だけで閉じている） |
-| D8 変数欠落 | 変数を 1 つ外した状態で deploy を回す | **run が赤**（成功のまま skip しない） |
-| D9 復元 | 復元後に `problem.list` を叩く | 破壊前の Problem が戻っている |
+| 判断                    | 確かめ方                                                                           | 何が言えたら緑か                                                                              |
+| ----------------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| D3 Entra 宣言           | 環境層を壊して `provision.sh` → **ブラウザで dev にログイン**                      | ログインが通り、`/api/trpc/*` が 200。**手作業をゼロ回**挟んでいる                            |
+| D3 クライアント ID 固定 | 再構築の前後で `appId` を比較                                                      | **同一**。redirect URI は新 SWA ホスト名に更新されている                                      |
+| D5 アプリ登録が消えない | 再構築後に `az ad app show --id <appId>`                                           | 存在する                                                                                      |
+| D6 purge 安全弁         | `cleanup-env.sh` を既定で実行し、Key Vault の soft-delete を確認                   | **soft-delete が残っている**（purge されていない）                                            |
+| D7 宣言だけで結線       | bicep 適用**だけ**を行い、deploy スクリプトを**通さずに** `/api/health` 相当を叩く | ai-agent / VOICEVOX の FQDN が入っており応答する                                              |
+| D2 CAE 再作成後の追従   | CAE を作り直した後、BFF の `AI_AGENT_BASE_URL` を読む                              | **新しい生成ドメイン**が入っている（parameters.json の古い FQDN ではない）                    |
+| D7 認証ゲート           | 再構築後、ai-agent の ingress を**トークン無しで**叩く                             | **401**（[ADR 0017](0017-container-apps-access-via-auth-gate.md) の門が宣言だけで閉じている） |
+| D8 変数欠落             | 変数を 1 つ外した状態で deploy を回す                                              | **run が赤**（成功のまま skip しない）                                                        |
+| D9 復元                 | 復元後に `problem.list` を叩く                                                     | 破壊前の Problem が戻っている                                                                 |
 
 ## Links
 

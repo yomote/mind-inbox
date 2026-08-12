@@ -13,13 +13,13 @@ RG=<your-rg> ./scripts/env/cleanup-env.sh
 
 ### 削除対象の流れ
 
-| # | 対象 | 既定 | 有効化する変数 |
-| --- | --- | --- | --- |
-| 1 | 自動作成された Entra アプリ登録 | **しない** | `DELETE_ENTRA_APP=true` |
-| 2 | Log Analytics workspace の permanent delete (14 日の soft-delete を回避) | **しない** | `FORCE_DELETE_LOG_ANALYTICS=true` |
-| 3 | **リソースグループ本体** | **する** | — (常に実行) |
-| 4 | Soft-deleted Key Vault の purge | **しない** | `PURGE_DELETED_KEYVAULTS=true` |
-| 5 | Soft-deleted Cognitive Services / Azure OpenAI account の purge | **しない** | `PURGE_DELETED_COGNITIVE_SERVICES=true` |
+| #   | 対象                                                                     | 既定       | 有効化する変数                          |
+| --- | ------------------------------------------------------------------------ | ---------- | --------------------------------------- |
+| 1   | 自動作成された Entra アプリ登録                                          | **しない** | `DELETE_ENTRA_APP=true`                 |
+| 2   | Log Analytics workspace の permanent delete (14 日の soft-delete を回避) | **しない** | `FORCE_DELETE_LOG_ANALYTICS=true`       |
+| 3   | **リソースグループ本体**                                                 | **する**   | — (常に実行)                            |
+| 4   | Soft-deleted Key Vault の purge                                          | **しない** | `PURGE_DELETED_KEYVAULTS=true`          |
+| 5   | Soft-deleted Cognitive Services / Azure OpenAI account の purge          | **しない** | `PURGE_DELETED_COGNITIVE_SERVICES=true` |
 
 purge を有効化した場合、Key Vault と Cognitive Services は RG が既に削除済みでも `list-deleted` をフォールバックとしてスキャンし、過去にこの RG に存在したものを拾って purge します。**つまり有効化した種類は soft-delete からも救えなくなる**ので、必要な種類だけを立ててください。
 

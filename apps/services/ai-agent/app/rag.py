@@ -11,6 +11,8 @@ Azure AI Search 差し替えポイント:
 import logging
 from dataclasses import dataclass
 
+from .observability import fingerprint
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,7 +25,9 @@ class RetrievalResult:
 
 async def retrieve(query: str, top_k: int = 3) -> list[RetrievalResult]:
     """Retrieve relevant documents for the given query."""
-    logger.debug("RAG retrieve: query=%r top_k=%d", query, top_k)
+    # query はユーザーの発話そのもの。LOG_LEVEL を DEBUG に上げただけで全発話が
+    # ログへ流れる状態にしない (Issue #313) — 指紋だけ出す
+    logger.debug("RAG retrieve: query=%s top_k=%d", fingerprint(query), top_k)
 
     # Stub — replace with Azure AI Search vector search
     return [

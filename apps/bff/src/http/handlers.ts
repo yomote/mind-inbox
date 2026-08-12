@@ -18,6 +18,7 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { z } from "zod";
 import { appRouter } from "../trpc/router";
 import { createContext } from "../trpc/context";
+import { MAX_ID_LENGTH, MAX_MESSAGE_LENGTH, MAX_TTS_TEXT_LENGTH } from "../limits";
 import { openChatStream } from "../chat/chatStream";
 import { planTts, prefetchTts, synthesizeTts } from "../tts/ttsService";
 import { warmupDownstreams } from "../warmup/warmupService";
@@ -49,9 +50,11 @@ export async function handleTrpc(
   });
 }
 
+// 入力の大きさの上限は `../limits.ts` に集約する (#313 C-1)。tRPC 経路 (router.ts) と
+// 非 tRPC 経路 (ここ) で別々の値を持つと、片方だけが青天井のまま残る。
 const ChatStreamRequestSchema = z.object({
-  sessionId: z.string().min(1),
-  message: z.string().min(1),
+  sessionId: z.string().min(1).max(MAX_ID_LENGTH),
+  message: z.string().min(1).max(MAX_MESSAGE_LENGTH),
 });
 
 /** チャット応答の SSE ストリーミング (`POST /api/chat/stream`, #120 / ADR 0024)。 */
@@ -82,7 +85,7 @@ export async function handleChatStream(
 }
 
 const TtsRequestSchema = z.object({
-  text: z.string().min(1),
+  text: z.string().min(1).max(MAX_TTS_TEXT_LENGTH),
   speaker: z.number().int().nonnegative().optional(),
   prefetch: z.boolean().optional(),
   /** #185: 合成せず読み上げ単位の文の並びだけ返す (フロントの逐次再生用)。 */

@@ -79,7 +79,7 @@ concurrency:
 permissions: {}
 
 jobs:
-  # PR 側のコード・定義で走るイベント (pull_request / pull_request_review) 専用 —
+  # PR 側の**定義**で走るイベント (pull_request / pull_request_review) 専用 —
   # **最小権限**。pull_request_review も GITHUB_REF/GITHUB_SHA が PR の merge ref を
   # 指し、workflow 定義も checkout も PR 側から来る (公式 events リファレンスの
   # GITHUB_SHA = "Last merge commit on the GITHUB_REF branch") ため、特権 job に
@@ -89,11 +89,20 @@ jobs:
   # (REVIEW_GATE_EXECUTE_MERGE=false) — マージは pm-accept コメント (issue_comment)
   # か 30 分毎の sweep が main 側コードで行う (レビュー到着時の即時マージは
   # 失われるが sweep が 30 分以内に回収する)。
-  # 残余リスク: statuses:write がある限り PR 側コードは偽 success を貼れる。
-  # この門は協調するエージェントの手続きミス防止であり、悪意ある同一リポ author
-  # への防御は branch protection では完結しない (ADR 0036 追記事項)。
+  # **判定ロジックは常に default branch のものを実行する** (Issue #311 / #313):
+  # 以前はここが ref 無しの checkout = PR 側の作業ツリーで check.py を走らせていた。
+  # fork PR は GITHUB_TOKEN が read-only なので無害だが、このリポの運用は
+  # 「エージェントが同一リポにブランチを push して PR を出す」— 同一リポ PR なら
+  # statuses:write が生きるため、PR が cicd/scripts/review-gate/check.py を
+  # 書き換えるだけで required check `review-gate` に**偽の success** を貼れた
+  # (= ADR 0036 の門を被判定者自身が開けられる)。gate-merge-group / gate-trusted /
+  # sweep が既に採っている `ref: default_branch` と同形に揃えて塞ぐ。
+  # 判定材料 (PR のコメント・レビュースレッド・差分) は全て GitHub API 経由で
+  # 取るので、PR の作業ツリーは不要 — PR の内容は**判定対象としてのみ**読む。
+  # 残る残余リスクは workflow 定義そのもの (pull_request イベントの run は yml も
+  # PR 側から来る) — こちらはブランチ保護 / 定義変更のレビューが担う。
   gate-pr:
-    name: マージの門を判定 (PR 側コード)
+    name: マージの門を判定 (PR イベント / main のコードで実行)
     runs-on: ubuntu-latest
     if: >-
       github.event_name == 'pull_request'
@@ -104,7 +113,11 @@ jobs:
       # advisory コメント (Codex 再トリガー依頼 / security review 依頼) の投稿用
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # PR 側の作業ツリーは checkout しない — 判定スクリプトは必ず信頼版
+          # (default branch) を実行する (#311 / gate-merge-group と同形)
+          ref: ${{ github.event.repository.default_branch }}
       - name: 判定して commit status を貼る
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -140,7 +153,7 @@ jobs:
       # マージ後の build-images / deploy を workflow_dispatch で起動する補償用 (#253)
       actions: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # 特権 job の checkout は default branch を明示 (Codex P1-a の安全側:
           # イベント分離に加えて ref も固定する)
@@ -169,7 +182,7 @@ jobs:
       contents: read
       statuses: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # queue の一時 branch (= PR 由来コード) ではなく信頼版を明示 (ADR 0042 D3)
           ref: ${{ github.event.repository.default_branch }}
@@ -196,7 +209,7 @@ jobs:
       issues: write
       actions: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # 特権 job の checkout は default branch を明示 (Codex P1-a の安全側)
           ref: ${{ github.event.repository.default_branch }}

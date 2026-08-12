@@ -94,7 +94,8 @@ test.describe.serial("ユースケースのゴールデンパス (UC-01 → 02 �
     await page.getByRole("button", { name: "新しい相談を始める" }).click();
     await expect(page).toHaveURL(/\/consultations\/current$/);
     await expect(page.getByRole("button", { name: "整理結果へ" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "困りごとを抽出" })).toBeVisible();
+    // 出口は 1 本だけ。real 結線後の文言は「この内容で確定」(#187 / ADR 0039 D3)
+    await expect(page.getByRole("button", { name: "この内容で確定" })).toBeVisible();
 
     // 直接 URL を叩いても復活しない (ルート自体が無い)
     await page.goto("/history");

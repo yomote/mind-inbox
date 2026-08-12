@@ -20,6 +20,17 @@ __pycache__
 # Azure Functions local config (may contain secrets)
 **/local.settings.json
 
+# .env 実体 (ai-agent / voicevox の pydantic BaseSettings が env_file=".env" で読む。
+# ai-agent の README は `OPENAI_API_KEY=sk-...` を書けと案内している)。
+# public リポジトリなので、コミットされた時点で鍵が世界に出る。追跡済みの
+# example / production (秘密を含まないビルド時フラグ) だけ明示的に許可する。
+.env
+.env.*
+!.env.example
+!*.env.example
+!.env.local.example
+!.env.production
+
 # MCP / E2E ツールのスクラッチ
 .playwright-mcp/
 .serena/
