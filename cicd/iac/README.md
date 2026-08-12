@@ -71,6 +71,11 @@ RG=<rg-name> DEPLOYMENT=main-bootstrap ./scripts/deploy/deploy-all.sh
 - Azure CLI ログイン済み
 - サブスクリプション選択済み
 - Bicep 利用可能
+- **既存の手動ロール割り当てが残っていないこと** — スクリプト時代（`az role assignment create`）に
+  作られた ai-agent MI → Cognitive Services OpenAI User の割り当てが残っていると、bicep の
+  宣言が `RoleAssignmentExists` で拒否され bootstrap ごと落ちる。あれば **1 回だけ手で削除**する
+  （Issue #297 / 手順は [`scripts/deploy/README.md`](../scripts/deploy/README.md#前提条件-古い手動割り当てが残っていないこと-297)）。
+  ロール割り当ての持ち主は bicep 1 本で、シェルからは作らない
 
 ```bash
 az login
