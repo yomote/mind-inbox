@@ -30,6 +30,12 @@
 #   途中の失敗を握り潰して案内まで進むと、OIDC 資格情報やロールが欠けた ID を登録してしまい、
 #   次の ops-inspect が Azure login やクエリで落ちるまで不完全な構成に気づけない。
 #   全ステップ冪等なので、原因を直してそのまま再実行してよい。
+#
+#   **「存在しない」と「調べられなかった」を混ぜない** — 冪等性は list 系の結果で分岐して
+#   成り立っているので、Graph の一時障害や権限不足で list が落ちたときに空の結果を
+#   「未登録」と読むと、**同名のアプリや SP を重複作成したうえで成功終了する**。
+#   list が失敗したら作成に進まず、失敗として記録する (この形の握り潰しは 2026-08-12 の
+#   レビューで指摘された。az の終了コードを必ず見ること)。
 set -uo pipefail
 
 APP_NAME=gha-oidc-readonly-mind-inbox
@@ -45,17 +51,32 @@ fail_step() {
 }
 
 echo "== 1. アプリ登録 =="
-APP_ID=$(az ad app list --display-name "$APP_NAME" --query "[0].appId" -o tsv 2>/dev/null)
-if [ -z "$APP_ID" ]; then
-  APP_ID=$(az ad app create --display-name "$APP_NAME" --query appId -o tsv) || exit 1
-  echo "  作成: $APP_ID"
+# list の終了コードを見てから分岐する。**空の結果を「未登録」と読んでよいのは list が
+# 成功したときだけ** — 失敗を空と混同すると同名アプリを重複作成してしまう。
+if APP_ID=$(az ad app list --display-name "$APP_NAME" --query "[0].appId" -o tsv); then
+  if [ -z "$APP_ID" ]; then
+    if APP_ID=$(az ad app create --display-name "$APP_NAME" --query appId -o tsv); then
+      echo "  作成: $APP_ID"
+    else
+      APP_ID=""
+      fail_step "アプリ登録の作成 ($APP_NAME) — 上のエラーを確認"
+    fi
+  else
+    echo "  既存を再利用: $APP_ID"
+  fi
 else
-  echo "  既存を再利用: $APP_ID"
+  APP_ID=""
+  fail_step "アプリ登録の検索 (az ad app list) — 既存かどうか判定できないため、重複作成を避けて作成に進んでいない"
 fi
 
 echo "== 2. フェデレーション資格情報 =="
 SUBJECT="repo:${REPO}:ref:refs/heads/${BRANCH}"
-if az ad app federated-credential list --id "$APP_ID" --query "[?subject=='$SUBJECT'] | [0].name" -o tsv 2>/dev/null | grep -q .; then
+if [ -z "$APP_ID" ]; then
+  fail_step "フェデレーション資格情報 — アプリ登録の ID が無いため確認も作成もしていない"
+elif ! FIC=$(az ad app federated-credential list --id "$APP_ID" \
+       --query "[?subject=='$SUBJECT'] | [0].name" -o tsv); then
+  fail_step "フェデレーション資格情報の検索 (az ad app federated-credential list) — 既存かどうか判定できないため作成に進んでいない"
+elif [ -n "$FIC" ]; then
   echo "  既にある (subject: $SUBJECT)"
 else
   if az ad app federated-credential create --id "$APP_ID" --parameters "{
@@ -71,24 +92,41 @@ else
 fi
 
 echo "== 3. サービスプリンシパル =="
-SP_ID=$(az ad sp list --filter "appId eq '$APP_ID'" --query "[0].id" -o tsv 2>/dev/null)
-if [ -z "$SP_ID" ]; then
-  SP_ID=$(az ad sp create --id "$APP_ID" --query id -o tsv) || exit 1
-  echo "  作成: $SP_ID"
+if [ -z "$APP_ID" ]; then
+  SP_ID=""
+  fail_step "サービスプリンシパル — アプリ登録の ID が無いため確認も作成もしていない"
+elif SP_ID=$(az ad sp list --filter "appId eq '$APP_ID'" --query "[0].id" -o tsv); then
+  if [ -z "$SP_ID" ]; then
+    if SP_ID=$(az ad sp create --id "$APP_ID" --query id -o tsv); then
+      echo "  作成: $SP_ID"
+    else
+      SP_ID=""
+      fail_step "サービスプリンシパルの作成 (appId: $APP_ID) — 上のエラーを確認"
+    fi
+  else
+    echo "  既存を再利用: $SP_ID"
+  fi
 else
-  echo "  既存を再利用: $SP_ID"
+  SP_ID=""
+  fail_step "サービスプリンシパルの検索 (az ad sp list) — 既存かどうか判定できないため、重複作成を避けて作成に進んでいない"
 fi
 
 echo "== 4. ロール (read-only のみ) =="
 # サブスクリプション ID が取れないとスコープが "/subscriptions/" になり、
 # 付与先の違う (あるいは失敗する) ロール割り当てになる。取れなければロール付与ごと飛ばす。
 SUB=$(az account show --query id -o tsv) || SUB=""
-if [ -z "$SUB" ]; then
+if [ -z "$SP_ID" ]; then
+  fail_step "ロールの付与 — サービスプリンシパルの ID が無いため付与先を決められない (ロール付与を行っていない)"
+elif [ -z "$SUB" ]; then
   fail_step "サブスクリプション ID の取得 (az account show) — ロール付与を行っていない"
 else
   for R in "Reader" "Cost Management Reader" "Log Analytics Reader"; do
-    if az role assignment list --assignee "$SP_ID" --scope "/subscriptions/$SUB" \
-         --query "[?roleDefinitionName=='$R'] | [0].id" -o tsv 2>/dev/null | grep -q .; then
+    # ここでも「付与済みが無い」と「調べられなかった」を分ける。後者で付与に進むのは
+    # 冪等ではあるが、権限不足を「付与した」と誤読させないため失敗として記録する。
+    if ! HAVE=$(az role assignment list --assignee "$SP_ID" --scope "/subscriptions/$SUB" \
+           --query "[?roleDefinitionName=='$R'] | [0].id" -o tsv); then
+      fail_step "ロールの確認: $R (az role assignment list が失敗 — 付与済みか判定できないため付与に進んでいない)"
+    elif [ -n "$HAVE" ]; then
       echo "  既にある: $R"
     else
       if az role assignment create --assignee-object-id "$SP_ID" \

@@ -47,8 +47,28 @@ Chosen option: **"Option B"**, because 用途 (調査のたびに直 push) と�
 
 1. **この識別には書き込み系のロールを一切付けない** — `ro.sh` が付けるのは Reader /
    Cost Management Reader / Log Analytics Reader の 3 つだけ。増やす場合は本 ADR を改訂する
-2. **`ops-inspect` workflow は書き込み操作をしない** — `az` は show/list のみ、`curl` は GET のみ、
-   入力は `env:` 経由でのみ参照する (既存の規律。workflow 冒頭に明記されている)
+2. **`ops-inspect` workflow は状態を変える操作をしない** — `az` は show / list のみ、`curl` は GET のみ、
+   入力は `env:` 経由でのみ参照する (既存の規律。workflow 冒頭に明記されている)。
+   **例外は Cost Management の query API 1 つだけ** — 下の 2-a のとおり POST を使うが読み取りである
+
+   **2-a. 例外: Cost Management の query API への POST は「読み取り」として許す**
+
+   `cost-summary` は `az rest --method post` で
+   `https://management.azure.com/subscriptions/{sub}/providers/Microsoft.CostManagement/query`
+   を叩く。HTTP メソッドは POST だが、**これは書き込みではない**:
+
+   - **なぜ POST なのか** — この API は集計の条件 (期間 `timeframe` / 粒度 `granularity` /
+     グルーピング `grouping`) を body で渡す設計であり、クエリを URL に載せないため POST になる。
+     **サブスクリプションのリソース・構成・課金設定は何も変わらない**。読めるのは
+     Cost Management Reader の範囲の請求データだけで、必要な権限も Reader 系のみ (条件 1 のロールで足りる)
+   - **なぜ GET で代替できないのか** — GET の `az consumption usage list` は、このサブスクリプションでは
+     `pretaxCost` が文字列 `"None"` で返り実額が取れなかった (2026-08-10 実測 / 89 件すべて。
+     Cost Management Reader を付けても変わらず、権限ではなく API の問題)。
+     「予算 ¥3,000 に対して今いくらか」を読むという `cost-summary` の目的そのものが GET では果たせない
+   - **例外の範囲はこの 1 URI に閉じる** — `Microsoft.CostManagement/query` 以外への POST、および
+     PUT / PATCH / DELETE は一切許さない。**「読み取りに必要なら POST してよい」という一般則にはしない**
+     (それを許すと条件 2 が実質的に空文になる)。増やす場合は本 ADR を改訂する
+
 3. **人間が実行するスクリプトはブランチ名で取らない** — `ro.sh` は PO 自身の Azure 権限
    (device-code ログイン / ADR 0006) の下で走るため、**commit sha で固定して取得する**。
    ブランチ名で取ると、このブランチに push できる者が中身を差し替えた瞬間に
@@ -69,6 +89,9 @@ Chosen option: **"Option B"**, because 用途 (調査のたびに直 push) と�
 - ブランチ保護が無いため、`ops/inspect` の履歴は誰の目も通らずに書き換わりうる (調査ログとしての証拠力は低い)
 - 条件 3 (sha 固定) は**運用で守る規律**であり、機械的に強制されていない。`ro.sh` を
   ブランチ名で取る運用に戻ると穴が開く
+- 条件 2 に例外 (2-a) が 1 つ空いており、「`az rest --method post` を書いてはいけない」を
+  機械的に検査していない。**例外が 1 つに閉じているかはレビューで見るしかない** — 2 つ目の POST が
+  増えたら本 ADR の改訂とセットになっているかを必ず確認する
 
 ## Pros and Cons of the Options
 

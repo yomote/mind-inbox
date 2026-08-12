@@ -21,7 +21,16 @@
 #   - **入力をシェルに展開しない**。`run:` の中に ${{ inputs.* }} を直接書かず、
 #     必ず env: 経由で渡して "$VAR" として引用符付きで参照する
 #     (${{ }} は run の実行前にテキスト置換されるため、直接書くと注入口になる)。
-#   - **書き込み操作をしない**。az は show/list のみ、curl は GET のみ。
+#   - **状態を変える操作をしない**。az は show / list のみ、curl は GET のみ。
+#     **例外は 1 つだけ** — Cost Management の query API
+#     (`az rest --method post .../Microsoft.CostManagement/query`) は POST だが読み取り。
+#     この API は集計条件 (期間・粒度・グルーピング) を body で渡す設計のため
+#     メソッドが POST になるだけで、**サブスクリプションの状態は何も変えない**
+#     (GET の `az consumption usage list` は pretaxCost が "None" で返り実額が取れない
+#     — 2026-08-10 実測。cost-summary の中のコメント参照)。
+#     **例外はこの URI に閉じる。他の POST / PUT / PATCH / DELETE は書かない。**
+#     広げるときは ADR 0048 の受容条件 2 を先に改訂すること
+#     (docs/adr/0048-readonly-investigation-identity-on-unprotected-branch.md)。
 #   - **取得できなかったことを「異常なし」と書かない** (inspect-env.sh と同じ規律)。
 #     失敗は `(未検証: 理由)` として出す。
 
