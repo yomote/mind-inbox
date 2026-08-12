@@ -8,7 +8,7 @@
       "enforce_admins": false,
       "lock_branch": false,
       "protected": true,
-      "required_conversation_resolution": true,
+      "required_conversation_resolution": false,
       "required_linear_history": false,
       "required_pull_request_reviews": {
         "dismiss_stale_reviews": false,
@@ -19,9 +19,10 @@
       "required_status_checks": {
         "contexts": [
           "lint-and-build",
-          "test (L0 / L1+L2 / L3)"
+          "review-gate",
+          "test (L0 / L1+L2 / L3 / L3-real)"
         ],
-        "strict": true
+        "strict": false
       },
       "restrictions": "none"
     },
@@ -39,23 +40,18 @@
         "dismiss_stale_reviews": false,
         "require_code_owner_reviews": false,
         "require_last_push_approval": false,
-        "required_approving_review_count": 1
+        "required_approving_review_count": 0
       },
-      "required_status_checks": {
-        "contexts": [
-          "test (L0 / L1+L2 / L3)"
-        ],
-        "strict": true
-      },
+      "required_status_checks": null,
       "restrictions": "none"
     }
   },
   "repository": "yomote/mind-inbox",
   "schemaVersion": 1,
   "security": {
-    "code_scanning_default_setup": "not-configured",
-    "dependabot_alerts": "disabled",
-    "dependabot_security_updates": "disabled",
+    "code_scanning_default_setup": "configured",
+    "dependabot_alerts": "enabled",
+    "dependabot_security_updates": "enabled",
     "secret_scanning": "enabled",
     "secret_scanning_push_protection": "enabled"
   }
