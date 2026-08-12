@@ -92,6 +92,7 @@ Codex が応答できない間 ([#345](https://github.com/yomote/mind-inbox/issu
 - 出力 (verdict + findings 表 + inline 本文) を PR に**投稿するのは呼び出し元** — judge は書かない
 - diff に認証・入力検証・秘密情報・インフラ (Bicep / workflow)・依存追加が含まれる場合は、あわせて security-reviewer も起動する (code-reviewer 側はセキュリティの深掘りを委譲する規約)
 - 修正 push 後は**同じ subagent を再起動して再レビュー**し、同じ指摘が再提起されないことを確認してから PM がスレッドを resolve する (CLAUDE.md の PO 決定 / 2026-08-12 改訂)
+- **resolve する前に「段」を見る** ([#351](https://github.com/yomote/mind-inbox/issues/351) Phase 0 — 受け取り方の修正)。judge は finding ごとに `T1` / `T2` / `T3` を宣言する ([rubric R4-b](../../.github/claude/review-rubric.md))。**`T1` / `T2` の指摘を点修正で resolve しない** — その場合は機構 (型・ラッパ・lint・契約テスト) に落とすか、落とす Issue を分ける。実測 62 件のうち **35.5% は機構に落とせた**のに点修正で畳まれ、`createdAt` のソート汚染 ([#274](https://github.com/yomote/mind-inbox/issues/274)) は同じ型のバグが**今も 2 箇所生きている**。**T4 (一回性の点修正) は使わない**
 - **Codex が復帰したら指摘者を Codex に戻す** (`REVIEW_GATE_REQUIRE_CODEX` を true のまま、[巡回 Routine を退役](#巡回-routine-を退役させる-codex-復帰時))
 
 #### 巡回手順 (このリポジトリの正典 — Routine もこれを読んで従う)
