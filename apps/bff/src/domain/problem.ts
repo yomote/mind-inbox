@@ -6,7 +6,7 @@
  * 型の真実は `../trpc/domain.ts` (zod)。仕様の明文化は docs/design/domain_rules.md。
  */
 
-import type { GroupingOutcome, Mention, Problem } from "../trpc/domain";
+import type { GroupingOutcome, Mention, Problem, StoredMention } from "../trpc/domain";
 
 export function dedupe(values: string[]): string[] {
   return [...new Set(values)];
@@ -48,11 +48,19 @@ function isLater(a: string, b: string): boolean {
  *   docs/design/domain_rules.md §3)。追記 Mention の日時を無条件採用すると、
  *   過去日時の Mention が後から届いたとき (再送・バックフィル・時計ずれ) に逆行して
  *   休眠判定・並び順が狂う。relink / merge と同じく `withDerived` に委譲して統一する。
+ * - 再オープンさせた Mention には来歴 `reopenedProblem: true` を残す (#283)。追記後は必ず
+ *   `open` なので「どの Mention が戻したか」は状態から再構成できず、同じ下書きの再送で
+ *   確定応答の「再燃」表示だけが消えてしまう。
  */
 export function appendMention(existing: Problem, mention: Mention): Problem {
+  // 再燃は「**この** Mention が棚卸し済みを open に戻した」という一回きりの事実。追記後の
+  // Problem (status: open / Mention 保存済み) からは再構成できないので、Mention 自身に
+  // 来歴として残す — 同じ下書きの再送でも確定応答を同じにするため (#283)。
+  const stored: StoredMention =
+    existing.status === "open" ? mention : { ...mention, reopenedProblem: true };
   return withDerived({
     ...existing,
-    mentions: [...existing.mentions, mention],
+    mentions: [...existing.mentions, stored],
     ...(existing.status === "open"
       ? {}
       : { status: "open" as const, resolvedAt: null, shelvedAt: null }),

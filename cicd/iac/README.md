@@ -307,12 +307,12 @@ frontend 側で `VITE_VOICEVOX_BASE_URL` に設定してください。
 
 **欠けると deploy はガードで静かに skip します**（run は成功のまま）。「成功 run = デプロイ済み」ではない原因がこれです。
 
-| 変数 | 用途 | 欠けるとどうなるか |
-| --- | --- | --- |
-| `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` | OIDC ログイン（[ADR 0009](../../docs/adr/0009-on-demand-cd-via-github-actions-oidc.md)） | `Guard — OIDC 設定済みか` が false → **全ステップ skip（run は成功）** |
-| `AUTO_DEPLOY_ENABLED` | push での自動デプロイ解禁（[ADR 0013](../../docs/adr/0013-standing-low-cost-dev-env-with-auto-deploy.md)） | `true` 以外だと push デプロイを skip（run は成功） |
-| `REVIEW_GATE_REQUIRE_CODEX` | コード PR に Codex レビューを必須にするか | 門の判定が緩む |
-| `CODEX_RETRIGGER_MINUTES` | Codex 再依頼の間隔 | 既定値で動く |
+| 変数                                                            | 用途                                                                                                       | 欠けるとどうなるか                                                     |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` | OIDC ログイン（[ADR 0009](../../docs/adr/0009-on-demand-cd-via-github-actions-oidc.md)）                   | `Guard — OIDC 設定済みか` が false → **全ステップ skip（run は成功）** |
+| `AUTO_DEPLOY_ENABLED`                                           | push での自動デプロイ解禁（[ADR 0013](../../docs/adr/0013-standing-low-cost-dev-env-with-auto-deploy.md)） | `true` 以外だと push デプロイを skip（run は成功）                     |
+| `REVIEW_GATE_REQUIRE_CODEX`                                     | コード PR に Codex レビューを必須にするか                                                                  | 門の判定が緩む                                                         |
+| `CODEX_RETRIGGER_MINUTES`                                       | Codex 再依頼の間隔                                                                                         | 既定値で動く                                                           |
 
 **確認する**（設定画面: `Settings > Secrets and variables > Actions > Variables`）:
 
@@ -344,12 +344,12 @@ gh secret list -R yomote/mind-inbox   # GITHUB_TOKEN は表示されない（自
 
 移行前に確認すべき制約（[一次ソース](https://learn.microsoft.com/en-us/graph/templates/bicep/limitations)）:
 
-| 制約 | このリポジトリへの影響 |
-| --- | --- |
+| 制約                                                                           | このリポジトリへの影響                                                                                                                              |
+| ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **アプリのパスワード（`passwordCredentials`）が非対応**。`keyCredentials` のみ | **ここが分かれ目。** クライアントシークレットが要る構成なら `DeploymentScript` が残る。SPA + フェデレーション資格情報 (OIDC) で済むなら宣言化できる |
-| **what-if が使えない**（拡張リソース全般） | [2-1. 事前確認](#2-1-事前確認build--what-if) の網から Graph 部分が外れる。事前確認の手順を見直す必要がある |
-| role-assignable group が非対応 | 該当なし |
-| Deployment stacks 非対応 | 該当なし |
+| **what-if が使えない**（拡張リソース全般）                                     | [2-1. 事前確認](#2-1-事前確認build--what-if) の網から Graph 部分が外れる。事前確認の手順を見直す必要がある                                          |
+| role-assignable group が非対応                                                 | 該当なし                                                                                                                                            |
+| Deployment stacks 非対応                                                       | 該当なし                                                                                                                                            |
 
 - 現行の手順: [3. Entra 認証を有効化する](#3-entra-認証を有効化する) / [Runbook](../../docs/runbooks/entra-spa-auth-and-budget.md)
 - 確認: `az ad app list --display-name <app-name>` / Functions 側は `ops-inspect` の `azure-resources`（EasyAuth の実測値が出る）
@@ -359,12 +359,12 @@ gh secret list -R yomote/mind-inbox   # GITHUB_TOKEN は表示されない（自
 
 **現状ここが宣言の外にあるため、bicep から環境を作り直しても、デプロイが走るまで設定が入りません。**
 
-| スクリプト | 何を設定しているか |
-| --- | --- |
-| `cicd/scripts/deploy/deploy-ai-agent.sh` | Container App の環境変数（`--set-env-vars`）/ **OpenAI ロール付与**（`az role assignment create`） |
-| `cicd/scripts/deploy/deploy-voicevox-wrapper.sh` | Container App の環境変数 |
-| `cicd/scripts/deploy/deploy-backend.sh` | Function App の appsettings（`az functionapp config appsettings set`） |
-| `cicd/scripts/deploy/provision.sh` | `manageAiAgentOpenAiRoleAssignment=false` — **bicep に宣言させない逃げ道**（PR #290 の応急処置。本治療は PR #292） |
+| スクリプト                                       | 何を設定しているか                                                                                                 |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `cicd/scripts/deploy/deploy-ai-agent.sh`         | Container App の環境変数（`--set-env-vars`）/ **OpenAI ロール付与**（`az role assignment create`）                 |
+| `cicd/scripts/deploy/deploy-voicevox-wrapper.sh` | Container App の環境変数                                                                                           |
+| `cicd/scripts/deploy/deploy-backend.sh`          | Function App の appsettings（`az functionapp config appsettings set`）                                             |
+| `cicd/scripts/deploy/provision.sh`               | `manageAiAgentOpenAiRoleAssignment=false` — **bicep に宣言させない逃げ道**（PR #290 の応急処置。本治療は PR #292） |
 
 **確認する**（実環境の実際の値を読む）:
 

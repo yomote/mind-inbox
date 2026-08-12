@@ -58,7 +58,7 @@
 **現行仕様**:
 
 1. **`mentionCount` は常に `mentions.length` から導出する**。ai-agent の申告値 (`grouping.mentionCount`) は使わない (候補集合のズレ・再送で実体と食い違うため)。追記 (`appendMention`) / 新規 (`problemFromMention`) / 統合 (`mergeProblems`) / 再リンク (`withDerived`) のすべての経路で成り立つ
-2. **再言及の追記は必ず `open` に戻す** (再燃自動 / domain_model §4.2)。棚卸し日時 (`resolvedAt` / `shelvedAt`) も消す
+2. **再言及の追記は必ず `open` に戻す** (再燃自動 / domain_model §4.2)。棚卸し日時 (`resolvedAt` / `shelvedAt`) も消す。**再燃させた Mention には来歴 `reopenedProblem: true` を残す** — 追記後の Problem は必ず `open` なので「この Mention が戻したのか」は状態から再構成できず、同じ下書きの再送で確定応答の「再燃」表示だけが消えてしまう (#283)
 3. 統合は Mention を取りこぼさず移し (`problemId` を統合先に付け替え)、tags は重複除去した和集合、plans は連結
 4. **`lastMentionedAt` は常に全 Mention の `createdAt` の最大値** — 追記 (`appendMention`) / 新規 (`problemFromMention`) / 統合 (`mergeProblems`) / 再リンク (`withDerived`) のすべての経路で成り立つ (実装は追記経路も `withDerived` に委譲して統一)
    - **裁定済み (2026-08-11 PO)**: 「最終言及」は**語られた日時 (createdAt) の最大**であり、「最後に追記された事実」ではない。旧実装は追記経路だけ「追記した Mention の `createdAt` を無条件採用」で、過去日時の Mention が後から届く (再送・バックフィル・時計ずれ) と `lastMentionedAt` が逆行し、休眠判定 (domain_model §4.2 の派生ビュー) や並び順が狂いえた
