@@ -18,6 +18,14 @@
 - **持ち越し**: {未消化の項目・次回に回した判断。無ければ「なし」}
 ```
 
+## 2026-08-12 — debrief
+
+- **対象**: [ADR 0048](../adr/0048-child-sessions-are-usable-again-with-a-one-way-poke-channel.md) (子セッションの復活と親子セッション間通信)。PO の質問「Claude のルーティン一覧は見えるか / コセッションは作れるか」から実測を始め、[ADR 0033](../adr/0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) の前提が崩れていることが判明したため起案。Proposed 5 本 (0041 / 0042 / 0045 / 0047 / 0048) のうち **0048 のみを裁定**する方針を PO が選択
+- **決定**: ADR 0048 を **Accepted**。分配の基準を ADR 0033 の「作業の大きさ」から「**往復の回数**」へ置き換え、担い手を 3 択 (親が直接 / subagent / 子セッション) にする。あわせて `.claude/settings.json` の allow 修正 (MCP サーバの二重名 + 破壊的ツールのツール単位指定) と Runbook [`child-sessions.md`](../runbooks/child-sessions.md) を導入
+- **学びメモ**: 理解確認は**エージェント側の質問が不良で成立しなかった**。1 つの解説に表を 2 つ出したうえで「表のどこに当てはまるか」と聞いたため、PO から「表ってどれかよく分かんないね」と返った。**指示語で参照した表・図が複数あるときは、名前で特定するか、質問の直前に対象を 1 つだけ再掲する**。答え (レビュー指摘 5 件対応 = subagent。子だと往復 5 回 × 1 分 + 聞き返せない) は質問を撤回して直接解説し直した
+- **特記**: 今回の最大の収穫は経路そのものより**「送信 API の成功 ≠ 配送」を実測で切り分けたこと**。`fire_trigger` は 3 方向 (親→子 idle / 子→親 / 自己宛) すべてで成功を返しながら `last_fired_at` すら付かず、一方 `create_trigger` + `run_once_at` は発火 14:54:00 → 子の受信 14:54:16 → [Issue #353 への投稿 14:54:26](https://github.com/yomote/mind-inbox/issues/353#issuecomment-5268488790) と end-to-end で通った。**危うく「送れた」で報告するところだった** (CLAUDE.md「取れなかったものを異常なしと書かない」の典型例)。もう 1 件、`last_fired_at` の反映遅れで「14:53 予定が 14:56 時点で未発火」と誤読しかけた — **発火判定は trigger のフィールドではなく子の `updated_at` と GitHub 上の成果で行う**を Runbook に明記。承認プロンプトの原因も 2 段構えで、(1) 同一 MCP サーバが対話セッションでは `Claude_Code_Remote` / 子では UUID `bf7c680d-...` の**二重名**、(2) サーバ単位 allow では `delete_trigger` が止まりツール単位の明示が必要、と判明。**`settings.json` は実行中セッションに反映されない**ため、main に入るまで承認は飛び続ける
+- **持ち越し**: **Proposed ADR 4 本 (0041 / 0042 / 0045 / 0047) の裁定が次回に残っている。4 本とも実装は既に main に入っており、裁定は「追認か巻き戻しか」になる**。[#356](https://github.com/yomote/mind-inbox/issues/356) の開発体制 (design-gate 対象 / `SendMessage`・`ListAgents` によるチームメイト連携はこの環境で使えないため subagent + 子セッションの 2 層で組む)。[#353](https://github.com/yomote/mind-inbox/issues/353) の `fire_trigger` 未配送の原因究明 (即時化できれば往復が 1 分 → 秒)。**PR #324 のタイトルが「ADR 0046」だが実体は 0047** という採番衝突の痕跡
+
 ## 2026-08-12 — design-gate
 
 - **対象**: インフラ整備の 3 件を 1 本にまとめた [ADR 0046](../adr/0046-environment-rebuildable-from-declaration.md) 起案 — [#302](https://github.com/yomote/mind-inbox/issues/302) (ライフサイクル 3 層分断) / [#303](https://github.com/yomote/mind-inbox/issues/303) (設定を宣言に一本化・Entra 含む) / [#306](https://github.com/yomote/mind-inbox/issues/306) (週次プロビジョンテスト)。ADR 0013「常設 dev 環境」の解釈追補を含む
