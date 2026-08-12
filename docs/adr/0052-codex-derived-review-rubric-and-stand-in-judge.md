@@ -1,0 +1,114 @@
+# 0052. PR レビューの基準を Codex の実レビュー 215 件から導出し、Codex 不在の間は代役 judge が読む
+
+- Status: Proposed
+- Date: 2026-08-12
+- Deciders: yomote (PO)
+- Consulted: — (Codex は本件の対象であり、利用上限で応答不能)
+- Informed: —
+
+Technical Story: [Issue #345](https://github.com/yomote/mind-inbox/issues/345)
+
+## Context and Problem Statement
+
+2026-08-12 10:44Z、Codex が **code review の利用上限に到達**し「You have reached your Codex usage limits for code reviews」を返した ([Issue #345](https://github.com/yomote/mind-inbox/issues/345))。技術レビューを Codex が担う構造 ([ADR 0035](0035-role-split-across-agents-and-actions.md) D4) と、**レビュースレッドの resolve は指摘者 (Codex) の再レビューが OK を出してから**という 2026-08-11 の PO 決定 (CLAUDE.md) が組み合わさり、**Codex が黙ると修正を push してもスレッドが畳めず、コード PR のマージ経路が閉じる**。復旧は人間の課金操作か上限回復待ちで、エージェントからは動かせない。
+
+自前の PR レビュー rubric ([`.github/claude/review-rubric.md`](../../.github/claude/review-rubric.md) / [ADR 0008](0008-pr-review-via-cloud-routine.md) 由来の軸 A/B/C) は残っていたが、PO 評価は「**Codex ほど洗練されていない**」だった。この評価は測られていなかった — [ADR 0035](0035-role-split-across-agents-and-actions.md) の `:132` に「Codex の指摘の質 — 最初の 3〜5 本で『Claude が見落としたものを拾えたか』を分類して測る」が**未決のまま残り続けていた**。
+
+そこで先に測った ([`docs/reviews/codex-review-analysis-2026-08-12.md`](../reviews/codex-review-analysis-2026-08-12.md))。**2026-08-10 13:55 UTC 〜 2026-08-12 10:39 UTC の約 45 時間・46 PR・Codex の inline finding 215 件 (P1 58 / P2 155 / P3 2)** を全件読んだ結果:
+
+- **既存 rubric の軸 C (PR 本文の評価) は 215 件中 0 件。** Codex は PR 本文を根拠に引用はするが、本文自体を finding にしたことが一度もない
+- **軸 B の「簡素化」「過剰な抽象化 / 既存ユーティリティの再実装」も 0 件。** スタイル・命名・可読性の指摘も 0 件
+- **既存 rubric のどの軸にも無い型が最大勢力だった** — 「**宣言と参照面の乖離**」(決定・型・既定値を変えたのに、それを引用している別ファイルが古い主張のまま残る) が **~60 件 = 全体の 28%**。既存の軸 A-3 は「UI なら MDX / 運用手順なら Runbook」しか見ておらず、射程が狭すぎた
+- 「洗練」の実体は観点の網羅ではなく**書き方**だった — 215 件すべてが「命令形の見出し + 条件 → 挙動 → 誤った帰結 + 反証可能な根拠 + 2 択の remedy」という同一テンプレートに乗っており、感想文 (「〜が気になります」) は 0 件
+
+つまり「洗練されていない」の正体は測定可能で、**書き直せる**。
+
+## Decision Drivers
+
+- **Codex 不在でマージ経路が止まらないこと** — 復旧は人間依存で、待つ間もコードは書かれる
+- **基準を推測ではなく実測から作ること** — ADR 0035 `:132` の未決を今度こそ実行する
+- **独立性の劣化を隠さないこと** — 代役は Claude であり、ADR 0035 D4 の前提 (実装者とレビュアーは別モデル系統) を満たさない
+- **Codex が戻ったとき素直に戻せること** — 代役が居座って本来の分離を溶かさない
+- 判断の根拠が後から検証できること (原文引用がリポジトリに残ること)
+
+## Considered Options
+
+- Option A: rubric を実データ由来に全面改訂し、それを読む代役 judge (`code-reviewer` subagent) を新設する
+- Option B: 既存 rubric のまま、`/code-review` skill で PM が回す (rubric は直さない)
+- Option C: Codex の復旧を待つ (レビュー必須を一時的に外し、マージだけ通す)
+
+## Decision Outcome
+
+Chosen option: **"Option A"**。**PO が 2026-08-12 に選択肢形式で「置き換える」「分析はリポジトリに残す」を選択した** ([ADR 0020](0020-hitl-choice-format-and-needs-human-queue.md))。
+
+決定の内訳:
+
+- **D1 `REVIEW_GATE_REQUIRE_CODEX` を false にする** (PO がクリック)。Codex レビューの有無を required check の条件から外し、マージ経路を開ける。Codex 復帰時に true へ戻す
+- **D2 `.github/claude/review-rubric.md` を実データ由来の内容に全面置換する。** ファイル名は変えない ([`security-rubric.md`](../../.github/claude/security-rubric.md) `:113` 等から参照されているため)。構成は「指摘の書き方 (R1〜R7) → Severity → 何を探すか (C1〜C9・頻度順) → 再レビューの規律 (R8〜R10) → 自制ルール (R11〜R17) → 出力形式」。**各項目に Codex の原文引用を根拠として添える** — 抽象カテゴリから演繹した項目を 1 つも作らない
+- **D3 実測 0 件だった観点を落とす** — 旧・軸 C (PR 本文の評価) と軸 B の「簡素化 / 過剰抽象 / 再実装」。落とした事実と理由は rubric 本文に 1 行残す (黙って消すと、次に誰かが同じ観点を「抜けている」と足し戻す)
+- **D4 代役 judge `.claude/agents/code-reviewer.md` を新設する** — [ADR 0019](0019-independent-judge-agents-security-qa-release.md) の judge 群と同じ形 (新品コンテキストの subagent / rubric-as-truth / コードを変更しない / 投稿は呼び出し元)。セキュリティの深掘りは従来どおり security-reviewer へ委譲する
+- **D5 CLAUDE.md の resolve 規律を書き換える** — 「指摘者 (Codex) の再レビューが OK を出してから」を「代役 judge (code-reviewer) の再レビューが OK を出してから」に。**2026-08-11 の PO 決定を上書きする変更**であることと、Codex 復帰時の戻し方を明記する
+- **D6 分析の全文をリポジトリに残す** — [`docs/reviews/codex-review-analysis-2026-08-12.md`](../reviews/codex-review-analysis-2026-08-12.md)。rubric の各項目が「なぜ存在するか」の唯一の説明が原文引用なので、rubric だけ残して根拠を捨てない
+
+### 動作検証条件 (ADR 0018 — 実測で確かめる)
+
+**この ADR は「実装した」では実装されたと言えない。** 次で測る:
+
+1. **次の 5 本のコード PR でこの judge を回し、Codex が過去に拾った類の欠陥 (C1〜C9) を拾えたかを 1 件ずつ突き合わせる** — とくに最大勢力の C1 (宣言と参照面の乖離 / 28%) を、diff の外のファイルを引く形で拾えるか
+2. 出力が rubric の形式を守っているか (命令形の見出し / 根拠が 3 種のどれか / remedy 2 択 / 3〜6 文) を、投稿された finding で確認する
+3. **偽陽性の率**を数える — 「開いていないファイルを根拠にした」「宣言を実環境と同一視した」(R11 / R12 違反) が出たら rubric に条件を足す
+4. **収束するか** — Codex は #288 で 25 件・#258 で 20 件まで再提起を続け全て PM が打ち切った。代役が R15 (収束宣言) に従い 3 ラウンド以内に終えられるかを見る
+5. Codex 復帰後、同じ PR に両方を当てて**代役が落とした指摘**を数える (独立性の劣化を数字で持つ)
+
+1 と 5 が満たせないなら、この ADR は Rejected に倒す。
+
+### Positive Consequences
+
+- Codex 不在でもコード PR のレビューと resolve が回り、マージ経路が閉じない
+- レビュー基準が**実測された指摘の型**に基づく (「洗練」が言葉ではなく形式になった)
+- ADR 0035 `:132` の未決が閉じる。以後「Codex の指摘の質」は 215 件の分類として引用できる
+- 実測 0 件の観点が落ちた分、judge が読む量と出すノイズが減る
+- Codex 復帰後も rubric は残り、**Codex 自身の質のばらつきを測る物差し**になる (原文引用が基準として残っているため)
+
+### Negative Consequences
+
+- **⚠️ Claude が Claude をレビューしても独立性は回復しない。** [ADR 0035](0035-role-split-across-agents-and-actions.md) `:56` (D4) の根拠は「**同じモデルは同じ盲点を持つ**」であり、実装も代役レビューも Claude である以上この前提は満たされない。**これは Codex の代役ではなく、Codex が戻るまで目隠しを薄くする措置**である。rubric がどれだけ精緻でも、実装時に見えなかったものは同じモデルのレビューでも見えない可能性が高い。Codex が復帰したら D1 を戻し、代役は「Codex を待つ間の埋め合わせ」と「Codex 対象外の PR」に退く
+- **起動を引く自動経路が無い。** Codex は PR に対して自動で起動していたが、この judge は**人か PM セッションが呼ばないと走らない**。呼び忘れれば静かにレビュー無しで進む (「沈黙と正常が区別できない」形 — CLAUDE.md が禁じている状態)。自動起動 (Actions か Routine) は別 Issue
+- **rubric が長い。** judge が毎回読むコストが増える (原文引用を根拠として残す代償)。引用を削れば「なぜこの項目があるか」が失われるので、削るなら項目ごと落とす
+- 45 時間・46 PR という**短い窓**から導出している。大規模リファクタリング PR / 新機能の初回設計 PR / 依存更新 PR (dependabot は全件レビュー対象外だった) に対する振る舞いは観測できておらず、rubric に書けていない
+- Codex の弱点 (R11〜R14 の自制ルール) は写せるが、Codex の強み (`gpg` / `curl` / `git` を実際に叩いて数値で示す) は**代役が実際にコマンドを叩かないと再現しない**。rubric に書いてあることと実行することは別
+
+## Pros and Cons of the Options
+
+### Option A: rubric を実データ由来に全面改訂し、代役 judge を新設する
+
+215 件から指摘の型を導出して rubric を書き直し、それを読む subagent を置く。
+
+- Good, because 「洗練されていない」という評価に対して、測った差分 (軸 C = 0 件 / 軸 B 簡素化 = 0 件 / 未カバーの C1 = 28%) で直接答えている
+- Good, because 基準がファイルとして残るので、Codex 復帰後も両者を同じ物差しで比べられる
+- Good, because judge が subagent なので、実装セッションのコンテキストを引き継がない ([ADR 0019](0019-independent-judge-agents-security-qa-release.md) と同じ形)
+- Bad, because 独立性 (別モデル系統) は回復しない — 埋め合わせであることを毎回明示する必要がある
+- Bad, because 自動起動が無く、呼ばれなければ沈黙する
+
+### Option B: 既存 rubric のまま `/code-review` skill で回す
+
+観点は変えず、実行者だけ差し替える。
+
+- Good, because 変更が最小 (ファイルを 1 つも足さない)
+- Bad, because PO の「洗練されていない」がそのまま残る。実測でも軸 C / 簡素化が 0 件、最大勢力の C1 が未カバーと分かっている基準を、根拠を持ったまま使い続けることになる
+- Bad, because ADR 0035 `:132` の未決が閉じない
+
+### Option C: Codex の復旧を待つ
+
+レビュー必須を一時的に外し、マージだけ通す。
+
+- Good, because 独立性を偽装しない (レビューが無いことが明白)
+- Bad, because 復旧時刻が人間の課金操作依存で、その間に書かれるコードは**誰にも読まれずに main へ入る**
+- Bad, because 「上限に当たる → 門を開ける」を前例にすると、門が有限資源の都合で開く運用になる
+
+## Links
+
+- Issue: [#345 Codex のコードレビュー利用上限に到達](https://github.com/yomote/mind-inbox/issues/345)
+- 実測データ (この判断の一次資料): [`docs/reviews/codex-review-analysis-2026-08-12.md`](../reviews/codex-review-analysis-2026-08-12.md)
+- 成果物: [`.github/claude/review-rubric.md`](../../.github/claude/review-rubric.md) / [`.claude/agents/code-reviewer.md`](../../.claude/agents/code-reviewer.md)
+- 関連 ADR: [0035](0035-role-split-across-agents-and-actions.md) (役割分担 — D4 「同じモデルは同じ盲点を持つ」/ `:132` の未決を実行) / [0008](0008-pr-review-via-cloud-routine.md) (旧・PR レビュー Routine と軸 A/B/C — **Superseded by 0035**) / [0019](0019-independent-judge-agents-security-qa-release.md) (独立 judge / rubric-as-truth) / [0036](0036-merge-gate-as-required-check-and-pm-cadence.md) (マージの門 / `review-gate`) / [0042](0042-pm-accept-carryover-and-merge-queue.md) (pm-accept の引き継ぎ) / [0018](0018-runtime-verification-in-the-loop.md) (動作検証をループに組み込む) / [0020](0020-hitl-choice-format-and-needs-human-queue.md) (選択肢形式の裁定)

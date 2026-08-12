@@ -123,3 +123,4 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0047](0047-security-posture-in-layers-free-tier-first.md) — セキュリティ対策を「無料枠優先 + 責任分担が重ならない層」で段階導入する (public リポジトリの無料枠を先に使い切り、アプリ内側の穴は design-gate 経由で塞ぐ / ADR 0038 の続き) — **Proposed**
 - [0050](0050-roles-and-lifetimes.md) — 担い手の役割は、能力ではなく寿命で決める (窓口 PM はファイルを書かない / teammate は Issue に落として死ぬ / PMO は機械 / Issue #348) — **Proposed**
 - [0051](0051-review-gate-verdict-on-workflow-run.md) — マージの門の判定を `workflow_run` に移し、門の定義を被判定者 (PR) から切り離す (ADR 0036 の強制力を機構として成立させる / Issue #331) — **Proposed**
+- [0052](0052-codex-derived-review-rubric-and-stand-in-judge.md) — PR レビューの基準を Codex の実レビュー 215 件から導出し、Codex 不在の間は代役 judge が読む (独立性は回復しない埋め合わせ / Issue #345) — **Proposed**
