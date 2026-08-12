@@ -635,6 +635,22 @@ def has_pm_accept(comments: list[tuple[str, str]], head_sha: str) -> bool:
     )
 
 
+def _without_quotes(body: str) -> str:
+    """引用行 (`>` 始まり) を落とした本文を返す。
+
+    マーカーが HTML コメント = **画面に見えない**ため、第三者が不可視の
+    `<!-- standin-review --> <sha>` を投稿し、権限保持者が GitHub の
+    "Quote reply" で返信すると、raw markdown がそのまま `> ` 付きで複製されて
+    **association が NONE → OWNER に化け、誰もレビューしていないのに門が開く**
+    (security-reviewer が実測: 第三者単体は False → OWNER の引用返信で True)。
+    `[pm-accept]` は可視文字列なので誤爆が目に見えるが、こちらは PR 画面に
+    痕跡が一切出ない。よって**引用された本文は数えない**。
+    """
+    return "\n".join(
+        line for line in body.splitlines() if not line.lstrip().startswith(">")
+    )
+
+
 def has_standin_review(
     comments: list[tuple[str, str]],
     head_sha: str,
@@ -663,10 +679,12 @@ def has_standin_review(
     if carried_short:
         accepted.add(carried_short)
     return any(
-        STANDIN_REVIEW_MARKER in body
-        and any(s in body for s in accepted)
+        STANDIN_REVIEW_MARKER in own
+        and any(s in own for s in accepted)
         and (association or "").upper() in TRUSTED_ASSOCIATIONS
-        for body, association in comments
+        for own, association in (
+            (_without_quotes(body), assoc) for body, assoc in comments
+        )
     )
 
 

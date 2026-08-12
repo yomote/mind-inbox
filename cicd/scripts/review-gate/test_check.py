@@ -155,6 +155,33 @@ def test_l1_代役レビューはマーカーとshaの両方が要る() -> None:
     assert not has_standin_review([(f"{HEAD[:7]} を見た", "OWNER")], HEAD)
 
 
+def test_l1_引用された代役マーカーは数えない() -> None:
+    """権限保持者が第三者の投稿を引用しても門が開かないこと。
+
+    無いと何が静かに通るか:
+        マーカーは HTML コメントで**画面に見えない**。第三者が不可視の
+        `<!-- standin-review --> <sha>` を投稿し、権限保持者が GitHub の
+        "Quote reply" で返信すると raw markdown が `> ` 付きで複製され、
+        association が NONE → OWNER に化けて **誰もレビューしていないのに
+        門が開く** (security-reviewer が PR #361 で実測した経路)。
+        `[pm-accept]` と違い可視の痕跡が PR 画面に残らないので、
+        後から気づく手段も無い。
+    """
+    quoted = (
+        f"> {STANDIN_REVIEW_MARKER}\n> 代役レビュー ({HEAD[:7]}): blocker なし\n\n"
+        "ありがとうございます、確認します",
+        "OWNER",
+    )
+    assert not has_standin_review([quoted], HEAD)
+    assert not decide(HEAD, ["apps/bff/x.ts"], [ACCEPT_OK, quoted], 0, False, True).ok
+    # 引用行に混ざっていても、自分の行に正しく書いてあれば数える
+    mixed = (
+        f"{STANDIN_REVIEW_MARKER}\n代役レビュー ({HEAD[:7]}): blocker なし\n\n> 引用\n",
+        "OWNER",
+    )
+    assert has_standin_review([mixed], HEAD)
+
+
 def test_l1_第三者の代役レビューは数えない() -> None:
     """権限保持者以外の投稿は代役レビューと数えないこと。
 
