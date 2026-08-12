@@ -20,6 +20,12 @@ UUID 名 `bf7c680d-...` として見える**。片方しか書いていないと
 `create_session` / `archive_session` / `interrupt_session` / `delete_trigger` / `update_trigger` は
 両方の名前でツール単位に列挙する。
 
+**`permissions.deny` も要る。** `mcp__github` をサーバ単位で許可すると、PR を経由せずリポジトリを
+直接書き換える `delete_file` / `push_files` / `create_or_update_file` まで通ってしまうので、この 3 つは
+`deny` に置く (代替は commit + PR なので、塞いでも仕事は止まらない)。**`ask` は使わないこと** —
+当番 PM Routine や子セッションには**クリックする人間がいない**ので、`ask` は永久停止になる。
+`deny` はサーバ単位の `allow` に優先する (2026-08-12 実測)。
+
 > **`settings.json` の変更は、実行中のセッションには反映されない。** 効くのは次に開くセッションから。
 > 「直したのにまだ承認が飛ぶ」の大半はこれ。**main に入るまでは、新しく開いたセッションでも
 > 承認が飛び続ける** (子は clone したブランチの設定を読むため、ブランチを指定した子だけは先に効く)。
@@ -106,7 +112,7 @@ get_session(session_id)
 | 値 | 意味 | 対処 |
 | --- | --- | --- |
 | `review_ready` | 1 ターン終えて待機 | 成果を回収する |
-| `need_input` | **承認プロンプトで停止** | `needs_action` のツール名を `.claude/settings.json` の allow に足して**起こし直す**。その場しのぎで user に承認させない |
+| `need_input` | **承認プロンプトで停止** | `needs_action` のツール名を `.claude/settings.json` の `allow` に足して**起こし直す**。その場しのぎで user に承認させない。**`deny` に載っているツール (下の §前提) は足さない** — 塞いだのは意図なので、子には commit + PR に切り替えさせる |
 | `failed` | 落ちた | ログは取れないので、指示を直して起こし直す |
 
 `interrupt_session` で止められるが、**割り込んだセッションは `failed` に落ちて以後メッセージを受け取らなくなる**

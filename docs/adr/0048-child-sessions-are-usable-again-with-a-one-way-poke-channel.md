@@ -59,9 +59,15 @@ Chosen option: **"Option B"**。`create_session` が通るようになった以�
   - **片方の名前だけだと、もう片方の系統で毎回承認プロンプトが出る** — 従来 UUID 名の `list_triggers` 1 個だけが許可されていたのが、承認が飛び続けていた原因
   - **サーバ単位 (`mcp__<server>`) の allow だけでは `delete_trigger` が止まった。** ツール単位で明示して初めてゼロになった (2026-08-12 実測)
   - **`settings.json` の変更は実行中のセッションには反映されない。** 効くのは次に開くセッションから。「直したのにまだ承認が飛ぶ」の大半はこれ。**起動済みの子にも効かない** — 子は clone 時点のブランチの設定を読むので、allow を足したら子を起こし直す
-  - **`mcp__github` もサーバ単位で許可する** (PM ループの主要ツールであり、1 件ずつ承認させると窓口が止まるため)。ただし **PR を経由せずリポジトリを直接書き換える系と、レビューの解決は `ask` に落とす** — `delete_file` / `push_files` / `create_or_update_file` / `resolve_review_thread`。前 3 つは PR とレビューの経路を丸ごと迂回でき、`resolve_review_thread` は CLAUDE.md が「Codex の再レビューが OK を出してから」と定めた判断を機械が先回りできてしまう
+  - **`mcp__github` もサーバ単位で許可する** (PM ループの主要ツールであり、1 件ずつ承認させると窓口が止まるため)。ただし **PR を経由せずリポジトリを直接書き換える 3 つは `deny` にする** — `delete_file` / `push_files` / `create_or_update_file`。いずれも PR とレビューの経路を丸ごと迂回できるうえ、**代替手段がある** (commit して PR を出せばよい) ので、塞いでも仕事が止まらない
+  - **`ask` は使わない。`deny` を使う。** この設定は**人間が張り付いていないセッションにも適用される** (当番 PM Routine / `create_session` の子)。`ask` はクリックする人がいないと `need_input` で永久に止まり、**当番の巡回レポートが黙って出なくなる** — watchers.json が検出しようとしている「沈黙と正常の区別がつかない」状態そのものになる。`deny` は人間の有無に関わらず決定的に落ちる
+  - **`resolve_review_thread` は塞がない。** 当番 PM Routine の職務に「スレッドを resolve する」が明示的に含まれており、塞ぐと当番が止まる。CLAUDE.md の「resolve は Codex の再レビューが OK を出してから」は**権限ではなく運用規約で守る**
+  - **`deny` がサーバ単位 `allow` に優先することは実測済み** (2026-08-12。`deny` を書いた直後、対話セッションの利用可能ツール一覧から該当 3 つが消えた)
+  - **これは MCP 経路を狭めるだけで、リポジトリ直接書き換えを塞ぎ切ってはいない** — Bash の `git push` は素通しのまま。ここで守っているのは「エージェントがうっかり PR を迂回する」ケースであって、意図した迂回ではない
 
-- **D5 子の生死は `get_session` の `post_turn_summary` で見る。** `status_category` が `need_input` なら権限待ちで止まっている。**`needs_action` に出るツール名を D4 の allow に足す** のが恒久対応で、その場しのぎで user に承認させない
+- **D5 子の生死は `get_session` の `post_turn_summary` で見る。** `status_category` が `need_input` なら権限待ちで止まっている。**`needs_action` に出るツール名を D4 の `allow` に足して子を起こし直す**のが恒久対応で、その場しのぎで user に承認させない。
+
+  ただし **D4 の `deny` に載っているツールは足さない** — 塞いだのは意図であって事故ではない。子がそれを要求して止まったなら、**塞がれていない手段 (commit + PR) に切り替えさせる**のが正しい対処
 
 - **D6 セッション間のメッセージは「`run_once_at` を約 1 分後に置いた Routine を相手に bind する」で送る。** `create_trigger` に `persistent_session_id`(相手のセッション ID) と `run_once_at`(現在時刻 + 1〜2 分) を渡すと、`prompt` が相手セッションに**ユーザー発言として届き、相手はそれを実行する**。子 → 親も同じ手順 (子が親のセッション ID に bind する)。
 
@@ -134,7 +140,7 @@ Chosen option: **"Option B"**。`create_session` が通るようになった以�
 | poke 専用 Routine + `fire_trigger` で送信 | **配送されない**。親 → 子 (idle) / 子 → 親 / 自己宛の 3 方向で `last_fired_at` すら付かず |
 | `run_once_at` 付き Routine を子に bind して送信 | **届く**。`last_fired_at 14:45:58` → 子が 14:46:10 に起動 (`updated_at` が動いた)。**遅延は約 1 分** (D6 の根拠) |
 | 同じ経路で送った指示を子が**実行**するか | **実行する**。`last_fired_at 14:54:00` → 子が 14:54:16 に受信 → 14:54:26 に [#353 へコメント投稿](https://github.com/yomote/mind-inbox/issues/353#issuecomment-5268488790)。**`disconnected` になっていた子も起き直した** |
-| 子が `mcp__github__*` を持つか | **持つ**。承認プロンプト無しで Issue コメントを投稿できた (子 → 親の恒久的な回収経路になる) |
+| 子が `mcp__github__*` を持つか | **持つ**。承認プロンプト無しで Issue コメントを投稿できた (子 → 親の恒久的な回収経路になる)。ただし D4 の `deny` に載せた 3 つ (`delete_file` / `push_files` / `create_or_update_file`) は**塞いである** |
 | 子が自分のセッション ID を知っているか | 知っている (システムプロンプトのセッションリンクから)。返信先として使える |
 | **子 → 親を `run_once_at` で送る** | **未検証**。この向きは通していない (D7)。子 → 親の既定は Issue コメント |
 

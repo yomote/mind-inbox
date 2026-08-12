@@ -16,11 +16,10 @@
       "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__delete_trigger",
       "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__update_trigger"
     ],
-    "ask": [
+    "deny": [
       "mcp__github__delete_file",
       "mcp__github__push_files",
-      "mcp__github__create_or_update_file",
-      "mcp__github__resolve_review_thread"
+      "mcp__github__create_or_update_file"
     ]
   },
   "hooks": {
