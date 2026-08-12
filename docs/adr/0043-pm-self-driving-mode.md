@@ -1,8 +1,8 @@
 # 0043. PM を自走モードにする — 実物指標・週次目標・引く当番・日次ダイジェスト・窓口台帳
 
-- Status: Proposed
+- Status: Accepted (2026-08-12, debrief にて PO 承認)
 - Date: 2026-08-11
-- Deciders: yomote (PO — 方向は 2026-08-11 の対話で合意。Accept は次回 debrief) / PM セッション
+- Deciders: yomote (PO — 方向は 2026-08-11 の対話で合意。2026-08-12 の debrief で Accept) / PM セッション
 - Related: [ADR 0040](0040-project-continuity-three-layers.md) (継続性 3 層 — 本 ADR は D2/D3 の拡張) / [ADR 0021](0021-parent-session-as-pm-orchestrator.md) (hub-and-spoke — 条項の機構化) / [ADR 0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) (分配基準) / [ADR 0036](0036-merge-gate-as-required-check-and-pm-cadence.md) (マージの門と PM リズム) / [ADR 0014](0014-design-comprehension-gate-and-debrief.md) (理解ゲート — 規律は不変)
 
 Technical Story: 当番 Routine (ADR 0040 D2) 初発火後の 2026-08-11 PO レビュー対話。宿題二重起票 [#270](https://github.com/yomote/mind-inbox/issues/270) / status ページ「プロダクトの現在地」PR #281。
