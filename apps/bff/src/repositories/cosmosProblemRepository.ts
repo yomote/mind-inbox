@@ -18,16 +18,42 @@
  * - **DB / コンテナは作らない**。器の宣言は bicep (`cicd/modules/bootstrap-core.bicep`)。
  */
 import type { Container } from "@azure/cosmos";
+import { summarizeIssues } from "../schemaIssues";
 import { ProblemSchema, type Problem } from "../trpc/domain";
 import type { ProblemFilter, ProblemRepository } from "./problemRepository";
 
 /** Cosmos に置く形。ドメイン型 + パーティションキー。 */
 type ProblemDocument = Problem & { userId: string };
 
-/** Cosmos の応答から `_rid` などのシステム属性を落としてドメイン型に戻す。 */
-function toDomain(doc: unknown): Problem {
+/**
+ * Cosmos の応答から `_rid` などのシステム属性を落としてドメイン型に戻す。
+ * 契約に反するドキュメントは **例外にせず `null`** を返す (#313 B-3)。
+ *
+ * 無いと何が起きるか: 1 件でも契約に反する doc が入ると `list()` の parse が投げ、
+ * **Problem 一覧が丸ごと 500 になる**。一覧も詳細も開けないので、画面からその doc を
+ * 消すこともできない (= 自力で復旧できない / poison document)。壊れた 1 件は
+ * 「無かったこと」にして残りを返す方が、可用性としても復旧手段としても上。
+ *
+ * 書き込み側は `aiAgentClient.extract` が保存前に検証するので、ここは最後の防壁。
+ */
+function toDomainOrNull(doc: unknown): Problem | null {
   // z.object は既定で未知のキーを落とすので、`userId` / `_rid` / `_ts` はここで消える。
-  return ProblemSchema.parse(doc);
+  const parsed = ProblemSchema.safeParse(doc);
+  if (parsed.success) return parsed.data;
+
+  // **ドキュメントの中身をログに出さない** — Problem の title / summary / mentions は
+  // 相談の本文そのもの。出すのは「どの doc の」「どこが」「どう壊れているか」だけ
+  // (id は生成された識別子で本文を含まない)。
+  console.warn(
+    `[cosmosProblemRepository] skipping invalid document id=${describeId(doc)} issues=${summarizeIssues(parsed.error)}`,
+  );
+  return null;
+}
+
+/** ログ用。id が文字列でない壊れ方もあるので、その場合は形だけ出す。 */
+function describeId(doc: unknown): string {
+  const id = (doc as { id?: unknown } | null)?.id;
+  return typeof id === "string" ? id : `(${typeof id})`;
 }
 
 export class CosmosProblemRepository implements ProblemRepository {
@@ -48,9 +74,7 @@ export class CosmosProblemRepository implements ProblemRepository {
     // 並び順は SQL 側で明示する (挿入順に依存しない)。
     // lastMentionedAt は ISO 8601 文字列なので辞書順 = 時系列順。
     const conditions = ["c.userId = @userId"];
-    const parameters: { name: string; value: string }[] = [
-      { name: "@userId", value: this.userId },
-    ];
+    const parameters: { name: string; value: string }[] = [{ name: "@userId", value: this.userId }];
     if (filter?.theme) {
       conditions.push("c.theme = @theme");
       parameters.push({ name: "@theme", value: filter.theme });
@@ -70,13 +94,19 @@ export class CosmosProblemRepository implements ProblemRepository {
       )
       .fetchAll();
 
-    return resources.map(toDomain);
+    // 壊れた doc は落とす (throw しない)。1 件の poison document で一覧全体を失わない。
+    return resources.flatMap((doc) => {
+      const problem = toDomainOrNull(doc);
+      return problem ? [problem] : [];
+    });
   }
 
   async get(id: string): Promise<Problem | null> {
     // item().read() は 404 を投げずに resource undefined を返す。
     const { resource } = await this.container.item(id, this.userId).read<ProblemDocument>();
-    return resource ? toDomain(resource) : null;
+    // 壊れた doc は「無い」と同じ扱い (NOT_FOUND)。list から消えたものが詳細では 500、
+    // という食い違いを作らない。`remove` は parse を通らないので削除経路は残っている。
+    return resource ? toDomainOrNull(resource) : null;
   }
 
   async upsert(problem: Problem): Promise<Problem> {

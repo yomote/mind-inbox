@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { config } from "../config";
+import { summarizeIssues } from "../schemaIssues";
 import { serviceHeaders } from "./serviceToken";
-import type { ExtractionResult } from "../trpc/domain";
+import { ExtractionResultSchema, type ExtractionResult } from "../trpc/domain";
 import type {
   ApproveRequest,
   ApproveResponse,
@@ -155,7 +156,33 @@ export async function extract(req: ExtractRequest): Promise<StubMarked<Extractio
     );
   }
 
-  return (await res.json()) as ExtractionResult;
+  // **書き込む前に検証する** (#313 B-3)。ここを型アサーションで素通しにしていたので、
+  // 契約に反する抽出結果 (LLM の出力揺れ / プロンプトインジェクション) がそのまま
+  // `materializeExtraction` から Cosmos に upsert され、以降 `problem.list` が
+  // ProblemSchema の parse で落ちて **一覧が丸ごと 500 になる (poison document)** —
+  // しかも画面から消せない。攻撃者は要らず、単一ユーザーでも踏む。
+  //
+  // 検証の順序を「保存の前」に固定するのがこの 1 箇所の役目なので、呼び出し側
+  // (router の `materializeExtraction`) は検証済みの値しか受け取らない。
+  let payload: unknown;
+  try {
+    payload = await res.json();
+  } catch {
+    throw new ExtractError("llm-parse-failed", "POST /extract の応答が JSON ではありません");
+  }
+
+  const parsed = ExtractionResultSchema.safeParse(payload);
+  if (!parsed.success) {
+    // 失敗の種別は既存の "llm-parse-failed" に寄せる (フロントは既にこの token で
+    // 文面と復帰導線を出し分けている)。**メッセージに応答本文を載せない** —
+    // 中身は相談の本文由来なので、壊れた場所と種別だけを出す (schemaIssues.ts)。
+    throw new ExtractError(
+      "llm-parse-failed",
+      `POST /extract の応答が契約に反しています: ${summarizeIssues(parsed.error)}`,
+    );
+  }
+
+  return parsed.data;
 }
 
 export async function createPlan(req: PlanRequest): Promise<PlanResponse> {

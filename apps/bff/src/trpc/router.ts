@@ -11,6 +11,13 @@ import {
   sendChatMessage,
 } from "../clients/aiAgentClient";
 import { issueSpeechAuthToken } from "../clients/speechTokenClient";
+import {
+  MAX_CONVERSATION_MESSAGES,
+  MAX_CONVERSATION_TOTAL_CHARS,
+  MAX_ID_LENGTH,
+  MAX_MESSAGE_LENGTH,
+  MAX_TITLE_LENGTH,
+} from "../limits";
 import { deriveTitle } from "../domain/title";
 import {
   appendMention,
@@ -36,6 +43,12 @@ const router = t.router;
 const publicProcedure = t.procedure;
 
 // ---- shared schemas --------------------------------------------------------
+
+/**
+ * クライアントから来る識別子。**入力側にだけ上限を置く** (`../limits.ts` / #313 C-1)。
+ * 出力・永続化側 (`domain.ts`) には足さない — 既存ドキュメントを読めなくしないため。
+ */
+const IdInputSchema = z.string().min(1).max(MAX_ID_LENGTH);
 
 const ChatMessageSchema = z.object({
   id: z.string(),
@@ -114,30 +127,30 @@ async function materializeExtraction(
 // action ごとに必要な引数が違うため discriminatedUnion で受ける。
 
 const TriageInputSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("resolve"), problemId: z.string().min(1) }),
-  z.object({ action: z.literal("shelve"), problemId: z.string().min(1) }),
-  z.object({ action: z.literal("reopen"), problemId: z.string().min(1) }),
-  z.object({ action: z.literal("dismiss"), problemId: z.string().min(1) }),
+  z.object({ action: z.literal("resolve"), problemId: IdInputSchema }),
+  z.object({ action: z.literal("shelve"), problemId: IdInputSchema }),
+  z.object({ action: z.literal("reopen"), problemId: IdInputSchema }),
+  z.object({ action: z.literal("dismiss"), problemId: IdInputSchema }),
   z.object({
     action: z.literal("editTheme"),
-    problemId: z.string().min(1),
+    problemId: IdInputSchema,
     theme: ThemeSchema,
   }),
   z.object({
     action: z.literal("editTitle"),
-    problemId: z.string().min(1),
-    title: z.string().min(1),
+    problemId: IdInputSchema,
+    title: z.string().min(1).max(MAX_TITLE_LENGTH),
   }),
   z.object({
     action: z.literal("relink"),
-    mentionId: z.string().min(1),
-    fromProblemId: z.string().min(1),
-    toProblemId: z.string().min(1),
+    mentionId: IdInputSchema,
+    fromProblemId: IdInputSchema,
+    toProblemId: IdInputSchema,
   }),
   z.object({
     action: z.literal("merge"),
-    sourceProblemId: z.string().min(1),
-    targetProblemId: z.string().min(1),
+    sourceProblemId: IdInputSchema,
+    targetProblemId: IdInputSchema,
   }),
 ]);
 type TriageInput = z.infer<typeof TriageInputSchema>;
@@ -262,7 +275,7 @@ const speechRouter = router({
 
 const consultationRouter = router({
   start: publicProcedure
-    .input(z.object({ concern: z.string() }))
+    .input(z.object({ concern: z.string().max(MAX_MESSAGE_LENGTH) }))
     .output(z.object({ session: SessionSchema, stubbed: z.boolean().optional() }))
     .mutation(async ({ input }) => {
       const sessionId = randomUUID();
@@ -315,8 +328,8 @@ const consultationRouter = router({
   sendMessage: publicProcedure
     .input(
       z.object({
-        sessionId: z.string().min(1),
-        message: z.string().min(1),
+        sessionId: IdInputSchema,
+        message: z.string().min(1).max(MAX_MESSAGE_LENGTH),
       }),
     )
     .output(ChatReplySchema)
@@ -342,10 +355,23 @@ const consultationRouter = router({
   extract: publicProcedure
     .input(
       z.object({
-        sessionId: z.string().min(1),
+        sessionId: IdInputSchema,
         // 会話全文はクライアントが渡す (#183)。省略時は ai-agent 側の履歴に賭ける
         // (旧クライアント互換) が、その経路は 404 になりうる。
-        messages: z.array(ConversationMessageSchema).default([]),
+        //
+        // **件数と合計文字数の両方で締める** (#313 C-1)。ここが 1 リクエストで
+        // LLM に流し込める入力量の天井 = 1 リクエストあたりの課金の天井になる。
+        // 件数だけだと 1 通が長い場合を、文字数だけだと短文の大量送信を止められない。
+        messages: z
+          .array(ConversationMessageSchema)
+          .max(MAX_CONVERSATION_MESSAGES)
+          .refine(
+            (messages) =>
+              messages.reduce((total, m) => total + m.text.length, 0) <=
+              MAX_CONVERSATION_TOTAL_CHARS,
+            { message: `会話全文が長すぎます (最大 ${MAX_CONVERSATION_TOTAL_CHARS} 文字)` },
+          )
+          .default([]),
       }),
     )
     .output(ExtractionReplySchema)
@@ -391,7 +417,7 @@ const consultationRouter = router({
   approve: publicProcedure
     .input(
       z.object({
-        approvalRequestId: z.string().min(1),
+        approvalRequestId: IdInputSchema,
         approved: z.boolean(),
       }),
     )
@@ -425,7 +451,7 @@ const problemRouter = router({
     }),
 
   get: publicProcedure
-    .input(z.object({ id: z.string().min(1) }))
+    .input(z.object({ id: IdInputSchema }))
     .output(ProblemSchema)
     .query(async ({ input, ctx }) => {
       return await requireProblem(ctx.problemRepo, input.id);
@@ -442,7 +468,7 @@ const problemRouter = router({
 
   // 既存 /plan を再利用して Problem にプランを付ける（派生物。status は変えない / ADR 0007）。
   createPlan: publicProcedure
-    .input(z.object({ problemId: z.string().min(1) }))
+    .input(z.object({ problemId: IdInputSchema }))
     .output(ProblemSchema)
     .mutation(async ({ input, ctx }) => {
       const problem = await requireProblem(ctx.problemRepo, input.problemId);
