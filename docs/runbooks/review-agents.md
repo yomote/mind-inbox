@@ -109,11 +109,31 @@ Codex が応答できない間 ([#345](https://github.com/yomote/mind-inbox/issu
 
 **詰まったら**: subagent が起動できない / GitHub に到達できない等で回らないときは、**推測で「異常なし」と書かず** #360 に何がどこで止まったかを書いて終了する (マーカー付きコメントは必ず残す)。ツール権限で止まったなら必要なツール名も残す。
 
-#### 巡回 Routine の登録 (登録済み / 再作成が必要なときだけ)
+#### 巡回 Routine の登録 — **web UI でしか作れない (要 user・3 分・1 回きり)**
 
-**登録済み** — `trig_01C4DFF8wkLnxnLeoM8QmE2b` / 6 時間毎 / 毎回新セッション。`create_trigger` MCP でエージェントが作成できたため、[#90](https://github.com/yomote/mind-inbox/issues/90) や [#156](https://github.com/yomote/mind-inbox/issues/156) と違い **web UI の手作業は不要**。生死は状況ページの Routine 行 (`watchers.json` の痕跡監視) で見る。
+**⚠️ 未登録。** エージェントは登録できない。実測で確定した事実 (2026-08-12 / [#352](https://github.com/yomote/mind-inbox/issues/352)):
 
-再作成するときの**プロンプト (貼り付け用 — これで全文)**:
+| 試したこと                                                                   | 結果                                                                                                                                                                                                           |
+| ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `create_trigger` に `source_url` / `source_revision` / `repositories` を渡す | **黙って破棄される**。エラーも警告も出ず、`job_config.session_context` に `sources` が入らない                                                                                                                 |
+| `create_session(source_url=…)` で repo 付きセッションを作る                  | **成功** (repo・rubric・`code-reviewer` 起動・`gh` / `mcp__github__*` すべて到達)                                                                                                                              |
+| その セッションに `create_trigger(persistent_session_id=…)` で束ねて発火     | **失敗**。`persist_session: true` が付くのに、発火は**束ねた先を起こさず新品セッションを作る** (束ねた先の `updated_at` が発火時刻より前のまま / 新セッションは `origin: force_run_trigger` で `sources` 無し) |
+
+⇒ **エージェント作成の trigger にリポジトリを持たせる手段が無い。** リポジトリが無い発火セッションは CLAUDE.md も rubric も `.claude/agents/` も読めず、5 分動いて痕跡ゼロで終わる (実測 2 回)。docs も「[クラウドセッションの中からは web UI で管理せよ](https://code.claude.com/docs/en/routines)」と明記している (`/schedule` は web セッションでは出ない)。
+
+**したがって [#90](https://github.com/yomote/mind-inbox/issues/90) / [#156](https://github.com/yomote/mind-inbox/issues/156) と同型の「最後の 1 クリック」**。<https://claude.ai/code/routines> → **New routine**:
+
+| 項目             | 値                                                                                                                  |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------- |
+| **Name**         | `PR review (mind-inbox)`                                                                                            |
+| **Repositories** | `yomote/mind-inbox` ← **これが本体。ここが空だと動かない**                                                          |
+| **Environment**  | 既定 (`Trusted`) でよい                                                                                             |
+| **Trigger**      | **GitHub event** → `pull_request` → `opened` + `synchronize` / filter: `Is draft` = `false`, `Base branch` = `main` |
+| **Connectors**   | 全部外してよい (GitHub は connector ではなく GitHub App 経由)                                                       |
+
+**cron ではなく GitHub trigger を選ぶこと** — PR を出した瞬間にレビューが走る。cron だと最悪 6 時間遅れる。docs もこの用途を "Bespoke code review: A GitHub trigger runs on `pull_request.opened`" として挙げている。
+
+**プロンプト (貼り付け用 — これで全文)**:
 
 ```text
 yomote/mind-inbox の PR レビュー巡回 (代役 judge) を実行して。
@@ -125,9 +145,15 @@ yomote/mind-inbox の PR レビュー巡回 (代役 judge) を実行して。
 このプロンプトに手順を再掲しない (二重管理で片方が古くなるため)。
 
 あなたの役割は技術レビュー (judge) だけ。実装・マージ・受け入れ・resolve はしない。
+判定は gh か mcp__github__* で取る。素の curl で api.github.com を叩くと
+403 (プロキシ) になるが、それは「GitHub に到達できない」ではない。
 ```
 
 **プロンプトを太らせないこと。** 手順を Routine 側に書くと、git に無い本文が正典になり、壊れても diff に出ない。
+
+**登録するまで状況ページの「PR レビュー (代役 judge)」行は 🔴 のまま** — 痕跡が無い = 動いていない、という判定は正しい。消さずに赤を残す (`watchers.json`)。
+
+**登録できたら、この節の「⚠️ 未登録」を消して trigger の実体 (routine 名) を書き足すこと。**
 
 #### 巡回 Routine を退役させる (Codex 復帰時)
 
