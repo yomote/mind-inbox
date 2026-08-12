@@ -961,6 +961,50 @@ describe("[単体] consultation.extract — draft commit (#283 / ADR 0039 D1/D3)
     expect((await caller.problem.get({ id: "prob-1" })).mentionCount).toBe(2);
   });
 
+  it("keeps every item 'new' when a multi-mention vanished-target commit is re-sent (応答も冪等)", async () => {
+    // 無いと: 消えた対象へ 2 件以上寄る draft の再送で、種の Mention だけが「この確定が
+    //         起こした」と判定され、2 件目以降が「既存に追加」に化ける。同じ problemId が
+    //         「新規 1 / 既存 1」と二重計上され、レビュー画面の件数が初回と食い違う
+    //         (書き込みは冪等なのに表示だけ変わる / #283 Codex P2)。
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem());
+    await caller.problem.triage({ action: "dismiss", problemId: "prob-1" });
+
+    const existingGrouping = {
+      kind: "existing" as const,
+      problemId: "prob-1",
+      problemTitle: "転職の迷い",
+      problemTheme: "仕事・キャリア" as const,
+      isRecurrence: true,
+      mentionCount: 2,
+      reignited: false,
+      groupingConfidence: 0.9,
+    };
+    const draft = {
+      items: [
+        {
+          mention: makeMention({ id: "men-p", createdAt: "2026-02-01T00:00:00.000Z" }),
+          grouping: existingGrouping,
+        },
+        {
+          mention: makeMention({ id: "men-q", createdAt: "2026-02-02T00:00:00.000Z" }),
+          grouping: existingGrouping,
+        },
+      ],
+    };
+
+    const first = await caller.consultation.extract({ sessionId: "s2", draft });
+    const second = await caller.consultation.extract({ sessionId: "s2", draft });
+
+    // 実績は「新規 1 件を起こしてそこに 2 件入った」= 新規 1 / 既存 0 (同じ Problem を
+    // 二重に数えない)。再送でも同じ答えになる
+    expect(first.newProblemCount).toBe(1);
+    expect(first.updatedProblemCount).toBe(0);
+    expect(first.items.map((i) => i.grouping.kind)).toEqual(["new", "new"]);
+    expect(second).toEqual(first);
+    expect((await caller.problem.get({ id: "prob-1" })).mentionCount).toBe(2);
+  });
+
   it("keeps per-item mentionCount stable when a multi-mention commit is re-sent (応答も冪等)", async () => {
     // 無いと: 同じ Problem に 2 件以上寄る draft で、初回は追記しながら 2, 3 と返るのに、
     //         再送では全部が保存済みなので最終件数 (3) が全 item に返り、レビュー画面の

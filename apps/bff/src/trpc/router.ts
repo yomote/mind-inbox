@@ -106,10 +106,9 @@ async function materializeExtraction(
   result: ExtractionResult,
   repo: ProblemRepository,
 ): Promise<ExtractedItem[]> {
-  // このバッチで新しく起こした Problem。あとから同じ Problem へ寄る Mention が来ても
-  // 「既存に追加」ではなく新規の一部として扱うために覚えておく
-  // (でないと 1 つの Problem が「新規 1 件」かつ「既存に追加 1 件」に二重計上される)。
-  const createdHere = new Set<string>();
+  // **この確定操作に含まれる Mention の集合**。「その Problem をこの確定が起こしたか」を
+  // 追加の状態ではなく保存済みデータから復元するために使う (下の seededByThisCommit)。
+  const commitMentionIds = new Set(result.items.map((item) => item.mention.id));
   const materialized: ExtractedItem[] = [];
 
   for (const { mention, grouping } of result.items) {
@@ -125,15 +124,16 @@ async function materializeExtraction(
       const committed = target.mentions.find((m) => m.id === mention.id);
       const alreadyCommitted = committed !== undefined;
 
-      // **応答も冪等にする**: この Problem の "種" (最初の Mention) がこの Mention なら、
-      // その Problem は**この確定操作が作った**もの = 初回の実績は "new" だった。再送では
-      // createdHere が空なので、これが無いと「新規 1 件」だった応答が「既存に追加 1 件」に
-      // 化ける (書き込みは起きていないのに件数もバッジも変わる)。**追加の状態を持たず、
-      // 保存済みデータから復元する** — 種は appendMention でも mergeProblems でも
-      // 先頭に残るため (relink で種を剥がした場合だけ崩れるが、その時は Problem の
-      // 来歴自体が変わっている)。
-      const seededByThisMention = target.mentions[0]?.id === mention.id;
-      const isNew = createdHere.has(target.id) || grouping.kind === "new" || seededByThisMention;
+      // **応答も冪等にする**: この Problem の "種" (最初の Mention) が**この確定操作のどれか**
+      // なら、その Problem はこの確定が起こしたもの = 実績は "new" だった。**この確定の
+      // Mention 全体で見る**のが要点 — 種の 1 件だけで見ると、同じ Problem へ 2 件以上寄る
+      // draft の再送で 2 件目以降が "existing" に化け、初回の「新規 1 / 既存 0」が
+      // 「新規 1 / 既存 1」に変わる (同じ problemId の二重計上)。**追加の状態を持たず
+      // 保存済みデータから復元する** — 種は appendMention でも mergeProblems でも先頭に
+      // 残るため (relink で種を剥がした場合だけ崩れるが、その時は Problem の来歴自体が
+      // 変わっている)。
+      const seededByThisCommit = commitMentionIds.has(target.mentions[0]?.id ?? "");
+      const isNew = grouping.kind === "new" || seededByThisCommit;
       // 再燃したか = **この確定で** 棚卸し済みを open に戻したか (appendMention の事後条件)。
       // 再送では「今の状態」から判定できない (Mention は保存済み・Problem はもう open) ので、
       // 初回に appendMention が Mention へ残した来歴 (`reopenedProblem`) を読み戻す。
@@ -176,7 +176,8 @@ async function materializeExtraction(
     // **grouping も実績に正規化する** — 申告のままだと件数もバッジも「既存に追加」と出る。
     const created = problemFromMention(mention, grouping);
     await repo.upsert(created);
-    createdHere.add(created.id);
+    // ここで起こした Problem の "種" はこの Mention なので、後続の item も再送時も
+    // seededByThisCommit で "new" と復元できる (覚えておく必要は無い)。
     materialized.push({
       mention,
       grouping: {
