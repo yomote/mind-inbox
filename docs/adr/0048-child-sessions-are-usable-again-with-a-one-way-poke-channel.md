@@ -125,7 +125,7 @@ Chosen option: **"Option B"**。`create_session` が通るようになった以�
 | `send_message` / `list_events` の有無 | **無い**。`ListAgents` も `No reachable agents` |
 | poke 専用 Routine + `fire_trigger` で送信 | **配送されない**。親 → 子 (idle) / 子 → 親 / 自己宛の 3 方向で `last_fired_at` すら付かず |
 | `run_once_at` 付き Routine を子に bind して送信 | **届く**。`last_fired_at 14:45:58` → 子が 14:46:10 に起動 (`updated_at` が動いた)。**遅延は約 1 分** (D6 の根拠) |
-| 同じ経路で送った指示を子が**実行**するか | **未確定**。2 回目 (14:53 予定) は 14:56 時点で発火せず。発火の間隔が不定である可能性がある → [#353](https://github.com/yomote/mind-inbox/issues/353) で追う |
+| 同じ経路で送った指示を子が**実行**するか | **実行する**。`last_fired_at 14:54:00` → 子が 14:54:16 に受信 → 14:54:26 に [#353 へコメント投稿](https://github.com/yomote/mind-inbox/issues/353#issuecomment-5268488790)。**`disconnected` になっていた子も起き直した** |
 | 子が `mcp__github__*` を持つか | **持つ**。承認プロンプト無しで Issue コメントを投稿できた (子 → 親の恒久的な回収経路になる) |
 | 子が自分のセッション ID を知っているか | 知っている (システムプロンプトのセッションリンクから)。返信先として使える |
 
