@@ -25,11 +25,11 @@ Technical Story: [Issue #313](https://github.com/yomote/mind-inbox/issues/313) �
 
 初回 sweep の結果は **102 件** ([Issue #316](https://github.com/yomote/mind-inbox/issues/316))。しかし到達可能性でトリアージすると、表示と実態が食い違っていた:
 
-| 表示 | 実態 |
-| --- | --- |
-| critical 4 件 (`shell-quote` / `vitest`) | **ビルド時ツール**。`vitest` の critical は「Vitest UI サーバが listen 中なら」で成立しない。出荷物に乗らない |
+| 表示                                        | 実態                                                                                                                        |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| critical 4 件 (`shell-quote` / `vitest`)    | **ビルド時ツール**。`vitest` の critical は「Vitest UI サーバが listen 中なら」で成立しない。出荷物に乗らない               |
 | high 37 件の多く (`react-router` の RCE 等) | **SSR / RSC モード前提**。このフロントは `vite build` の SPA で `entry.server` も `renderToString` も無く、経路が存在しない |
-| **不明 40 件** (Python) | **これが本命**。`starlette` / `aiohttp` / `pyjwt` / `cryptography` / `urllib3` は Container Apps 上で実際に動く実行時依存 |
+| **不明 40 件** (Python)                     | **これが本命**。`starlette` / `aiohttp` / `pyjwt` / `cryptography` / `urllib3` は Container Apps 上で実際に動く実行時依存   |
 
 `pip-audit` が severity を出力しない仕様が、そのまま「**一番重要なものが一番軽く見える**」バイアスになっていた。検出の器を増やす前に、この読み違えを直す方が効く。
 
@@ -62,16 +62,16 @@ Technical Story: [Issue #313](https://github.com/yomote/mind-inbox/issues/313) �
 
 ### 層の責任分担 (何がどこを持つか)
 
-| 層 | 検査 | 持ち場 | トリガー | コスト |
-| --- | --- | --- | --- | --- |
-| **push 時 (事前)** | secret scanning + **push protection** | 秘密の混入を**未然に止める** | GitHub 側 (常時) | ¥0 |
-| **PR 時 (必須)** | CI (test / lint) + review-gate | 既存 | PR | ¥0 |
-| **PR 時 (advisory)** | CodeQL (SAST) / dependency-review / zizmor | コードの脆弱パターン・新規依存・workflow 権限 | PR | ¥0 |
-| **PR 時 (条件付き)** | `@codex security review` 自動指名 | 敏感パス (ADR 0038) | 敏感パス変更時 | ¥0 |
-| **週次** | security-sweep (SCA + secrets) | 既知 CVE の照合 | cron (ADR 0038) | ¥0 |
-| **週次** | Dependabot | **修正 PR の自動生成** | GitHub 側 | ¥0 |
-| **リリース** | 独立 judge (security-reviewer) | 到達可能性と実害の判定 | リリース PR ([ADR 0019](0019-independent-judge-agents-security-qa-release.md)) | ¥0 |
-| **常時 (実行時)** | smoke-test の認可実測 + 予算アラート | 設定が外れたことの検知 | deploy 毎 / Azure | ¥0 |
+| 層                   | 検査                                       | 持ち場                                        | トリガー                                                                       | コスト |
+| -------------------- | ------------------------------------------ | --------------------------------------------- | ------------------------------------------------------------------------------ | ------ |
+| **push 時 (事前)**   | secret scanning + **push protection**      | 秘密の混入を**未然に止める**                  | GitHub 側 (常時)                                                               | ¥0     |
+| **PR 時 (必須)**     | CI (test / lint) + review-gate             | 既存                                          | PR                                                                             | ¥0     |
+| **PR 時 (advisory)** | CodeQL (SAST) / dependency-review / zizmor | コードの脆弱パターン・新規依存・workflow 権限 | PR                                                                             | ¥0     |
+| **PR 時 (条件付き)** | `@codex security review` 自動指名          | 敏感パス (ADR 0038)                           | 敏感パス変更時                                                                 | ¥0     |
+| **週次**             | security-sweep (SCA + secrets)             | 既知 CVE の照合                               | cron (ADR 0038)                                                                | ¥0     |
+| **週次**             | Dependabot                                 | **修正 PR の自動生成**                        | GitHub 側                                                                      | ¥0     |
+| **リリース**         | 独立 judge (security-reviewer)             | 到達可能性と実害の判定                        | リリース PR ([ADR 0019](0019-independent-judge-agents-security-qa-release.md)) | ¥0     |
+| **常時 (実行時)**    | smoke-test の認可実測 + 予算アラート       | 設定が外れたことの検知                        | deploy 毎 / Azure                                                              | ¥0     |
 
 **重複の排除**: SCA は security-sweep と Dependabot の 2 つが見るが、**役割が違う** — sweep は「棚卸しと痕跡」、Dependabot は「修正 PR の生成」。sweep 側は将来 Dependabot が回り始めたら**件数の追跡に軽量化する**余地がある (ADR 0038 の「将来オプション」がここで回収される)。SAST は CodeQL のみ (semgrep / bandit は入れない)。secrets は push protection (事前) / gitleaks (週次・履歴) で、**事前と事後**という別の役割に分ける。
 
@@ -119,12 +119,12 @@ Issue #313 が挙げたカテゴリのうち、**クラウドの実状態を見�
 
 既存の security-sweep に相乗りさせない。理由は 4 つ:
 
-| 軸 | リポジトリ側 (sweep / CodeQL) | 実環境側 (ASM / CSPM / CIEM / DAST) |
-| --- | --- | --- |
-| **真実の所在** | git (lockfile・ソース・履歴) | **Azure の実状態**。リポジトリとズレること自体が検出対象 |
-| **必要な権限** | **秘密ゼロ** (public リポジトリを読むだけ) | **Azure の読み取り権限が要る** |
-| **検出の意味** | 「既知 CVE を含む版がある」 | 「設定が期待からドリフトした」 |
-| **トリガー** | PR / 週次 | **deploy 後 + 定期** (クラウドの状態は PR では変わらない) |
+| 軸             | リポジトリ側 (sweep / CodeQL)              | 実環境側 (ASM / CSPM / CIEM / DAST)                       |
+| -------------- | ------------------------------------------ | --------------------------------------------------------- |
+| **真実の所在** | git (lockfile・ソース・履歴)               | **Azure の実状態**。リポジトリとズレること自体が検出対象  |
+| **必要な権限** | **秘密ゼロ** (public リポジトリを読むだけ) | **Azure の読み取り権限が要る**                            |
+| **検出の意味** | 「既知 CVE を含む版がある」                | 「設定が期待からドリフトした」                            |
+| **トリガー**   | PR / 週次                                  | **deploy 後 + 定期** (クラウドの状態は PR では変わらない) |
 
 同じ箱に入れると、sweep に理由なく Azure 権限が付いて被害半径が広がり、かつ「npm の CVE」と「Storage が匿名公開」が同じ Issue に混ざって**両方読まれなくなる** (#316 が 102 件で読みにくかったのと同じ失敗)。
 
@@ -155,11 +155,20 @@ CIEM を先に入れても、返ってくる最大の指摘は **「CD の ident
 
 #### 決定 5 — 次の一手は CSPM ではなく**監査ログ** (PO 裁定)
 
-診断設定は `bootstrap-core.bicep:597` に SQL 用が 1 本あるだけで、それも `enableSql=false` のため **実際には 1 本も出ていない**。Function App / Container Apps / Cosmos / Storage のいずれにもアクセス記録が無い。
+診断設定は `bootstrap-core.bicep:597` に SQL 用が 1 本あるだけで、それも `enableSql=false` のため **実際には 1 本も出ていない**。**Cosmos DB と Function App にアクセス記録が無い**。
 
 これが他と質的に違うのは、**「問題を検出できない」ではなく「事故の後に何が読まれたか答えられない」**から。メンタルヘルスに近い個人の悩みを Entra RBAC の 1 層で守っていて、そのアクセス記録が無い状態は、他のどの検出機構より先に埋めるべき穴と判断した。
 
-⚠️ **ただしログは取り込み量で課金される。** 「セキュリティのために毎月の請求が増えた」は最悪の結果なので、カテゴリを絞り・保持期間を短くし・**無料枠に収まる根拠を実測で示せない限り実装しない**方針とする。
+**実装時に判明した訂正**: 当初の調査は「Container Apps にも記録が無い」としていたが、**誤りだった** — Container Apps Environment の `appLogsConfiguration` が console / system ログを既に同じ Log Analytics へ送っている (`bootstrap-core.bicep:840` 付近)。ここに診断設定を足すと**同じログが二重に取り込まれ、コストだけが倍**になるところだった。Storage も対象外とした — `StorageRead/Write/Delete` は Functions ランタイムの lease / heartbeat で常時大量に出る**最大の取り込み源**である一方、この口座にはランタイムの作業領域しか無く**ユーザーデータは全て Cosmos にある**。守る対象が無い場所に最大のコストを払う形になる。
+
+⚠️ **ログは取り込み量で課金される。** 「セキュリティのために毎月の請求が増えた」は最悪の結果なので、以下で担保した:
+
+- **カテゴリを絞る** — 監査に効くものだけ (Cosmos の `DataPlaneRequests` = 「何が読まれたか」に答えられる唯一のカテゴリ / `ControlPlaneRequests` / Function App の `FunctionAppLogs`)。`AllMetrics` は**全リソースで捨てた** (標準メトリックは無料で見られるものに取り込み課金を乗せるだけ)
+- **保持 30 日** — 無料枠の「31 日ぶんは取り込み料金に含まれる」条件を満たし、保持課金の発生条件をそもそも満たさない
+- **日次上限 (`workspaceCapping.dailyQuotaGb = 0.15`)** — 見積もり (~90 MB/月 = 無料枠 5 GB の約 2%) が外れても、**構造的に無料枠を超えられない**ようにした。上限超過分は収集されないので課金にならない
+- **feature flag** (`enableDiagnostics` / `enableCosmosDataPlaneAudit`) — 取り込み量が最大の DataPlaneRequests だけ独立に落とせる
+
+**残課題 (PO 裁定が要る)**: EasyAuth のサインイン記録 (`AppServiceAuthenticationLogs`) は監査価値が高いが、**Linux Consumption (Y1) では出力されない**。取得には plan 変更 = 課金が前提になるため、Phase 2-4 (`x-ms-client-principal` の前提の実測) と併せて判断する。
 
 #### その他 (優先度低)
 
@@ -172,14 +181,14 @@ CIEM を先に入れても、返ってくる最大の指摘は **「CD の ident
 
 ### 明示的に「やらない」もの (課金・複雑さが制約と衝突)
 
-| 候補 | 理由 |
-| --- | --- |
+| 候補                                            | 理由                                                                                                                                                                                                                                                                                         |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Microsoft Defender for Cloud のプラン有効化** | ⚠️ **初回有効化で 30 日無料トライアルが自動開始し、終了後に自動課金**。しかも**プランごとに個別に 30 日**が始まるため感覚がズレる。Foundational CSPM (全プラン Off) は無料で Secure Score まで見られるので**そこで止める**。`Get-AzSecurityPricing` でプラン状態を定期監視するのが最安の保険 |
-| **Azure WAF** | $35〜$330/月。追加課金ゼロの制約と正面衝突 |
-| **Entra ID Access Reviews** | **P2 ライセンス必須**で無料枠外 |
-| **有料の ASM / CSPM / DAST SaaS** | 同上。公開面は Bicep が真実なので、まず IaC 側で把握する |
-| **semgrep / bandit / eslint-plugin-security** | CodeQL と責任範囲が重複する。**2 つが同じものを吠えると両方読まれなくなる** |
-| **LLM を採点者にするセキュリティテスト** | 非決定 + 課金 + 説明不能。判定は「機構が何をしたか」に寄せる (決定的なツール権限テストで代替) |
+| **Azure WAF**                                   | $35〜$330/月。追加課金ゼロの制約と正面衝突                                                                                                                                                                                                                                                   |
+| **Entra ID Access Reviews**                     | **P2 ライセンス必須**で無料枠外                                                                                                                                                                                                                                                              |
+| **有料の ASM / CSPM / DAST SaaS**               | 同上。公開面は Bicep が真実なので、まず IaC 側で把握する                                                                                                                                                                                                                                     |
+| **semgrep / bandit / eslint-plugin-security**   | CodeQL と責任範囲が重複する。**2 つが同じものを吠えると両方読まれなくなる**                                                                                                                                                                                                                  |
+| **LLM を採点者にするセキュリティテスト**        | 非決定 + 課金 + 説明不能。判定は「機構が何をしたか」に寄せる (決定的なツール権限テストで代替)                                                                                                                                                                                                |
 
 ### 誤検知と開発速度を守る運用方針
 
@@ -191,12 +200,12 @@ CIEM を先に入れても、返ってくる最大の指摘は **「CD の ident
 
 ### CI で必須にするもの / 定期でよいもの (Issue #313 の成果物)
 
-| 必須 (マージを止める) | 定期実行でよい |
-| --- | --- |
-| CI (test / lint) — 既存 | CodeQL (advisory → 実績を見て判断) |
-| review-gate — 既存 | security-sweep (週次) |
-| push protection (GitHub 側で push を拒否) | Dependabot (月次) |
-| | zizmor / PSRule / Trivy (Phase 3) |
+| 必須 (マージを止める)                     | 定期実行でよい                     |
+| ----------------------------------------- | ---------------------------------- |
+| CI (test / lint) — 既存                   | CodeQL (advisory → 実績を見て判断) |
+| review-gate — 既存                        | security-sweep (週次)              |
+| push protection (GitHub 側で push を拒否) | Dependabot (月次)                  |
+|                                           | zizmor / PSRule / Trivy (Phase 3)  |
 
 **この表の左側を今すぐ増やさない**のが要点。門を重くする判断は、advisory での実績が出てから PO が行う。
 
