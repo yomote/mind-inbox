@@ -54,7 +54,11 @@ Chosen option: **"Option B"**。`create_session` が通るようになった以�
 
 - **D3 `create_session` には `source_url` と `source_revision` を必ず渡す。** 環境は継承されるが **リポジトリは継承されない** — 省略すると子は空の作業ディレクトリで起動し、「repo が無い」と言って止まる (2026-08-12 実測)
 
-- **D4 MCP の権限 allow は、対話セッション名と子セッションの UUID 名の両方を書く。** `.claude/settings.json` に `mcp__Claude_Code_Remote` と `mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a` を並べる。**片方だけだと、もう片方の系統で毎回承認プロンプトが出る** — 従来 UUID 名の `list_triggers` 1 個だけが許可されていたのが、承認が飛び続けていた原因
+- **D4 MCP の権限 allow は、対話セッション名と子セッションの UUID 名の両方を書く。さらに破壊的なツールはツール単位でも明示する。** `.claude/settings.json` に `mcp__Claude_Code_Remote` と `mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a` を並べ、**加えて `create_session` / `archive_session` / `interrupt_session` / `delete_trigger` / `update_trigger` を両方の名前でツール単位に書く**。
+
+  - **片方の名前だけだと、もう片方の系統で毎回承認プロンプトが出る** — 従来 UUID 名の `list_triggers` 1 個だけが許可されていたのが、承認が飛び続けていた原因
+  - **サーバ単位 (`mcp__<server>`) の allow だけでは `delete_trigger` が止まった。** ツール単位で明示して初めてゼロになった (2026-08-12 実測)
+  - **`settings.json` の変更は実行中のセッションには反映されない。** 効くのは次に開くセッションから。「直したのにまだ承認が飛ぶ」の大半はこれ
 
 - **D5 子の生死は `get_session` の `post_turn_summary` で見る。** `status_category` が `need_input` なら権限待ちで止まっている。**`needs_action` に出るツール名を D4 の allow に足す** のが恒久対応で、その場しのぎで user に承認させない
 
@@ -69,7 +73,7 @@ Chosen option: **"Option B"**。`create_session` が通るようになった以�
 ### 未解決 (この ADR では決めない)
 
 - **`fire_trigger` が配送しない理由は未特定。** 即時配送ができれば往復が 1 分から秒単位に縮むので、追う価値はある ([#353](https://github.com/yomote/mind-inbox/issues/353))
-- サーバ単位の allow (`mcp__<server>`) を書いても **`delete_trigger` は子セッションで承認プロンプトが出た** (2026-08-12 実測)。ツール単位の例外規則があるのか、反映の遅れなのかは未特定
+- **`SendMessage` / `ListAgents` によるチームメイト連携はこの環境では使えない** (`No reachable agents`)。体制はこれ抜きで組む ([#356](https://github.com/yomote/mind-inbox/issues/356))
 
 ### Positive Consequences
 
@@ -121,7 +125,8 @@ Chosen option: **"Option B"**。`create_session` が通るようになった以�
 | `source_url` + `source_revision` を渡した子 | clone され、README を読んで正常終了 |
 | 子セッションでの MCP サーバ名 | UUID 名 `bf7c680d-...` (D4 の根拠) |
 | 修正前の allow で子が `create_trigger` を呼ぶ | 承認待ちで停止 |
-| 修正後 (本 PR の `settings.json`) を clone した子 | `create_trigger` / `fire_trigger` を無プロンプトで通過。`delete_trigger` のみ停止 (未解決) |
+| サーバ単位 allow だけを入れた子 | `create_trigger` / `fire_trigger` は無プロンプト。**`delete_trigger` だけ停止** |
+| ツール単位 allow も足した子 | **承認プロンプトゼロ**。`create_trigger` / `update_trigger` / `delete_trigger` / `list_sessions` / `add_issue_comment` の 5 つ全部が無停止 ([証拠](https://github.com/yomote/mind-inbox/issues/353#issuecomment-5268573108)) |
 | `send_message` / `list_events` の有無 | **無い**。`ListAgents` も `No reachable agents` |
 | poke 専用 Routine + `fire_trigger` で送信 | **配送されない**。親 → 子 (idle) / 子 → 親 / 自己宛の 3 方向で `last_fired_at` すら付かず |
 | `run_once_at` 付き Routine を子に bind して送信 | **届く**。`last_fired_at 14:45:58` → 子が 14:46:10 に起動 (`updated_at` が動いた)。**遅延は約 1 分** (D6 の根拠) |

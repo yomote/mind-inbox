@@ -8,15 +8,21 @@
 
 ## 前提
 
-`.claude/settings.json` の `permissions.allow` に **MCP サーバ名が 2 つとも** 入っていること。
-
-```json
-"allow": ["mcp__Claude_Code_Remote", "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a", "mcp__github"]
-```
+`.claude/settings.json` の `permissions.allow` に、**MCP サーバ名が 2 つとも**、
+**さらに破壊的なツールがツール単位でも**入っていること (現物は
+[`.claude/settings.json`](../../.claude/settings.json) を見ること)。
 
 同じ Claude Code Remote の MCP サーバが、**対話セッションでは `Claude_Code_Remote`、子セッションでは
 UUID 名 `bf7c680d-...` として見える**。片方しか書いていないと、もう片方の系統で毎回承認プロンプトが出て
 子が止まる (これが 2026-08-12 まで「毎回承認が飛んでくる」と言われていた状態の原因)。
+
+サーバ単位の `mcp__<server>` だけでは足りない。**`delete_trigger` はツール単位で書くまで止まった**。
+`create_session` / `archive_session` / `interrupt_session` / `delete_trigger` / `update_trigger` は
+両方の名前でツール単位に列挙する。
+
+> **`settings.json` の変更は、実行中のセッションには反映されない。** 効くのは次に開くセッションから。
+> 「直したのにまだ承認が飛ぶ」の大半はこれ。**main に入るまでは、新しく開いたセッションでも
+> 承認が飛び続ける** (子は clone したブランチの設定を読むため、ブランチを指定した子だけは先に効く)。
 
 ## 1. 起こす
 
