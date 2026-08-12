@@ -310,9 +310,17 @@ def github_error_message(error_text: str) -> str:
     (「At least 1 approving review is required」「Required status check ... is
     expected」等) なので、分類のために捨ててはいけない。抜けなければ空文字。
     """
-    match = re.search(r'"message"\s*:\s*"([^"]+)"', error_text)
-    if match:
-        return " ".join(match.group(1).split())
+    # JSON body が乗っているならパーサに解かせる。正規表現で `"message": "..."` を
+    # 拾うと、値の中のエスケープ済み引用符 (`Required status check \"foo\" is expected.`)
+    # で途中で切れ、**まさに調べたい check 名が落ちる** (PR #330 Codex P2)。
+    decoder = json.JSONDecoder()
+    for brace in re.finditer(r"\{", error_text):
+        try:
+            obj, _ = decoder.raw_decode(error_text[brace.start() :])
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and isinstance(obj.get("message"), str):
+            return " ".join(obj["message"].split())
     match = re.search(r"gh:\s*(.+?)\s*\(HTTP \d{3}\)", error_text, re.DOTALL)
     if match:
         return " ".join(match.group(1).split())

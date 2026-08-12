@@ -936,11 +936,13 @@ def test_l1_405はgithubの理由をそのまま残す() -> None:
     )
     assert "At least 1 approving review is required" in approval
 
-    # JSON body がそのまま乗る経路 (gh のバージョン差) でも同じ 1 文を拾う
+    # JSON body がそのまま乗る経路 (gh のバージョン差) でも同じ 1 文を拾う。
+    # **エスケープされた引用符で切ってはいけない** — 切ると調べたい check 名が落ちる
+    # (正規表現で "message": "..." を拾う実装はここで落ちる / PR #330 Codex P2)
     body = merge_failure_reason(
-        '{"message": "Required status check \\"foo\\" is expected.", "status": "405"}'
+        '{"message": "Required status check \\"foo / bar\\" is expected.", "status": "405"}'
     )
-    assert "Required status check" in body
+    assert 'Required status check "foo / bar" is expected.' in body
 
     # 理由が取り出せないときは「取れなかった」と書く (推測で埋めない)
     assert "取り出せず" in merge_failure_reason("HTTP 405")
