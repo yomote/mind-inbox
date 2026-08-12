@@ -113,13 +113,18 @@ Codex が応答できない間 ([#345](https://github.com/yomote/mind-inbox/issu
 
 **⚠️ 未登録。** エージェントは登録できない。実測で確定した事実 (2026-08-12 / [#352](https://github.com/yomote/mind-inbox/issues/352)):
 
-| 試したこと                                                                   | 結果                                                                                                                                                                                                           |
-| ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `create_trigger` に `source_url` / `source_revision` / `repositories` を渡す | **黙って破棄される**。エラーも警告も出ず、`job_config.session_context` に `sources` が入らない                                                                                                                 |
-| `create_session(source_url=…)` で repo 付きセッションを作る                  | **成功** (repo・rubric・`code-reviewer` 起動・`gh` / `mcp__github__*` すべて到達)                                                                                                                              |
-| その セッションに `create_trigger(persistent_session_id=…)` で束ねて発火     | **失敗**。`persist_session: true` が付くのに、発火は**束ねた先を起こさず新品セッションを作る** (束ねた先の `updated_at` が発火時刻より前のまま / 新セッションは `origin: force_run_trigger` で `sources` 無し) |
+| 試したこと                                                                                 | 結果                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `create_trigger` に `source_url` / `source_revision` / `repositories` を渡す               | **黙って破棄される**。エラーも警告も出ず、`job_config.session_context` に `sources` が入らない                                                                                                                                                                            |
+| `create_session(source_url=…)` で repo 付きセッションを作る                                | **成功** (repo・rubric・`code-reviewer` 起動・`gh` / `mcp__github__*` すべて到達)                                                                                                                                                                                         |
+| その セッションに `create_trigger(persistent_session_id=…)` で束ねて `fire_trigger` で発火 | **失敗。ただし原因は束ね方ではなく `fire_trigger`** — [`child-sessions.md`](child-sessions.md) §2 が「`fire_trigger` は API は成功を返すが**配送されない**」と既に実測記録していた。束ねた先は起きず、`sources` 無しの新品セッション (`origin: force_run_trigger`) が立つ |
+| 同じ束ねに `run_once_at` (1〜2 分後) で送る                                                | **成功**。束ねた先の `updated_at` が発火時刻に動いて起動した (2026-08-12 17:11 実測)。**配送経路は `run_once_at` が正しい**                                                                                                                                               |
 
-⇒ **エージェント作成の trigger にリポジトリを持たせる手段が無い。** リポジトリが無い発火セッションは CLAUDE.md も rubric も `.claude/agents/` も読めず、5 分動いて痕跡ゼロで終わる (実測 2 回)。docs も「[クラウドセッションの中からは web UI で管理せよ](https://code.claude.com/docs/en/routines)」と明記している (`/schedule` は web セッションでは出ない)。
+⇒ **リポジトリを持たせること自体は可能** (repo 付きセッションに束ねて `run_once_at` で送る)。**それでも web UI が要るのは、欲しいのがイベント駆動だから**。
+
+`create_trigger` が持つのは `cron_expression` と `run_once_at` **だけで、GitHub イベント (`pull_request` の opened / synchronize) を trigger にするフィールドが無い**。未知のパラメータは黙って捨てられるので渡して通すこともできない (上表 1 行目)。cron で回すと**最悪 6 時間遅れる**うえ、束ね先が 1 セッションに固定されるのでコンテキストが積もり、コンテナ回収で束ねが腐るリスクも残る。**PR が動いた瞬間に走らせたいなら web UI しかない** — docs も「[クラウドセッションの中からは web UI で管理せよ](https://code.claude.com/docs/en/routines)」と明記している (`/schedule` は web セッションでは出ない)。
+
+> **2026-08-12: 一度 cron (6 時間毎) の暫定 Routine を置いたが、PO 判断で削除した。** 「巡回 (ポーリング) は要らない / イベントで起動すべき」— 設計としてそれが正しく、暫定の cron を残すと**それが設計だと誤読される**。イベント駆動が入るまで自動起動は無しとし、その間のレビューは PM が手で `code-reviewer` を呼ぶ (下の「単発でレビューだけ欲しい」)。
 
 **したがって [#90](https://github.com/yomote/mind-inbox/issues/90) / [#156](https://github.com/yomote/mind-inbox/issues/156) と同型の「最後の 1 クリック」**。<https://claude.ai/code/routines> → **New routine**:
 
