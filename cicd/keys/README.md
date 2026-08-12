@@ -204,9 +204,37 @@ az keyvault key decrypt --vault-name <持続層の Vault> --name e2e-artifacts \
 ```
 
 > ⚠️ **返ってきた AES 鍵は失効できない。** Key Vault は秘密鍵を守るが、`decrypt` が返す
-> AES 鍵は手元の平文であり、`az` のトークンが切れても**その時点で開いた artifact は
+> AES 鍵は手元の平文であり、資格情報を revoke しても**その時点で開いた artifact は
 > 読める状態のまま**になる。復号は必要な artifact に絞ること。残る露出の正確な範囲は
 > ADR 0045 D5「消える穴 / 消えない穴」が正典。
+
+### 侵害が疑われたら: 更新資格情報を revoke する
+
+**`az login` はアクセストークンだけでなく更新資格情報 (refresh token) をディスクに置く。**
+侵害された環境の任意コードは**これを持ち出して別環境から `decrypt` を呼び続けられる**ので、
+**時間が経てば閉じる、は成り立たない**。閉じるのは revoke したときだけ。
+
+> 2026-08-12 に実測: エージェントセッションが、失効したアクセストークンを保存済みの
+> refresh token だけで更新し、PO の関与なしに Azure API を叩き直せた。
+
+```bash
+# 1. 手元の資格情報を捨てる (これだけでは不十分 — 既に持ち出されていたら効かない)
+az logout
+
+# 2. その identity の更新資格情報を無効化する (これが本体)
+az rest --method POST \
+  --url "https://graph.microsoft.com/v1.0/me/invalidateAllRefreshTokens"
+#    他人の identity を止める場合は Entra 管理者が
+#    /users/{id}/invalidateAllRefreshTokens を叩く
+
+# 3. Key Vault のアクセスログで、想定外の decrypt が無いか確認する
+```
+
+**恒久的に露出を絞るなら**、復号専用の最小権限プリンシパルにするか、JIT 権限 /
+復号ブローカーを入れる必要がある。どちらも
+[#302](https://github.com/yomote/mind-inbox/issues/302) 実装時の PO 裁定事項
+(ADR 0045 D5)。それまでは、**復号に使う資格情報が PO 個人のもの = サブスクリプション
+全体に届く**ことを承知のうえで使う。
 
 ## 鍵を替えるとき
 
