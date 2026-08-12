@@ -44,7 +44,7 @@ Chosen option: **"Option A"**。**PO が 2026-08-12 に選択肢形式で「置�
 決定の内訳:
 
 - **D1 ~~`REVIEW_GATE_REQUIRE_CODEX` を false にする~~ (PO がクリック)。Codex レビューの有無を required check の条件から外し、マージ経路を開ける。Codex 復帰時に true へ戻す**
-  → **2026-08-12 に D7 が置き換えた** (PO 裁定)。門を**開ける**のではなく、門が要求する独立レビューの**担い手を差し替える**。`REVIEW_GATE_REQUIRE_CODEX` は `true` のまま据え置き、PO のクリックは不要になった
+  → **2026-08-12 に D7 が置き換えた** (PO 裁定)。門を**開ける**のではなく、門が要求する独立レビューの**担い手を差し替える**。変数名は改名しない。**ただし 2026-08-12 時点の実測では `REVIEW_GATE_REQUIRE_CODEX` は既に `false`** (`review-gate` の欠落理由が pm-accept の 1 行だけ / [#352](https://github.com/yomote/mind-inbox/issues/352) の記述と整合) — **D7 を実際に効かせるには `true` に戻すクリックが要る**。戻すまでこの PR の変更は「基準と judge と起動経路を足すだけ」で、門はレビューの有無を見ない。戻す順序は「巡回が痕跡を残すのを 1 回確認してから」が安全 (閉じた瞬間に代役レビュー待ちで全コード PR が止まるため)
 - **D2 `.github/claude/review-rubric.md` を実データ由来の内容に全面置換する。** ファイル名は変えない ([`security-rubric.md`](../../.github/claude/security-rubric.md) `:113` 等から参照されているため)。構成は「指摘の書き方 (R1〜R7) → Severity → 何を探すか (C1〜C9・頻度順) → 再レビューの規律 (R8〜R10) → 自制ルール (R11〜R17) → 出力形式」。**各項目に Codex の原文引用を根拠として添える** — 抽象カテゴリから演繹した項目を 1 つも作らない
 - **D3 実測 0 件だった観点を落とす** — 旧・軸 C (PR 本文の評価) と軸 B の「簡素化 / 過剰抽象 / 再実装」。落とした事実と理由は rubric 本文に 1 行残す (黙って消すと、次に誰かが同じ観点を「抜けている」と足し戻す)
 - **D4 代役 judge `.claude/agents/code-reviewer.md` を新設する** — [ADR 0019](0019-independent-judge-agents-security-qa-release.md) の judge 群と同じ形 (新品コンテキストの subagent / rubric-as-truth / コードを変更しない / 投稿は呼び出し元)。セキュリティの深掘りは従来どおり security-reviewer へ委譲する
