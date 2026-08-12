@@ -371,8 +371,20 @@ def test_l1_敏感パスの判定() -> None:
     assert sensitive_paths(["apps/bff/src/functions/speechToken.ts"])
     assert sensitive_paths(["apps/bff/src/cors.ts"])
     assert not sensitive_paths(["apps/bff/src/trpc/domain.ts"])
+    # 特権 workflow が呼ぶスクリプトと宣言 (2026-08-12 追加)。
+    # 無いと何が静かに通るか: workflow ファイル 1 行の変更は指名されるのに、
+    # その workflow が実際に叩く管理 API のコードは無審査で入る
+    # (PR #347 が実際にそうなった)。
+    assert sensitive_paths(["cicd/github/settings.yml"])
+    assert sensitive_paths(["cicd/scripts/github-settings/sync.py"])
+    assert sensitive_paths(["cicd/scripts/github-settings/device_login.py"])
+    # マージの門そのもの — PR が自分の門を緩められる経路 (#331)
+    assert sensitive_paths(["cicd/scripts/review-gate/check.py"])
     # 対象外のもの
     assert not sensitive_paths(["docs/adr/0038-x.md", "apps/frontend/src/App.tsx"])
+    # cicd/ でも門・管理設定と無関係なものは対象外 (広げすぎない)
+    assert not sensitive_paths(["cicd/scripts/status-page/build.py"])
+    assert not sensitive_paths(["cicd/scripts/ux-probe/post-judge-score.sh"])
     # 混在なら当たったものだけ返す
     assert sensitive_paths(["docs/x.md", "cicd/iac/x.bicep"]) == ["cicd/iac/x.bicep"]
 
