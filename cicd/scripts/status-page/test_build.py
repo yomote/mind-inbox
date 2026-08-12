@@ -36,17 +36,54 @@ def emit(value):
     else:
         print(value if isinstance(value, str) else json.dumps(value))
 
-if "/runs" in url:
+# プロダクトの現在地 (product_status.py / Issue #280) が読む口。
+# ここに列挙が無い形が返ると「(未検証: …)」がページに出て、
+# test_L1_痕跡が取れたら未検証にしない が落ちる — わざとそうしてある
+# (新しい取得口を足したら stub にも足す、を強制する)。
+if "/milestones?" in url:
+    emit([{"n": 1, "t": "今週: テスト目標", "due": "2099-01-08T00:00:00Z",
+           "u": "https://example.test/milestone/1"}])
+elif "milestone=" in url:
+    emit([{"n": 187, "t": "目標に紐づく Issue", "s": "open", "pr": False}])
+elif "labels=ci-failure" in url:
+    emit([])
+elif "labels=P1" in url:
+    emit([{"n": 42, "t": "次の候補になる Issue", "c": "2099-01-01T00:00:00Z",
+           "labels": ["P1"], "pr": False}])
+elif "/jobs" in url:
+    # 実デプロイの痕跡 (deploy.yml の Provision ステップ完走) — /runs より先に
+    # 引っ掛けること (URL は .../actions/runs/<id>/jobs で両方に部分一致する)
+    emit({"steps": [{"n": "Provision + deploy (up)", "c": "success"}]})
+elif "/files" in url:
+    # --paginate + 1 行 1 値 (jq .[].filename) — 配列ではなく行で返す
+    print("apps/frontend/src/App.tsx")
+    print("docs/x.md")
+elif "/runs" in url:
     # event=schedule で絞った照会にだけ失敗 run を返す — 「イベント種別を絞らない
     # と、schedule の連続失敗が直後の PR run の成功に隠れる」(#258) を再現する。
     # フィルタ無しの照会 (従来の watcher) は success のまま。
     if "event=schedule" in url:
-        emit([{"c": "failure", "s": "completed",
-               "t": "2099-01-01T00:00:00Z", "u": "https://example.test/sweep-run"}])
+        emit([{"id": 2, "c": "failure", "s": "completed", "t": "2099-01-01T00:00:00Z",
+               "sha": "abc1234def5678", "e": "schedule",
+               "u": "https://example.test/sweep-run"}])
     else:
-        emit([{"c": "success", "s": "completed",
-               "t": "2099-01-01T00:00:00Z", "u": "https://example.test/run"}])
-elif "needs-human" in url or "pulls" in url:
+        emit([{"id": 1, "c": "success", "s": "completed", "t": "2099-01-01T00:00:00Z",
+               "sha": "abc1234def5678", "e": "push", "u": "https://example.test/run"}])
+elif "pulls" in url:
+    # 一覧は --paginate で 1 行 1 オブジェクト。付いていなければ 1 ページ目しか
+    # 見ていないので、stub 側で落として気づけるようにする
+    if "--paginate" not in args:
+        print("stub: PR 一覧を --paginate 無しで取っている", file=sys.stderr)
+        sys.exit(1)
+    if "base=main" in url:
+        # 51 件 — 1 ページ (50) で切れていないことを確かめるため
+        for i in range(1, 52):
+            print(json.dumps({"n": i, "t": f"PR {i}", "sha": f"sha{i}", "draft": False}))
+    else:
+        # 全 open PR は 52 件 (#52 だけ main 向けではない = 脚注に出る側)
+        for i in range(1, 53):
+            print(json.dumps({"n": i, "t": f"PR {i}", "d": "2099-01-01T00:00:00Z"}))
+elif "needs-human" in url:
     emit([])
 elif "/comments" in url or "labels=" in url or "select(.title" in jqf:
     emit({"t": "2099-01-01T00:00:00Z"} if jqf.startswith("{") else "2099-01-01T00:00:00Z")
@@ -215,6 +252,22 @@ def test_L1_痕跡を残さない自動化は判定不能のまま残る(tmp_pat
     assert "🟢" not in html, "痕跡が無いのに緑にしている"
 
 
+def test_L1_open_PRの一覧は両方とも全ページ取得する(tmp_path):
+    """「進行中」の base=main 一覧も、脚注の補完元 (pending) も paginate すること。
+
+    無いと何が静かに通るか:
+        open PR が 50 件を超えると、51 件目以降が**分類以前にページから消える**。
+        しかも消えたことはページ上に何の痕跡も残さない (「無かった」に化ける)。
+        stub は --paginate 無しの取得を失敗させてあるので、退行すると赤くなる。
+    """
+    html = _run(tmp_path, ux_data=FRESH_UX_DATA)
+    assert "/pull/51" in html, "51 件目の PR が「進行中」から消えている"
+    assert "/pull/52" in html, (
+        "pending 側 (main 向け以外の脚注) が 1 ページ目で切れている"
+    )
+    assert "取得できませんでした" not in html
+
+
 def test_L1_eventフィルタ付きwatcherはその種別のrunだけを見る(tmp_path):
     """review-gate は PR・コメントイベントでも起動する。イベント種別を絞らないと
     「schedule sweep (マージ再試行・補償) が毎回失敗していても、直後の PR 再評価
@@ -332,7 +385,9 @@ if "/comments" in url:
         print("2099-01-01T00:00:00Z")      # 新しい人間コメント (マーカー無し)
 elif "/runs" in url:
     emit([])
-elif "needs-human" in url or "pulls" in url:
+elif "pulls" in url:
+    pass  # open PR ゼロ (--paginate なので「行を出さない」が空一覧)
+elif "needs-human" in url:
     emit([])
 else:
     emit("null")

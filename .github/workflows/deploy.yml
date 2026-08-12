@@ -98,6 +98,17 @@ jobs:
             echo "::notice::自動デプロイは未解禁のため skip しました。認可の設定 (docs/runbooks/entra-spa-auth-and-budget.md) を終えたあと、リポジトリ Variables に AUTO_DEPLOY_ENABLED=true を設定すると main マージで常設 dev へ自動反映されます。"
           fi
 
+      # 状況ページ (cicd/scripts/status-page) が「この run はデプロイ経路に入ったか」を
+      # 読むための痕跡。**失敗し得る処理より前**に置くのが要点 — Azure login や
+      # IMAGE_TAG 解決で落ちると後続の `Provision + deploy (up)` は skipped になり、
+      # 「試みて失敗した」と「そもそも走らなかった (guard skip)」が区別できなくなる。
+      # 区別できないと、デプロイ赤なのに状況ページが緑に見える (PR #281)。
+      # **ステップ名を変えたら product_status.py の MARKER_STEP も直すこと。**
+      # 実行内容は echo だけ (デプロイの挙動は変えない)。条件は下のデプロイ step 群と同一。
+      - name: デプロイ経路に入った (marker)
+        if: steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
+        run: echo "deploy path entered (marker for status-page)"
+
       - name: Azure login (OIDC, no stored secret)
         if: steps.guard.outputs.run == 'true'
         uses: azure/login@v2
