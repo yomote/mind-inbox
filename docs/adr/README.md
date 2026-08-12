@@ -119,3 +119,4 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0042](0042-pm-accept-carryover-and-merge-queue.md) — pm-accept は「実装差分が不変の main 追随」に引き継ぎ、直列化は Merge Queue に任せる (0036 の運用改訂) — **Proposed**
 - [0044](0044-stream-lanes-as-the-project-map.md) — プロジェクトの地図を固定レーン (stream ラベル) で持ち、Projects board を正式に畳む (ADR 0011 の描画面を改訂 / ADR 0043 を補完)
 - [0045](0045-e2e-artifacts-are-secret-by-default.md) — 実環境 E2E の成果物は既定で秘密扱いにし、trace は公開鍵で暗号化して残す (public リポジトリのため artifact のアクセス制限が使えない) — **Proposed**
+- [0046](0046-environment-rebuildable-from-declaration.md) — 環境を「宣言から作り直せるもの」にする — ライフサイクル 3 層分断 / Entra の Graph Bicep 宣言 / 週次プロビジョンテスト (ADR 0013 の「常設」を追補)

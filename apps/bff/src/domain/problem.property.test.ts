@@ -107,6 +107,17 @@ describe("[単体] appendMention (property)", () => {
     );
   });
 
+  it("再燃させた Mention にだけ来歴 (reopenedProblem) が残る — 追記後の状態からは再構成できない (#283)", () => {
+    fc.assert(
+      fc.property(arbProblem(anyIso), arbMention(anyIso), (existing, mention) => {
+        const stored = appendMention(existing, mention).mentions.at(-1);
+        // 追記後は必ず open なので、「棚卸し済みを戻したか」は Mention 側にしか残らない。
+        // 落ちると同じ確定の再送で「再燃」表示だけが静かに消える (応答の冪等性が壊れる)
+        expect(stored?.reopenedProblem === true).toBe(existing.status !== "open");
+      }),
+    );
+  });
+
   it("既存の Mention を 1 件も失わない (追記専用 / domain_model §6-3)", () => {
     fc.assert(
       fc.property(arbProblem(anyIso), arbMention(anyIso), (existing, mention) => {
@@ -207,10 +218,10 @@ describe("[単体] appendMention — タイムゾーン混在", () => {
   it("オフセット表記が混在しても epoch で比較する (辞書順だと +09:00 が Z に勝ってしまう)", () => {
     // PR #274 Codex 指摘の反例そのまま: 10:00+09:00 = 01:00Z < 02:00Z なのに
     // 辞書順では "2026-01-01T10:00" > "2026-01-01T02:00" となり古い方が最大に残る
-    const seed = fc.sample(
-      fc.tuple(arbProblem(anyIso), arbMention(anyIso)),
-      { numRuns: 1, seed: 42 },
-    )[0];
+    const seed = fc.sample(fc.tuple(arbProblem(anyIso), arbMention(anyIso)), {
+      numRuns: 1,
+      seed: 42,
+    })[0];
     const older = { ...seed[1], id: "m-old", createdAt: "2026-01-01T10:00:00+09:00" };
     const newer = { ...seed[1], id: "m-new", createdAt: "2026-01-01T02:00:00.000Z" };
     const problem = withDerived({ ...seed[0], mentions: [older] });

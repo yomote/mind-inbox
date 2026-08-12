@@ -47,6 +47,11 @@ if [[ -z "$FUNC_HOST" || -z "$SPA_CLIENT_ID" ]]; then
   if [[ "$DEPLOY_STATE" == "Running" || "$DEPLOY_STATE" == "Accepted" ]]; then
     # デプロイ中は outputs が空になる。これは「壊れている」ではなく「まだ確かめられない」。
     ng "デプロイが実行中 (provisioningState=$DEPLOY_STATE) のため outputs が空。デプロイ完了後に再実行すること"
+  elif [[ "$DEPLOY_STATE" == "Failed" ]]; then
+    # 直近の bicep 適用そのものが失敗している = **ゴールデンパスの故障ではなく deploy の故障**。
+    # ここを 1 行にまとめると、自動起票される Issue が「実環境が壊れた」としか読めず、
+    # 載ってもいない新コードを疑って時間が溶ける (2026-08-11 の #287 が実例。真因は #262)。
+    ng "直近の bootstrap デプロイが失敗している (provisioningState=Failed) — 実環境に新コードは載っておらず、ゴールデンパスの判定自体ができていない。先に deploy workflow の失敗を直すこと (#262)"
   else
     ng "deployment outputs から functionAppDefaultHostname / functionAuthEntraClientId を解決できない (provisioningState=${DEPLOY_STATE:-unknown})"
   fi
