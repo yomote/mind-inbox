@@ -18,6 +18,23 @@
 - **持ち越し**: {未消化の項目・次回に回した判断。無ければ「なし」}
 ```
 
+## 2026-08-12 — debrief (ADR 裁定)
+
+- **対象**: 未裁定 ADR の裁定。あわせて #293 の「trace 復号」と [#46](https://github.com/yomote/mind-inbox/issues/46) (OIDC ロール最小化) を PO 向けに解説
+- **決定**:
+  - **[ADR 0041](../adr/0041-ux-observations-on-git-data-branch.md) を Accept** — 選択自体は 2026-08-11 に #197 で実施済み、実装も PR #260 で着地。形式的な追認
+  - **[ADR 0042](../adr/0042-pm-accept-carryover-and-merge-queue.md) は保留** — 決定の 2 本柱が両方とも現状動いていない (D1 の pm-accept 引き継ぎが純粋な base マージでも成立しない = [#329](https://github.com/yomote/mind-inbox/issues/329) / D2 の Merge Queue は本リポで実行不能と PR #292 が報告済み)。**#329 の原因が判ってから裁定する**
+  - **[ADR 0045](../adr/0045-e2e-artifacts-are-secret-by-default.md) を Accept、ただし D5 を改訂** — **エージェント復号を認める**。方式は**非エクスポート版** (Key Vault の鍵オブジェクトに置き `az keyvault key decrypt` で Key Vault 内で復号。鍵は一度も外に出ない)。暗号方式は gpg → 封筒暗号へ
+  - **Key Vault だけ先に作る案は不採用** — #302 をまとめてやる。したがって**エージェント復号が効くのは #302 完了時**で、#293 はそれまで PO 復号のまま (artifact 期限 8/26 が実質の締切)
+  - #314 (SWA カスタムドメイン) は寝かせる / #311 (Action の SHA 固定) は別セッションへ分配済み
+- **学びメモ**: PO は「Key Vault に入れた上でやると決めたはず」と**自分の合意内容を正確に覚えていて、ADR との食い違いを指摘した**。裁定の場で PO が仕様の記憶を頼りに差分を見つけている状態は、こちらの提示の仕方に問題がある (下記)
+- **特記 (エージェント側の失敗 3 件)**:
+  - **(a) 決定を狭めたのに目立たせなかった** — ADR 0045 の初版 D5 は「鍵を環境変数に置きエージェントが復号」。Codex の P1 (ADR 0031 と衝突) を受けてエージェントが書き換えた際、**鍵の置き場所を直す (Key Vault へ) だけでなく、エージェント復号そのものを禁じた**。技術的な理由 (`gpg --import` で鍵がディスクに落ち持ち出せる) は正しかったが、**「PO が合意した内容を狭める」ことを理由の節に畳んで宣言しなかった**。Proposed のまま承認キューに載せたのは手続き上正しいが、気づけたのは PO の記憶によるもので仕組みでは捕まっていない
+  - **(b) 選択肢を探し切らずに「できない」と結論した** — 初版 ADR 自身が恒久解として「Key Vault の鍵オブジェクト + `az keyvault key decrypt`」を挙げていたのに、**PO への選択肢として提示されなかった**。「安全のためにできないことにする」判断は、**「安全なままできる方法」を探し切ってから**出す
+  - **(c) 私 (裁定を回した側) も部分読みで断じた** — 最初 PO に「エージェントが勝手に狭めた、理由づけに穴がある」と説明したが、全文を読むと前エージェントの理由づけは私の説明より筋が通っていた (使い捨てサンドボックス論の否定まで書かれていた)。**その場で訂正した**。ADR を部分読みして評価を下すのは (a) と同じ型の失敗
+  - **(d) 未裁定 ADR の数え違い** — `grep -l "Status: Proposed"` が本文中の「Proposed」の語に誤マッチし、ADR 0014 (実際は Accepted) を未裁定として数え、「4 件」と繰り返し報告していた。`/status` skill の集計にも同じ穴がある
+- **持ち越し**: [ADR 0042](../adr/0042-pm-accept-carryover-and-merge-queue.md) の裁定 (#329 の原因特定後)。ADR 0045 D5 の実装 (封筒暗号への組み替え / #302 待ち)。#293 の trace 復号 (PO / 8/26 期限)。#46 の権限最小化 (CD 主体が User Access Administrator を持つと実測)
+
 ## 2026-08-12 — design-gate
 
 - **対象**: インフラ整備の 3 件を 1 本にまとめた [ADR 0046](../adr/0046-environment-rebuildable-from-declaration.md) 起案 — [#302](https://github.com/yomote/mind-inbox/issues/302) (ライフサイクル 3 層分断) / [#303](https://github.com/yomote/mind-inbox/issues/303) (設定を宣言に一本化・Entra 含む) / [#306](https://github.com/yomote/mind-inbox/issues/306) (週次プロビジョンテスト)。ADR 0013「常設 dev 環境」の解釈追補を含む

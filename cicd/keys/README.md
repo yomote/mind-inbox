@@ -99,7 +99,16 @@ gpg --armor --export-secret-keys "mind-inbox e2e artifacts"
 
 持続層 RG ができるまでは暫定で PO の手元に置き、復号は PO が行う。
 
-## 復号して trace を見る (**PO の管理環境でのみ**)
+> **⚠️ 2026-08-12 の debrief で方式が変わりました (ADR 0045 D5 改訂)。**
+> 恒久形は「Key Vault の**鍵オブジェクト**に非エクスポートで置き、`az keyvault key decrypt` で
+> **Key Vault の中で復号する**」= 秘密鍵は一度も外に出ず、**エージェントも復号してよい**。
+> 暗号方式も gpg から封筒暗号 (AES + RSA-OAEP) に変わります。
+>
+> **ただし切り替えは [#302](https://github.com/yomote/mind-inbox/issues/302) の持続層 RG ができてから。**
+> それまでは下の GPG 手順が正典で、**復号できるのは PO のみ**です。
+> 既存の `.gpg` artifact は移行後も現行の GPG 鍵で復号します。
+
+## 復号して trace を見る (**PO の管理環境でのみ** / #302 完了までの手順)
 
 > ⚠️ **エージェントのサンドボックスで復号しないこと。** `gpg --import` した時点で秘密鍵が
 > ディスク (`$GNUPGHOME/private-keys-v1.d/*.key`) に置かれ、**そのセッション内の任意の
