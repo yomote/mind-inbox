@@ -27,23 +27,28 @@ Key Vault と Cognitive Services は、RG が既に削除済みでも `list-dele
 | ---------------------------------- | ------------------- | --------------------------------------------------- |
 | `RG`                               | `rg-dev-mind-inbox` | 対象リソースグループ                                |
 | `DELETE_ENTRA_APP`                 | `true`              | 自動作成された Entra アプリを削除                   |
-| `FORCE_DELETE_LOG_ANALYTICS`       | `true`              | LA workspace を `--force` で即時削除                |
-| `PURGE_DELETED_KEYVAULTS`          | `true`              | Key Vault の soft-delete を purge                   |
-| `PURGE_DELETED_COGNITIVE_SERVICES` | `true`              | Cognitive Services / OpenAI の soft-delete を purge |
+| `FORCE_DELETE_LOG_ANALYTICS`       | `false`             | LA workspace を `--force` で即時削除                |
+| `PURGE_DELETED_KEYVAULTS`          | `false`             | Key Vault の soft-delete を purge                   |
+| `PURGE_DELETED_COGNITIVE_SERVICES` | `false`             | Cognitive Services / OpenAI の soft-delete を purge |
 | `NO_WAIT`                          | `true`              | `az group delete --no-wait` で非同期削除            |
 | `PURGE_WAIT_SECONDS`               | `1800`              | RG 削除や soft-delete 状態の最大待機秒              |
+
+> **破壊系の既定は off** ([ADR 0046](../../../docs/adr/0046-environment-rebuildable-from-declaration.md) D5/D6)。
+> purge は **soft-delete という唯一の復旧手段を消す**ので、明示的に頼まれた時だけ行う。
+> `DELETE_ENTRA_APP` も既定 off — アプリ登録は RG ではなく**テナントのオブジェクト**で、
+> RG の撤収が持ち主ではない。
 
 ### 例
 
 ```bash
-# 既定（完全クリーンアップ）
+# 既定（RG は消すが、soft-delete による救済は残す）
 RG=rg-dev-mind-inbox ./scripts/env/cleanup-env.sh
 
-# 既存の手動管理 Entra アプリを残す
-RG=rg-dev-mind-inbox DELETE_ENTRA_APP=false ./scripts/env/cleanup-env.sh
-
-# OpenAI account の purge をスキップ（後で手動 recover したい場合など）
-RG=rg-dev-mind-inbox PURGE_DELETED_COGNITIVE_SERVICES=false ./scripts/env/cleanup-env.sh
+# 同じ名前で作り直したいので soft-delete の残骸を退ける
+# （再 provision が「already exists in soft-deleted state」で失敗したときの手当て）
+RG=rg-dev-mind-inbox \
+  PURGE_DELETED_KEYVAULTS=true PURGE_DELETED_COGNITIVE_SERVICES=true \
+  ./scripts/env/cleanup-env.sh
 
 # ヘルプ
 ./scripts/env/cleanup-env.sh --help

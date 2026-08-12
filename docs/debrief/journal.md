@@ -18,6 +18,14 @@
 - **持ち越し**: {未消化の項目・次回に回した判断。無ければ「なし」}
 ```
 
+## 2026-08-12 — design-gate
+
+- **対象**: インフラ整備の 3 件を 1 本にまとめた [ADR 0046](../adr/0046-environment-rebuildable-from-declaration.md) 起案 — [#302](https://github.com/yomote/mind-inbox/issues/302) (ライフサイクル 3 層分断) / [#303](https://github.com/yomote/mind-inbox/issues/303) (設定を宣言に一本化・Entra 含む) / [#306](https://github.com/yomote/mind-inbox/issues/306) (週次プロビジョンテスト)。ADR 0013「常設 dev 環境」の解釈追補を含む
+- **決定**: ADR 0046 を **Accepted** (design-gate で承認)。選択肢形式で PO が 2 点を選択 — **週次プロビジョンテストの発火は土曜 10:00 JST** (`0 1 * * 6` UTC。日曜 03:00 案は「落ちると月曜まで dev が無い」ため退けた) / **設計全体を承認し実装へ**。着手順は D6 安全弁 (即効) → D3 Entra 宣言化 → D9 第 1 段階の手動 dispatch
+- **学びメモ**: 理解確認 1 問 (「SWA のホスト名が変わっても毎週ログインが壊れないのはなぜか」) は設計どおりの理解 — `uniqueName` でアプリ登録が固定され redirect URI だけが追従する、を正答。層分けの動機 (データが消える) から、宣言の冪等キーという実装レベルの帰結まで一続きで追えている
+- **特記**: 設計の中心を「**層の境界は名前が決定的かで引く**」に置いたことで、当初見えていなかった 2 件目の地雷が出た。**Container Apps の FQDN も生成物**で、`main-bootstrap.parameters.json` にハードコードされたうえで `deploy-backend.sh:189-195` が毎回 `az containerapp show` で引き直して黙って上書きしている。つまり **bicep のパラメータは既に陳腐化しており、スクリプトがそれを隠していた** — #306 で bicep だけから作り直すと BFF が ai-agent に届かない状態で立つ。これにより「デプロイスクリプトから設定を撤去する」は整理ではなく #306 の必須条件になった。あわせて **ADR 0017 の認証ゲートも bicep と `deploy-ai-agent.sh:197-203` の二重宣言**であることが判明 (守るべき資源に直結する門なので、どちらが勝つか曖昧なまま放置できない)。**一次ソース確認の成果**: `Microsoft.Graph/oauth2PermissionGrants` が v1.0 のサポート対象と分かり、#303 が「最後の関門」としていた事前 consent の宣言化が可能になった。逆に **what-if が拡張リソースで使えない**ため、Graph を bootstrap に混ぜると [#308](https://github.com/yomote/mind-inbox/issues/308) の what-if 投資が無効化されると分かり、config フェーズへの隔離を判断に含めた。**退行の罠を 1 件先回りで潰した**: `cleanup-env.sh` は現在 `staticSiteEntraAppAutoCreated == true` のアプリ登録しか消しておらず、手作業の SPA 登録は消えていない。宣言化するとそれが deployment output に載り**削除対象に入りうる**ので、`DELETE_ENTRA_APP` の既定を false にする判断 (D5) を同時に入れた
+- **持ち越し**: 移行時に **clientId が一度だけ変わる可能性** (既存アプリに `uniqueName` を後付けできるかが未確認 — D9 第 1 段階で最初に確かめる)。持続層の bicep が検証されない穴 (明示的に先送り)。[PR #292](https://github.com/yomote/mind-inbox/pull/292) が `provision.sh` / `bootstrap-core.bicep` 等を占有しており main と衝突中 — 実装は当面これらのファイルを避け、config フェーズの適用は `deploy.yml` 側に置く
+
 ## 2026-08-11 — design-gate
 
 - **対象**: プロジェクト管理の可視性 (PO 申告「何が進行しているか / ボトルネックが把握できない。大きく線があるはずで戦況的なものがない」) → [ADR 0044](../adr/0044-stream-lanes-as-the-project-map.md) 起案。関連: 別セッションの ADR 0043 (PM 自走モード / PR #284 で審議中 — マージまで `docs/adr/` に無い) / PR #281 (status ページ「プロダクトの現在地」)

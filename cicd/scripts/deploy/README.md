@@ -67,5 +67,5 @@ cd cicd
 RG=<your-rg> ./scripts/env/cleanup-env.sh
 ```
 
-- `main-config` / `main-bootstrap` の outputs から、自動作成した Entra アプリ登録を検出できた場合は先に削除します。
-- 既存の手動管理 Entra アプリを残したい場合は `DELETE_ENTRA_APP=false` を付けてください。
+- **既定では Entra アプリ登録を削除しません** (`DELETE_ENTRA_APP=false`)。アプリ登録は RG ではなく**テナントのオブジェクト**で、RG の撤収が持ち主ではないためです ([ADR 0046](../../../docs/adr/0046-environment-rebuildable-from-declaration.md) D5)。
+- **soft-delete の purge も既定で行いません** (同 D6)。purge は復旧手段を消すので、同名で作り直すために残骸を退ける必要が出たときだけ `PURGE_DELETED_KEYVAULTS=true PURGE_DELETED_COGNITIVE_SERVICES=true` を付けてください。
