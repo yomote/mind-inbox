@@ -35,7 +35,12 @@ export function withDerived(problem: Problem): Problem {
  *   docs/design/domain_rules.md §3 の未決事項。
  */
 export function appendMention(existing: Problem, mention: Mention): Problem {
-  const mentions = [...existing.mentions, mention];
+  const reopening = existing.status !== "open";
+  // 再燃は「**この** Mention が棚卸し済みを open に戻した」という一回きりの事実。追記後の
+  // Problem (status: open / Mention 保存済み) からは再構成できないので、Mention 自身に
+  // 来歴として残す — 同じ下書きの再送でも確定応答を同じにするため (#283)。
+  const stored: Mention = reopening ? { ...mention, reopenedProblem: true } : mention;
+  const mentions = [...existing.mentions, stored];
   return {
     ...existing,
     mentions,

@@ -925,6 +925,42 @@ describe("[単体] consultation.extract — draft commit (#283 / ADR 0039 D1/D3)
     expect((await caller.problem.get({ id: "prob-1" })).mentionCount).toBe(1);
   });
 
+  it("keeps the reignition flag when the reignition commit is re-sent (応答も冪等)", async () => {
+    // 無いと: 棚卸し済み Problem を再燃させた確定の応答が失われて再送すると、2 回目は
+    //         Mention が保存済み・Problem はもう open なので「再燃」を状態から判定できず、
+    //         同じ確定操作なのにレビュー画面の「🔥 再燃」バッジだけが静かに消える (#283 Codex P2)。
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(
+      makeProblem({ status: "resolved", resolvedAt: "2026-01-15T00:00:00.000Z" }),
+    );
+
+    const draft = {
+      items: [
+        {
+          mention: makeMention({ id: "men-r", createdAt: "2026-02-01T00:00:00.000Z" }),
+          grouping: {
+            kind: "existing" as const,
+            problemId: "prob-1",
+            problemTitle: "転職の迷い",
+            problemTheme: "仕事・キャリア" as const,
+            isRecurrence: true,
+            mentionCount: 2,
+            reignited: false, // 下書き時点の申告 (確定時の実績で上書きされる)
+            groupingConfidence: 0.9,
+          },
+        },
+      ],
+    };
+
+    const first = await caller.consultation.extract({ sessionId: "s2", draft });
+    const second = await caller.consultation.extract({ sessionId: "s2", draft });
+
+    expect(first.items[0].grouping.reignited).toBe(true);
+    expect(second).toEqual(first);
+    // 保存データも増えない (書き込みの冪等性は維持)
+    expect((await caller.problem.get({ id: "prob-1" })).mentionCount).toBe(2);
+  });
+
   it("normalizes the returned grouping from the target's state at commit time", async () => {
     // 無いと: preview 後・確定前に別タブで対象のタイトル/テーマを編集したり棚卸ししたりすると、
     //         書き込みは最新の Problem に対して行うのに返却だけ下書き時点の値のままになる。

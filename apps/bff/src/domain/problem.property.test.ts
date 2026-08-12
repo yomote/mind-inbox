@@ -107,6 +107,17 @@ describe("[単体] appendMention (property)", () => {
     );
   });
 
+  it("再燃させた Mention にだけ来歴 (reopenedProblem) が残る — 追記後の状態からは再構成できない (#283)", () => {
+    fc.assert(
+      fc.property(arbProblem(anyIso), arbMention(anyIso), (existing, mention) => {
+        const stored = appendMention(existing, mention).mentions.at(-1);
+        // 追記後は必ず open なので、「棚卸し済みを戻したか」は Mention 側にしか残らない。
+        // 落ちると同じ確定の再送で「再燃」表示だけが静かに消える (応答の冪等性が壊れる)
+        expect(stored?.reopenedProblem === true).toBe(existing.status !== "open");
+      }),
+    );
+  });
+
   it("既存の Mention を 1 件も失わない (追記専用 / domain_model §6-3)", () => {
     fc.assert(
       fc.property(arbProblem(anyIso), arbMention(anyIso), (existing, mention) => {

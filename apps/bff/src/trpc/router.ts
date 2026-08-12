@@ -122,7 +122,8 @@ async function materializeExtraction(
       // ユーザーが「この内容で確定」を押し直すのは普通に起きるが、Mention は不変・追記専用
       // (domain_model.md §2.1) なので、同じ Mention ID が既に入っていれば書くことは何も無い。
       // 無いと同じ Mention が二重に入り mentionCount まで増える (静かなデータ破損)。
-      const alreadyCommitted = target.mentions.some((m) => m.id === mention.id);
+      const committed = target.mentions.find((m) => m.id === mention.id);
+      const alreadyCommitted = committed !== undefined;
 
       // **応答も冪等にする**: この Problem の "種" (最初の Mention) がこの Mention なら、
       // その Problem は**この確定操作が作った**もの = 初回の実績は "new" だった。再送では
@@ -133,8 +134,13 @@ async function materializeExtraction(
       // 来歴自体が変わっている)。
       const seededByThisMention = target.mentions[0]?.id === mention.id;
       const isNew = createdHere.has(target.id) || grouping.kind === "new" || seededByThisMention;
-      // 再燃したか = **この確定で** 棚卸し済みを open に戻したか (appendMention の事後条件)
-      const reignited = !alreadyCommitted && target.status !== "open";
+      // 再燃したか = **この確定で** 棚卸し済みを open に戻したか (appendMention の事後条件)。
+      // 再送では「今の状態」から判定できない (Mention は保存済み・Problem はもう open) ので、
+      // 初回に appendMention が Mention へ残した来歴 (`reopenedProblem`) を読み戻す。
+      // 無いと同じ確定操作なのに 2 回目だけ「再燃」バッジが消える (#283)。
+      const reignited = alreadyCommitted
+        ? committed.reopenedProblem === true
+        : target.status !== "open";
 
       const after = alreadyCommitted ? target : appendMention(target, mention);
       if (!alreadyCommitted) await repo.upsert(after);

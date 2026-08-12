@@ -81,6 +81,15 @@ export const MentionSchema = z.object({
   problemId: z.string().nullable(),
   /** 自動グルーピング時の類似スコア 0..1（手動リンクなら null） */
   groupingConfidence: z.number().min(0).max(1).nullable(),
+  /**
+   * この Mention の追記が棚卸し済み Problem を `open` に戻したか（再燃の来歴 / #283）。
+   * `appendMention` が**保存する Mention にだけ**立てる（抽出時の入力には無いので optional）。
+   *
+   * 無いと再燃が保存後の状態から再構成できない: 確定応答が失われて同じ下書きを再送すると、
+   * 2 回目は Mention が保存済み・Problem も `open` なので「再燃した」と判定しようがなく、
+   * 同じ確定操作なのにレビュー画面の「再燃」表示だけが消える（応答が冪等でなくなる）。
+   */
+  reopenedProblem: z.boolean().optional(),
 });
 export type Mention = z.infer<typeof MentionSchema>;
 
