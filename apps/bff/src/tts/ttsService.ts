@@ -12,7 +12,7 @@
  */
 
 import { isConfigured, synthesize } from "../clients/voicevoxClient";
-import { splitTtsSentences } from "../audio/sentences";
+import { splitTtsSentences } from "../domain/sentences";
 import { concatWavs } from "../audio/wav";
 
 const CACHE_TTL_MS = 5 * 60_000;

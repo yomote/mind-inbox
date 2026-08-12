@@ -22,6 +22,11 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { authEnabled, getAccount, initAuth, login, logout } from "./auth/msal";
 import { useTextToSpeech } from "./voice/useTextToSpeech";
 import { useConsultation } from "./consultation/useConsultation";
+import { useEnvStatus } from "./envstatus/useEnvStatus";
+import { EnvStatusBanner } from "./envstatus/EnvStatusBanner";
+import { StubResponseBanner } from "./components/StubResponseBanner";
+import { resetStubbedResponse } from "./api/stubStatus";
+import { previewSupported } from "./api";
 import type { PaletteMode } from "@mui/material";
 import { AppRouter, ROUTE_PATHS } from "./Router";
 import type { AppRoute, AuthStatus } from "./Router";
@@ -68,6 +73,9 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   // 読み上げ (state 3 + audio ref 5 + VOICEVOX/ブラウザの分岐) は voice/ が所有する (#141)。
   // 音声入力 (STT) は SessionComposer の useVoiceInput が所有する (#121 / ADR 0023)。
   const tts = useTextToSpeech({ standalone, speaker: voicevoxSpeaker });
+
+  // 「今この環境、触って大丈夫?」(env-status-banner.mdx)。VITE_ENV_STATUS_REPO 未設定なら常に unknown。
+  const envStatus = useEnvStatus();
 
   React.useEffect(() => {
     let active = true;
@@ -125,16 +133,33 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
   // 相談フロー (state 9 + ハンドラ 12) は consultation/ が所有する (#142)。
   const consultation = useConsultation(transition);
-  const { speakOnce, unlock, reset: resetTts, toggleEnabled: toggleTtsEnabled } = tts;
+  const {
+    speakOnce,
+    unlock,
+    reset: resetTts,
+    stop: stopTts,
+    clearTransient: clearTtsTransient,
+    toggleEnabled: toggleTtsEnabled,
+  } = tts;
   const { reset: resetConsultation, startConsultation, sendDraftMessage } = consultation;
 
   // iOS は最初のユーザージェスチャ内で一度発話しておかないと、以降の自動読み上げが無音になる。
   // 相談フロー (consultation) と読み上げ (tts) は互いを知らないので、「どのタップが音声の
   // 起点になるか」を知っている Layout がここで束ねる (#141 のレビュー指摘: 分離で配線が消えた)。
   const startConsultationWithAudio = React.useCallback(() => {
+    // 前セッションの読み上げを新しい相談に持ち込まない (#146 レビュー / dialogue-session.mdx
+    // §5.6): 再生中にホームへ戻って開始すると、旧セッションの音声が鳴り続け、メッセージ
+    // 0 件の新セッションのマスコットが speaking のまま表示される。開始タップで止める
+    // (ttsStatus も idle に戻る)。
+    //
+    // **順序は stop → unlock 固定**: stop() は speechSynthesis.cancel() を呼ぶので、
+    // 逆順だと unlock() が enqueue した無音発話 (iOS / ブラウザ読み上げの解錠) を打ち消す。
+    // unlock は解錠済みマーク (ref) で 2 回目以降 no-op になるため、「マークだけ立って
+    // 実際は解錠されていない」状態になり、最初の読み上げが無音になりうる。
+    stopTts();
     unlock();
     return startConsultation();
-  }, [startConsultation, unlock]);
+  }, [startConsultation, stopTts, unlock]);
 
   const sendDraftMessageWithAudio = React.useCallback(() => {
     unlock();
@@ -156,6 +181,16 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     void login();
   }, [authStatus, isDev, transition]);
 
+  // 新しいセッションに前セッションの読み上げ表示 (劣化警告 error / 出力経路) を持ち込まない
+  // (#146 レビュー): stop() は再生 status しか戻さず、挨拶を撤去した (#241) 新セッションには
+  // error を消す契機の speak() も無いため、前セッションの警告が出続けてしまう。
+  // **セッション id が変わった時 = start 成功後にだけ**消す (start 失敗時は旧セッションに
+  // 留まるので警告も残す — stub バナーのリセットと同じ理由)。enabled 設定は触らない。
+  const consultationSessionId = consultation.session?.id ?? null;
+  React.useEffect(() => {
+    clearTtsTransient();
+  }, [consultationSessionId, clearTtsTransient]);
+
   // AI の返事が増えたら読み上げる。同じ id を二度読まない判定は hook 側 (speakOnce)。
   // hook オブジェクトごと依存にすると毎レンダーで再実行されるため、安定な関数だけを取る。
   React.useEffect(() => {
@@ -169,6 +204,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const handleLogout = React.useCallback(() => {
     resetTts();
     resetConsultation();
+    resetStubbedResponse();
     setAuthStatus("anonymous");
     navigate(ROUTE_PATHS.onboarding, { replace: true });
     // standalone（dev / mock デモ）と認証無効ビルドはサインアウト先が無いのでリダイレクトしない。
@@ -258,7 +294,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
           >
             <Box
               component="img"
-              src={`${import.meta.env.BASE_URL}fabicon.png`}
+              src={`${import.meta.env.BASE_URL}favicon.png`}
               alt=""
               sx={{ width: 28, height: 28, borderRadius: 1 }}
             />
@@ -299,7 +335,14 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
       </AppBar>
 
       <Toolbar />
-      <Container maxWidth="md" sx={{ py: 3 }}>
+      <EnvStatusBanner status={envStatus} />
+      {/* BFF が stub 応答のときの警告 (#146)。api 層が立てるフラグを購読するだけ。 */}
+      <StubResponseBanner />
+      {/* 対話画面は 2 ペイン (#187 / ADR 0039) のため広めに取る。他画面は従来の md。 */}
+      <Container
+        maxWidth={currentRoute === "session" && previewSupported ? "lg" : "md"}
+        sx={{ py: 3 }}
+      >
         <Stack spacing={2}>
           {authStatus === "loading" ? (
             <Typography color="text.secondary">認証状態を確認中...</Typography>
@@ -323,6 +366,10 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
                 extraction={consultation.extraction}
                 problems={consultation.problems}
                 selectedProblem={consultation.selectedProblem}
+                previewEnabled={previewSupported}
+                preview={consultation.preview}
+                previewStatus={consultation.previewStatus}
+                handleRefreshPreview={consultation.refreshPreview}
                 themeMode={themeMode}
                 onToggleTheme={onToggleTheme}
                 transition={transition}

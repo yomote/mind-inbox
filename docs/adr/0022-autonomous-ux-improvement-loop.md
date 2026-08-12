@@ -1,6 +1,6 @@
 # 0022. UX 品質は自律改善ループで維持する — 観測・評価・改善 (PR まで) を自動化し、人間は基準定義と例外裁定に徹する
 
-- Status: Accepted (briefing #1, 2026-08-08)
+- Status: Accepted (briefing #1, 2026-08-08) / 一部 Superseded by [0035](0035-role-split-across-agents-and-actions.md) (2026-08-10 — 起動経路のみ。ループの目的と 3 段構成は生きている)
 - Date: 2026-08-08
 - Deciders: omoteforlab (方向性は 2026-08-08 の PM セッションで選択済み — 「PR 作成まで自動 / 会話品質から」)
 - Consulted: —

@@ -1,6 +1,7 @@
 # 0036. マージの門を required check で機構化し、PM の運転リズムを定める
 
 - Status: Accepted (design-gate 2026-08-10 で PO 承認)
+- 運用改訂: [ADR 0042](0042-pm-accept-carryover-and-merge-queue.md) (2026-08-11 PO 裁定) — D1 の pm-accept 失効規則を「実装差分が不変の main 追随には引き継ぐ」に狭め、Considered Options D (merge queue) を実測 (追いつき競争 — PR #243 が 1 日 4 周) で採用に転じた
 - Date: 2026-08-10
 - Deciders: yomote (PO) / PM セッション
 - Related: [ADR 0035](0035-role-split-across-agents-and-actions.md) (役割分担 — 本 ADR はその未決事項「レビューを待つ仕組み」の解) / [ADR 0021](0021-parent-session-as-pm-orchestrator.md) (hub-and-spoke — 条項追加であり supersede しない) / [ADR 0019](0019-independent-judge-agents-security-qa-release.md) / [ADR 0020](0020-hitl-choice-format-and-needs-human-queue.md)
@@ -47,7 +48,7 @@ PR (base = main) ごとに走る Actions workflow が、以下の**揃うまで�
 - required status checks: `review-gate` + `test.yml` の主要ジョブ (+ testing strategy §373 の必須チェック群)
 - Require conversation resolution before merging
 - 直 push / force push の禁止 (PR 経由のみ)
-- **admin (PO) のバイパスは残す** — 緊急時の脱出口。エージェントはバイパスしない
+- **Bypass list は空にする** — 当初「admin (PO) のバイパスを脱出口として残す」としたが、**実測で覆った** (下の実測記録)。このリポジトリはエージェントも PO と同一アカウント (= admin) の資格情報で操作するため、admin バイパス = 全操作素通しになり門が門でなくなる。緊急時の脱出口は **ruleset を一時 Disabled にする** (admin にしかできない操作なので強度は同じ)
 - 設定作業は web UI のみ = needs-human Issue に積む。**設定されるまでの review-gate は「見えるが強制されない」advisory 状態**であり、それでも先に入れる (門の生死と判定精度を先に観測できる)
 
 ### D3 — CLAUDE.md の常設承認を書き換える
@@ -73,7 +74,7 @@ PR (base = main) ごとに走る Actions workflow が、以下の**揃うまで�
 | **直 push (git push / MCP の push_files)** | **通る (無防備)** | branch protection が拒否 |
 | force push | 通る | branch protection が拒否 |
 | 自動改善 PR (ADR 0027) | diff ガードのみ | 同じ門を通る (ガードと併存) |
-| admin (PO) のバイパス | — | **意図して残す** (脱出口) |
+| admin (PO) による ruleset の一時 Disable | — | **意図して残す** (脱出口。bypass 方式は同一アカウント構成で成立せず却下 — 実測記録参照) |
 
 門を 1 枚作っても直 push が開いたままでは意味がない — D1 と D2 は**セットで初めて門になる**。
 
@@ -88,7 +89,7 @@ PR (base = main) ごとに走る Actions workflow が、以下の**揃うまで�
 
 - **マージのリードタイムが延びる** (Codex 待ち + PM tick 待ち。上限は実質 1 営業日)。docs のみ PR は Codex 対象外にして緩和
 - **受け入れコメントの形骸化は機構では防げない** — `[pm-accept]` のコピペは検出できない。質は debrief / po-feedback で監査する
-- Codex が数日沈黙するとコード PR が詰まる。脱出口は PO の admin バイパスのみ (エージェントに waive 権を持たせると門が門でなくなる)
+- Codex が数日沈黙するとコード PR が詰まる。脱出口は PO による ruleset の一時 Disable のみ (エージェントに waive 権を持たせると門が門でなくなる)
 - コメントイベント駆動の required check は SHA への貼り直しが要り、実装がやや繊細 (最初の 2〜3 PR で誤赤・誤緑を観測して直す)
 
 ## Considered Options
@@ -110,8 +111,8 @@ PR (base = main) ごとに走る Actions workflow が、以下の**揃うまで�
 ## 実測記録
 
 - **2026-08-10 (PR #212 / この ADR を入れた PR 自身)**: 検証 1 を通過 — 受け入れコメント前に 🔴「PM 受け入れ ([pm-accept] + 4c411fc) が無い」、コメント投稿 + 再評価で 🟢「受け入れ・スレッド・レビューが揃った」
-- **2026-08-10**: PO が D2 を設定完了 — ruleset (Active / required checks: review-gate + test + lint-and-build / conversation resolution / force push 禁止 / admin バイパス) + `REVIEW_GATE_REQUIRE_CODEX=true` (#211)。Codex GitHub 連携も有効化 (#205)
-- 検証 2 (赤のままマージ拒否) / 4 (docs PR は Codex 不要で緑) / 5 (push で受け入れ失効) は、この記録を積む docs PR で実測する
+- **2026-08-10**: PO が D2 を設定完了 — ruleset (Active / required checks: review-gate + test + lint-and-build / conversation resolution / force push 禁止) + `REVIEW_GATE_REQUIRE_CODEX=true` (#211)。Codex GitHub 連携も有効化 (#205)
+- **2026-08-10 (PR #213) — 検証 2 の初回は不合格**: review-gate 🔴 のまま squash マージが**通ってしまった**。原因は当初設計どおり Bypass list に Repository admin を入れていたこと — エージェントも PO と同一アカウントで操作するため、admin バイパス = 全操作素通しだった。**設計側を修正** (Bypass list 空 / 脱出口は ruleset の一時 Disable) し、ruleset からバイパスを除去して再実測 → この PR 自身で記録
 
 ## 未決
 

@@ -125,19 +125,56 @@ if [[ -z "$PRINCIPAL_ID" ]]; then
 fi
 echo "  Principal ID: $PRINCIPAL_ID"
 
+# 許容するのは「既に同じ割り当てがある」だけ。それ以外の失敗 (権限不足・throttling)
+# を done と表示すると、bicep 側が宣言を見送った run で付与の保証が丸ごと消え、
+# provision は緑のまま ai-agent が OpenAI を呼べなくなる。
 _assign_role() {
-  local role="$1" scope="$2" label="$3"
-  az role assignment create \
+  local role="$1" scope="$2" label="$3" out rc
+  set +e
+  out="$(az role assignment create \
     --assignee-object-id "$PRINCIPAL_ID" \
     --assignee-principal-type ServicePrincipal \
     --role "$role" \
     --scope "$scope" \
-    --output none 2>&1 | grep -v "already exists" || true
-  echo "  $label: done."
+    --output none 2>&1)"
+  rc=$?
+  set -e
+
+  if [[ $rc -eq 0 ]]; then
+    echo "  $label: done."
+    return 0
+  fi
+  # 一意性は principal+role+scope で決まるので、重複エラーは目的が達成済みという意味
+  if grep -qiE "already exists|RoleAssignmentExists" <<<"$out"; then
+    echo "  $label: already assigned."
+    return 0
+  fi
+  echo "ERROR: $label のロール付与に失敗しました (az exit $rc)" >&2
+  echo "$out" >&2
+  return "$rc"
 }
 
 if [[ -n "$OPENAI_ACCOUNT_NAME" ]]; then
-  OPENAI_ID="$(az cognitiveservices account show -g "$RG" -n "$OPENAI_ACCOUNT_NAME" --query id -o tsv 2>/dev/null || true)"
+  # scope が引けなければ _assign_role に到達しない = ロール未付与のまま緑になる。
+  # 「アカウントが無い」(az は exit 3) だけを許容し、参照エラーは落とす。
+  _OAI_ERR="$(mktemp)"
+  set +e
+  OPENAI_ID="$(az cognitiveservices account show -g "$RG" -n "$OPENAI_ACCOUNT_NAME" \
+    --query id -o tsv 2>"$_OAI_ERR")"
+  _OAI_RC=$?
+  set -e
+
+  if [[ $_OAI_RC -ne 0 ]] \
+     && [[ $_OAI_RC -ne 3 ]] \
+     && ! grep -qiE 'ResourceNotFound|was not found|could not be found|does not exist' "$_OAI_ERR"; then
+    echo "ERROR: OpenAI アカウント '$OPENAI_ACCOUNT_NAME' を参照できませんでした (az exit $_OAI_RC)。" >&2
+    echo "       ロール付与の可否を判定できないため中断します (未付与のまま緑にしない)。" >&2
+    cat "$_OAI_ERR" >&2
+    rm -f "$_OAI_ERR"
+    exit "$_OAI_RC"
+  fi
+  rm -f "$_OAI_ERR"
+
   if [[ -n "$OPENAI_ID" ]]; then
     _assign_role "$ROLE_OPENAI_USER" "$OPENAI_ID" "Cognitive Services OpenAI User"
   else

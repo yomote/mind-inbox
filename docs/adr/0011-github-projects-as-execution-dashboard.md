@@ -1,6 +1,6 @@
 # 0011. GitHub Projects は実行状態のダッシュボードに徹し、設計の真実は docs に置く
 
-- Status: Accepted (debrief #1, 2026-08-06)
+- Status: Accepted (debrief #1, 2026-08-06) — 一部改訂: 実行ダッシュボードの描画面を Projects board から status ページの戦況図へ移すことを決定 ([ADR 0044](0044-stream-lanes-as-the-project-map.md), 2026-08-11。**描画の実装は #289 待ちで、それまで戦況図を見る手段は `/status` skill のみ**)。「Issues が実行状態の真実 / board に設計を書かない」の核は維持
 - Date: 2026-07-19
 - Deciders: omoteforlab
 - Consulted: —

@@ -11,7 +11,7 @@ import { ProblemListSpecPreview } from '../../../frontend/src/spec/previews/Prob
 ## 困りごと一覧（UC-02）
 
 蓄積された Problem を俯瞰し、継続テーマに気づくための一覧。
-既定は**直近言及順**で、再出現を `🔁N回` バッジで常時強調する。
+既定は**直近言及順**で、再出現を回数バッジ（`Repeat` アイコン + `N回`）で常時強調する。
 
 <ProblemListSpecPreview />
 
@@ -28,7 +28,9 @@ import { ProblemListSpecPreview } from '../../../frontend/src/spec/previews/Prob
 - 「棚卸し済みも表示」トグル（既定は `open` のみ表示。`resolved`/`shelved` は隠す＝参照可）
 - Problem カード:
   - タイトル
-  - `🔁 N回` バッジ（`mentionCount > 1` のとき。再出現の常時強調）
+  - `N回` バッジ（`mentionCount > 1` のとき。再出現の常時強調）。アイコンは
+    `@mui/icons-material` の `Repeat` を Chip の `icon` prop で表示する（絵文字は使わない —
+    [共通規約](./README.mdx)）
   - 状態チップ（追跡中 / 解決 / 棚卸し）
   - テーマチップ + 最終言及の相対表示
   - 要約（`summary`）

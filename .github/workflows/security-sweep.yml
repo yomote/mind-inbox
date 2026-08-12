@@ -1,0 +1,160 @@
+# 週次のセキュリティスキャン (ADR 0038 — 常時層)。
+#
+# 背景: セキュリティ検査は 3 層の設計 (常時スキャン / PR の @codex security review /
+#   release-gate の security-reviewer) があるのに、トリガーが全部「人の判断」だったため
+#   全層で実績ゼロだった。この workflow は常時層のトリガーを機構に移す。
+#
+# 分担: スキャナ (npm audit / pnpm audit / pip-audit / gitleaks) はここで回し、
+#   解釈 (severity 集計 / Issue 本文 / 実行できなかったツールの明示) は
+#   cicd/scripts/security-sweep/sweep.py (テスト済みの純関数) がやる。
+#   検出の severity 判定 (到達可能性・実害) はこの機構ではできない —
+#   カバー外領域とともに Issue 本文と run ログに毎回明示する。
+#
+# 起票規則 (debt-check と同じ冪等パターン): 検出 > 0 のときだけ
+#   `[security-sweep] YYYY-MM-DD: 検出 N 件` の Issue を立てる。既存 open の
+#   [security-sweep] Issue があれば新規に立てずコメント追記。0 件なら起票せず
+#   run 緑のみ — 動いた痕跡は run 履歴が持つ (ADR 0035 D1)。
+#
+# 各ツールの `|| true` は「検出あり = 非 0 exit」を握るためのもの。ツール自体の
+#   失敗は握り潰されない — 出力 JSON が読めなければ sweep.py が「実行できず」として
+#   数え、後段の step が run を落とす (取れなかったものを合格と書かない)。
+name: security-sweep
+
+on:
+  schedule:
+    - cron: "30 21 * * 0" # 月曜 06:30 JST (= 日曜 21:30 UTC)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  # ツールのバージョンは固定する (ADR 0025 の :latest 禁止と同じ理由 —
+  # 「先週と違う結果」の原因がツール更新か依存の変化か区別できなくなる)。
+  GITLEAKS_VERSION: 8.24.3
+  GITLEAKS_SHA256: 9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c
+  PIP_AUDIT_VERSION: 2.9.0
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # npm / pnpm audit は lockfile だけで動く (install 不要)。
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: npm audit (root / apps/bff)
+        run: |
+          mkdir -p /tmp/sweep-reports
+          npm audit --json > /tmp/sweep-reports/npm-root.json || true
+          npm --prefix apps/bff audit --json > /tmp/sweep-reports/npm-bff.json || true
+
+      - name: pnpm audit (apps/frontend)
+        run: |
+          pnpm --dir apps/frontend audit --json > /tmp/sweep-reports/pnpm-frontend.json || true
+
+      # ai-agent は uv.lock が正典 (CLAUDE.md) — pip-audit は uv.lock を直接読めないので
+      # uv export で固定版 requirements に落としてから照合する (--no-deps = lock の全依存
+      # をそのまま照合。解決し直さない)。voicevox は lockfile が無く requirements.txt の
+      # 直接依存のみ — この狭さは sweep.py がレポートに明示する。
+      - name: pip-audit (ai-agent / voicevox)
+        run: |
+          uv export --directory apps/services/ai-agent --format requirements-txt \
+            --no-emit-project --no-hashes --no-dev -o /tmp/ai-agent-req.txt
+          uvx "pip-audit==${PIP_AUDIT_VERSION}" -r /tmp/ai-agent-req.txt --no-deps \
+            -f json -o /tmp/sweep-reports/pip-audit-ai-agent.json || true
+          uvx "pip-audit==${PIP_AUDIT_VERSION}" -r apps/services/voicevox/requirements.txt \
+            --no-deps -f json -o /tmp/sweep-reports/pip-audit-voicevox.json || true
+
+      # gitleaks はランナーに無い — バイナリを固定バージョン + checksum 検証で入れる。
+      # 対象は HEAD スナップショット (dir スキャン)。git 履歴は見ない (カバー外として明示)。
+      - name: gitleaks (HEAD snapshot)
+        run: |
+          curl -sSL --retry 3 -o /tmp/gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tgz" | sha256sum -c -
+          tar -C /tmp -xzf /tmp/gitleaks.tgz gitleaks
+          /tmp/gitleaks dir . --no-banner --exit-code 0 \
+            --report-format json --report-path /tmp/sweep-reports/gitleaks.json
+
+      - name: 集計 (severity 別 + カバー外の明示)
+        id: sweep
+        run: |
+          python3 cicd/scripts/security-sweep/sweep.py /tmp/sweep-reports > /tmp/sweep-report.json
+          jq -r '.markdown' /tmp/sweep-report.json > /tmp/sweep-report.md
+          echo "total=$(jq -r '.total' /tmp/sweep-report.json)" >> "$GITHUB_OUTPUT"
+          echo "failed=$(jq -r '.failed | length' /tmp/sweep-report.json)" >> "$GITHUB_OUTPUT"
+          echo "severity_line=$(jq -r '.severity_line' /tmp/sweep-report.json)" >> "$GITHUB_OUTPUT"
+          # カバー外領域をログにも出す (Issue が立たない 0 件の週でも「狭さ」が見えるように)
+          cat /tmp/sweep-report.md
+          cat /tmp/sweep-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 検出があれば Issue を起票 / 追記
+        if: steps.sweep.outputs.total != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TOTAL: ${{ steps.sweep.outputs.total }}
+          SEVERITY_LINE: ${{ steps.sweep.outputs.severity_line }}
+        run: |
+          gh label create security-sweep -R "$GITHUB_REPOSITORY" --color b60205 \
+            --description "週次のセキュリティスキャンが立てた Issue (ADR 0038)" 2>/dev/null || true
+
+          # 既存 open の [security-sweep] Issue に追記する (debt-check と同じ冪等パターン)。
+          # 毎週別 Issue を立てると一覧が氾濫し、誰も読まなくなる
+          EXISTING=$(gh issue list -R "$GITHUB_REPOSITORY" --label security-sweep --state open \
+                       --json number,title --limit 50 \
+                       --jq '[.[] | select(.title | startswith("[security-sweep]")) | .number] | first // empty')
+
+          TITLE="[security-sweep] $(date -u -d '+9 hours' +%Y-%m-%d): 検出 $TOTAL 件 ($SEVERITY_LINE)"
+          {
+            echo "$TITLE"
+            echo ""
+            echo "- run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo ""
+            cat /tmp/sweep-report.md
+          } > /tmp/sweep-issue-body.md
+
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" -R "$GITHUB_REPOSITORY" -F /tmp/sweep-issue-body.md
+            echo "既存の #$EXISTING に追記した"
+          else
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$TITLE" \
+              --label security-sweep -F /tmp/sweep-issue-body.md || {
+              # ここで黙って終わると「起票したつもり」になる (report-failure と同じ理由)
+              echo "::error::Issue を作成できなかった (permissions: issues: write を確認)"
+              exit 1
+            }
+            echo "新規 Issue を立てた"
+          fi
+
+      # 「実行できず」のツールがあったら run を落とす。findings の起票は上で済んでいる —
+      # 検査できなかった対象を緑のまま残さない (取れなかったものを合格と書かない)。
+      - name: ツールが回らなかったら落とす
+        if: steps.sweep.outputs.failed != '0'
+        run: |
+          echo "::error::${{ steps.sweep.outputs.failed }} 個のツールの出力を読めなかった (詳細は集計 step のログ)"
+          exit 1
+
+      # 落ちたことに気づける唯一の経路 (ADR 0035 D2)。
+      - name: 失敗を Issue にする / 復旧したら閉じる
+        if: always()
+        uses: ./.github/actions/report-failure
+        with:
+          job-status: ${{ job.status }}
+          # 集計まで走り、全ツールの出力を読めたときだけ「仕事が済んだ」と言える
+          work-ran: ${{ steps.sweep.outcome == 'success' && steps.sweep.outputs.failed == '0' }}
+          what: "**週次のセキュリティスキャン (security-sweep) が実行できていません。** 依存の既知 CVE・コミットされた秘密の検出が止まっており、脆弱性が静かに積もります。"

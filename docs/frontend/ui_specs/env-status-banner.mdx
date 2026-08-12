@@ -1,0 +1,59 @@
+---
+id: env-status-banner
+title: 環境ステータスバナー（全画面共通）
+status: implemented
+owner: frontend
+---
+
+## 環境ステータスバナー
+
+dev 環境は main への push ごとに自動デプロイされ（ADR 0013）、デプロイ直後の数分は
+BFF の再起動で応答が不安定になる（#118）。その間にユーザー（PO）が触ると、原因の
+分からないエラーに見える — 2026-08-10 の抽出エラー調査で実際に起きた。
+
+このバナーは「今この環境、触って大丈夫?」を**触る場所そのもの（アプリ）に**出す。
+状況ページや GitHub Actions を見に行く一手間を無くすことが存在理由。
+
+## 表示仕様
+
+ヘッダー（AppBar）直下・コンテンツの上に全幅で表示する。全画面共通。
+
+| 状態 | 表示 | 判定 |
+| --- | --- | --- |
+| `deploying` | 🟡 warning「デプロイ進行中です — 数分間、応答が不安定になることがあります」 | deploy workflow に進行中（`status != completed`）の run がある |
+| `broken` | 🔴 error「直近のデプロイ検証が失敗しています — 一部の機能が動かない可能性があります（状況ページ）」 | 直近の完了 run の `conclusion != success` |
+| `ok` / `unknown` | 何も表示しない | 直近成功 / 判定不能・機能無効 |
+
+- `deploying` と `broken` が同時に成立する場合（直前が赤 + いま再デプロイ中）は
+  **`deploying` を優先**する。走っている deploy が直すかもしれない状況で赤を出すと
+  「触るな」と読めてしまうため
+- `broken` の「状況ページ」は <https://yomote.github.io/mind-inbox/status/> へのリンク
+- 観測点: バナー要素に `data-env-status`（`deploying` / `broken`）を付与する
+
+## データソースと更新
+
+- 公開リポジトリの GitHub Actions API を**匿名で**読む:
+  `GET https://api.github.com/repos/{VITE_ENV_STATUS_REPO}/actions/workflows/deploy.yml/runs?branch=main&per_page=5`
+- 初回マウント時 + 180 秒ごとのポーリング + **タブがフォアグラウンドに戻った瞬間**に再取得
+  （「ぱっと触るとき」に最新であることが目的なので visibilitychange が本命）
+- 匿名 API の rate limit（60 req/h/IP）は**全タブで共有**されるため、超えない設計を 3 段で持つ:
+  背面タブは fetch しない / 結果を localStorage（TTL 150 秒）で全タブ共有し TTL 内は
+  fetch しない / ポーリング 180 秒 = 20 req/h/タブ。別タブの取得結果は storage イベントで
+  即時反映する
+- 取得が並行した場合は**最新の要求だけ**が表示を更新する（古いレスポンスが新しい判定を
+  巻き戻さない）
+- 取得失敗（rate limit / ネットワーク断）は無視して直前の表示を保つ。バナー自身の障害で
+  アプリを巻き込まない
+
+## 有効化の条件
+
+- ビルド時変数 `VITE_ENV_STATUS_REPO`（`owner/repo`）が焼き込まれている場合のみ動く。
+  CI デプロイでは `deploy-frontend.sh` が `GITHUB_REPOSITORY` から自動設定する
+- 未設定（ローカル dev / mock デモ / テスト / E2E）では **fetch を一切しない**。
+  外部サービス無しで動く特性（stub fallback）を壊さないため
+
+## 実装対応
+
+- 実装ファイル: `frontend/src/envstatus/useEnvStatus.ts` / `frontend/src/envstatus/EnvStatusBanner.tsx`（表示は `Layout.tsx` が配線）
+- 関連: #118（デプロイ直後の不安定窓）/ #146（stub 応答の警告バナー — あちらは BFF の
+  応答フラグで「偽物の応答」を可視化する別機構。本バナーは「環境の状態」を可視化する）

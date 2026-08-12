@@ -68,7 +68,10 @@ test.describe.serial("ユースケースのゴールデンパス (UC-01 → 02 �
     await startConsultationAndSay(page, TOPIC.again);
     await extractProblems(page);
     await expect(page.getByText("既存に追加", { exact: true })).toBeVisible();
-    await expect(page.getByText("🔁 2回目")).toBeVisible();
+    // 回数バッジは MUI アイコン (Repeat) + 「N回目」— 絵文字ではない (#237 / ui_specs 共通規約)
+    const recurrenceChip = page.locator(".MuiChip-root", { hasText: "2回目" });
+    await expect(recurrenceChip).toBeVisible();
+    await expect(recurrenceChip.locator('svg[data-testid="RepeatIcon"]')).toBeVisible();
     await expect(page.getByText("再燃", { exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: "困りごと一覧へ" }).click();
