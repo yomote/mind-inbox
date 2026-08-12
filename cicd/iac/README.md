@@ -295,7 +295,7 @@ frontend 側で `VITE_VOICEVOX_BASE_URL` に設定してください。
 
 **「消えると困る設定」は、正確には「宣言されていない設定」**です。ここには **bicep の外にある設定を全部**列挙します。**新しく宣言の外に設定を作ったら、必ずここに 1 行足すこと。**
 
-> 方針として、**設定は bicep に一本化する**のが目標です（[#303](https://github.com/yomote/mind-inbox/issues/303)）。下の「デプロイスクリプトが設定するもの」は**将来 bicep へ移す対象**で、恒久的な例外ではありません。恒久的な例外は「GitHub 側の設定」と「Entra のアプリ登録」の 2 つだけです。
+> 方針として、**設定は bicep に一本化する**のが目標です（[#303](https://github.com/yomote/mind-inbox/issues/303)）。下の「デプロイスクリプトが設定するもの」と「Entra のアプリ登録」は**将来 bicep へ移す対象**で、恒久的な例外ではありません。**恒久的な例外は「GitHub 側の設定」だけ**です (Azure ではないため bicep の管轄外)。
 
 ### 8-1. GitHub Actions Variables（恒久的な例外 — Azure ではない）
 
@@ -330,11 +330,22 @@ gh secret list -R yomote/mind-inbox   # GITHUB_TOKEN は表示されない（自
 
 **ここに秘密を足す前に ADR を書くこと。** 現状ゼロであること自体が設計判断です。
 
-### 8-3. Entra のアプリ登録（恒久的な例外 — ARM リソースではない）
+### 8-3. Entra のアプリ登録（**恒久的な例外ではない** — Graph Bicep で宣言できる）
 
-Entra のオブジェクトは ARM リソースではないため、**bicep で直接宣言できません**。`main-config.bicep` が `Microsoft.Resources/deploymentScripts`（宣言の中に命令を埋める形）で処理しています。
+> **2026-08-12 訂正**: 当初この節は「Entra は ARM リソースではないので bicep で宣言できない = 恒久的な例外」と書いていたが、**誤り**。[Microsoft Graph Bicep 拡張](https://learn.microsoft.com/en-us/graph/templates/bicep/overview-bicep-templates-for-graph)は **GA** しており、`Microsoft.Graph/applications` などを **Azure リソースと同じテンプレートに**書ける。
 
-- 手順: [3. Entra 認証を有効化する](#3-entra-認証を有効化する) / [Runbook](../../docs/runbooks/entra-spa-auth-and-budget.md)
+現状は `main-config.bicep` が `Microsoft.Resources/deploymentScripts`（宣言の中に命令を埋める形）で処理している。**これは移行対象**（[#303](https://github.com/yomote/mind-inbox/issues/303)）。
+
+移行前に確認すべき制約（[一次ソース](https://learn.microsoft.com/en-us/graph/templates/bicep/limitations)）:
+
+| 制約 | このリポジトリへの影響 |
+| --- | --- |
+| **アプリのパスワード（`passwordCredentials`）が非対応**。`keyCredentials` のみ | **ここが分かれ目。** クライアントシークレットが要る構成なら `DeploymentScript` が残る。SPA + フェデレーション資格情報 (OIDC) で済むなら宣言化できる |
+| **what-if が使えない**（拡張リソース全般） | [2-1. 事前確認](#2-1-事前確認build--what-if) の網から Graph 部分が外れる。事前確認の手順を見直す必要がある |
+| role-assignable group が非対応 | 該当なし |
+| Deployment stacks 非対応 | 該当なし |
+
+- 現行の手順: [3. Entra 認証を有効化する](#3-entra-認証を有効化する) / [Runbook](../../docs/runbooks/entra-spa-auth-and-budget.md)
 - 確認: `az ad app list --display-name <app-name>` / Functions 側は `ops-inspect` の `azure-resources`（EasyAuth の実測値が出る）
 - **RG を消しても Entra のアプリ登録は消えません**（テナントに属するため）。逆に言うと、環境を作り直したときに**古いアプリ登録が残って混乱する**ことがあります
 
