@@ -1,8 +1,8 @@
 # 0048. 子セッションは再び起動できる — 会話は Routine 経由で片道 1 分なので、分配先は往復の少ない作業に限る
 
-- Status: Proposed
+- Status: Accepted (debrief, 2026-08-12)
 - Date: 2026-08-12
-- Deciders: omoteforlab (Accept は debrief で)
+- Deciders: omoteforlab (2026-08-12 の debrief で Accept)
 - Consulted: —
 - Informed: —
 
