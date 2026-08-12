@@ -358,11 +358,20 @@ gh secret list -R yomote/mind-inbox   # GITHUB_TOKEN は表示されない（自
 
 **現状ここが宣言の外にあるため、bicep から環境を作り直しても、デプロイが走るまで設定が入りません。**
 
-| スクリプト | 何を設定しているか |
-| --- | --- |
-| `cicd/scripts/deploy/deploy-ai-agent.sh` | Container App の環境変数（`--set-env-vars`）/ 認証ゲート（`az containerapp auth ... update`） |
-| `cicd/scripts/deploy/deploy-voicevox-wrapper.sh` | Container App の環境変数 / 認証ゲート |
-| `cicd/scripts/deploy/deploy-backend.sh` | Function App の appsettings（`az functionapp config appsettings set`） |
+| スクリプト | 何を設定しているか | 持ち主 |
+| --- | --- | --- |
+| `cicd/scripts/deploy/deploy-ai-agent.sh` | Container App の環境変数（`--set-env-vars`） | **シェルのみ**（宣言の外） |
+| `cicd/scripts/deploy/deploy-voicevox-wrapper.sh` | Container App の環境変数 | **シェルのみ**（宣言の外） |
+| `cicd/scripts/deploy/deploy-backend.sh` | Function App の appsettings（`az functionapp config appsettings set`） | **シェルのみ**（宣言の外） |
+
+> **⚠️ 認証ゲート（[ADR 0017](../../docs/adr/0017-container-apps-access-via-auth-gate.md)）はこの表に入りません — 宣言の外ではなく「二重管理」です。**
+> `bootstrap-core.bicep:1133-1187` の `aiAgentAuthConfig` / `voicevoxWrapperAuthConfig` が
+> `containerAppsGateClientId` 非空のとき同じ `current` authConfig を**既に宣言しており**、
+> かつ `deploy-ai-agent.sh` / `deploy-voicevox-wrapper.sh` も
+> `az containerapp auth ... update` で設定しています。
+> つまり「デプロイが走るまで設定が入らない」のではなく、**どちらが勝つかが曖昧**な状態です。
+> 守るべき資源（OpenAI の課金）に直結する門なので、持ち主の一本化は [#303](https://github.com/yomote/mind-inbox/issues/303) の対象。
+> **本 PR のスコープ外**（本 PR はロール割り当ての一本化のみ）。
 
 > **ロール割り当てはこの表に載りません（本 PR で撤去済み）。** 以前は `deploy-ai-agent.sh` が
 > `az role assignment create` で OpenAI User を付与し、`provision.sh` が
