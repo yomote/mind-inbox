@@ -56,8 +56,9 @@ for a in "$@"; do
   prev="$a"
 done
 case "${STUB_MODE:-ok}" in
-  ok)        printf 'PGP-CIPHERTEXT+DATA' > "$out"; exit 0 ;;
-  truncated) printf 'PGP-CIPHERTEXT' > "$out"; exit 0 ;;  # ← PKESK だけの部分書き込み
+  ok)        { printf 'PGP-CIPHERTEXT+DATA'; cat "${!#}"; } > "$out"; exit 0 ;;
+  truncated) printf 'PGP-CIPHERTEXT+DATA' > "$out"; exit 0 ;;  # ← パケット名は揃うがサイズが足りない
+  pkesk)     printf 'PGP-CIPHERTEXT' > "$out"; exit 0 ;;       # ← PKESK だけの部分書き込み
   fail)      exit 2 ;;
   empty)     : > "$out"; exit 0 ;;   # ← rc=0 なのに中身が空 (2026-08-12 に踏んだ失敗)
   plaintext) cp "${!#}" "$out"; exit 0 ;;  # ← 暗号化せず平文を置く最悪ケース
@@ -177,10 +178,30 @@ def test_単体_PKESK_だけに切り詰められた暗号文は落とす(tmp_pa
     しかも元の trace は既に消えている。
     """
     key, env = _setup(tmp_path)
-    env["STUB_MODE"] = "truncated"
+    env["STUB_MODE"] = "pkesk"
     r = _run(tmp_path, key, env)
     assert r.returncode == 1, "切り詰められた暗号文を正常扱いしている"
     assert "OpenPGP" in r.stdout
+    leftovers = list((tmp_path / "out").glob("*")) if (tmp_path / "out").exists() else []
+    assert leftovers == [], f"検証に落ちたファイルが残っている: {leftovers}"
+
+
+def test_単体_パケット名が揃っていてもサイズが足りなければ落とす(tmp_path: Path):
+    """Codex P2 2 巡目 (PR #300) の回帰テスト。
+
+    実測: 7196 byte の暗号文を 529 / 700 / 3000 byte に切り詰めても
+    `gpg --list-packets` は**同じ rc・同じパケット名**を出し、警告も出さない。
+    つまり**パケット名の検査では切り詰めを検出できない**。
+
+    `-z 0` (無圧縮) なら暗号文は必ず平文以上のサイズになるので、その不変条件で補う。
+
+    無いと何が静かに通るか: 「暗号化済み」として artifact に残るのに復号できない。
+    気づくのは証拠が必要になった瞬間で、そのとき元の trace はもう無い。
+    """
+    key, env = _setup(tmp_path)
+    env["STUB_MODE"] = "truncated"
+    r = _run(tmp_path, key, env)
+    assert r.returncode == 1, "パケット名だけ揃った短いファイルを通している"
     leftovers = list((tmp_path / "out").glob("*")) if (tmp_path / "out").exists() else []
     assert leftovers == [], f"検証に落ちたファイルが残っている: {leftovers}"
 

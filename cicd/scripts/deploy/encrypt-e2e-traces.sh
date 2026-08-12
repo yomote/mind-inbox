@@ -50,9 +50,12 @@ encrypted=0
 for t in "${traces[@]}"; do
   name="$(printf '%s' "${t#"$TRACE_ROOT"/}" | tr '/' '_')"
   out="$OUT_DIR/${name}.gpg"
-  if ! gpg --batch --yes --trust-model always \
+  # -z 0 で圧縮を切る。入力は zip で既に圧縮済みなので圧縮の得は無く、かつ
+  # **暗号文サイズ >= 平文サイズ** が成り立つので、下の完全性チェックに使える。
+  if ! gpg --batch --yes --trust-model always -z 0 \
            --encrypt --recipient "$RECIPIENT" -o "$out" "$t"; then
     echo "::error::暗号化に失敗しました: $t"
+    rm -f "$out"
     exit 1
   fi
   # 出力が本当に OpenPGP メッセージかを確かめる。gpg が失敗しても空ファイルが残る
@@ -71,11 +74,26 @@ for t in "${traces[@]}"; do
   # **復号不能な部分書き込みが検査を通ってしまう** (Codex P2 / 実鍵で再現済み)。
   # 実データのパケット (新しい gpg は `:aead encrypted packet:` / 旧 cipher は
   # `:encrypted data packet:`) の存在まで確認する。
+  #
+  # **パケット名の検査だけでは切り詰めを検出できない** (Codex P2 / 2026-08-12 実測)。
+  # 7196 byte の実暗号文を 529 / 700 / 3000 byte に切り詰めても、`--list-packets` は
+  # どれも同じ rc・同じパケット名を出し、警告も出さない。**gpg にこれを見分けさせる
+  # 手段は無い**ので、別の不変条件で補う:
+  #
+  #   `-z 0` (無圧縮) なので **暗号文は必ず平文以上のサイズになる**。
+  #   途中で切れたファイルはこの不等式を破る。
+  #
+  # 完全な保証ではない (末尾数バイトの欠落は捕まらない) が、gpg の終了コード・
+  # パケット名・サイズの 3 つを重ねることで、現実的な部分書き込みは塞げる。
+  # 真の完全性検証には復号が要り、CI は秘密鍵を持たない (持たせてはいけない)。
   packets="$(gpg --batch --list-packets "$out" 2>/dev/null || true)"
+  plain_size=$(wc -c < "$t")
+  cipher_size=$(wc -c < "$out")
   if [ ! -s "$out" ] \
      || ! printf '%s' "$packets" | grep -q ':pubkey enc packet:' \
-     || ! printf '%s' "$packets" | grep -qE ':(aead encrypted packet|encrypted data packet):'; then
-    echo "::error::出力が OpenPGP メッセージになっていません: $out"
+     || ! printf '%s' "$packets" | grep -qE ':(aead encrypted packet|encrypted data packet):' \
+     || [ "$cipher_size" -lt "$plain_size" ]; then
+    echo "::error::出力が完全な OpenPGP メッセージになっていません: $out (平文 ${plain_size}B / 暗号文 ${cipher_size}B)"
     # **検証に落ちたファイルを残さない。** 残すと、後続の upload ステップが
     # `hashFiles` で「.gpg が 1 つでもあれば真」と判定して部分成果物を公開しうる
     # (Codex P1 / PR #300)。中身が平文の可能性があるものをディスクに置かない。
