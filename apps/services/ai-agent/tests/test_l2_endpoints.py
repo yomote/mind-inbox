@@ -165,7 +165,54 @@ class TestChatStream:
 
         events = _parse_sse_events(body)
         assert events[-1]["type"] == "error"
-        assert "LLM connection lost" in events[-1]["message"]
+        # 追跡できる形は保つ (ref があればサーバのログ行に辿り着ける)
+        assert "ref:" in events[-1]["message"]
+
+    async def test_単体_ストリームのエラー本文に上流の例外文を載せない(
+        self, client, monkeypatch
+    ):
+        # 無いと: Azure OpenAI SDK の例外文 (エンドポイント URL / デプロイ名 /
+        # api-version / コンテンツフィルタが引用したプロンプト断片) が
+        # BFF の素通しでブラウザの devtools まで届く (Issue #313 / rubric S3)
+        upstream = (
+            "AuthenticationError: https://aoai-dev-mindbox.openai.azure.com/"
+            " deployment=gpt-4o api-version=preview 「転職したい」"
+        )
+
+        async def broken_stream(session_id, message, sr, ar):
+            raise RuntimeError(upstream)
+            yield  # pragma: no cover — 非同期ジェネレータにするためだけの行
+
+        monkeypatch.setattr(app_main, "run_workflow_stream", broken_stream)
+
+        async with client.stream(
+            "POST", "/chat/stream", json={"session_id": "s1", "message": "転職したい"}
+        ) as res:
+            body = ""
+            async for chunk in res.aiter_text():
+                body += chunk
+
+        message = _parse_sse_events(body)[-1]["message"]
+        for leaked in ("openai.azure.com", "gpt-4o", "api-version", "転職したい"):
+            assert leaked not in message, leaked
+
+    async def test_単体_chat_の_500_応答に上流の例外文を載せない(
+        self, client, monkeypatch
+    ):
+        # 無いと: 同じ流出が非ストリーミング経路 (detail=str(exc)) から起き続ける
+        async def boom(*args, **kwargs):
+            raise RuntimeError(
+                "https://aoai-dev-mindbox.openai.azure.com/ deployment=gpt-4o"
+            )
+
+        monkeypatch.setattr(app_main, "run_workflow", boom)
+
+        res = await client.post("/chat", json={"session_id": "s1", "message": "テスト"})
+        assert res.status_code == 500
+        detail = res.json()["detail"]
+        assert "openai.azure.com" not in detail
+        assert "gpt-4o" not in detail
+        assert "ref:" in detail
 
 
 # ---- /extract ---------------------------------------------------------------
