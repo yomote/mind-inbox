@@ -16,6 +16,12 @@
 - CD（Actions）経由なら追加ツール不要。**device-code セッションから `provision.sh` を直接叩く場合**は
   `az` / `node`(npm) / `pnpm` / `zip` / `curl` に加え **SWA CLI** が必要:
   `npm i -g @azure/static-web-apps-cli`
+- **既存の手動ロール割り当てが残っていないこと**（初回のみ）— ロール割り当ての持ち主は
+  bicep 1 本で、デプロイスクリプトからは作らない。スクリプト時代に作られた
+  ai-agent MI → Cognitive Services OpenAI User の割り当てが残っていると、bicep の宣言が
+  `RoleAssignmentExists` で拒否され bootstrap ごと落ちる（= dev が古いまま止まる / #262）。
+  残っていれば **1 回だけ手で削除**する（削除権限が要るので人手 / Issue #297）。
+  手順は [`cicd/scripts/deploy/README.md`](../../cicd/scripts/deploy/README.md#前提条件-古い手動割り当てが残っていないこと-297)
 
 ## Steps
 
