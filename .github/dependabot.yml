@@ -1,0 +1,171 @@
+# Dependabot — 依存と Action の更新 (Issue #313 / #311 / #316)
+#
+# ■ この設定が解く問題
+#   security-sweep (週次) は既知 CVE を **検出して Issue にする** ところまでで、
+#   直す PR は誰も作らない。Dependabot は「直す PR」の側を機械化する。
+#   github-actions ecosystem は #311 で入れた SHA 固定の**維持装置**でもある —
+#   `uses: owner/repo@<sha> # vX.Y.Z` の sha とコメントを両方追従してくれるので、
+#   pin が「入れたら古くなる」だけの負債にならない。
+#
+# ■ PR 洪水を避けるための設計 (2026-08 初回スキャンで既知 CVE 102 件 / #316)
+#   素直に有効化すると 100 本規模の PR が立ち、開発が止まる。3 段で抑える:
+#
+#   1. **groups で 1 エコシステム 1 PR に畳む** — version-updates と
+#      security-updates の**両方**に `patterns: ["*"]` のグループを置く。
+#      グループは security update にも効く (`applies-to: security-updates`)。
+#      これが 102 件を「manifest ごとに 1 本」へ畳む主装置。
+#   2. **open-pull-requests-limit: 1** — 同時に開く version update PR を
+#      manifest あたり 1 本に制限する。前の 1 本を片づけない限り次は来ない
+#      (= 溜まらない。溜まっていること自体が「手が回っていない」の signal)。
+#      ※ この上限は version update 用。security update は別枠なので、
+#        「洪水を止めた結果 CVE の修正 PR まで止まる」ことにはならない。
+#   3. **interval: monthly** — 版上げは月次に寄せ、PR の到着を予測可能にする。
+#      CVE 由来 (security update) は repo 設定側の即時トリガーで来るので、
+#      月次にしても「危険なものが 1 か月放置される」ことにはならない。
+#
+#   `ignore` で major を切る手は**採らない** — ignore は security update にも
+#   効いてしまい、「major でしか直らない CVE」が静かに落ちるため。major は
+#   グループに含めたうえで、壊れたら PR ごと閉じる (1 本なので安い)。
+#
+# ■ 前提 (ファイルだけでは完結しない)
+#   このファイルは **version update** の設定。Dependabot alerts /
+#   security updates の有効化は Settings → Code security 側のスイッチで、
+#   ここには書けない (needs-human)。
+#
+# ■ 運用上の注意
+#   Dependabot の PR も required check `review-gate` (ADR 0036) を通る。
+#   pm-accept / Codex レビューの扱いをどうするかは PM 側の運用判断。
+version: 2
+
+updates:
+  # ── GitHub Actions (#311 の SHA 固定の維持装置) ────────────────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: "chore(actions)"
+    groups:
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      actions-version:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  # ── npm (root: リポジトリ横断のツール) ─────────────────────────────────
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: "chore(deps: root)"
+    groups:
+      root-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      root-version:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  # ── npm (apps/bff — Azure Functions + tRPC / package-lock.json) ───────
+  - package-ecosystem: "npm"
+    directory: "/apps/bff"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: "chore(deps: bff)"
+    groups:
+      bff-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      bff-version:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  # ── pnpm (apps/frontend) ──────────────────────────────────────────────
+  # pnpm は npm ecosystem が pnpm-lock.yaml を読んで扱う (専用の ecosystem 名は無い)。
+  - package-ecosystem: "npm"
+    directory: "/apps/frontend"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: "chore(deps: frontend)"
+    groups:
+      frontend-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      frontend-version:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  # ── uv (apps/services/ai-agent — uv.lock が正典 / CLAUDE.md) ──────────
+  # pip ecosystem は uv.lock を読めない。uv 専用 ecosystem を使う
+  # (security-sweep 側も uv export 経由で lock を正典として照合している)。
+  - package-ecosystem: "uv"
+    directory: "/apps/services/ai-agent"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: "chore(deps: ai-agent)"
+    groups:
+      ai-agent-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      ai-agent-version:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  # ── pip (apps/services/voicevox — requirements.txt) ───────────────────
+  - package-ecosystem: "pip"
+    directory: "/apps/services/voicevox"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: "chore(deps: voicevox)"
+    groups:
+      voicevox-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      voicevox-version:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  # ── Docker ベースイメージ ─────────────────────────────────────────────
+  # ghcr へ push する image の土台 (python:3.11-slim / python:3.12-slim)。
+  # image CVE スキャン (trivy) は未導入なので、ここが base image を追う唯一の経路。
+  - package-ecosystem: "docker"
+    directory: "/apps/services/ai-agent"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: "chore(image: ai-agent)"
+    groups:
+      ai-agent-image-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      ai-agent-image-version:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  - package-ecosystem: "docker"
+    directory: "/apps/services/voicevox"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: "chore(image: voicevox)"
+    groups:
+      voicevox-image-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      voicevox-image-version:
+        applies-to: version-updates
+        patterns: ["*"]
