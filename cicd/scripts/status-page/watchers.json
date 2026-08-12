@@ -29,6 +29,12 @@
       "expect": "必要なときだけ (手動)"
     },
     {
+      "id": "github-settings.yml",
+      "name": "GitHub 設定の点検 / 適用 (宣言 → 現実)",
+      "what": "宣言 (cicd/github/settings.yml) と実際のリポジトリ設定を突き合わせ、事実をデータブランチ data/github-settings に記録する。ズレがあれば Issue に積み、apply で適用する (#344。device-code 認証なので PO 本人の承認が要る = 手動)",
+      "expect": "必要なときだけ (手動)"
+    },
+    {
       "id": "debt-check.yml",
       "name": "週次の技術負債チェック",
       "what": "docs の壊れたリンク・placeholder テスト等を機械検出して Issue に積む (カバー外領域は本文に明示)",
