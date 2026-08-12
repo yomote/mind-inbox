@@ -16,10 +16,24 @@ export function dedupe(values: string[]): string[] {
 export function withDerived(problem: Problem): Problem {
   const mentionCount = problem.mentions.length;
   const lastMentionedAt = problem.mentions.reduce(
-    (max, m) => (m.createdAt > max ? m.createdAt : max),
+    (max, m) => (isLater(m.createdAt, max) ? m.createdAt : max),
     problem.mentions[0]?.createdAt ?? problem.lastMentionedAt,
   );
   return { ...problem, mentionCount, lastMentionedAt };
+}
+
+/**
+ * ISO 8601 文字列を時刻として比較する（a が b より後なら true）。
+ * 辞書順比較はタイムゾーンオフセット混在（"+09:00" と "Z" 等）で時系列と
+ * 食い違うため、epoch へ正規化して比べる（PR #274 Codex 指摘）。
+ * どちらかが時刻として読めない文字列のときだけ、従来の辞書順に落とす
+ * （壊れた値で NaN 比較が常に false になり「最初の値が勝ち続ける」のを防ぐ）。
+ */
+function isLater(a: string, b: string): boolean {
+  const ta = Date.parse(a);
+  const tb = Date.parse(b);
+  if (Number.isNaN(ta) || Number.isNaN(tb)) return a > b;
+  return ta > tb;
 }
 
 /**
@@ -30,26 +44,27 @@ export function withDerived(problem: Problem): Problem {
  * - 棚卸し済み（resolved / shelved）への再言及は **`open` に戻す**（UC-03 の事後条件 /
  *   domain_model.md §4.2「再燃は自動」）。棚卸し日時も消す (再オープンなのに
  *   解決日時が残っていると履歴が嘘になる)。
- * - NOTE: `lastMentionedAt` は追記した Mention の `createdAt` を無条件に採用する
- *   (max 再計算ではない)。過去日時の Mention を後から追記すると逆行する —
- *   docs/design/domain_rules.md §3 の未決事項。
+ * - `lastMentionedAt` は **常に全 Mention の `createdAt` の最大値** (2026-08-11 PO 裁定 /
+ *   docs/design/domain_rules.md §3)。追記 Mention の日時を無条件採用すると、
+ *   過去日時の Mention が後から届いたとき (再送・バックフィル・時計ずれ) に逆行して
+ *   休眠判定・並び順が狂う。relink / merge と同じく `withDerived` に委譲して統一する。
+ * - 再オープンさせた Mention には来歴 `reopenedProblem: true` を残す (#283)。追記後は必ず
+ *   `open` なので「どの Mention が戻したか」は状態から再構成できず、同じ下書きの再送で
+ *   確定応答の「再燃」表示だけが消えてしまう。
  */
 export function appendMention(existing: Problem, mention: Mention): Problem {
-  const reopening = existing.status !== "open";
   // 再燃は「**この** Mention が棚卸し済みを open に戻した」という一回きりの事実。追記後の
   // Problem (status: open / Mention 保存済み) からは再構成できないので、Mention 自身に
   // 来歴として残す — 同じ下書きの再送でも確定応答を同じにするため (#283)。
-  const stored: Mention = reopening ? { ...mention, reopenedProblem: true } : mention;
-  const mentions = [...existing.mentions, stored];
-  return {
+  const stored: Mention =
+    existing.status === "open" ? mention : { ...mention, reopenedProblem: true };
+  return withDerived({
     ...existing,
-    mentions,
-    mentionCount: mentions.length,
-    lastMentionedAt: mention.createdAt,
+    mentions: [...existing.mentions, stored],
     ...(existing.status === "open"
       ? {}
       : { status: "open" as const, resolvedAt: null, shelvedAt: null }),
-  };
+  });
 }
 
 /**

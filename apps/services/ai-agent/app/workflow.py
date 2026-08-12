@@ -33,9 +33,11 @@ from collections.abc import AsyncIterator
 from typing import Never, Optional, Union
 
 from agent_framework import (
+    BaseChatClient,
     CheckpointStorage,
     Executor,
     InMemoryCheckpointStorage,
+    Message,
     Workflow,
     WorkflowBuilder,
     WorkflowContext,
@@ -45,11 +47,10 @@ from agent_framework import (
 )
 from agent_framework_azure_cosmos import CosmosCheckpointStorage
 from pydantic import BaseModel
-from semantic_kernel import Kernel
-from semantic_kernel.contents import ChatHistory
 
+from .agents import chat, chat_stream, complete, get_chat_client
 from .config import get_settings
-from .kernel import get_execution_settings
+from .history import ChatHistory
 from .prompts import CHAT_SYSTEM_PROMPT
 from .rag import retrieve
 from .repositories import ApprovalRepository, SessionRepository
@@ -156,10 +157,10 @@ def _is_retry_of_last_user_turn(history: ChatHistory, message: str) -> bool:
     間に assistant が挟まる。つまりこの条件は「失敗したターンの再試行」を意味する。
     """
     for msg in reversed(history.messages):
-        if msg.role.value == "system":
+        if msg.role == "system":
             # ツール結果などの system メッセージは判定に関係しないので読み飛ばす
             continue
-        return msg.role.value == "user" and str(msg.content) == message
+        return msg.role == "user" and msg.text == message
     return False
 
 
@@ -191,7 +192,18 @@ async def _append_user_message_once(
 # ── LLM helpers (v1 から不変: 分類プロンプト / 壊れた JSON → 安全側 no-op) ────
 
 
-async def _classify(message: str, kernel: Kernel) -> dict:
+def _resolve_client(client: Optional[BaseChatClient]) -> BaseChatClient:
+    """chat client の遅延解決 (縮退挙動を SK kernel 時代と同一に保つ)。
+
+    未注入 (None = 本番経路) なら LLM を実際に呼ぶこの時点で初めて構築する。
+    資格情報なしでも起動・RECEIVE (履歴保存)・/approve の ID 検証までは動き、
+    失敗は LLM 呼び出し (CLASSIFY / RESPOND) で表面化する — SK kernel の
+    「構築は成功し get_service で落ちる」と同じ失敗面。テストは fake を注入する。
+    """
+    return client if client is not None else get_chat_client()
+
+
+async def _classify(message: str, client: Optional[BaseChatClient]) -> dict:
     """LLM でメッセージを分類し、必要なツール・RAG 検索を判定する。"""
     prompt = f"""Analyze the user message and respond with JSON only. No markdown.
 
@@ -211,14 +223,7 @@ Respond with this exact JSON structure:
   "tool_args": <dict or {{}}>
 }}"""
 
-    classification_chat = ChatHistory()
-    classification_chat.add_user_message(prompt)
-    svc = kernel.get_service("chat")
-    result = await svc.get_chat_message_content(
-        chat_history=classification_chat, settings=get_execution_settings()
-    )
-
-    llm_response = str(result).strip()
+    llm_response = (await complete(_resolve_client(client), prompt)).strip()
     parts = llm_response.split("```")
     if len(parts) >= 3:
         llm_response = parts[1].removeprefix("json").strip()
@@ -235,47 +240,37 @@ Respond with this exact JSON structure:
         }
 
 
-def _build_call_history(history: ChatHistory, rag_context: str) -> ChatHistory:
-    """RAG コンテキストがある場合だけ system メッセージを足した呼び出し用履歴を作る。"""
+def _build_call_messages(history: ChatHistory, rag_context: str) -> list[Message]:
+    """RAG コンテキストがある場合だけ system メッセージを足した呼び出し用メッセージ列を作る。"""
     if not rag_context:
-        return history
-    call_history = ChatHistory()
-    for msg in history.messages:
-        call_history.messages.append(msg)
-    call_history.add_system_message(f"Relevant context:\n{rag_context}")
-    return call_history
+        return list(history.messages)
+    return [
+        *history.messages,
+        Message(role="system", contents=[f"Relevant context:\n{rag_context}"]),
+    ]
 
 
 async def _respond(
     history: ChatHistory,
-    kernel: Kernel,
+    client: Optional[BaseChatClient],
     rag_context: str = "",
 ) -> str:
     """最終的なアシスタント返答を生成する。"""
-    call_history = _build_call_history(history, rag_context)
-
-    svc = kernel.get_service("chat")
-    result = await svc.get_chat_message_content(
-        chat_history=call_history, settings=get_execution_settings()
+    return await chat(
+        _resolve_client(client), _build_call_messages(history, rag_context)
     )
-    return str(result)
 
 
 async def _respond_stream(
     history: ChatHistory,
-    kernel: Kernel,
+    client: Optional[BaseChatClient],
     rag_context: str = "",
 ) -> AsyncIterator[str]:
     """_respond のストリーミング版。トークン (チャンク) 文字列を逐次 yield する。"""
-    call_history = _build_call_history(history, rag_context)
-
-    svc = kernel.get_service("chat")
-    async for chunk in svc.get_streaming_chat_message_content(
-        chat_history=call_history, settings=get_execution_settings()
+    async for token in chat_stream(
+        _resolve_client(client), _build_call_messages(history, rag_context)
     ):
-        text = str(chunk) if chunk is not None else ""
-        if text:
-            yield text
+        yield token
 
 
 # ── Workflow messages (executor 間で流れる型 = エッジ配送のルーティングキー) ──
@@ -365,16 +360,16 @@ class ReceiveExecutor(Executor):
 class ClassifyExecutor(Executor):
     """CLASSIFY: LLM でツール・RAG 要否を判定。"""
 
-    def __init__(self, kernel: Kernel):
+    def __init__(self, client: Optional[BaseChatClient]):
         super().__init__(id="classify")
-        self._kernel = kernel
+        self._client = client
 
     @handler
     async def classify(
         self, turn: ChatTurn, ctx: WorkflowContext[ClassifiedTurn]
     ) -> None:
         logger.info("Workflow[CLASSIFY]")
-        classification = await _classify(turn.message, self._kernel)
+        classification = await _classify(turn.message, self._client)
         tool_name = classification.get("tool_name")
         await ctx.send_message(
             ClassifiedTurn(
@@ -534,10 +529,15 @@ class ExecuteToolExecutor(Executor):
 class RespondExecutor(Executor):
     """RESPOND: 最終応答を生成。stream 時はトークンを intermediate output で流す。"""
 
-    def __init__(self, session_repo: SessionRepository, kernel: Kernel, stream: bool):
+    def __init__(
+        self,
+        session_repo: SessionRepository,
+        client: Optional[BaseChatClient],
+        stream: bool,
+    ):
         super().__init__(id="respond")
         self._session_repo = session_repo
-        self._kernel = kernel
+        self._client = client
         self._stream = stream
 
     @handler
@@ -548,12 +548,12 @@ class RespondExecutor(Executor):
         history = await _get_or_create_session(req.session_id, self._session_repo)
         if self._stream:
             parts: list[str] = []
-            async for token in _respond_stream(history, self._kernel, req.rag_context):
+            async for token in _respond_stream(history, self._client, req.rag_context):
                 parts.append(token)
                 await ctx.yield_output(token)
             reply = "".join(parts)
         else:
-            reply = await _respond(history, self._kernel, req.rag_context)
+            reply = await _respond(history, self._client, req.rag_context)
         history.add_assistant_message(reply)
         await self._session_repo.save(req.session_id, history)
         await ctx.send_message(
@@ -576,7 +576,7 @@ class FinishExecutor(Executor):
 
 def _build_chat_workflow(
     session_repo: SessionRepository,
-    kernel: Kernel,
+    client: Optional[BaseChatClient],
     *,
     stream: bool,
     checkpoint_storage: CheckpointStorage,
@@ -588,11 +588,11 @@ def _build_chat_workflow(
     checkpoint を /approve (非 stream) で再開できるのはこのため。
     """
     receive = ReceiveExecutor(session_repo)
-    classify = ClassifyExecutor(kernel)
+    classify = ClassifyExecutor(client)
     retrieve_exec = RetrieveExecutor()
     plan = PlanExecutor(session_repo)
     execute = ExecuteToolExecutor(session_repo)
-    respond = RespondExecutor(session_repo, kernel, stream=stream)
+    respond = RespondExecutor(session_repo, client, stream=stream)
     finish = FinishExecutor()
     return (
         WorkflowBuilder(
@@ -662,11 +662,11 @@ async def run_workflow(
     message: str,
     session_repo: SessionRepository,
     approval_repo: ApprovalRepository,
-    kernel: Kernel,
+    client: Optional[BaseChatClient] = None,
 ) -> ChatResponse:
     storage = _new_checkpoint_storage()
     workflow = _build_chat_workflow(
-        session_repo, kernel, stream=False, checkpoint_storage=storage
+        session_repo, client, stream=False, checkpoint_storage=storage
     )
     result = await workflow.run(ChatTurn(session_id=session_id, message=message))
 
@@ -687,7 +687,7 @@ async def run_workflow_stream(
     message: str,
     session_repo: SessionRepository,
     approval_repo: ApprovalRepository,
-    kernel: Kernel,
+    client: Optional[BaseChatClient] = None,
 ) -> AsyncIterator[Union[ChatStreamDelta, ChatStreamDone]]:
     """run_workflow のストリーミング版 (#120 / ADR 0024)。
 
@@ -697,7 +697,7 @@ async def run_workflow_stream(
     """
     storage = _new_checkpoint_storage()
     workflow = _build_chat_workflow(
-        session_repo, kernel, stream=True, checkpoint_storage=storage
+        session_repo, client, stream=True, checkpoint_storage=storage
     )
 
     request_event: Optional[WorkflowEvent] = None
@@ -732,7 +732,7 @@ async def resume_after_approval(
     approved: bool,
     session_repo: SessionRepository,
     approval_repo: ApprovalRepository,
-    kernel: Kernel,
+    client: Optional[BaseChatClient] = None,
 ) -> str:
     record = await approval_repo.get(approval_id)
     if not record:
@@ -761,7 +761,7 @@ async def resume_after_approval(
     await approval_repo.save(record)
 
     workflow = _build_chat_workflow(
-        session_repo, kernel, stream=False, checkpoint_storage=storage
+        session_repo, client, stream=False, checkpoint_storage=storage
     )
     result = await workflow.run(
         responses={approval_id: ApprovalDecision(approved=approved)},

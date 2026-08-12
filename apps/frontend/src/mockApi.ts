@@ -64,6 +64,23 @@ export async function sendMessage(_sessionId: string, text: string): Promise<Cha
 const daysAgo = (n: number) => new Date(Date.now() - 1000 * 60 * 60 * 24 * n).toISOString();
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
+/**
+ * ExtractionResult の件数は **実際の書き込み実績を Problem 単位で** 数える。
+ *
+ * 2 つのズレをここで潰している (BFF #283 と同じ意味論 / ai-agent `extractor.py` に合わせる):
+ *
+ * 1. **item 数ではなく problemId の異なり数** — 1 セッションで同じ Problem に複数の
+ *    Mention が寄ることがあり、item 数だと「既存に追加 2 件」と過大表示になる
+ *    (ai-agent も `updated_problem_count=len(updated_ids)` と集合で数える)
+ * 2. **申告 (下書きの grouping.kind) ではなく実績** — preview 後・確定前に対象 Problem が
+ *    dismiss / merge で消えていると、確定は「既存に追加」ではなく新規作成になる。
+ *    申告のまま数えると「実際は新規作成なのに新規 0 / 既存に追加 1」と表示される
+ *
+ * `commitPreview` は返す items の grouping を実績に正規化するので、ここはそれを数えるだけ。
+ */
+const countProblems = (items: ExtractionResult["items"], kind: "new" | "existing") =>
+  new Set(items.filter((i) => i.grouping.kind === kind).map((i) => i.grouping.problemId)).size;
+
 function makeMention(input: {
   id: string;
   problemId: string;
@@ -448,6 +465,170 @@ export async function extractMentions(sessionId: string): Promise<ExtractionResu
     ],
     newProblemCount: 1,
     updatedProblemCount: career ? 1 : 0,
+  };
+}
+
+/**
+ * 読み取り専用の抽出プレビュー (#187 / ADR 0039 D1)。
+ *
+ * **store には一切書かない** — 右ペインの下書きは揮発し、確定 (extractMentions) して
+ * 初めて Problem が増える。ここが書いてしまうと「確定していない下書き」が
+ * 蓄積データを静かに汚す (ADR 0039 の核を壊す)。
+ *
+ * 会話が進むほど下書きが「増える / 育つ」体験を mock で再現する:
+ *   - ユーザー発話 1 件〜: 既存「転職」への再出現 (🔁) の下書き
+ *   - ユーザー発話 3 件〜: 新規 Problem (プレゼン不安) の下書きが加わる
+ * excerpt には実際のユーザー発話を引用し、「話した内容が形になっていく」を見せる。
+ */
+export async function previewExtraction(
+  sessionId: string,
+  messages: ChatMessage[],
+): Promise<ExtractionResult> {
+  await wait(600);
+
+  const userTexts = messages.filter((m) => m.role === "user").map((m) => m.text);
+  const items: ExtractionResult["items"] = [];
+
+  if (userTexts.length >= 1) {
+    // 既存 Problem への再出現の下書き。mentionCount は「確定したらこうなる」件数。
+    const career = getProblem("p-career");
+    items.push({
+      mention: makeMention({
+        id: `m-draft-${sessionId}-recur`,
+        problemId: "p-career",
+        sessionId,
+        daysAgo: 0,
+        statement: "やっぱり転職のことが頭から離れない。面談だけでも受けてみようか迷う。",
+        excerpt: userTexts[0].slice(0, 60),
+        affect: { label: "迷い", valence: "negative", intensity: 0.58 },
+        theme: "仕事・キャリア",
+        tags: ["転職", "迷い"],
+        confidence: 0.88,
+      }),
+      grouping: {
+        kind: "existing",
+        problemId: "p-career",
+        problemTitle: career?.title ?? "転職すべきか迷っている",
+        problemTheme: "仕事・キャリア",
+        isRecurrence: true,
+        mentionCount: (career?.mentionCount ?? 3) + 1,
+        reignited: false,
+        groupingConfidence: 0.88,
+      },
+    });
+  }
+
+  if (userTexts.length >= 3) {
+    // 新規 Problem の下書き。id は draft 前置で「未確定」を機械的に区別できるようにする。
+    const draftProblemId = `p-draft-${sessionId}`;
+    items.push({
+      mention: makeMention({
+        id: `m-draft-${sessionId}-new`,
+        problemId: draftProblemId,
+        sessionId,
+        daysAgo: 0,
+        statement: "来週のプレゼンが不安で気が重い。",
+        excerpt: userTexts[2].slice(0, 60),
+        affect: { label: "緊張", valence: "negative", intensity: 0.65 },
+        theme: "仕事・キャリア",
+        tags: ["プレゼン", "緊張"],
+        confidence: null,
+      }),
+      grouping: {
+        kind: "new",
+        problemId: draftProblemId,
+        problemTitle: "来週のプレゼンが不安",
+        problemTheme: "仕事・キャリア",
+        isRecurrence: false,
+        mentionCount: 1,
+        reignited: false,
+        groupingConfidence: null,
+      },
+    });
+  }
+
+  return {
+    sessionId,
+    items,
+    newProblemCount: countProblems(items, "new"),
+    updatedProblemCount: countProblems(items, "existing"),
+  };
+}
+
+/**
+ * 表示中の下書きをそのまま確定する (#187 / ADR 0039 D1・D3 — 「この内容で確定」)。
+ *
+ * **再抽出しない**: 抽出は非決定的なので、確定時に抽出し直すと画面で確認した内容と
+ * 違うものが保存されうる (PR #282 Codex P1)。入力の drafts (previewExtraction が返した
+ * items) を**そのまま** Problem store へ書き、保存された結果を ExtractionResult として返す。
+ *
+ * mock は真実 (ADR 0004) — この入出力が BFF 側 commit 経路 (#283) の契約の写しになる:
+ *   入力: sessionId + drafts (ExtractedItem[] — zod は ExtractedItemSchema がそのまま使える)
+ *   出力: ExtractionResult (id 類はサーバー権威で採番し直してよい。mock は draft id を流用)
+ */
+export async function commitPreview(
+  sessionId: string,
+  drafts: ExtractionResult["items"],
+): Promise<ExtractionResult> {
+  await wait(400);
+
+  // このバッチで新しく起こした Problem。あとから同じ Problem へ寄る Mention が来ても
+  // 「既存に追加」ではなく新規の一部として数えるために覚えておく (BFF #283 と同じ) —
+  // でないと 1 つの Problem が「新規 1 件」かつ「既存に追加 1 件」に二重計上される。
+  const createdHere = new Set<string>();
+
+  const items: ExtractionResult["items"] = drafts.map(({ mention, grouping }) => {
+    // kind を問わず problemId で引く (BFF の materialize と同じ意味論): 同じ id を持つ
+    // 下書きが複数あっても Problem は 1 つで、2 件目以降は Mention の追記になる。
+    // ここが id を見ずに新規を作ると、distinct 件数 (countProblems) と実態がズレる。
+    const existing = getProblem(grouping.problemId);
+    if (existing) {
+      // 既存 Problem への再出現: 下書きの Mention をそのまま追記する。
+      existing.mentions.push({ ...clone(mention), problemId: existing.id });
+      Object.assign(existing, deriveProblemDates({ ...existing, status: "open" }));
+      return {
+        mention: clone(mention),
+        grouping: {
+          ...clone(grouping),
+          // 実績に正規化する: このバッチで起こした Problem への追記は "new" のまま。
+          kind: createdHere.has(existing.id) || grouping.kind === "new" ? "new" : "existing",
+          mentionCount: existing.mentionCount,
+        },
+      };
+    }
+
+    // 新規、**または確定までの間に既存が消えていた場合** (preview 後に dismiss / merge された)。
+    // 取りこぼさず新規として作り、実績も "new" に正規化する — 申告 (grouping.kind) のまま
+    // 数えると「実際は新規作成なのに『既存に追加 1 件』」とレビュー画面に出る (BFF #283)。
+    const problem = deriveProblemDates({
+      id: grouping.problemId,
+      title: grouping.problemTitle,
+      summary: mention.statement,
+      theme: grouping.problemTheme,
+      tags: [...mention.proposedTags],
+      status: "open",
+      mentions: [{ ...clone(mention), problemId: grouping.problemId }],
+      mentionCount: 1,
+      plans: [],
+      createdAt: mention.createdAt,
+      lastMentionedAt: mention.createdAt,
+      resolvedAt: null,
+      shelvedAt: null,
+    });
+    problemStore = [problem, ...problemStore];
+    createdHere.add(problem.id);
+    return {
+      mention: clone(mention),
+      grouping: { ...clone(grouping), kind: "new", mentionCount: 1, isRecurrence: false },
+    };
+  });
+
+  // 件数は**実際の書き込み実績**から数える (正規化済みの items がその実績)。
+  return {
+    sessionId,
+    items,
+    newProblemCount: countProblems(items, "new"),
+    updatedProblemCount: countProblems(items, "existing"),
   };
 }
 

@@ -3,12 +3,20 @@ name: test
 on:
   pull_request:
     branches: [main]
+  # merge queue の一時 branch でも required check を報告する (ADR 0042)。
+  # これが無いと queue に入った PR は test / lint-and-build が永遠に pending で
+  # タイムアウト脱落する。queue 有効化は needs-human #269。
+  merge_group:
   push:
     branches: [main]
 
+# 信頼境界 (PR #271 Codex P1 / ADR 0042): test / lint-and-build は PR 由来の
+# npm / pnpm スクリプト (= 未信頼コード) を実行する。merge_group では fork PR でも
+# GITHUB_TOKEN が read-only に落ちない (base リポジトリのイベント) ため、
+# これらの job に write を持たせない。PR コメントの投稿だけを、未信頼コードを
+# 実行しない別 job (pr-comment) に分離して最小権限で行う。
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   test:
@@ -115,12 +123,15 @@ jobs:
             echo "戦略: [docs/testing/strategy.md](https://github.com/yomote/mind-inbox/blob/main/docs/testing/strategy.md)"
           } | tee pr-comment.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Sticky PR comment
+      # コメント投稿は write 権限を持つ別 job (pr-comment) へ渡す — この job は
+      # 未信頼コードを実行するため write を持たない (冒頭「信頼境界」参照)
+      - name: Upload summary for PR comment
         if: github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: actions/upload-artifact@v4
         with:
-          header: test-summary
+          name: test-summary-md
           path: pr-comment.md
+          retention-days: 1
 
       - name: Fail if any layer failed
         run: |
@@ -222,12 +233,14 @@ jobs:
             echo "戦略: [docs/testing/strategy.md §5.3](https://github.com/yomote/mind-inbox/blob/main/docs/testing/strategy.md)"
           } | tee lint-build-comment.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Sticky PR comment
+      # コメント投稿は write 権限を持つ別 job (pr-comment) へ渡す (冒頭「信頼境界」参照)
+      - name: Upload summary for PR comment
         if: github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: actions/upload-artifact@v4
         with:
-          header: lint-build-summary
+          name: lint-build-summary-md
           path: lint-build-comment.md
+          retention-days: 1
 
       - name: Fail if any check failed
         run: |
@@ -238,3 +251,46 @@ jobs:
             echo "::error::Lint or build check failed"
             exit 1
           fi
+
+  # PR への sticky コメント投稿だけを担う job (PR #271 Codex P1)。
+  # 未信頼コード (npm / pnpm スクリプト) を一切実行しないので、ここにだけ
+  # pull-requests: write を許す。artifact の中身は PR 由来の markdown だが、
+  # コメント本文として貼るだけで権限昇格には使えない。
+  pr-comment:
+    name: Sticky PR comments
+    runs-on: ubuntu-latest
+    needs: [test, lint-and-build]
+    # テストが赤でも FAIL の表を貼るため always()。merge_group / push では動かない
+    if: always() && github.event_name == 'pull_request'
+    permissions:
+      pull-requests: write
+    steps:
+      # summary が作られる前に job が落ちた場合は artifact が無い — その場合は
+      # コメントもスキップ (continue-on-error + outcome ガード)
+      - name: Download test summary
+        id: dl_test
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: test-summary-md
+
+      - name: Download lint-build summary
+        id: dl_lint
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: lint-build-summary-md
+
+      - name: Sticky PR comment (test)
+        if: steps.dl_test.outcome == 'success'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: test-summary
+          path: pr-comment.md
+
+      - name: Sticky PR comment (lint-build)
+        if: steps.dl_lint.outcome == 'success'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: lint-build-summary
+          path: lint-build-comment.md
