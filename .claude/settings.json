@@ -4,7 +4,17 @@
     "allow": [
       "mcp__Claude_Code_Remote",
       "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a",
-      "mcp__github"
+      "mcp__github",
+      "mcp__Claude_Code_Remote__create_session",
+      "mcp__Claude_Code_Remote__archive_session",
+      "mcp__Claude_Code_Remote__interrupt_session",
+      "mcp__Claude_Code_Remote__delete_trigger",
+      "mcp__Claude_Code_Remote__update_trigger",
+      "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__create_session",
+      "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__archive_session",
+      "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__interrupt_session",
+      "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__delete_trigger",
+      "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__update_trigger"
     ]
   },
   "hooks": {
