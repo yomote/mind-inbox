@@ -34,7 +34,12 @@ export default defineConfig({
   use: {
     baseURL: process.env.LIVE_APP_URL ?? "",
     screenshot: "only-on-failure",
-    trace: "retain-on-failure",
+    // sources: false — trace に **spec のソースコードを同梱しない** (ADR 0045 D8)。
+    // 2026-08-12 の実測で、trace の resources/src@*.txt にテストの中身がそのまま
+    // 入っていることを確認した。spec にハードコードされた秘密はそれだけで trace に
+    // 載るので、実トークンを扱う live 設定では落とす。デバッグに要るのは実行時の
+    // DOM とアクション記録で、ソースはリポジトリ側で読める。
+    trace: { mode: "retain-on-failure", snapshots: true, screenshots: true, sources: false },
     locale: "ja-JP",
   },
 

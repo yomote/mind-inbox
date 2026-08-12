@@ -278,6 +278,33 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+      # trace は診断価値が最も高いが、実 BFF アクセストークンを含む (上のステップの
+      # コメント参照)。**public リポジトリなので artifact のアクセス制限は使えない**
+      # ため、公開鍵で暗号化してから上げる (ADR 0045)。
+      #
+      # スクラブ (文字列置換) を選ばなかった理由: 秘密は trace 内の 3 種類のエントリ
+      # (spec のソース / アクション記録 / DOM スナップショット) に散らばっており、
+      # 外科的な除去は列挙漏れで**静かに漏れる** (失敗が公開側に倒れる)。暗号化は
+      # 中身の形に依存しないので、その失敗モードが存在しない。
+      #
+      # 鍵の準備・復号手順は cicd/keys/README.md。
+      - name: E2E の trace を公開鍵で暗号化して残す
+        if: always() && steps.e2e.conclusion == 'failure'
+        env:
+          PUBKEY: cicd/keys/e2e-artifacts.pub.asc
+        run: |
+          cicd/scripts/deploy/encrypt-e2e-traces.sh \
+            "$PUBKEY" apps/frontend/test-results-live e2e-trace-enc
+
+      - name: 暗号化した trace をアップロードする
+        if: always() && steps.e2e.conclusion == 'failure' && hashFiles('e2e-trace-enc/**/*.gpg') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-live-trace-${{ github.run_id }}
+          path: e2e-trace-enc/**/*.gpg
+          retention-days: 14
+          if-no-files-found: error
+
       - name: SWA URL を Actions サマリに出す
         # smoke が落ちても URL は出す（切り分けの手掛かりになるため）。
         if: always() && steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
