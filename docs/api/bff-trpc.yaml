@@ -359,6 +359,7 @@ paths:
                           - mention
                           - grouping
                         additionalProperties: false
+                      maxItems: 200
                   required:
                     - items
                   additionalProperties: false
@@ -532,6 +533,7 @@ paths:
                 sessionId:
                   type: string
                   minLength: 1
+                  maxLength: 200
                 messages:
                   type: array
                   items:
@@ -544,10 +546,12 @@ paths:
                           - assistant
                       text:
                         type: string
+                        maxLength: 8000
                     required:
                       - role
                       - text
                     additionalProperties: false
+                  maxItems: 200
               required:
                 - sessionId
                 - messages
