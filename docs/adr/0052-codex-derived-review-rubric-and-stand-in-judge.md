@@ -62,6 +62,22 @@ Chosen option: **"Option A"**。**PO が 2026-08-12 に選択肢形式で「置�
 
 1 と 5 が満たせないなら、この ADR は Rejected に倒す。
 
+### 初回実測 (2026-08-12 / PR #347) — judge が GitHub を読めていなかった
+
+**この ADR の初回レビューで、judge は PR 本文もレビューコメントも一切読めなかった。** 実測で分かった事実:
+
+- **R8 / R9 (再レビューの規律) が一度も使われなかった。** 前回分の解消状況を名指しで宣言することも、再提起に新しい根拠を添えることも、そもそも「前回の指摘」を取得できないため実行不能だった。動作検証条件 4 (収束するか) は、この状態では測れない
+- **原因は frontmatter の `tools:` に GitHub MCP ツールが無かったこと。** この実行環境では GitHub を触る経路が MCP ツール (`mcp__github__*`) に限定されており、シェルからの `gh` / 直接 API は環境側で塞がれている (`403 GitHub access is not enabled for this session.`)。subagent は frontmatter に列挙されたツールしか持たないため、judge は GitHub API に到達する手段を 1 つも持っていなかった
+- **同じ穴が judge 5 体すべてにあった** — `code-reviewer` / `security-reviewer` / `qa-reviewer` / `biz-owner-reviewer` / `release-judge` (`ux-reviewer` を含めると 6 体)。[ADR 0019](0019-independent-judge-agents-security-qa-release.md) の release-gate judge 群も同様で、release-judge は release-rubric のチェック項目「未解決の PR レビュースレッドが残っていないか」を GitHub の実状態で判定できない状態だった
+
+対処 (2026-08-12):
+
+- **読み取り専用の GitHub MCP ツールを付与した** — `pull_request_read` / `issue_read` / `get_file_contents` / `list_issues` / `search_issues` / `list_pull_requests` / `get_commit` / `list_commits`。**書き込み・状態変更を伴うツール (コメント投稿 / レビュー作成 / スレッド resolve / merge / issue 更新) は意図的に渡さない** — `_common.md` の共通 9 「judge はコードを変更しない / 投稿は呼び出し元の責務」を、文面ではなく**機構**で守るため。`ToolSearch` も渡さない (後から書き込みツールを読み込めてしまうため)
+- **「diff 先読み → PR 本文は後」の順序規律を `code-reviewer` 本文に足した** — PR 本文を先に読むと書いた人の言い分に引きずられ、judge の設計思想 (実装セッションのコンテキストを引き継がない) が壊れる。まず diff だけで findings を出し切り、そのあとに本文・既存コメント・関連 Issue を読み、用途を (a) 本文の主張と実装の食い違い検出 / (b) 既出指摘の再提起でないかの確認 (R8 / R9) / (c) 別 Issue へ切り出し済みかの確認 (R9 / R10) の 3 つに限る。**本文の正当化を根拠に finding を取り下げない** — 取り下げてよいのは実装・仕様・一次情報で反証されたときだけ
+- **付与先は 3 体に限った** — `code-reviewer` (R8〜R10 が GitHub 依存) / `qa-reviewer` (qa-rubric の真実ソースに「リリース対象の Issue / PR に書かれたやること」がある) / `release-judge` (release-rubric が「GitHub の実状態」での裏取りと未解決スレッドの確認を要求している)。`security-reviewer` (rubric は diff + スキャナ完結・再レビュー規律を持たない) / `biz-owner-reviewer` (初見ユーザーの立場が PR 本文で汚染される) / `ux-reviewer` (採点対象はデータブランチの JSONL / [ADR 0041](0041-ux-observations-on-git-data-branch.md)、git だけで完結する) には付与していない。**権限は後から足せるが、広げた権限で起きた事故は戻せない**
+
+**未検証**: agent frontmatter の `tools:` が MCP ツール名を受け付けるかは、この時点で実測できていない (subagent を起動して確かめる手段が作業セッションに無かった)。リポジトリ内に先例も無い。次に judge を回したときに、GitHub の読み取りが実際に通ったかを確認すること — 通らなければ ToolSearch の遅延ロードとの相互作用を疑う。
+
 ### Positive Consequences
 
 - Codex 不在でもコード PR のレビューと resolve が回り、マージ経路が閉じない
