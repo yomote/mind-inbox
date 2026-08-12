@@ -26,7 +26,8 @@
     - [A. 環境ごと削除（推奨）](#a-環境ごと削除推奨)
     - [B. Complete モードで整理（要注意）](#b-complete-モードで整理要注意)
   - [7. よく使う確認コマンド](#7-よく使う確認コマンド)
-  - [8. 関連手順](#8-関連手順)
+  - [8. bicep で管理していないもの（宣言の外にある設定）](#8-bicep-で管理していないもの宣言の外にある設定)
+  - [9. 関連手順](#9-関連手順)
 
 ---
 
@@ -295,7 +296,97 @@ frontend 側で `VITE_VOICEVOX_BASE_URL` に設定してください。
 
 ---
 
-## 8. 関連手順
+## 8. bicep で管理していないもの（宣言の外にある設定）
+
+**「消えると困る設定」は、正確には「宣言されていない設定」**です。ここには **bicep の外にある設定を全部**列挙します。**新しく宣言の外に設定を作ったら、必ずここに 1 行足すこと。**
+
+> 方針として、**設定は bicep に一本化する**のが目標です（[#303](https://github.com/yomote/mind-inbox/issues/303)）。下の「デプロイスクリプトが設定するもの」と「Entra のアプリ登録」は**将来 bicep へ移す対象**で、恒久的な例外ではありません。**恒久的な例外は「GitHub 側の設定」だけ**です (Azure ではないため bicep の管轄外)。
+
+### 8-1. GitHub Actions Variables（恒久的な例外 — Azure ではない）
+
+**欠けると deploy はガードで静かに skip します**（run は成功のまま）。「成功 run = デプロイ済み」ではない原因がこれです。
+
+| 変数 | 用途 | 欠けるとどうなるか |
+| --- | --- | --- |
+| `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` | OIDC ログイン（[ADR 0009](../../docs/adr/0009-on-demand-cd-via-github-actions-oidc.md)） | `Guard — OIDC 設定済みか` が false → **全ステップ skip（run は成功）** |
+| `AUTO_DEPLOY_ENABLED` | push での自動デプロイ解禁（[ADR 0013](../../docs/adr/0013-standing-low-cost-dev-env-with-auto-deploy.md)） | `true` 以外だと push デプロイを skip（run は成功） |
+| `REVIEW_GATE_REQUIRE_CODEX` | コード PR に Codex レビューを必須にするか | 門の判定が緩む |
+| `CODEX_RETRIGGER_MINUTES` | Codex 再依頼の間隔 | 既定値で動く |
+
+**確認する**（設定画面: `Settings > Secrets and variables > Actions > Variables`）:
+
+```bash
+# 一覧（gh CLI がある環境で）
+gh variable list -R yomote/mind-inbox
+
+# workflow がどれを使っているか（リポジトリ側から逆引き）
+grep -rhoE 'vars\.[A-Z_]+' .github/workflows/*.yml | sort -u
+```
+
+**設定する**: `gh variable set AUTO_DEPLOY_ENABLED --body true -R yomote/mind-inbox`
+
+### 8-2. GitHub Actions Secrets
+
+**自前で登録した秘密はゼロ**です。使っているのは GitHub が自動発行する `GITHUB_TOKEN` のみ（[ADR 0009](../../docs/adr/0009-on-demand-cd-via-github-actions-oidc.md) の "no stored secret" / [ADR 0031](../../docs/adr/0031-agent-reaches-outside-via-github-actions.md)）。
+
+```bash
+gh secret list -R yomote/mind-inbox   # GITHUB_TOKEN は表示されない（自動発行のため）
+```
+
+**ここに秘密を足す前に ADR を書くこと。** 現状ゼロであること自体が設計判断です。
+
+### 8-3. Entra のアプリ登録（**恒久的な例外ではない** — Graph Bicep で宣言できる）
+
+> **2026-08-12 訂正**: 当初この節は「Entra は ARM リソースではないので bicep で宣言できない = 恒久的な例外」と書いていたが、**誤り**。[Microsoft Graph Bicep 拡張](https://learn.microsoft.com/en-us/graph/templates/bicep/overview-bicep-templates-for-graph)は **GA** しており、`Microsoft.Graph/applications` などを **Azure リソースと同じテンプレートに**書ける。
+
+現状は `main-config.bicep` が `Microsoft.Resources/deploymentScripts`（宣言の中に命令を埋める形）で処理している。**これは移行対象**（[#303](https://github.com/yomote/mind-inbox/issues/303)）。
+
+移行前に確認すべき制約（[一次ソース](https://learn.microsoft.com/en-us/graph/templates/bicep/limitations)）:
+
+| 制約 | このリポジトリへの影響 |
+| --- | --- |
+| **アプリのパスワード（`passwordCredentials`）が非対応**。`keyCredentials` のみ | **ここが分かれ目。** クライアントシークレットが要る構成なら `DeploymentScript` が残る。SPA + フェデレーション資格情報 (OIDC) で済むなら宣言化できる |
+| **what-if が使えない**（拡張リソース全般） | [2-1. 事前確認](#2-1-事前確認build--what-if) の網から Graph 部分が外れる。事前確認の手順を見直す必要がある |
+| role-assignable group が非対応 | 該当なし |
+| Deployment stacks 非対応 | 該当なし |
+
+- 現行の手順: [3. Entra 認証を有効化する](#3-entra-認証を有効化する) / [Runbook](../../docs/runbooks/entra-spa-auth-and-budget.md)
+- 確認: `az ad app list --display-name <app-name>` / Functions 側は `ops-inspect` の `azure-resources`（EasyAuth の実測値が出る）
+- **RG を消しても Entra のアプリ登録は消えません**（テナントに属するため）。逆に言うと、環境を作り直したときに**古いアプリ登録が残って混乱する**ことがあります
+
+### 8-4. デプロイスクリプトが設定するもの（**将来 bicep へ移す** / [#303](https://github.com/yomote/mind-inbox/issues/303)）
+
+**現状ここが宣言の外にあるため、bicep から環境を作り直しても、デプロイが走るまで設定が入りません。**
+
+| スクリプト | 何を設定しているか |
+| --- | --- |
+| `cicd/scripts/deploy/deploy-ai-agent.sh` | Container App の環境変数（`--set-env-vars`）/ **OpenAI ロール付与**（`az role assignment create`） |
+| `cicd/scripts/deploy/deploy-voicevox-wrapper.sh` | Container App の環境変数 |
+| `cicd/scripts/deploy/deploy-backend.sh` | Function App の appsettings（`az functionapp config appsettings set`） |
+| `cicd/scripts/deploy/provision.sh` | `manageAiAgentOpenAiRoleAssignment=false` — **bicep に宣言させない逃げ道**（PR #290 の応急処置。本治療は PR #292） |
+
+**確認する**（実環境の実際の値を読む）:
+
+```bash
+# エージェントから: ADR 0031 の経路（Actions 経由・read-only）
+#   → ops-inspect workflow を check=azure-resources で dispatch
+# 手元から: ADR 0006 の device-code
+az login --use-device-code
+az containerapp show -g rg-dev-mind-inbox -n ca-dev-mindbox-ai-agent \
+  --query "properties.template.containers[0].env" -o table
+az functionapp config appsettings list -g rg-dev-mind-inbox -n func-dev-mindbox -o table
+az role assignment list --scope <openai-scope> -o table
+```
+
+### 8-5. 宣言の外にあるものを増やしたら
+
+1. **この節に 1 行足す**（何を・どこで確認・どう設定するか）
+2. 恒久的な例外にするなら **ADR に理由を書く**
+3. 一時的なものなら **Issue を立てて期限を切る**
+
+---
+
+## 9. 関連手順
 
 - Entra ユーザー登録（CSV一括）: [../../operation/automation/identity/README.md](../../operation/automation/identity/README.md)
 - ローカル音声合成（VOICEVOX）: [../scripts/local-voicevox/README.md](../scripts/local-voicevox/README.md)

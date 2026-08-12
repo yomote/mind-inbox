@@ -54,6 +54,8 @@ need pnpm
 need zip
 need curl
 need swa
+# deploy-*.sh が bicep の outputs (JSON) を読むのに使う。GitHub runner には既定で入っている。
+need python3
 
 az account show >/dev/null
 
