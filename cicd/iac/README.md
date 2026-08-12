@@ -372,8 +372,10 @@ gh secret list -R yomote/mind-inbox   # GITHUB_TOKEN は表示されない（自
 > つまり「デプロイが走るまで設定が入らない」のではなく、**どちらが勝つかが曖昧**な状態です。
 > 守るべき資源（OpenAI の課金）に直結する門なので、持ち主の一本化は [#303](https://github.com/yomote/mind-inbox/issues/303) の対象。
 > **本 PR のスコープ外**（本 PR はロール割り当ての一本化のみ）。
-
-> **ロール割り当てはこの表に載りません（本 PR で撤去済み）。** 以前は `deploy-ai-agent.sh` が
+>
+> ---
+>
+> **ロール割り当てもこの表に載りません（本 PR で撤去済み）。** 以前は `deploy-ai-agent.sh` が
 > `az role assignment create` で OpenAI User を付与し、`provision.sh` が
 > `manageAiAgentOpenAiRoleAssignment=false` という「bicep に宣言させない逃げ道」を渡していました。
 > **どちらも削除済み**で、**持ち主は bicep 1 本**です（`bootstrap-core.bicep` の
