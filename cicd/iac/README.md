@@ -244,20 +244,26 @@ cd cicd
 RG=<rg-name> ./scripts/env/cleanup-env.sh
 ```
 
-- 自動作成した Entra アプリ登録を検出できた場合は先に削除
-- 既定で Key Vault の purge まで実行
+- RG を削除する
+- **soft-delete の purge は既定で行わない**（Key Vault / Cognitive Services の救済を残す）
+- **Entra アプリ登録も既定で削除しない**（テナントのオブジェクトであり RG の持ち物ではない）
 - 手動指定した既存 Entra アプリと共有 UAMI は削除しない
+
+破壊系の既定が off である理由は [ADR 0046](../../docs/adr/0046-environment-rebuildable-from-declaration.md) D5/D6。
 
 オプション:
 
 ```bash
-# Entra アプリを残す
+# 再 provision が名前衝突で失敗したときの手当て。
+# ★ 衝突した種類のフラグ「だけ」を立てる — 巻き添えで purge すると、
+#   衝突していない種類の soft-delete による救済まで永久に失う
 cd cicd
-RG=<rg-name> DELETE_ENTRA_APP=false ./scripts/env/cleanup-env.sh
 
-# Key Vault purge を無効化
-cd cicd
-RG=<rg-name> PURGE_DELETED_KEYVAULTS=false ./scripts/env/cleanup-env.sh
+# OpenAI / Speech (Cognitive Services) が衝突した場合
+RG=<rg-name> PURGE_DELETED_COGNITIVE_SERVICES=true ./scripts/env/cleanup-env.sh
+
+# Key Vault が衝突した場合
+RG=<rg-name> PURGE_DELETED_KEYVAULTS=true ./scripts/env/cleanup-env.sh
 ```
 
 ### B. Complete モードで整理（要注意）

@@ -87,10 +87,17 @@ gpg --armor --export-secret-keys "mind-inbox e2e artifacts"
   ドキュメントも「cloud environments have no dedicated secrets store, so don't add
   API keys or other credentials」と明示している
 
-**置き場所は管理系 RG の Key Vault** (ADR 0045 D5)。環境の RG に置くと
-`cleanup-env.sh` が purge するため、撤収のたびに鍵が消える
-([#302](https://github.com/yomote/mind-inbox/issues/302))。管理系 RG ができるまでは
-暫定で PO の手元に置き、復号は PO が行う。
+**置き場所は持続層 (管理系) RG の Key Vault** (ADR 0045 D5 /
+[ADR 0046](../../docs/adr/0046-environment-rebuildable-from-declaration.md) D1 が層の実体を定義)。
+環境の RG に置くと `cleanup-env.sh` の RG 削除に巻き込まれる
+([#302](https://github.com/yomote/mind-inbox/issues/302))。
+
+> **2026-08-12 更新**: ADR 0046 D6 で `PURGE_DELETED_KEYVAULTS` の既定を `false` にしたため、
+> 環境 RG に置いた場合でも **soft-delete による救済は残る**ようになった (以前は purge まで走り、
+> 救済不能に消えていた)。ただしこれは事故を止める安全弁であって置き場所の答えではない —
+> **秘密鍵は持続層に置く**方針は変わらない。
+
+持続層 RG ができるまでは暫定で PO の手元に置き、復号は PO が行う。
 
 ## 復号して trace を見る (**PO の管理環境でのみ**)
 
