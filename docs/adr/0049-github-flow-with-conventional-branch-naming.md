@@ -173,7 +173,17 @@ ADR 0043 D5 との接続を明文化する。
 
 ## 動作検証 (この ADR が実装されたと言える条件)
 
-1. 本 ADR マージ後に切られた作業ブランチが、**D2 / D3 の許可パターンのいずれか**に合致している — `^(claude|codex)/[0-9]+-` (D2 / Issue 番号必須) **または** `^(feature|feat|fix|bugfix|hotfix|chore|docs|test)/` (D3 の例外 / 人間が切るもの) **または** `^dependabot/` (生成名を変えられない)。**どれにも合致しないものが 0 本であること**が条件 (実測: `git ls-remote --heads origin` の日付順)
+1. **本 ADR マージ後に作成された PR** の head ブランチ名が、下記の**完全パターン**のいずれかに合致する。**どれにも合致しないものが 0 本であること**が条件
+
+   ```text
+   ^(claude|codex|feature|feat|fix|bugfix|hotfix)/[0-9]+(-[a-z0-9]+)+$   # D2: Issue 番号必須
+   ^(chore|docs|test)/[a-z0-9]+(-[a-z0-9]+)*$                            # D3: 番号なし例外
+   ^dependabot/                                                          # 生成名を変えられない (形式は問わない)
+   ```
+
+   `[a-z0-9]+` をハイフンで連結する形にしているのは、Conventional Branch 1.1.0 の Naming Rules (小文字のみ / 連続ハイフン禁止 / 先頭末尾ハイフン禁止) を**パターン自体で表現する**ため。prefix だけを見る条件では `feature/foo` (番号なし) / `claude/123-FOO` (大文字) / `chore/a--b` (連続ハイフン) がすべて通ってしまい、規約違反を検出できない
+
+   **観測対象を「ブランチ」ではなく「PR の head」にしたのは、新規かどうかを再現可能に判定するため。** `git ls-remote --heads origin` の出力は ``<oid>` + タブ + `<ref>`` だけで**作成日時を返さない**。tip の commit 日時で代用しても、古い commit を指す新規 ref と、既存 ref への追記を区別できない。一方 **PR の `created_at` は API が返す**ので、「本 ADR マージ後に作成されたか」が一意に決まる。D2 の判定点 (「PR を出す時点」) とも一致する
 2. `claim/*` `data/*` に作業ブランチが切られていない
 3. **merged** な PR の head ブランチが残っていない (Automatically delete head branches 有効化後)。**未マージ close** については、head が残っている closed PR の**それぞれに削除の `needs-human` 引き渡しが存在する** (D5)。件数の増減ではなく**引き渡しの有無**で判定する — 件数条件では個々の head が消えなくても満たせてしまい、D5 の「PR の決着と同時に削除する」を検証できないため
 4. `git ls-remote --heads origin` の総数が減少に転じる (置き去り 115 本の掃除 Issue の完了後)
