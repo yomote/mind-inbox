@@ -21,10 +21,30 @@ GitHub ユーザーなら誰でもダウンロードできる。したがって 
 
 ## ファイル
 
-| ファイル                | 中身           | commit する?                                                                      |
-| ----------------------- | -------------- | --------------------------------------------------------------------------------- |
-| `e2e-artifacts.pub.asc` | GPG **公開**鍵 | **する** (公開鍵は公開してよい)                                                   |
-| 秘密鍵                  | —              | **しない**。管理系 RG の Azure Key Vault に置く (#302 完了までは暫定で PO の手元) |
+| ファイル                 | 中身                                                                | commit する?                                                                      |
+| ------------------------ | ------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `e2e-artifacts.pub.asc`  | GPG **公開**鍵 (**#302 まで**の暫定)                                | **する** (公開鍵は公開してよい)                                                   |
+| `e2e-artifacts.pub.json` | 恒久形。**公開鍵 (PEM) と Key Vault の鍵バージョンを 1 ファイルに** | **する** (#302 で作る)                                                            |
+| 秘密鍵                   | —                                                                   | **しない**。管理系 RG の Azure Key Vault に置く (#302 完了までは暫定で PO の手元) |
+
+恒久形を 1 ファイルにする理由 ([ADR 0045](../../docs/adr/0045-e2e-artifacts-are-secret-by-default.md) D4 / D9):
+**CI は Azure の資格情報を持たない**ので、「どの鍵バージョンで wrap したか」をリポジトリから
+受け取る以外に知る方法が無い。公開鍵とバージョンを別ファイルにすると、片方だけ更新して
+**食い違ったまま暗号化し続ける**ことができてしまい、それに気づくのは復号しようとした時
+(最大 14 日後) になる。
+
+```json
+{
+  "vault": "https://<持続層の Vault>.vault.azure.net/",
+  "keyName": "e2e-artifacts",
+  "keyVersion": "<Key Vault の鍵バージョン ID>",
+  "wrapAlgorithm": "RSA-OAEP-256",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\n…"
+}
+```
+
+**このファイルが読めない / 壊れているときは、CI は暗号化せず落とす** (D4 の fail closed)。
+バージョンが取れないまま暗号化すると、**開けない artifact** ができる。
 
 **公開鍵が無い間、deploy は trace を残さず `::warning::` を出して続行する**
 (ADR 0045 D6)。鍵の準備前に平文で上がる事故を構造的に防ぐため。
@@ -153,7 +173,7 @@ artifact の取得自体はエージェントからも可能 (`download_workflow
 ## 鍵を替えるとき
 
 **方式が移行中なので手順が 2 つある** ([ADR 0045](../../docs/adr/0045-e2e-artifacts-are-secret-by-default.md) D5 / D9)。
-今どちらかは、リポジトリに置かれている公開鍵の形 (`*.pub.asc` = GPG / `*.pub.pem` = RSA 鍵オブジェクトの公開部) で判る。
+今どちらかは、リポジトリに置かれている公開鍵の形 (`*.pub.asc` = GPG / `*.pub.json` = 鍵オブジェクトの公開部 + バージョン) で判る。
 
 ### #302 完了まで — GPG (現行)
 
@@ -169,8 +189,21 @@ CI 側の変更は要らない (秘密を持っていないため)。**古い鍵
    **旧バージョンは無効化も削除もしない** — 保持中 (14 日) の artifact は旧バージョンで wrap されており、
    `az keyvault key decrypt` は wrap 時のバージョンを指定して呼ぶ必要がある
    (`.enc` にどのバージョンで wrap したかが入っている / ADR 0045 D9)
-2. **公開鍵の写しを更新して commit する** — `az keyvault key download --version <新> --encoding PEM` で
-   取り出し、リポジトリの公開鍵ファイルを差し替える。**ここを忘れると CI は旧バージョンで wrap し続ける**
-   (壊れはしないが、ローテーションが効いていない)
+2. **公開鍵とバージョンを一緒に commit する** — `e2e-artifacts.pub.json` の `publicKeyPem` と
+   `keyVersion` を**同時に**書き換える。**CI は Azure の資格情報を持たないので、バージョンは
+   ここからしか受け取れない** (ADR 0045 D4)。片方だけ直すと、CI は新しい鍵で暗号化しながら
+   `.enc` には旧バージョンを記録する — **暗号化は成功し、復号だけができない artifact** ができる:
+
+   ```bash
+   # 新バージョンの ID と公開鍵 PEM を 1 度に取り、1 ファイルとして書く
+   ver="$(az keyvault key show --vault-name <Vault> --name e2e-artifacts \
+            --query 'key.kid' -o tsv | awk -F/ '{print $NF}')"
+   pem="$(az keyvault key download --vault-name <Vault> --name e2e-artifacts \
+            --version "$ver" --encoding PEM -f /dev/stdout)"
+   # → vault / keyName / keyVersion / wrapAlgorithm / publicKeyPem を含む JSON を書き出して commit
+   ```
+
+   **ここを忘れると CI は旧バージョンで wrap し続ける** (壊れはしないが、ローテーションが効いていない)
+
 3. **旧バージョンを消してよいのは、それで wrap された artifact が全部期限切れになってから**。
    消すと**その artifact は永久に開けない** (鍵が Key Vault の外に無い = 復旧手段が存在しない)
