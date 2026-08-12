@@ -1,11 +1,11 @@
-# 0042. pm-accept は「実装差分が不変の main 追随」に引き継ぎ、直列化は Merge Queue に任せる
+# 0042. pm-accept は「実装差分が不変の main 追随」に引き継ぎ、追いつき自体を strict OFF で無くす
 
-- Status: Proposed
+- Status: Proposed (D2 を 2026-08-12 に実測で書き直し — 下記「D2 の改訂」。裁定は次の debrief)
 - Date: 2026-08-11
 - Deciders: yomote (PO) / PM セッション (PO 裁定 2026-08-11 を受けた実装側 ADR)
 - Related: [ADR 0036](0036-merge-gate-as-required-check-and-pm-cadence.md) (マージの門 — 本 ADR はその運用改訂。D1 の pm-accept 失効規則を狭め、Considered Options D の merge queue を採用に転じる) / [ADR 0040](0040-project-continuity-three-layers.md) D1 (マージ**執行**とストール検知 — 本 ADR は**受け入れ判定**側で、分担は D4 参照) / [ADR 0035](0035-role-split-across-agents-and-actions.md) (役割分担)
 
-Technical Story: 2026-08-11 の実害 — PR #243 が「追いつき競争」で 4 周 (base 追随 → pm-accept 失効 → 再受け入れ → 別 PR がマージされてまた out-of-date)。#260 / #261 / #263 が同時周回して互いの pm-accept を無効化し合った。queue 有効化の設定作業は needs-human Issue #269。
+Technical Story: 2026-08-11 の実害 — PR #243 が「追いつき競争」で 4 周 (base 追随 → pm-accept 失効 → 再受け入れ → 別 PR がマージされてまた out-of-date)。#260 / #261 / #263 が同時周回して互いの pm-accept を無効化し合った。queue 有効化の設定作業は needs-human Issue #269 → **その #269 で「Merge Queue は org 所有リポジトリ専用」と判明し、strict OFF に切り替えた** (D2 の改訂を参照)。
 
 ## Context and Problem Statement
 
@@ -49,6 +49,24 @@ review-gate (`cicd/scripts/review-gate/check.py`) の受け入れ判定を拡張
 - 判定理由は status description に可視化する — 成立時「OK: pm-accept を \<sha\> から引き継ぎ (差分不変)」、不成立時は「引き継ぎ不成立: \<理由\>」を従来の赤メッセージに併記
 - 既知の保守的な副作用: main 側が PR と**同じファイル**に触れた場合、コンフリクトせずマージできても patch の文脈や blob が変わり不成立になる (= 再受け入れが要る)。緩める方向の誤判定よりよい
 
+### D2 の改訂 (2026-08-12) — Merge Queue は使えない。追いつき自体を strict OFF で消す
+
+**初版の D2 は実行不能だった。** Merge Queue は **organization 所有のリポジトリ向け**の機能で、`yomote/mind-inbox` は個人アカウント所有のため設定項目が UI に出ない (2026-08-11、PO が Settings → Rules → Rulesets を実際に開いて確認 — [#269 コメント](https://github.com/yomote/mind-inbox/issues/269#issuecomment-5262150635))。**前提を確認せずに手順まで書いたのは PM の落ち度**。
+
+改訂後の決定 (PO 裁定 2026-08-11):
+
+- **直列化はしない。「Require branches to be up to date before merging」(strict) を OFF にする** — 渋滞の実体は「直列化の不在」ではなく **strict そのもの**だった。個人リポでもこれは外せる。2026-08-11 に PO が OFF にし、追いつきレースは即消滅した
+- **代償を引き受ける**: 少し古い main に対してテストされた PR が入りうる。組み合わせの破綻は**後段で捕まえる** — main の CI / dev への auto-deploy / golden-path 監視 / [#258](https://github.com/yomote/mind-inbox/issues/258) のマージ執行時のフル再評価が受け皿になる。「マージ前に完全に直列化する」を諦め、「壊れたら早く気づく」に賭ける判断
+- **`merge_group` 対応 (PR #271) は捨てない** — 将来 org へ移す判断をすればそのまま効く。有効化されていない間は**トリガーが発火しないだけ**で、PR フローに影響しない
+- **D1 (pm-accept の引き継ぎ) は strict の有無に関係なく効き続ける** — base 追随はコンフリクト解消などで今後も起きるため
+
+渋滞対策は結果として **3 層**で成立した: **#258 マージ執行 (緑になったら workflow が叩く) / D1 の引き継ぎ (追随のたびの受け入れ儀式が要らない) / strict OFF (そもそも追随が要らない)**。
+
+**2026-08-12 の実測で分かった注意点**: strict が OFF になった以上、**base が進んだからといって反射的に `update-branch` してはいけない**。同日 PR #286 で PM が不要な追随を行い、それが引き金で D1 の引き継ぎが不成立になって受け入れをやり直した (原因は [#323](https://github.com/yomote/mind-inbox/issues/323) — D1 の判定が base 側の変化を実装差分の変化として拾う実装バグ)。追随が要るのは **コンフリクトが実際に出たとき**だけ。
+
+<details>
+<summary>初版の D2 (実行不能と判明。経緯の記録として残す)</summary>
+
 ### D2 — 直列化は GitHub Merge Queue に任せる (ADR 0036 Considered Options D の再裁定)
 
 - required check を出す workflow (`test.yml` の test / lint-and-build、`review-gate.yml`、`auto-improve-guard.yml`、`adr-number-guard.yml`) に `merge_group:` トリガーを追加し、**queue の一時 branch (merge group) でも check が報告される**ようにする。これが無い required check は queue で永遠に pending になり、PR がタイムアウト脱落する
@@ -57,6 +75,8 @@ review-gate (`cicd/scripts/review-gate/check.py`) の受け入れ判定を拡張
 - **queue の有効化はリポ設定 (web UI) = needs-human Issue #269 で PO が行う**。有効化されるまで `merge_group:` トリガーは発火しないだけで、既存の PR フローに影響しない (先に入れて安全)
 
 ADR 0036 は merge queue を「並行 2 本・同一アカウント運用にはオーバーキル」として不採用にした。**実測で覆す**: 並行 3〜4 本 + 活発な main で「追いつき競争」が 1 日 4 周の実害になった。queue は「追いついて check を回してからマージ」をサーバー側で直列化し、セッションの生死に依存しない (auto-merge と同じ性質)。
+
+</details>
 
 ### D3 — 信頼境界: 門のスクリプトは常に main の信頼版を実行する (PR #271 Codex P1)
 
@@ -95,9 +115,9 @@ PR #258 (ADR 0040 D1) は「review-gate 自身が受け入れ済み・auto-merge
 ### Negative Consequences
 
 - review-gate の判定が複雑になる (compare API 依存が増える)。誤判定は「保守的に赤」に倒しているが、最初の数 PR で実測が要る
-- merge queue の一時 branch でも CI (test / lint-and-build ≒ 15 分) が回る — Actions 分数の消費が増える (public リポジトリなので無料枠内)
 - pm-accept 引き継ぎは**コメント列の最新受け入れだけ**を見る — PM が受け入れをやり直すと古い受け入れへは遡らない (意図した仕様だが、運用上は「受け入れは最後に 1 回」が前提)
-- commit status (checks API でなく statuses API) が merge queue の required check として数えられることは**実測で確認が要る** (下の動作検証 1)
+- **strict OFF (改訂後の D2) の代償**: 少し古い main に対してテストされた PR が入りうる。semantic conflict はマージ後 (main の CI / dev への auto-deploy / golden-path 監視) で露見する。**「壊れたら早く気づく」に賭けた**判断であり、壊れないことは保証しない
+- ~~merge queue の一時 branch でも CI が回るので Actions 分数が増える~~ / ~~statuses API が queue の required check として数えられるかは実測が要る~~ — **どちらも Merge Queue 前提。改訂後の D2 では該当しない**
 
 ## Pros and Cons of the Options
 
@@ -124,21 +144,21 @@ PR #258 (ADR 0040 D1) は「review-gate 自身が受け入れ済み・auto-merge
 
 ## 動作検証 (この ADR が実装されたと言える条件)
 
-1. queue 有効化後、queue に入った PR で review-gate / test / lint-and-build / auto-improve-guard / adr-number-guard が merge group SHA に報告され、マージまで到達する (実測 — **statuses API が queue の required check として数えられることの確認を含む**)
-2. 受け入れ済み PR に main をマージで追随させても review-gate が緑のまま、description に「pm-accept を \<sha\> から引き継ぎ (差分不変)」が出る (実測)
+1. **strict OFF の状態で、main が進んでも受け入れ済み PR がそのままマージできる** (実測) — 初版の「queue に入った PR が merge group SHA で全 check 緑になる」は Merge Queue が使えないため**検証不能・廃止**
+2. 受け入れ済み PR に main をマージで追随させても review-gate が緑のまま、description に「pm-accept を \<sha\> から引き継ぎ (差分不変)」が出る (実測) — **2026-08-12 に PR #286 で実施したところ不成立になり、[#323](https://github.com/yomote/mind-inbox/issues/323) を起票した。この条件は未達**
 3. 受け入れ後に実装コミットを積むと従来どおり赤に戻り、「引き継ぎ不成立」の理由が description に出る (実測)
 4. [L1] テスト: 引き継ぎの成立 / 実装コミット混入 / 非 main マージ / evil merge (差分変化) / rebase / 判定不能の各ケース (`cicd/scripts/review-gate/test_check.py`)
 5. 引き継ぎで緑になった PR が**マージ執行 (ADR 0040 D1) の直前フル再評価でも緑のまま**マージされる (実測 — 判定が `evaluate_gate` の 1 経路にあることの動作確認)
 
 ## 未決
 
-- merge queue の設定値 (merge method = squash / 並行ビルド数 / タイムアウト) — #269 で PO が設定するときに初期値を決め、実測で調整
-- up-to-date 必須 (strict) を queue 有効化後に外すか — queue が同じ保証を持つため外せるはずだが、#269 の設定作業とセットで判断
-- `iac-validate` など paths フィルタ付き workflow を required に入れる場合の merge_group 対応 (現状 required は上の 5 check のみという前提)
-- **queue 有効化後に PR 側経路のマージ執行 (ADR 0040 D1) を畳むか** — queue がマージを直列実行するなら二重だが、queue 未投入の PR (auto-merge 未武装) には効いている。実測してから 0040 側の改訂で判断 (D4)
+- **D1 の引き継ぎ判定が base の前進を実装差分の変化として拾う** ([#323](https://github.com/yomote/mind-inbox/issues/323) / P1) — 直すまで、追随のたびに再受け入れが要る
+- **strict OFF で「古い main に対する PR」がどこまで許容できるか** — 実際に semantic conflict が main で露見したら、そのときの検知経路 (どの層が捕まえたか) を記録して判断材料にする
+- ~~merge queue の設定値~~ / ~~strict を queue 有効化後に外すか~~ / ~~paths フィルタ付き workflow の merge_group 対応~~ / ~~queue 有効化後に PR 側マージ執行を畳むか~~ — **すべて Merge Queue 前提。個人アカウント所有リポでは使えないため消滅** (org へ移す判断をしたら復活する)
 
 ## Links
 
 - 関連 ADR: [0036](0036-merge-gate-as-required-check-and-pm-cadence.md) / [0040](0040-project-continuity-three-layers.md) / [0035](0035-role-split-across-agents-and-actions.md) / [0031](0031-agent-reaches-outside-via-github-actions.md)
-- Runbook: [merge-queue.md](../runbooks/merge-queue.md)
-- needs-human: Issue #269 (queue 有効化)
+- Runbook: [merge-queue.md](../runbooks/merge-queue.md) — **Merge Queue が使えないと判明した後は「将来 org へ移したら読む手順書」**であり、現行運用の手順ではない
+- 経緯: Issue [#269](https://github.com/yomote/mind-inbox/issues/269) (queue 有効化 → **使えないと判明 → strict OFF に切り替えてクローズ**。訂正コメントに一次情報がある)
+- 追随の実装バグ: [#323](https://github.com/yomote/mind-inbox/issues/323)

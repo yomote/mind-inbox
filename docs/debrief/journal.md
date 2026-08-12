@@ -18,6 +18,18 @@
 - **持ち越し**: {未消化の項目・次回に回した判断。無ければ「なし」}
 ```
 
+## 2026-08-12 — debrief
+
+- **対象**: Proposed のまま溜まっていた ADR 4 本の裁定 — [0041](../adr/0041-ux-observations-on-git-data-branch.md) (UX 観測データを git データブランチへ) / [0042](../adr/0042-pm-accept-carryover-and-merge-queue.md) (pm-accept 引き継ぎ + Merge Queue) / [0045](../adr/0045-e2e-artifacts-are-secret-by-default.md) (E2E 成果物は既定で秘密扱い) / [0043](../adr/0043-pm-self-driving-mode.md) (PM 自走モード)
+- **決定**:
+  - **0041 Accept** — 蓄積の正しさを「返信しないでください」というお願いから git の構造に移す
+  - **0045 Accept + 宿題 1 件** — 公開鍵暗号化で trace を残す。PO の追加要望「**エージェントも復号できる安全な道を探る**」を [#325](https://github.com/yomote/mind-inbox/issues/325) に起票 (ADR 本文が「この driver は満たせていない」と自認していた箇所への対処)
+  - **0043 Accept** — 実物指標 / 週次目標 / 引く当番 (WIP 上限 2) / 日次ダイジェスト / 窓口台帳 + claim ref の CAS
+  - **0042 は裁定に至らず、D2 を書き直して Proposed のまま持ち越し** — 下記「特記」
+- **学びメモ**: 0042 の提示に対し PO が即座に「**Merge Queue はオーガニゼーションじゃないと使えないからダメになったはず。この辺どうだったっけ、確認必要**」と指摘。PO の記憶が正しく、[#269](https://github.com/yomote/mind-inbox/issues/269) の訂正コメント (2026-08-11) に一次情報が残っていた。**PM が裁定の場に「既に否定された前提を含む ADR」をそのまま持ち込んだ**のが誤り
+- **特記**: 0042 の D2 (直列化を Merge Queue に任せる) は **2026-08-11 の時点で実行不能と判明済み**だった — Merge Queue は organization 所有リポジトリ専用で、`yomote/mind-inbox` は個人アカウント所有。#269 のクローズ時に「**ADR 0042 の D2 を改訂する Proposed ADR を PM が起票し、次の debrief で裁定する**」と持ち越しが明記されていたが、**PM (この窓口セッション) がそれを読まずに debrief を開いた**。裁定の場で PO の記憶に救われた形。⇒ 本 debrief で D2 を「**strict OFF で追いつき自体を無くす。直列化はしない。組み合わせの破綻は後段 (main の CI / auto-deploy / golden-path) で捕まえる**」に書き直し、初版 D2 は `<details>` で経緯として残した。**再発防止**: debrief の Step 1 で「前回以降のマージ PR」だけでなく **クローズされた needs-human Issue の持ち越し欄**も集める
+- **持ち越し**: **0042 の裁定** (改訂 D2 で次回)。0042 D1 の引き継ぎ判定に実装バグ ([#323](https://github.com/yomote/mind-inbox/issues/323) / P1) — 本日 PR #286 で base が進んだだけなのに不成立になり再受け入れが発生。あわせて **strict が OFF になった以上、反射的な `update-branch` はしない** (今日の再受け入れは PM の不要な追随が引き金だった)
+
 ## 2026-08-12 — design-gate
 
 - **対象**: インフラ整備の 3 件を 1 本にまとめた [ADR 0046](../adr/0046-environment-rebuildable-from-declaration.md) 起案 — [#302](https://github.com/yomote/mind-inbox/issues/302) (ライフサイクル 3 層分断) / [#303](https://github.com/yomote/mind-inbox/issues/303) (設定を宣言に一本化・Entra 含む) / [#306](https://github.com/yomote/mind-inbox/issues/306) (週次プロビジョンテスト)。ADR 0013「常設 dev 環境」の解釈追補を含む

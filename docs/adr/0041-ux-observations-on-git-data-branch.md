@@ -1,6 +1,6 @@
 # 0041. UX 観測データの蓄積先を Issue コメントから git データブランチへ移す
 
-- Status: Proposed
+- Status: Accepted (2026-08-12, debrief にて PO 承認)
 - Date: 2026-08-11
 - Deciders: omoteforlab (蓄積先の方式は 2026-08-11 の対話セッションで選択肢形式により裁定 — [#197 コメント](https://github.com/yomote/mind-inbox/issues/197)) / 実装セッション
 - Consulted: —
