@@ -124,13 +124,20 @@ jobs:
         # コードは即座に出る。ここが長いのは PO の承認を待つ時間だけ。
         timeout-minutes: 12
         env:
-          # 万一 client_id を差し替える必要が出たとき、コード変更なしで効くように
-          GH_OAUTH_CLIENT_ID: ${{ vars.GH_OAUTH_CLIENT_ID }}
+          # 承認したのが誰かを検証するための期待値。user_code は public な run ログに
+          # 出るので、**第三者が先に自分のアカウントで承認できてしまう** (#366 レビュー)。
+          EXPECT_LOGIN: ${{ github.repository_owner }}
         run: |
           set -uo pipefail
-          mkdir -p "$WORKDIR"
+          # 既存ファイルに書かない (device_login.py が O_EXCL で開く) ため、
+          # 前の run の残骸があれば先に消す
+          mkdir -p "$WORKDIR" && rm -f "$WORKDIR/token"
+          # client_id は **リポジトリ変数で差し替えられない** — 特権 workflow の
+          # 承認先を PR に残らない経路で変えられるようにしないため (#366 レビュー major)。
+          # 差し替えるなら device_login.py を PR で直す。
           python3 cicd/scripts/github-settings/device_login.py \
-            --scopes "repo,read:org" \
+            --scopes "repo" \
+            --expect-login "$EXPECT_LOGIN" \
             --token-out "$WORKDIR/token" \
             --max-wait 600
           rc=$?
@@ -177,13 +184,17 @@ jobs:
           exit "$rc"
 
       # 特権トークンは用が済んだら即捨てる (run が続く間も持ち歩かない)。
+      # ⚠️ これは **runner 上のコピーを消すだけ** で、GitHub 側の認可は失効しない。
+      #    public client なので revoke API (client_secret が要る) は叩けない。
+      #    完全に切るには PO が Settings → Applications → Authorized OAuth Apps で
+      #    「GitHub CLI」の grant を revoke する (ローカルの gh ログインも切れる)。
       - name: トークンを捨てる
         if: always()
         run: |
           rm -f "$WORKDIR/token"
           # gh のストアは使っていないが、将来 gh auth login に戻したときの取り残し防止
           rm -rf ~/.config/gh
-          echo "device-code のトークンを破棄しました"
+          echo "device-code のトークンの手元コピーを削除しました (GitHub 側の認可は残ります)"
 
       # 事実をデータブランチへ。push は GITHUB_TOKEN で行う (device トークンは既に破棄済み)。
       - name: 観測をデータブランチに置く

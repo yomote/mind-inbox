@@ -36,6 +36,16 @@
 
 > **窓口 PM (エージェント) に頼む場合**: コードは annotation なので**走行中でも API から読める**。
 > 「コードを教えて」と言えば PM が読んで貼れる (生ログは完了後しか取れないので、これが唯一の経路)。
+>
+> ⚠️ **承認は必ずリポジトリ所有者のアカウントで行うこと。** `user_code` は public な
+> run ログに出るため第三者も読めます。別アカウントで承認された場合、workflow は
+> **設定を 1 つも読まずに赤で終わります** (トークンの持ち主を `GET /user` で照合しているため)。
+>
+> ⚠️ **run が終わってもトークンの認可は残ります。** workflow が消すのは runner 上の
+> コピーだけで、GitHub 側の grant は生きています (public client なので revoke API を
+> 叩けない)。完全に切るには **Settings → Applications → Authorized OAuth Apps →
+> 「GitHub CLI」を revoke** してください (ローカルの `gh` ログインも切れます)。
+> 同意画面に「GitHub CLI」と出るのは、gh CLI と同じ公開 client_id を使っているためです。
 
 **結果の見方:**
 
