@@ -64,12 +64,8 @@ PR を作成したら放置せず、**merge / close されるまで追従する*
 
 - PR を作ったら `subscribe_pr_activity` で監視を有効化する
 - レビュー ([ADR 0008](docs/adr/0008-pr-review-via-cloud-routine.md) の Routine 含む) や CI コメントが付いたら調査し、**小さく確実な修正は push**、曖昧 / 重大な指摘は確認を取る。**再レビューが Resolve するまで追う**
-<<<<<<< HEAD
 - **レビュースレッドを resolve してよいのは、指摘者 = 代役 judge (`code-reviewer` subagent) の再レビューが OK を出してから** (2026-08-12 PO 承認 — **2026-08-11 の「指摘者 (Codex) の再レビューが OK を出してから」を上書きする**。理由: Codex が利用上限で停止し ([#345](https://github.com/yomote/mind-inbox/issues/345))、指摘者が応答できない間は修正を push してもスレッドが畳めずマージ経路が閉じるため / [ADR 0052](docs/adr/0052-codex-derived-review-rubric-and-stand-in-judge.md)) — 修正 push → `code-reviewer` subagent を再起動して再レビュー → **同じ指摘が再提起されないことを確認してから** resolve する。操作は PM、判定は指摘者。修正せず見送る場合 (別 Issue へ切り出し等) に再レビューでも再提起されたら、独断で畳まず PO に上げる。docs のみの PR 等レビュー対象外の指摘 (セルフレビュー・PM レビュー) は従来どおり対応確認で resolve してよい。**Codex が復帰したら指摘者を Codex に戻す** (`REVIEW_GATE_REQUIRE_CODEX` を true に戻し、`@codex review` を再レビューの主経路にする。代役は Codex 対象外の PR と、Codex を待てない場合の埋め合わせに退く)。**代役は Claude なので独立性は回復していない** — 同じモデルは同じ盲点を持つ ([ADR 0035](docs/adr/0035-role-split-across-agents-and-actions.md) D4)
-=======
-- **レビュースレッドを resolve してよいのは、指摘者 (Codex) の再レビューが OK を出してから** (2026-08-11 PO 決定) — 修正 push → `@codex review` で再レビュー依頼 → **同じ指摘が再提起されないことを確認してから** resolve する。操作は PM、判定は指摘者。修正せず見送る場合 (別 Issue へ切り出し等) に再レビューでも再提起されたら、独断で畳まず PO に上げる。docs のみの PR 等 Codex レビュー対象外の指摘 (セルフレビュー・PM レビュー) は従来どおり対応確認で resolve してよい
   - **例外: 外部要因で再レビューが回せないとき** (2026-08-12 PO 裁定 / 実例は [PR #284](https://github.com/yomote/mind-inbox/pull/284)) — (1) 指摘が対応済みか別 Issue へ移送済み、(2) 再レビュー不能の原因が**外部事情** (レビュー枠切れ・サービス障害) であって PR の中身ではない、(3) **PO が明示的に裁定する** — この 3 つが揃うときに限り resolve してよい。**エージェントの自己判断では使えない** (判定者を欠いたまま自分の宿題に合格を出す経路にしないため)。「マージの常設承認」には含めず、個別裁定として扱う
->>>>>>> origin/main
 - webhook は CI 成功・新規 push・マージ遷移を配信しないので、定期チェックインで取りこぼしを補い、merge / close で監視を終える
 - **「緑になったらマージ」の主経路は GitHub の auto-merge** — 受け入れ (pm-accept) まで済ませたら `enable_pr_auto_merge` (squash) を掛けて終わってよい。マージはサーバー側で行われ、**セッションの生死に依存しない**。required check (CI + review-gate) が門を守る。常設承認の例外 (リリース PR / needs-human 等) には掛けないこと。リポ設定の有効化は Issue #234
 - **定期チェックインは auto-merge の補助** (レビュー対応の取りこぼし確認など)。`send_later` ではなく `CronCreate` を使う (MCP 側は承認ゲートに当たる / [ADR 0031](docs/adr/0031-agent-reaches-outside-via-github-actions.md) D6) が、**CronCreate はセッション内メモリでありセッション終了と共に消える** — 2026-08-10 に PR #230 が「全 check 緑のままマージされず一晩放置」される実害が出た。チェックインだけに完遂を依存させない
