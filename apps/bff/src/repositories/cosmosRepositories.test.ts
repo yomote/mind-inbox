@@ -13,7 +13,8 @@
  *     スキーマ (strict ではない) を素通りしてフロントに謎のキーが漏れる
  */
 import type { Container } from "@azure/cosmos";
-import { describe, expect, it } from "vitest";
+import fc from "fast-check";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CosmosProblemRepository, isNotFound } from "./cosmosProblemRepository";
 import type { Mention, Problem } from "../trpc/domain";
 
@@ -210,5 +211,82 @@ describe("[L2] CosmosProblemRepository", () => {
     expect(isNotFound({ code: 403 })).toBe(false);
     expect(isNotFound(new Error("boom"))).toBe(false);
     expect(isNotFound(null)).toBe(false);
+  });
+});
+
+// ---- poison document 耐性 (#313 B-3) ---------------------------------------
+
+describe("[単体] 契約に反する 1 件が一覧全体を落とさない", () => {
+  // 無いと何が静かに通るか: list が全 doc に parse を掛ける形に戻り、**壊れた doc が 1 件
+  // 混ざるだけで Problem 一覧が丸ごと 500 になる**。一覧も詳細も開けないので、その doc を
+  // 画面から消すこともできない (自力で復旧できない)。書き込み側の検証
+  // (aiAgentClient) をすり抜けたもの・過去に書かれたもの・スキーマ変更後の doc が該当する。
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("壊れた doc は落とし、残りの正常な doc は位置に関わらず全件返す", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await fc.assert(
+      fc.asyncProperty(
+        fc.integer({ min: 1, max: 5 }),
+        fc.nat(),
+        async (validCount, positionSeed) => {
+          const valid = Array.from({ length: validCount }, (_, i) =>
+            asStoredDocument(makeProblem({ id: `prob-${i}` }), "user-a"),
+          );
+          // 「theme が 8 分類の外」— LLM の出力揺れで実際に起こりうる壊れ方
+          const broken = asStoredDocument(
+            { ...makeProblem({ id: "prob-broken" }), theme: "でっちあげ" },
+            "user-a",
+          );
+          const at = positionSeed % (validCount + 1);
+          const queryResults = [...valid.slice(0, at), broken, ...valid.slice(at)];
+
+          const fake = makeFakeContainer({ queryResults });
+          const repo = new CosmosProblemRepository(fake.container, "user-a");
+
+          const got = await repo.list();
+
+          expect(got.map((p) => p.id)).toEqual(valid.map((d) => d.id));
+        },
+      ),
+      { numRuns: 20 },
+    );
+  });
+
+  it("get も壊れた doc を「無い」として返す (list から消えたのに詳細だけ 500 にしない)", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const broken = asStoredDocument({ ...makeProblem(), mentions: [] }, "user-a");
+    const fake = makeFakeContainer({ readResource: broken });
+    const repo = new CosmosProblemRepository(fake.container, "user-a");
+
+    await expect(repo.get("prob-1")).resolves.toBeNull();
+  });
+
+  it("警告ログに相談本文 (title / summary / mentions) を載せない", async () => {
+    // 無いと: 復旧のための警告ログが、そのまま Application Insights への機微データ漏洩に
+    // なる (監査 E-2 / 観点 S3)。出してよいのは id と「どこがどう壊れたか」だけ。
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const secret = "会社を辞めたいと毎晩考えている";
+    const broken = asStoredDocument(
+      {
+        ...makeProblem({ title: secret, summary: secret, mentions: [makeMention()] }),
+        theme: "でっちあげ",
+      },
+      "user-a",
+    );
+
+    await new CosmosProblemRepository(
+      makeFakeContainer({ queryResults: [broken] }).container,
+      "user-a",
+    ).list();
+
+    const logged = warn.mock.calls.flat().join(" ");
+    expect(logged).toContain("prob-1"); // どの doc かは分かる
+    expect(logged).toContain("theme"); // どこが壊れたかも分かる
+    expect(logged).not.toContain(secret);
+    expect(logged).not.toContain("でっちあげ"); // 弾かれた値そのものも出さない
   });
 });

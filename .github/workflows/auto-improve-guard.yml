@@ -9,15 +9,22 @@
 #   - `ux-auto-improve` ラベルが無い PR → 「対象外」で緑 (required check に据えられるよう、
 #     常に走って常に結論を出す。ラベル条件で job ごとスキップすると status が付かない)
 #   - ラベルがある PR → 変更パスが許可リスト内に収まっているかを検査し、外れたら赤
+#   - merge_group (ADR 0042) → head_ref から対象 PR を解決し、ラベル・変更ファイルを
+#     API で取得して同じ検査をする。PR を解決できなければ赤 (安全側 — 静かに通さない)
 name: auto-improve-guard
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
     branches: [main]
+  # merge queue の一時 branch でも required check を報告する (ADR 0042)。
+  # queue 有効化は needs-human #269。
+  merge_group:
 
 permissions:
   contents: read
+  # merge_group で対象 PR のラベル・変更ファイルを API で読むため (ADR 0042)
+  pull-requests: read
 
 jobs:
   guard:
@@ -26,15 +33,18 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
       - name: 変更パスを許可リストと突き合わせる
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
           IS_AUTO_IMPROVE: ${{ contains(github.event.pull_request.labels.*.name, 'ux-auto-improve') }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_GROUP_HEAD_REF: ${{ github.event.merge_group.head_ref }}
         run: |
           set -euo pipefail
 
@@ -45,15 +55,31 @@ jobs:
             "apps/services/ai-agent/app/prompts/"
           )
 
-          if [ "$IS_AUTO_IMPROVE" != "true" ]; then
-            echo "::notice title=auto-improve-guard::ux-auto-improve ラベルなし — 自動改善 PR ではないため検査対象外"
-            exit 0
+          if [ "$EVENT_NAME" = "merge_group" ]; then
+            # merge queue の一時 branch — diff を base と直接取ると queue 内で
+            # 先行する他 PR の変更が混ざるため、対象 PR の files API を使う (ADR 0042)
+            PR_NUMBER="$(sed -nE 's#.*gh-readonly-queue/.+/pr-([0-9]+)-.*#\1#p' <<< "$MERGE_GROUP_HEAD_REF")"
+            if [ -z "$PR_NUMBER" ]; then
+              echo "::error title=auto-improve-guard::merge_group ref から PR を解決できない ($MERGE_GROUP_HEAD_REF) — 安全側で赤"
+              exit 1
+            fi
+            LABELS="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.labels[].name] | join("\n")')"
+            if ! grep -qx 'ux-auto-improve' <<< "$LABELS"; then
+              echo "::notice title=auto-improve-guard::PR #${PR_NUMBER} に ux-auto-improve ラベルなし — 検査対象外"
+              exit 0
+            fi
+            CHANGED="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename')"
+          else
+            if [ "$IS_AUTO_IMPROVE" != "true" ]; then
+              echo "::notice title=auto-improve-guard::ux-auto-improve ラベルなし — 自動改善 PR ではないため検査対象外"
+              exit 0
+            fi
+
+            # base は PR の checkout に含まれない場合があるので明示的に取得する
+            git fetch --no-tags --depth=1 origin "$BASE_SHA" 2>/dev/null || git fetch --no-tags origin "$BASE_SHA"
+
+            CHANGED="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
           fi
-
-          # base は PR の checkout に含まれない場合があるので明示的に取得する
-          git fetch --no-tags --depth=1 origin "$BASE_SHA" 2>/dev/null || git fetch --no-tags origin "$BASE_SHA"
-
-          CHANGED="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
 
           if [ -z "$CHANGED" ]; then
             echo "::notice title=auto-improve-guard::変更ファイルなし"

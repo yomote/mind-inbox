@@ -25,10 +25,15 @@ on:
     types: [completed]
   workflow_dispatch:
 
+# permissions は **書いた瞬間に、書かなかったものが none になる**。
+# 新しい API を叩くようになったらここに 1 行足すこと — 足し忘れると本番だけ
+# 403 になり、ページは落ちずに「未検証」を並べる (静かに情報が消える / PR #281)。
 permissions:
   contents: write # gh-pages に push する
-  actions: read # 他ワークフローの run 履歴を読む
+  actions: read # 他ワークフローの run 履歴 / run の jobs (実デプロイの痕跡) を読む
   issues: write # 落ちたら自分で Issue を立てる (ADR 0035 D2)
+  pull-requests: read # 「進行中」の open PR 一覧と変更ファイル (#280)
+  statuses: read # 各 PR の review-gate (commit status) の色 (#280)
 
 concurrency:
   group: status-page
@@ -39,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # UX トレンド (ADR 0041 D6) の描画元。ブランチが無くても落とさない —
       # build.py が「未検証」として出す (取れなかったを異常なしに見せない)

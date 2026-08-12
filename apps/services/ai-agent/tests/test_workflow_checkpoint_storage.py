@@ -29,8 +29,7 @@ from app.workflow import (
 )
 from tests.test_workflow_approval import (
     APPROVAL_CLASSIFICATION,
-    FakeKernel,
-    RoutedChatService,
+    RoutedChatClient,
 )
 
 
@@ -58,10 +57,10 @@ class TestCosmosModeApprovalLifecycle:
         self, cosmos_mode, session_repo, approval_repo
     ):
         """共有ストア構成では registry を経由しない = 再起動を跨いでも再開できる形。"""
-        kernel = FakeKernel(RoutedChatService(APPROVAL_CLASSIFICATION))
+        client = RoutedChatClient(APPROVAL_CLASSIFICATION)
 
         res = await run_workflow(
-            "s-cosmos", "返信して", session_repo, approval_repo, kernel
+            "s-cosmos", "返信して", session_repo, approval_repo, client
         )
 
         assert res.requires_approval is True
@@ -71,7 +70,7 @@ class TestCosmosModeApprovalLifecycle:
         # registry が空のまま (= プロセス再起動相当) でも、共有ストアの
         # checkpoint から再開できる
         reply = await resume_after_approval(
-            res.approval_request_id, True, session_repo, approval_repo, kernel
+            res.approval_request_id, True, session_repo, approval_repo, client
         )
         assert reply == "対応しました。"
 
@@ -81,10 +80,10 @@ class TestCosmosModeApprovalLifecycle:
     async def test_l1_resolve_deletes_pending_checkpoint(
         self, cosmos_mode, session_repo, approval_repo
     ):
-        kernel = FakeKernel(RoutedChatService(APPROVAL_CLASSIFICATION))
+        client = RoutedChatClient(APPROVAL_CLASSIFICATION)
 
         res = await run_workflow(
-            "s-cosmos-del", "返信して", session_repo, approval_repo, kernel
+            "s-cosmos-del", "返信して", session_repo, approval_repo, client
         )
         record = await approval_repo.get(res.approval_request_id)
         assert any(
@@ -93,7 +92,7 @@ class TestCosmosModeApprovalLifecycle:
         )
 
         await resume_after_approval(
-            res.approval_request_id, True, session_repo, approval_repo, kernel
+            res.approval_request_id, True, session_repo, approval_repo, client
         )
 
         # 解決時 delete: 解決済みの pending checkpoint は TTL を待たずに消える
@@ -106,10 +105,10 @@ class TestCosmosModeApprovalLifecycle:
         self, cosmos_mode, session_repo, approval_repo
     ):
         """TTL 失効相当 (checkpoint 文書だけ消えた) は 404 系 (ValueError) に写る。"""
-        kernel = FakeKernel(RoutedChatService(APPROVAL_CLASSIFICATION))
+        client = RoutedChatClient(APPROVAL_CLASSIFICATION)
 
         res = await run_workflow(
-            "s-cosmos-ttl", "返信して", session_repo, approval_repo, kernel
+            "s-cosmos-ttl", "返信して", session_repo, approval_repo, client
         )
         record = await approval_repo.get(res.approval_request_id)
         # checkpoint 文書だけ TTL で消えた状況を再現
@@ -119,5 +118,5 @@ class TestCosmosModeApprovalLifecycle:
 
         with pytest.raises(ValueError, match="Approval checkpoint not found"):
             await resume_after_approval(
-                res.approval_request_id, True, session_repo, approval_repo, kernel
+                res.approval_request_id, True, session_repo, approval_repo, client
             )

@@ -35,6 +35,36 @@
 置き場所は gh-pages の **`/status/` 配下だけ**。ルートには 2026-07 のフロント配信物が
 残っているので触らない。
 
+## プロダクトの現在地 (ページ冒頭 / Issue #280)
+
+2026-08-11 の PO 要望「いつでも開けば、できているもの / 進行中 / 次にやることが見えて、
+指させる場所」。自動化の生死と同じ規律 (状態を持たず GitHub の実データから毎回生成) で、
+組み立ては [`cicd/scripts/status-page/product_status.py`](../../cicd/scripts/status-page/product_status.py)。
+
+| 欄                    | 何から作るか                                                                                                                             |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| 今週の目標            | open milestone のうち**期限が直近の 1 件** + 紐づく Issue/PR の消化状態。無ければ「未設定」— **今週の目標は milestone を切って表現する** |
+| いま dev で触れるもの | `deploy.yml` の run 履歴。「dev は何時の commit の状態か / 以降何本のマージが未反映か」。deploy 赤なら ⚠️ + ci-failure Issue へのリンク  |
+| 進行中                | open PR (base=main) を機械分類 — 変更ファイルに `apps/` を含めば**プロダクト**、それ以外は**工場** (開発体制)。各行に review-gate の色   |
+| 🙋 あなたの番         | `needs-human` ラベルの open Issue + `Status: Proposed` の ADR (main の内容から)                                                          |
+| 次の候補              | `P1` ラベルかつ ci 系ラベル無しの open Issue を**作成日昇順で 5 件** (= PM の優先案)。並べ替えの指示は Issue #280 へ                     |
+
+運用上の注意:
+
+- **新しい API を叩くようになったら `.github/workflows/status-page.yml` の `permissions` に 1 行足す** — `permissions` は書いた瞬間に**書かなかったものが `none`** になる。足し忘れるとローカルでは通るのに本番だけ 403 になり、ページは落ちずに「未検証」を並べる (静かに情報が消える)。現在の必要権限: `contents: write` (gh-pages) / `actions: read` (run 履歴 + run の jobs) / `issues: write` (失敗 Issue) / `pull-requests: read` (進行中) / `statuses: read` (review-gate の色)
+- **一覧 API は必ず `--paginate` で取る** — PR / Issue の一覧は 1 ページ (最大 100 件) で切れ、**51 件目以降が「無かった」ことになる**。`--paginate` + `--jq` はページごとに jq を適用するので `[...]` で包まず、`.[] | {...}` の 1 行 1 オブジェクトにして `build.gh_objects` で畳む
+- 変更ファイルが取得できなかった PR は工場に黙って混ぜず「未検証」として別枠に出す (files も `--paginate` で全ページ取得 — 100 件超の PR で `apps/` を取りこぼさないため)
+- review-gate の ❓ は 2 種類 — 「(未評価)」= status がまだ貼られていない / 「(未検証)」= 取得失敗
+- 「以降 N 本のマージが未反映」は deploy.yml の **push イベントの run** で数える (手動の up/down は数えない)
+- **run の緑 ≠ デプロイした**。deploy.yml は run success でも実デプロイが走らない経路 (guard skip = OIDC 未設定 / `AUTO_DEPLOY_ENABLED` 未設定、手動 `down` = 撤収) を持つ。そこで run の jobs API から `Provision + deploy (up)` の痕跡を見て、**2 つを別々に**決める — 「dev に載っている commit」= 同ステップが **success で完走**した最後の成功 run / 「直近のデプロイが通ったか」= 同ステップが **走った (success or failure)** 最新の push run の結果。後者を分けないと、**失敗の次の push が guard skip で緑になった瞬間に ⚠️ と ci-failure Issue へのリンクが消える**
+  - 撤収が最後なら「⚠️ dev は撤収されています」、guard skip だけが続くなら「実デプロイの痕跡がありません」— いずれも「反映済み」とも「赤」とも書かない
+  - **「デプロイ経路に入った」痕跡は deploy.yml の no-op marker step が持つ** (`デプロイ経路に入った (marker)` — guard 通過直後・Azure login より前)。Azure login や IMAGE_TAG 解決で落ちると `Provision + deploy (up)` は skipped になり、marker が無いと「試みて失敗した」と「そもそも走らなかった」を区別できない (deploy が赤なのにページだけ緑になる)
+  - **`deploy.yml` のステップ名を変えたら `product_status.py` の `DEPLOY_STEP` / `TEARDOWN_STEP` / `MARKER_STEP` を追随させる** (deploy.yml 側にも同じ注意をコメントで置いてある)
+  - 赤は保守側に保持する — guard skip の緑が何本続いても ⚠️ を消さない。根拠は 2 つ: ①取得済み run の中の失敗 push ②**open な deploy の `ci-failure` Issue** (緑になれば report-failure が自動で閉じる / ADR 0035 D2 なので、open のまま = 未復旧。**run 一覧の取得窓に依存しない**のがこちらの役目)。どちらも「それより新しいデプロイできた痕跡」があれば採用しない (復旧済みの古い失敗・閉じ損ねた Issue で永久に赤くしない)
+  - **「いつから未復旧か」は Issue の `created_at` ではなく、bot の失敗追記 (`🔴 まだ落ちています`) の最新時刻**で測る。`report-failure` の close は `|| true` で握り潰されうるので、「閉じ損ねた Issue → 成功デプロイ → 再障害の追記」だと created_at (初回) が古すぎて赤が消える。人間のコメントで時刻が進まないよう **bot 投稿だけ**を数え、追記が無ければ created_at に戻す。この追加取得は **open な deploy Issue があるときだけ 1 回**
+    - **文言 (`🔴 まだ落ちています`) を変えたら `product_status.py` の `FAILURE_COMMENT_MARKER` も直す** (`report-failure/action.yml` 側にも同じ注意をコメントで置いてある)
+  - deploy.yml の該当ステップ名を変えたら `product_status.py` の `DEPLOY_STEP` / `TEARDOWN_STEP` も直すこと
+
 ## 記号の読み方
 
 | 記号 | 意味                                                  |

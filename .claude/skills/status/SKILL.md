@@ -1,24 +1,29 @@
 ---
 name: status
-description: Mind Inbox の開発状況を GitHub の Issue / PR / sub-issue から集計してレポートする。user が「状況教えて」「今どこまで進んでる?」「進捗レポート」「/status」等と言ったとき、または開発の全体像を数字で把握したいときに起動。ライブの GitHub 状態を pull して要約する（board を作らなくても状況が見える）。設計背景は ADR 0011。
+description: Mind Inbox の開発状況を GitHub の Issue / PR から集計して「戦況図」としてレポートする。user が「状況教えて」「今どこまで進んでる?」「進捗レポート」「/status」等と言ったとき、または開発の全体像を数字で把握したいときに起動。ライブの GitHub 状態を pull し、固定 5 レーン (stream ラベル) + 裁定 3 件で要約する。設計背景は ADR 0044 / 0011。
 ---
 
 # status
 
-Mind Inbox の「今どこまで進み・次に何をやるか」を **GitHub のライブ状態から集計**して 1 レポートにまとめる。ADR 0011 の「実行状態 = GitHub Issues + Projects が真実」に沿い、**skill は状態を持たず毎回 GitHub を引く**（スナップショットをハードコードしない）。
+Mind Inbox の「今どこまで進み・次に何をやるか」を **GitHub のライブ状態から集計**して 1 レポートにまとめる。ADR 0011 の「実行状態 = GitHub Issues が真実」に沿い、**skill は状態を持たず毎回 GitHub を引く**（スナップショットをハードコードしない）。
+
+構造は **固定 5 レーン (戦況図)** — ADR 0044。レーンは毎回作り直さず `cicd/scripts/status-page/streams.json` の定義に従う（PO が地図を 1 回覚えれば以後は差分だけ読めばよい状態を保つため。**毎回違う束ね方で出さない**）。
 
 ## いつ起動するか
 
 - user が「状況」「進捗」「今どこ」「レポート」「/status」等を言ったとき
 - 開発を再開する前に全体像を把握したいとき
-- board（Projects の見る画面）を開かずに数字で状況を知りたいとき
+- 会話の中で数字で状況を知りたいとき（**#289 までは戦況図を出せるのはこの skill だけ**。[status ページ](https://yomote.github.io/mind-inbox/status/)には自動化の生死しか出ない）
 
 ## 設計思想
 
-- **真実は GitHub 側**（ADR 0011）。skill は Issue 番号のスナップショットを持たず、都度 `list_issues` / `list_pull_requests` / sub-issue rollup を引く。アンカー（Epic 番号・タイトル接頭辞）だけを手がかりにする。
-- **board の代替ではなく補完**。board = user が自分で眺める用 / このレポート = 聞かれた時に pull で出す用。
-- **数字を主役に**。「Open 数 / v1 フェーズ N-of-4 / 次アクション」を必ず出す。散文で埋めない。
+- **真実は GitHub 側**（ADR 0011）。skill は Issue 番号のスナップショットを持たず、都度 `list_issues` / `list_pull_requests` を引く。レーンの所属は Issue の `stream:*` ラベルが真実（skill 側で分類し直さない）。
+- **枠組みは固定・中身は差分**（ADR 0044）。レーンの数・名前・順序を毎回変えない。認知負荷は「毎回新しい構造」で跳ね上がる。
+- **数字を主役に**。「Open 数 / レーン別残件 / 未分類 / 次アクション」を必ず出す。散文で埋めない。
+- **裁定は最重要 3 件まで**（ADR 0044 D3）。残りは件数だけ出す。全部並べるのは PO への押し付け。
 - **次の一手を1つ名指す**。レポートは眺めるためでなく動くために出す。
+- **status ページと役割を分ける**。ページ = PO がいつでも開ける定点（自動生成）/ この skill = 聞かれた時に会話で出す要約。将来は**同じ真実（GitHub + stream ラベル）を見る**ので食い違わない。
+  - **ただし #289 が入るまで、戦況図を出せるのはこの skill だけ** — 現在の `build.py` は `streams.json` を読まず、ページには自動化の生死しか出ない。**「ページを見れば戦況図がある」と案内しない**（PO がリンクを開いて空振りする）。
 
 ---
 
@@ -28,102 +33,169 @@ Mind Inbox の「今どこまで進み・次に何をやるか」を **GitHub �
 
 GitHub MCP ツール（`mcp__github__*`。ToolSearch で `select:` して読み込む）で以下を取得。repo は `yomote/mind-inbox`。
 
-1. **Open Issue 一覧** — `list_issues` (state OPEN, perPage 40, fields: number/title/labels/updated_at)。
-2. **直近マージ PR** — `list_pull_requests` (state closed, sort updated desc, perPage 10) から `merged_at` のあるものを数件。
-3. **Epic の sub-issue rollup** — Open Issue のうちタイトルが `[epic]` で始まるものについて `issue_read` で `sub_issues_summary`（completed / total）を取る。特に v1 本流 Epic（タイトルに「Problem 中心」を含むもの）。
+**出力する項目の根拠は必ず引く**（引けなかった項目は推測せず「未取得」と書く）:
 
-> Issue 番号は変わりうるので**タイトル接頭辞で発見**する（番号をこの skill に固定しない）: `[epic]` = エピック、`[v1][Phase A/B/C]` = v1 フェーズ、ラベル `infra`/`security` = インフラ、`[tech-debt]` = 技術負債。
+1. **Open Issue 一覧** — `list_issues` (state OPEN, perPage 100, fields: number/title/labels/**milestone**/**created_at**/updated_at)。レーン所属・詰まり・次の一手・今週の目標の根拠（`created_at` は「次の一手」のタイブレーク用）。
+2. **Open PR 一覧** — `list_pull_requests` (state open, fields: number/title/**body**/**draft**/head/base/labels/updated_at)。`body` は Issue 参照 (`closes` / `fixes` / `resolves` / `refs` — 下記) を読むため（PR → レーンの紐づけ）、`draft` と `updated_at` は「走っているもの」の判定に使う（Step 2）。**`auto_merge` は `list_pull_requests` の fields に無いので、詰まり判定に使う PR だけ `pull_request_read` (method: `get`) で個別に取る**（未武装の PR をストール扱いしないため）。
+3. **PR の変更ファイル** — 「apps/ を触る PR が何本か」(Step 3) を出すときだけ、対象 PR に `pull_request_read` (method: `get_files`)。**PR 数が多い時は全件叩かない** — 数えた本数と、数えられなかった本数を両方書く。
+4. **今週の目標 (milestone)** — Issue の `milestone` から、**(a) 期限が今週内 かつ (b) `stream:product` の Issue を含む** open milestone を取る。**「期限が一番近い open milestone」で代用しない** — 来月期限のインフラ milestone しか無い状況でそれを今週の目標として表示すると、Step 4 でプロダクトの P1 より優先されてしまう。条件を満たすものが無ければ「**未設定**」と書く（勝手に代役を立てない）。
+5. **dev への到達状況** — `actions_list` (method: `list_workflow_runs`, resource_id: `deploy.yml`)。**「成功 run があった」= 到達ではない**（下記）。**ここを省くと「工場は動いたがプロダクトは届いていない」が隠れる**（ADR 0043 D1）。
 
-### Step 1.5 — 「🙋 あなたの番」を集める (ADR 0020)
+   > **⚠️ 成功 run だけで到達と判定しない。** `deploy.yml` は緑でもデプロイしていないことがある:
+   >
+   > | ケース | run の結果 | 実際 |
+   > | --- | --- | --- |
+   > | OIDC 未設定 (`AZURE_*` Variables が欠けている) | **成功** | 全ステップ skip = **未デプロイ** |
+   > | push で `AUTO_DEPLOY_ENABLED != true` | **成功** | 自動デプロイ未解禁で skip = **未デプロイ** |
+   > | 手動 `workflow_dispatch` の `action=down` | **成功** | **環境を撤収した**（到達どころか消えている） |
+   >
+   > **判定手順 — 判定は run の結論ではなく「ステップの結論」で行う**（run 全体は skip でも成功になるため）:
+   >
+   > **0. 未完了 run を先に見る。** 最新 run が `queued` / `in_progress` なら、**それ以上さかのぼらず「デプロイ中 / 撤収中（現在状態は未確定）」**と書く — 走行中に過去の完了 run を現在状態として断定しない
+   > 1. 完了 run を**新しい順**に見る。各 run について `actions_list` (method: `list_workflow_jobs`) で**ステップ単位の結論**を取る
+   > 2. **`Tear down (cleanup-env)` ステップ** — `success` なら「**撤収済み (down)**」で確定 / `failure` なら「**状態不明 (撤収が途中で失敗)**」で確定 (`cleanup-env.sh` は RG 削除後の purge で失敗しうるので、失敗した down を読み飛ばしてはいけない) / **`skipped` なら状態を変えていないので次へ**
+   > 3. **`Provision + deploy (up)` ステップ** — `skipped` でなければ、これと `Smoke test（認可と疎通の実測）` の結論で確定。両方 `success` なら「**到達 (その run の commit)**」、いずれか `failure` なら「**未到達 (デプロイ失敗)**」
+   > 4. 2・3 のステップがどちらも `skipped` の run (guard で止まったもの) は**環境を変えていないので読み飛ばす**
+   > 5. **上記ステップの結論が `success` / `failure` / `skipped` 以外 (`cancelled` 等) なら「状態不明 (中断)」で走査を止める** — 手動キャンセルや 90 分のジョブタイムアウトが `provision.sh` / RG 削除の途中で起きうるので、**未知の結論を「無かったこと」にして古い run を採用しない**
+   > 6. 走査しても確定しなければ「**未デプロイ (自動デプロイ未解禁 / OIDC 未設定)**」
+   >
+   > **`down` を run の conclusion で判定しない** — OIDC guard が false のときは `Tear down` も skip されるが run は成功するので、実在する環境を「撤収済み」と誤報する。
+   >
+   > **`down` を単純に一覧から除外してはいけない** — 「最新が `down`、その前に up 成功」というケースで、撤収済みの環境を「到達」と誤報する (環境の状態は**最後に状態を変えた run** が決める)。ジョブまで引けなかったときは「**未取得**」とし、成功 run の存在だけで到達と書かない。
+6. **直近マージ PR** — `list_pull_requests` (state closed, sort updated desc, perPage 10) から `merged_at` のあるものを数件。
+7. **レーン定義** — `cicd/scripts/status-page/streams.json` を読む（レーンの名前・目標・分類基準。工場の終了条件もここ）。
+
+> Issue 番号は変わりうるので**ラベルで発見**する（番号をこの skill に固定しない）。レーン所属 = `stream:*` ラベル、人間待ち = `needs-human`、優先 = `P1`。
+>
+> **PR → レーンの紐づけ**: PR 本文の Issue 参照から `stream:*` を引く。**拾い方は優先順で 3 段**（大文字小文字を問わない）:
+>
+> 1. **closing keyword** — `close` / `closes` / `closed` / `fix` / `fixes` / `fixed` / `resolve` / `resolves` / `resolved` / `refs` + `#n`
+> 2. **PR テンプレの `Issue:` 行** — `.github/PULL_REQUEST_TEMPLATE.md` の Links 節が `- Issue: #n` 形式なので、**このリポジトリではこちらが主流**
+> 3. **上の 2 つに当たらないが本文に `#n` がある** — 弱い参照として扱い、「**未紐づけ (参照 #n あり)**」と書く（勝手に確定紐づけにしない）
+>
+> **記法を 1 つでも落とすと二重に壊れる** — その PR がレーンの「走っているもの」から消えるだけでなく、**対応 Issue が「実装中」除外をすり抜けて次アクションに再選定される**（既に実装中のものを「次にやれ」と PO に出す）。1〜3 のどれにも当たらない PR は「**未紐づけ PR**」として末尾に列挙する（黙って落とさない）。
+>
+> **重い取得 (3 / 5) を省いてよい**。ただし省いたら該当項目を「未取得」と明記する — 推測値を数字として出さない。
+
+### Step 1.5 — 「🙋 あなたの番」を集める (ADR 0020 / 0044 D3)
 
 PO の応答待ちを先頭に出すための材料を引く:
 
 1. **`needs-human` ラベルの Open Issue** — `list_issues` (labels: ["needs-human"])
 2. **Proposed のまま滞留している ADR** — `grep -l "Status: Proposed" docs/adr/*.md` (経過日数も出す)
+3. **上位候補の中身を読む (必須)** — 1・2 で挙がったもののうち **3 件に絞ってから**、その Issue の `body` + 直近コメント (`issue_read` method: `get`／`get_comments`) と、ADR の本文 (Context / Decision Outcome) を読む
 
-この 2 つはレポート冒頭に**必ず**表示する (0 件なら「🙋 あなたの番: なし」と 1 行)。
+**3 は省略できない** — 下の出力形式は「どのレーンが止まるか / 推奨 / 先送りの代償」を要求しており、**タイトルとラベルだけからは書けない**。読まずに書けば推測が裁定の材料として PO に届く (この skill が最も避けるべき失敗)。読めなかった場合は、その件について**推測で埋めず「未取得 — 中身を読めていない」と書く**。
 
-### Step 2 — 構造にマッピング
+これはレポート冒頭に**必ず**表示する (0 件なら「🙋 あなたの番: なし」と 1 行)。ただし**全部は並べない** — ADR 0044 D3 に従い:
 
-引いた Issue を次の束に振り分ける（ラベルとタイトル接頭辞で判定）:
+- **最重要 3 件だけ**を出す。選定基準は「**レーンを止めているもの優先**」(古い順・P1 順ではない)。**絞り込みはタイトル・ラベル・レーンで行い、中身を読むのは絞った後の 3 件だけ** (全件精読はコストに見合わない)
+- 各件は「**どのレーンが止まっていて、通すには何の裁定が要るか。推奨は X、先送りすると Y が止まったまま**」の形で書く。裁定の材料を戦況に接続する
+- 残りは「**寝かせ中 n 件**」と件数だけ。隠さないが押し付けない (PO が「全部見せて」と言えば全量を出す)
 
-- **v1 本流** — Epic（Problem 中心 2層）+ その sub-issue（Phase A/B/C）。Phase D は完了済み（PR #44）。`rollup` から N-of-4 を出す（D 済 + A/B/C の open/closed）。
-- **テストハーネス** — Epic「テストハーネス」+ ラベル `testing` の残 Issue。
-- **docs-as-code** — Epic「documentation as code」+ ラベル `docs` の残 Issue。
-- **インフラ/運用** — ラベル `infra` / `security` / IaC 系。
-- **技術負債** — `[tech-debt]` 接頭辞など。
-- **その他（未分類）** — 上のどのバケットにも入らない Open Issue（例: `enhancement` ラベルのみ）。**取りこぼし防止のための受け皿**。ここが 0 件でない限り必ず出す（`enhancement` 単独の #47 のような残作業を報告から静かに消さない）。
+### Step 2 — 戦況図（5 レーン）にマッピング
+
+Issue を `stream:*` ラベルでレーンに振り分ける。**レーンは streams.json の 5 本で固定**（自分で束ね方を発明しない）:
+
+| ラベル | レーン |
+| --- | --- |
+| `stream:product` | プロダクト本流 |
+| `stream:improve-loop` | 改善ループ（機械） |
+| `stream:concept` | コンセプト・最上流設計 |
+| `stream:factory` | 工場（開発する機械） |
+| `stream:infra` | 実行環境 |
+
+各レーンについて **4 語だけ**で語る（それ以上書かない）:
+
+- **目標** — streams.json の `goal`
+- **走っているもの** — そのレーンの **`draft` でない** open PR のうち **7 日以内に更新**されたもの（最大 3 件）
+  - **`draft` PR を「走っている」と書かない** — review-gate も draft をマージ判定の対象外にしている (`cicd/scripts/review-gate/check.py`)。draft と 7 日超無更新の PR は **「休眠 n 本」と件数だけ**出す（隠さないが進行中に混ぜない）
+  - **Issue は「走っている」に入れない** — `updated_at` はコメント・ラベル変更・自動通知でも動くので、**更新 = 進行ではない**。open PR に紐づいていない Issue は列に出さず、出す場合は列名を「**直近更新**」にして進行中と呼ばない
+- **詰まり** — 判定は**既存の機械条件を再利用する**（新しい基準を発明しない）:
+  - **PR**: **auto-merge 有効** かつ 全 check 🟢 のまま **2 時間**以上未マージ（`MERGE_STALL_HOURS`。ADR 0040 D1 と同じ条件）。判定には `auto_merge` (Step 1-2 のフィールド) と check 状態 (`pull_request_read` method: `get_status` / `get_check_runs`) の**両方**が要る — **auto-merge 未武装の PR をストール扱いしない**。引けなければ「詰まり: 未取得」と書く
+  - **人間待ち**: `needs-human` Issue / Proposed ADR が **48 時間**以上停滞（`HUMAN_STALL_HOURS`）
+- **次の一手** — そのレーンの **着手可能な** `P1` を 1 件。**「P1 最古」だけで選ばない**:
+  - **除外**: 実装中 (open PR が紐づいている) / `needs-human` で止まっている / 依存 Issue 待ちのもの。これらを次アクションに出すと**重複実装か着手不能な指示**になる
+  - **依存待ちはラベルからは分からない** — `created_at` 順の上位候補 **3 件までを `issue_read` (method: `get` / **`get_comments`** / `get_sub_issues`) で開き、本文・コメントの `blocked by #n` / 未完了の sub-issue を確認**してから選ぶ（依存が**コメントにだけ**書かれている Issue があるので `get_comments` を省かない）。**開かずに選んだ候補は「(依存未確認)」と併記する**（確認したふりをしない）
+  - 残った候補が複数なら `created_at` (Step 1-1 の fields に含める) の古い順。**候補が 0 件なら「着手可能な P1 なし」と書く**（無理に 1 件ひねり出さない）
+
+**未分類**（`stream:*` が無い open Issue）は番号つきで**必ず**出す。0 件でも「未分類 0 件」と 1 行書く — ラベル運用が崩れたときに静かに腐らせないための生存条件（ADR 0044 D2）。
 
 ### Step 3 — 数字を計算
 
-- Open Issue 総数
-- v1 フェーズ進捗（例: 1-of-4 = Phase D のみ完了）
-- 各ストリームの残件数（**その他（未分類）を含む**）
+- Open Issue 総数 / レーン別残件数 / **未分類 n 件**（Step 1-1 のラベルから）
+- open PR 数と、そのうち**プロダクト（apps/ を触る）が何本か**（Step 1-3 の `get_files`。全件叩かなかった場合は「n 本中 m 本を確認」と書く。工場の稼働量をプロダクトの前進と取り違えない — ADR 0043 D1）
+- **dev に届いているか**（Step 1-5。**成功 run の存在ではなく、実際に up + smoke が走ったか**で判定する。届いていないなら「未到達 + 理由」/ 判定材料を引けなければ「未取得」）
 - 直近マージ PR（何を進めたか 1 行）
 
-> **整合チェック（必須）**: 「Open Issue 総数 = 全バケット件数の合計（未分類含む）」が成り立つこと。食い違ったら未分類バケットに落ちている Issue があるので、それを「その他」に出す。数字の信頼性がこの skill の根幹。
+> **整合チェック（必須）**: 「Open Issue 総数 = 全レーン合計 + 未分類」が成り立つこと。食い違ったら数え落としがあるので原因を書く。数字の信頼性がこの skill の根幹。
 
 ### Step 4 — 次アクションを1つ選ぶ
 
-v1 ロードマップ（`docs/design/archive/implementation_plan_v1.md`）の順序（D→A→B→C）で、**まだ着手していない最も早い Phase** を「次アクション」に据える。v1 が動いていない場合のみ並行ストリームの小粒を候補にする。
+**今週のプロダクト目標（milestone / ADR 0043 D2）があればそれを最優先**に、無ければ `stream:product` の**着手可能な** P1（Step 2 の「次の一手」と同じ除外規則 — 実装中 / `needs-human` / 依存待ちを外し、残りを `created_at` の古い順）を「次アクション」に据える。工場・インフラの作業を次アクションに据えてよいのは、**それがプロダクトを止めているとき**だけ（ADR 0043 D2）。**着手可能な候補が無ければ「次アクション: 着手可能な P1 なし」と書く**。
 
 ### Step 5 — 出力
 
 既定は下記の compact 形式（1 画面）。user が「詳しく」と言った時のみ各 Issue にリンク・更新日を付す。
 
 ```markdown
-## 📊 Mind Inbox 開発ステータス（{YYYY-MM-DD}）
+## 📊 Mind Inbox 戦況図（{YYYY-MM-DD}）
 
-**🙋 あなたの番** ({k} 件) ← 0 件でも行は出す
-- {needs-human Issue #n: タイトル / 何をすればよいか 1 行}
-- {Proposed ADR NNNN ({n} 日経過) → 次の debrief で Accept/Reject}
+**🙋 あなたの番** — 最重要 {≤3} 件 / 寝かせ中 {k} 件 ← 0 件でも行は出す
+1. {レーン名} が {何で} 止まっている → {裁定の内容}。推奨 **{X}**。先送りすると {Y} が止まったまま
+2. …
 
-**直近の動き**: {直近マージ PR を 1 行}
+**今週の目標**: {milestone or「未設定」} / **dev で触れるもの**: {到達した commit or「未到達（理由）」or「未取得」}
 
-**v1 本流 — Epic #{n}「Problem 中心 2層モデル」** … Phase {N}/4 完了
-- ✅ Phase D（型&モック先行）— PR #44
-- {⬜/🔄/✅} Phase A #{n}（AI Agent: 抽出/グルーピング/テーマ）
-- ⬜ Phase B #{n}（BFF ルーター）
-- ⬜ Phase C #{n}（結線・移行）
+**戦況**
+| レーン | 残 | 走っているもの | 詰まり | 次の一手 |
+| --- | --- | --- | --- | --- |
+| 🎯 プロダクト本流 | {n} | PR #{n} … | {…} | #{n} |
+| 🔁 改善ループ | {n} | … | … | … |
+| 🧭 コンセプト | {n} | … | … | … |
+| 🏭 工場 | {n} | … | … | … |
+| ☁️ 実行環境 | {n} | … | … | … |
+| ❓ 未分類 | {n} | #{n}, #{n} ← 必ず出す | — | ラベル付与 |
 
-**並行ストリーム**
-- 🧪 テストハーネス #{epic} — 残 {k}: {...}
-- 📚 docs-as-code #{epic} — 残 {k}: {...}
-- ☁️ インフラ — {...}
-- 🔧 技術負債 — {...}
-- 🗂 その他（未分類）— 残 {k}: {...}   ← 0 件なら省略可
-
-**数字**: Open {n}（= 全バケット合計）/ v1 フェーズ {N}-of-4 / 次アクション = **{Phase X #n 着手}**
+**数字**: Open {n}（= 全レーン {a} + 未分類 {b} ✓）/ open PR {p}（うちプロダクト {q}）/ 次アクション = **{#n}**
 ```
 
-行が増えすぎる時は各ストリーム 1 行に圧縮し、v1 本流を優先表示する。
+行が増えすぎる時は各レーン 1 行に圧縮し、プロダクト本流を優先表示する。**レーンの行自体は残件 0 でも消さない**（地図の形を毎回変えないため）。
 
 ### HTML レポートモード
 
 user が「HTML で」「レポートにまとめて」「見れる形で」等と言ったとき、または定期レポートとして残したいときは、compact 形式と同じ内容構造を **1 枚の HTML レポート**にして出す。
 
 - 内容は Step 1〜4 で引いた**同じライブデータ**を使う (HTML のために集計をやり直さない)
-- 構成: ヘッダ (日付・直近の動き) → v1 フェーズ進捗 (D→A→B→C の横並びステッパー) → 並行ストリーム (残件数のバー or カード) → 数字サマリ → 次アクション (1 つを大きく)
-- 可視化は簡素に: フェーズは ✅/🔄/⬜ のステッパー、ストリームは件数バー程度。装飾より「1 画面で状況が分かる」を優先
+- 構成: ヘッダ (日付・今週の目標・dev で触れるもの) → 🙋 あなたの番 (≤3 件) → 戦況図 (5 レーン + 未分類のカード) → 数字サマリ → 次アクション (1 つを大きく)
+- 可視化は簡素に: レーンは残件数のバー / カード程度。装飾より「1 画面で状況が分かる」を優先
 - 出し方: Artifact ツールが使える環境ではそれで公開 (chart を描く前に dataviz / artifact-design skill を読む)。使えなければ HTML ファイルを書いて user に渡す
-- HTML の中にも「数字整合チェック」(Open 総数 = バケット合計) の結果を小さく出す (レポートの信頼性表示)
+- HTML の中にも「数字整合チェック」(Open 総数 = 全レーン + 未分類) の結果を小さく出す (レポートの信頼性表示)
+
+> **単発の HTML を量産しない** — 都度生成のスナップショットは自動更新されず腐る (ADR 0011 / 0044)。この HTML モードはプレゼン等の単発用途に限る。常設の定点は status ページだが、**戦況図が載るのは #289 の実装後**（それまで同ページは自動化の生死のみ）。
 
 ---
 
 ## やらないこと
 
 - ❌ Issue 番号や進捗をこの skill 内にハードコード（毎回 GitHub を引く）
-- ❌ board（Projects v2）の作成・更新（API 非対応。user の web UI 操作 / Runbook `github-projects-setup.md`）
+- ❌ レーンを毎回作り直す・増やす（地図の形が変わると PO は毎回読み直しになる。変更は streams.json の PR で / ADR 0044）
+- ❌ 未分類を黙って省く（0 件でも 1 行出す。腐敗を見えなくしない）
+- ❌ 裁定を全部並べる（最重要 3 件 + 「寝かせ中 n 件」。ADR 0044 D3）
+- ❌ Projects v2 board の作成・更新（**board は ADR 0044 D5 で退役**。代替はこの skill — status ページへの描画は #289 後）
 - ❌ Issue の open/close やコメント投稿（レポートは読み取り専用。状態変更は明示依頼時のみ）
 - ❌ 設計内容の記述（それは docs / ADR。ここは状態の要約のみ）
 
 ## 失敗時の挙動
 
 - GitHub MCP ツールが未接続 → ToolSearch で `mcp__github__list_issues` 等を読み込む。それでも不可なら user に通知して中断。
-- Epic / Phase が発見できない（タイトル規約変更）→ 引けた Open Issue をラベル別に素朴に集計して出す（構造化は諦めても数字は出す）。
+- `streams.json` が読めない → レーン名は本ファイルの Step 2 の表で代替する（目標・終了条件は「未取得」と明示）。
+- `stream:*` ラベルがほとんど付いていない → 諦めて別の束ね方を発明せず、**未分類の件数をそのまま出す**（それが実態であり、当番 PM の巡回で埋める対象）。
 
 ## 関連
 
-- ADR 0011（実行状態 = Issues + Projects）: `docs/adr/0011-github-projects-as-execution-dashboard.md`
-- Runbook（board セットアップ）: `docs/runbooks/github-projects-setup.md`
-- v1 ロードマップ: `docs/design/archive/implementation_plan_v1.md`
+- ADR 0044（戦況図 = stream レーン / 裁定 3 件 / board 退役）: `docs/adr/0044-stream-lanes-as-the-project-map.md`
+- ADR 0043（PM 自走モード — 週次目標・日次ダイジェスト）: **PR #284 で審議中。マージされるまで `docs/adr/` に無い** — 「今週の目標」「dev 到達」の扱いは本 skill の記述を正とする
+- ADR 0011（実行状態 = GitHub Issues が真実）: `docs/adr/0011-github-projects-as-execution-dashboard.md`
+- レーン定義: `cicd/scripts/status-page/streams.json`
+- status ページ: <https://yomote.github.io/mind-inbox/status/>（現在は**自動化の生死のみ**。戦況図の描画は #289 / Runbook: `docs/runbooks/status-page.md`）

@@ -19,7 +19,12 @@ from fastapi.responses import StreamingResponse
 from .agents import get_chat_client
 from .config import get_settings
 from .extractor import ExtractionParseError, ExtractionUnavailable, extract
-from .kernel import get_kernel
+from .observability import (
+    client_detail,
+    exception_frames,
+    exception_kind,
+    new_ref,
+)
 from .planner import generate_plan
 from .repositories import (
     ApprovalRepository,
@@ -64,17 +69,48 @@ def get_approval_repo() -> ApprovalRepository:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting %s", settings.app_name)
-    get_kernel()  # 起動時にカーネルをロードして初回リクエストのレイテンシを下げる (M1-3 まで /chat 系が使用)
     try:
-        get_chat_client()  # MAF chat client も起動時にロード
+        # MAF chat client を起動時にロードして初回リクエストのレイテンシを下げる
+        get_chat_client()
     except Exception as exc:
-        # 資格情報なしでも起動は継続する (kernel と同じ縮退方針)。LLM 呼び出し時に失敗する
+        # 資格情報なしでも起動は継続する (stub fallback の流儀)。LLM 呼び出し時に失敗する
         logger.error("Chat client setup failed — LLM calls will fail: %s", exc)
     yield
     logger.info("Shutting down %s", settings.app_name)
 
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+
+
+def _fail(endpoint: str, exc: Exception) -> HTTPException:
+    """例外をクライアントに返してよい形へ落とす (Issue #313 / rubric S3)。
+
+    `str(exc)` をそのまま返すと、Azure OpenAI SDK の例外文 (エンドポイント URL /
+    デプロイ名 / api-version / request id、コンテンツフィルタが引用したプロンプト断片)
+    が BFF の素通しでブラウザの devtools まで届く。**外に出すのは一般化した文言 + ref
+    だけ**にし、詳細 (traceback 込み) は同じ ref を持つサーバのログにだけ残す。
+
+    タイムアウトは 504 に分けて写す — 「上流が遅くて諦めた」と「こちらが壊れた」は
+    運用上まったく別の事象で、まとめて 500 にすると切り分けができなくなる。
+
+    ログ側も `exc_info=True` は使わない — traceback の最終行が例外メッセージそのもの
+    (= コンテンツフィルタの引用や検証に落ちた値) なので、サーバのログが機微データの
+    出口として残ってしまう。フレームだけを `exception_frames` で残す (PR #324 P1)。
+    """
+    ref = new_ref()
+    logger.error(
+        "%s failed ref=%s kind=%s at=%s",
+        endpoint,
+        ref,
+        exception_kind(exc),
+        exception_frames(exc),
+    )
+    if isinstance(exc, TimeoutError):
+        return HTTPException(
+            status_code=504,
+            detail=client_detail(ref, "処理が時間内に完了しませんでした"),
+        )
+    return HTTPException(status_code=500, detail=client_detail(ref))
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -89,16 +125,16 @@ async def chat(
     approval_repo: ApprovalRepository = Depends(get_approval_repo),
 ) -> ChatResponse:
     try:
+        # chat client は workflow が LLM を呼ぶ時点で遅延解決する (資格情報なし
+        # でも起動し、失敗は LLM 呼び出しで表面化する縮退挙動を保つ)
         return await run_workflow(
             req.session_id,
             req.message,
             session_repo,
             approval_repo,
-            get_kernel(),
         )
     except Exception as exc:
-        logger.error("POST /chat error: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise _fail("POST /chat", exc) from exc
 
 
 @app.post(
@@ -127,14 +163,22 @@ async def chat_stream(
                 req.message,
                 session_repo,
                 approval_repo,
-                get_kernel(),
             ):
                 yield f"data: {event.model_dump_json()}\n\n"
         except Exception as exc:
             # SSE は 200 を返した後なので HTTP エラーにできない。error イベントで伝え、
             # クライアント (BFF/フロント) が非ストリーミングへフォールバックする。
-            logger.error("POST /chat/stream error: %s", exc, exc_info=True)
-            yield f"data: {ChatStreamError(message=str(exc)).model_dump_json()}\n\n"
+            # data 行はブラウザまで素通しされる (BFF はバイト列を転送するだけ) ので、
+            # 例外文ではなく一般化した文言 + ref を載せる (Issue #313)。
+            ref = new_ref()
+            logger.error(
+                "POST /chat/stream failed ref=%s kind=%s at=%s",
+                ref,
+                exception_kind(exc),
+                exception_frames(exc),
+            )
+            error = ChatStreamError(message=client_detail(ref))
+            yield f"data: {error.model_dump_json()}\n\n"
 
     return StreamingResponse(
         event_stream(),
@@ -161,11 +205,11 @@ async def extract_endpoint(
         raise HTTPException(status_code=404, detail=str(exc))
     except ExtractionParseError as exc:
         # 「0 件だった」と区別できるようにする。502 = 上流 (LLM) の応答が壊れている。
+        # 例外文は extractor が作った一般化済みの文言 + ref (壊れた応答本文は含まない)。
         logger.error("POST /extract parse error: %s", exc)
-        raise HTTPException(status_code=502, detail=str(exc))
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
-        logger.error("POST /extract error: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise _fail("POST /extract", exc) from exc
 
 
 @app.post("/plan", response_model=PlanResponse)
@@ -173,8 +217,7 @@ async def plan_endpoint(req: PlanRequest) -> PlanResponse:
     try:
         return await generate_plan(req, get_chat_client())
     except Exception as exc:
-        logger.error("POST /plan error: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise _fail("POST /plan", exc) from exc
 
 
 @app.post("/approve", response_model=ApproveResponse)
@@ -189,11 +232,10 @@ async def approve(
             req.approved,
             session_repo,
             approval_repo,
-            get_kernel(),
         )
         return ApproveResponse(reply=reply)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        # このサービス自身が投げる「未知 / 処理済みの承認 ID」— 上流の情報を含まない
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
-        logger.error("POST /approve error: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise _fail("POST /approve", exc) from exc

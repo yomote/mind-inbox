@@ -107,6 +107,17 @@ describe("[単体] appendMention (property)", () => {
     );
   });
 
+  it("再燃させた Mention にだけ来歴 (reopenedProblem) が残る — 追記後の状態からは再構成できない (#283)", () => {
+    fc.assert(
+      fc.property(arbProblem(anyIso), arbMention(anyIso), (existing, mention) => {
+        const stored = appendMention(existing, mention).mentions.at(-1);
+        // 追記後は必ず open なので、「棚卸し済みを戻したか」は Mention 側にしか残らない。
+        // 落ちると同じ確定の再送で「再燃」表示だけが静かに消える (応答の冪等性が壊れる)
+        expect(stored?.reopenedProblem === true).toBe(existing.status !== "open");
+      }),
+    );
+  });
+
   it("既存の Mention を 1 件も失わない (追記専用 / domain_model §6-3)", () => {
     fc.assert(
       fc.property(arbProblem(anyIso), arbMention(anyIso), (existing, mention) => {
@@ -119,22 +130,27 @@ describe("[単体] appendMention (property)", () => {
     );
   });
 
-  // 既知の仕様の穴 (docs/design/domain_rules.md §3 未決): appendMention は
-  // lastMentionedAt に「追記した Mention の createdAt」を無条件で採用する。
-  // 過去日時の Mention が後から届く (再送・バックフィル) と lastMentionedAt が
-  // **逆行**し、休眠判定・並び順が狂う。relink / merge (withDerived) は max を
-  // 取るので、導出ルールが経路によって食い違っている。裁定後、統一したら
-  // このテストを通常の it に昇格すること。
-  it.fails("lastMentionedAt は常に mentions の最大 createdAt — 未決の仕様の穴", () => {
+  // 2026-08-11 PO 裁定「lastMentionedAt は常に全 Mention の createdAt の最大値」で
+  // 確定し、it.fails から昇格 (domain_rules.md §3 の旧・未決)。旧実装は追記経路だけ
+  // 「追記した Mention の createdAt を無条件採用」で、過去日時の Mention が後から
+  // 届く (再送・バックフィル・時計ずれ) と逆行していた。現在は relink / merge と
+  // 同じ withDerived (max 再計算) に統一されている。
+  it("lastMentionedAt は常に mentions の最大 createdAt (2026-08-11 PO 裁定)", () => {
     fc.assert(
       fc.property(
-        // 既存は 2028 年以降、追記 Mention は 2021 年以前 → 必ず逆行する
-        arbProblem(isoDate({ min: "2028-01-01", max: "2030-01-01" })),
-        arbMention(isoDate({ min: "2020-01-01", max: "2021-01-01" })),
-        (existing, mention) => {
+        // 任意の日時どうし + 「既存が新しく追記が古い = 必ず逆行する」領域の両方を回す
+        // (後者は旧実装の反例が決定的に出る領域。退行検知を運任せにしない)
+        fc.oneof(
+          fc.tuple(arbProblem(anyIso), arbMention(anyIso)),
+          fc.tuple(
+            arbProblem(isoDate({ min: "2028-01-01", max: "2030-01-01" })),
+            arbMention(isoDate({ min: "2020-01-01", max: "2021-01-01" })),
+          ),
+        ),
+        ([existing, mention]) => {
           const updated = appendMention(existing, mention);
           const maxCreatedAt = updated.mentions.reduce(
-            (max, m) => (m.createdAt > max ? m.createdAt : max),
+            (max, m) => (Date.parse(m.createdAt) > Date.parse(max) ? m.createdAt : max),
             updated.mentions[0].createdAt,
           );
           expect(updated.lastMentionedAt).toBe(maxCreatedAt);
@@ -198,6 +214,22 @@ describe("[単体] mergeProblems (property)", () => {
   });
 });
 
+describe("[単体] appendMention — タイムゾーン混在", () => {
+  it("オフセット表記が混在しても epoch で比較する (辞書順だと +09:00 が Z に勝ってしまう)", () => {
+    // PR #274 Codex 指摘の反例そのまま: 10:00+09:00 = 01:00Z < 02:00Z なのに
+    // 辞書順では "2026-01-01T10:00" > "2026-01-01T02:00" となり古い方が最大に残る
+    const seed = fc.sample(fc.tuple(arbProblem(anyIso), arbMention(anyIso)), {
+      numRuns: 1,
+      seed: 42,
+    })[0];
+    const older = { ...seed[1], id: "m-old", createdAt: "2026-01-01T10:00:00+09:00" };
+    const newer = { ...seed[1], id: "m-new", createdAt: "2026-01-01T02:00:00.000Z" };
+    const problem = withDerived({ ...seed[0], mentions: [older] });
+    const updated = appendMention(problem, newer);
+    expect(updated.lastMentionedAt).toBe(newer.createdAt);
+  });
+});
+
 describe("[単体] withDerived (property)", () => {
   it("lastMentionedAt は mentions の最大 createdAt、mentionCount は件数に一致する", () => {
     fc.assert(
@@ -205,7 +237,7 @@ describe("[単体] withDerived (property)", () => {
         const derived = withDerived(problem);
         expect(derived.mentionCount).toBe(problem.mentions.length);
         const maxCreatedAt = problem.mentions.reduce(
-          (max, m) => (m.createdAt > max ? m.createdAt : max),
+          (max, m) => (Date.parse(m.createdAt) > Date.parse(max) ? m.createdAt : max),
           problem.mentions[0].createdAt,
         );
         expect(derived.lastMentionedAt).toBe(maxCreatedAt);

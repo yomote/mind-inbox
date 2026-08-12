@@ -101,10 +101,79 @@ export async function extractMentions(
     return result;
   } catch (err) {
     // 理由を失わない。呼び出し側が文面と復帰導線を出し分けられるようにする。
-    const token = err instanceof TRPCClientError ? String(err.message) : "";
-    const kind = EXTRACT_FAILURE_KINDS.find((k) => k === token) ?? "unknown";
-    console.error(`[extractMentions] failed kind=${kind}`, err);
-    throw new ExtractFailed(kind);
+    return throwExtractFailure("extractMentions", err);
+  }
+}
+
+/** 抽出系 (preview / extract) の失敗を機械可読な kind に翻訳して投げ直す (#183)。 */
+function throwExtractFailure(label: string, err: unknown): never {
+  const token = err instanceof TRPCClientError ? String(err.message) : "";
+  const kind = EXTRACT_FAILURE_KINDS.find((k) => k === token) ?? "unknown";
+  console.error(`[${label}] failed kind=${kind}`, err);
+  throw new ExtractFailed(kind);
+}
+
+/**
+ * 読み取り専用の抽出プレビュー (#187 / ADR 0039 D1) が使えるか。
+ *
+ * mock も real も対応済み — real は BFF の `consultation.preview` (書かない読み取り専用抽出)
+ * と `consultation.extract` の draft 確定経路 (#283) を叩く。画面側はこのフラグしか見ない。
+ *
+ * **2 ペイン表示の切り戻しスイッチとして残す** — false にすると preview を一切呼ばず、
+ * 従来の 1 ペイン + 確定時抽出に戻る (`useConsultation` / `Layout` の分岐が生きている)。
+ * dev で preview 経路が不調なときに、画面側を触らずここだけで戻せるようにしておく。
+ */
+export const previewSupported = true;
+
+/**
+ * 会話の途中経過から「整理されつつある困りごと」の下書きを計算する (#187 / ADR 0039)。
+ *
+ * **書かない**: 戻り値は画面内だけの揮発する下書きで、Problem リポジトリには何も起きない
+ * (BFF の `consultation.preview` は読み取り専用 — ADR 0039 D1)。確定は commitPreview。
+ */
+export async function previewExtraction(
+  sessionId: string,
+  messages: ChatMessage[],
+): Promise<ExtractionResult> {
+  if (useMock) return mock.previewExtraction(sessionId, messages);
+  try {
+    const result = await trpc.consultation.preview.mutate({
+      sessionId,
+      messages: messages.map((m) => ({ role: m.role, text: m.text })),
+    });
+    // stub 応答の可視化 (#146)。下書きの時点で警告を出さないと、確定して初めて
+    // 「[stub] のカードが保存されていた」と気づくことになる。
+    reportStubbedResponse(result.stubbed);
+    return result;
+  } catch (err) {
+    return throwExtractFailure("previewExtraction", err);
+  }
+}
+
+/**
+ * 表示中の下書きをそのまま確定する (#187 / ADR 0039 D1・D3 — 「この内容で確定」)。
+ *
+ * **再抽出しない** — 確定時に抽出し直すと、画面で確認した内容と違うものが保存されうる
+ * (抽出は非決定的 / PR #282 Codex P1)。real は `consultation.extract` に `draft` を渡す
+ * 経路 (#283) で、BFF は ai-agent を呼ばずこの下書きをそのまま永続化する。
+ * 契約の形は mock (ADR 0004) が真実。
+ */
+export async function commitPreview(
+  sessionId: string,
+  drafts: ExtractionResult["items"],
+): Promise<ExtractionResult> {
+  if (useMock) return mock.commitPreview(sessionId, drafts);
+  try {
+    const result = await trpc.consultation.extract.mutate({
+      sessionId,
+      // 下書き確定では会話を送らない (BFF は draft があれば抽出を走らせない)。
+      messages: [],
+      draft: { items: drafts },
+    });
+    reportStubbedResponse(result.stubbed);
+    return result;
+  } catch (err) {
+    return throwExtractFailure("commitPreview", err);
   }
 }
 

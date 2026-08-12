@@ -3,12 +3,20 @@ name: test
 on:
   pull_request:
     branches: [main]
+  # merge queue の一時 branch でも required check を報告する (ADR 0042)。
+  # これが無いと queue に入った PR は test / lint-and-build が永遠に pending で
+  # タイムアウト脱落する。queue 有効化は needs-human #269。
+  merge_group:
   push:
     branches: [main]
 
+# 信頼境界 (PR #271 Codex P1 / ADR 0042): test / lint-and-build は PR 由来の
+# npm / pnpm スクリプト (= 未信頼コード) を実行する。merge_group では fork PR でも
+# GITHUB_TOKEN が read-only に落ちない (base リポジトリのイベント) ため、
+# これらの job に write を持たせない。PR コメントの投稿だけを、未信頼コードを
+# 実行しない別 job (pr-comment) に分離して最小権限で行う。
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   test:
@@ -17,26 +25,26 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup Node 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 9
 
       - name: Setup Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3.2.4
         with:
           enable-cache: true
 
@@ -82,7 +90,7 @@ jobs:
 
       - name: Upload Playwright report (失敗時のみ)
         if: steps.e2e.outcome == 'failure' || steps.e2e_uc.outcome == 'failure'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-report
           path: |
@@ -115,12 +123,15 @@ jobs:
             echo "戦略: [docs/testing/strategy.md](https://github.com/yomote/mind-inbox/blob/main/docs/testing/strategy.md)"
           } | tee pr-comment.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Sticky PR comment
+      # コメント投稿は write 権限を持つ別 job (pr-comment) へ渡す — この job は
+      # 未信頼コードを実行するため write を持たない (冒頭「信頼境界」参照)
+      - name: Upload summary for PR comment
         if: github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          header: test-summary
+          name: test-summary-md
           path: pr-comment.md
+          retention-days: 1
 
       - name: Fail if any layer failed
         run: |
@@ -138,26 +149,26 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup Node 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 9
 
       - name: Setup Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3.2.4
         with:
           enable-cache: true
 
@@ -222,12 +233,14 @@ jobs:
             echo "戦略: [docs/testing/strategy.md §5.3](https://github.com/yomote/mind-inbox/blob/main/docs/testing/strategy.md)"
           } | tee lint-build-comment.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Sticky PR comment
+      # コメント投稿は write 権限を持つ別 job (pr-comment) へ渡す (冒頭「信頼境界」参照)
+      - name: Upload summary for PR comment
         if: github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          header: lint-build-summary
+          name: lint-build-summary-md
           path: lint-build-comment.md
+          retention-days: 1
 
       - name: Fail if any check failed
         run: |
@@ -238,3 +251,46 @@ jobs:
             echo "::error::Lint or build check failed"
             exit 1
           fi
+
+  # PR への sticky コメント投稿だけを担う job (PR #271 Codex P1)。
+  # 未信頼コード (npm / pnpm スクリプト) を一切実行しないので、ここにだけ
+  # pull-requests: write を許す。artifact の中身は PR 由来の markdown だが、
+  # コメント本文として貼るだけで権限昇格には使えない。
+  pr-comment:
+    name: Sticky PR comments
+    runs-on: ubuntu-latest
+    needs: [test, lint-and-build]
+    # テストが赤でも FAIL の表を貼るため always()。merge_group / push では動かない
+    if: always() && github.event_name == 'pull_request'
+    permissions:
+      pull-requests: write
+    steps:
+      # summary が作られる前に job が落ちた場合は artifact が無い — その場合は
+      # コメントもスキップ (continue-on-error + outcome ガード)
+      - name: Download test summary
+        id: dl_test
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: test-summary-md
+
+      - name: Download lint-build summary
+        id: dl_lint
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: lint-build-summary-md
+
+      - name: Sticky PR comment (test)
+        if: steps.dl_test.outcome == 'success'
+        uses: marocchino/sticky-pull-request-comment@773744901bac0e8cbb5a0dc842800d45e9b2b405 # v2.9.4
+        with:
+          header: test-summary
+          path: pr-comment.md
+
+      - name: Sticky PR comment (lint-build)
+        if: steps.dl_lint.outcome == 'success'
+        uses: marocchino/sticky-pull-request-comment@773744901bac0e8cbb5a0dc842800d45e9b2b405 # v2.9.4
+        with:
+          header: lint-build-summary
+          path: lint-build-comment.md

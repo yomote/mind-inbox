@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { config } from "../config";
+import { summarizeIssues } from "../schemaIssues";
 import { serviceHeaders } from "./serviceToken";
-import type { ExtractionResult } from "../trpc/domain";
+import { ExtractionResultSchema, type ExtractionResult } from "../trpc/domain";
 import type {
   ApproveRequest,
   ApproveResponse,
@@ -47,6 +48,21 @@ export type ExtractFailureKind =
  * フロント向けの真実は tRPC 出力 schema (router.ts の `ChatReplySchema` 等) に置く。
  */
 export type StubMarked<T> = T & { stubbed?: boolean };
+
+/**
+ * この BFF が **今** stub フォールバックで動いているか (#283 / ADR 0039 D6)。
+ *
+ * 判定は `AI_AGENT_BASE_URL` の有無だけ = 各 stub 応答が `stubbed: true` を立てるのと
+ * まったく同じ条件で、**サーバ側だけで決まる**。preview を経ずに永続化される確定
+ * (`consultation.extract` の draft 経路) は ai-agent を呼ばないので応答由来のフラグを
+ * 持てないが、その確定結果が stub 由来かどうかはこれで判定できる。
+ *
+ * クライアント申告の `stubbed` を信じない理由: 偽装できるうえ、**フラグを落とす**方向に
+ * 偽装されると「本物のふりをした stub」(#146 で潰した状態) が復活するため。
+ */
+export function isStubMode(): boolean {
+  return !config.aiAgentBaseUrl;
+}
 
 export class ExtractError extends Error {
   // パラメータプロパティ短縮記法は erasableSyntaxOnly で使えないため明示代入する。
@@ -155,7 +171,33 @@ export async function extract(req: ExtractRequest): Promise<StubMarked<Extractio
     );
   }
 
-  return (await res.json()) as ExtractionResult;
+  // **書き込む前に検証する** (#313 B-3)。ここを型アサーションで素通しにしていたので、
+  // 契約に反する抽出結果 (LLM の出力揺れ / プロンプトインジェクション) がそのまま
+  // `materializeExtraction` から Cosmos に upsert され、以降 `problem.list` が
+  // ProblemSchema の parse で落ちて **一覧が丸ごと 500 になる (poison document)** —
+  // しかも画面から消せない。攻撃者は要らず、単一ユーザーでも踏む。
+  //
+  // 検証の順序を「保存の前」に固定するのがこの 1 箇所の役目なので、呼び出し側
+  // (router の `materializeExtraction`) は検証済みの値しか受け取らない。
+  let payload: unknown;
+  try {
+    payload = await res.json();
+  } catch {
+    throw new ExtractError("llm-parse-failed", "POST /extract の応答が JSON ではありません");
+  }
+
+  const parsed = ExtractionResultSchema.safeParse(payload);
+  if (!parsed.success) {
+    // 失敗の種別は既存の "llm-parse-failed" に寄せる (フロントは既にこの token で
+    // 文面と復帰導線を出し分けている)。**メッセージに応答本文を載せない** —
+    // 中身は相談の本文由来なので、壊れた場所と種別だけを出す (schemaIssues.ts)。
+    throw new ExtractError(
+      "llm-parse-failed",
+      `POST /extract の応答が契約に反しています: ${summarizeIssues(parsed.error)}`,
+    );
+  }
+
+  return parsed.data;
 }
 
 export async function createPlan(req: PlanRequest): Promise<PlanResponse> {

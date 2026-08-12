@@ -115,9 +115,6 @@ param containerImageTag string = 'latest'
 @description('image 座標のベース (<registry>/<owner>/<repo>)。この下に /ai-agent, /voicevox-wrapper がある。CD (provision.sh) は IMAGE_REGISTRY / IMAGE_REPO から解決した値を渡し、deploy-*.sh と座標がズレないようにする (PR #261 Codex P2)。既定は本家 ghcr の座標。')
 param ghcrImageRepository string = 'ghcr.io/yomote/mind-inbox'
 
-@description('ai-agent MI → Cognitive Services OpenAI User の既存ロール割り当て名 (GUID)。既存環境では provision.sh が実行時に解決して渡す (#262 の養子縁組)。空なら guid() で新規作成。')
-param aiAgentOpenAiRoleAssignmentName string = ''
-
 // -------------------- VOICEVOX Wrapper Container App --------------------
 @description('Enable VOICEVOX Wrapper on Azure Container Apps.')
 param enableVoicevoxWrapperAca bool = false
@@ -142,6 +139,20 @@ param cosmosThroughput int = 400
 
 @description('Provision the Azure SQL stack. Default false: v1 は in-memory のみで SQL 未使用 (ADR 0013)。永続化は Cosmos DB (ADR 0030) が担うため、SQL は引き続き不要。')
 param enableSql bool = false
+
+// -------------------- 監査ログ / 診断設定 (#313 / ADR 0047 Phase 3) --------------------
+// カテゴリ選択の根拠とコスト見積もりは modules/bootstrap-core.bicep の同名セクションが正典。
+@description('診断設定 (監査ログ) を作る。Cosmos の ControlPlane/DataPlane と Function App の FunctionAppLogs のみ。無料枠 5 GB/月 の内側に収まる見積もり (#313)。')
+param enableDiagnostics bool = true
+
+@description('Cosmos の DataPlaneRequests (「何が読まれたか」に答えられる唯一のカテゴリ) を記録する。取り込み量が最大のカテゴリなので独立に落とせる。')
+param enableCosmosDataPlaneAudit bool = true
+
+@description('Log Analytics の保持日数。31 日までは取り込み料金に含まれ保持課金が発生しない。')
+param lawRetentionInDays int = 30
+
+@description('Log Analytics の日次取り込み上限 (GB/日)。小数を扱うため文字列。既定 0.15 = 31 日で約 4.65 GB < 無料枠 5 GB/月。暴走時のブレーカーであり日常の調整弁ではない。')
+param lawDailyQuotaGb string = '0.15'
 
 @description('Set to true if a soft-deleted Key Vault with the same name already exists.')
 param recoverSqlAdminKeyVault bool = false
@@ -186,7 +197,6 @@ module infra '../modules/bootstrap-core.bicep' = {
     enableVoicevoxWrapperAca: enableVoicevoxWrapperAca
     containerImageTag: containerImageTag
     ghcrImageRepository: ghcrImageRepository
-    aiAgentOpenAiRoleAssignmentName: aiAgentOpenAiRoleAssignmentName
     enableCosmos: enableCosmos
     cosmosLocation: cosmosLocation
     enableCosmosFreeTier: enableCosmosFreeTier
@@ -196,6 +206,10 @@ module infra '../modules/bootstrap-core.bicep' = {
     recoverSqlAdminKeyVault: recoverSqlAdminKeyVault
     sqlAdminKeyVaultName: sqlAdminKeyVaultName
     restoreOpenAiAccount: restoreOpenAiAccount
+    enableDiagnostics: enableDiagnostics
+    enableCosmosDataPlaneAudit: enableCosmosDataPlaneAudit
+    lawRetentionInDays: lawRetentionInDays
+    lawDailyQuotaGb: lawDailyQuotaGb
   }
 }
 
@@ -239,3 +253,9 @@ output cosmosDatabaseName string = infra.outputs.cosmosDatabaseName
 output cosmosLocation string = infra.outputs.cosmosLocation
 output cosmosFreeTierEnabled bool = infra.outputs.cosmosFreeTierEnabled
 output cosmosServerless bool = infra.outputs.cosmosServerless
+output diagnosticsEnabled bool = infra.outputs.diagnosticsEnabled
+output cosmosAuditLogsEnabled bool = infra.outputs.cosmosAuditLogsEnabled
+output cosmosDataPlaneAuditEnabled bool = infra.outputs.cosmosDataPlaneAuditEnabled
+output logAnalyticsWorkspaceName string = infra.outputs.logAnalyticsWorkspaceName
+output logAnalyticsRetentionInDays int = infra.outputs.logAnalyticsRetentionInDays
+output logAnalyticsDailyQuotaGb string = infra.outputs.logAnalyticsDailyQuotaGb

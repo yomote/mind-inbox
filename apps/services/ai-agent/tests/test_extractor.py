@@ -5,12 +5,17 @@
 - prompt 文面の正しさ — 仕様変更時に false positive を量産する
 - session repository 自体の挙動 — それは test_repositories.py
 - HTTP / FastAPI 経由の通し挙動 — それは L2 (test_l2_endpoints.py)
+
+fixture 置き換え (M1-5 / #82): SK 依存除去に伴い、履歴 fixture を SK ChatHistory
+から app.history.ChatHistory (MAF Message ベース / 追記 API は同形) へ差し替えた。
+検証意図は不変。
 """
 
 import json
+import logging
 
 import pytest
-from semantic_kernel.contents import ChatHistory
+from app.history import ChatHistory
 
 from app.extractor import ExtractionParseError, ExtractionUnavailable, extract
 from app.schemas import ConversationMessage, ExistingProblemRef
@@ -272,6 +277,28 @@ class TestExtractRobustness:
 
         with pytest.raises(ExtractionParseError):
             await extract("s1", [], session_repo, client_mock)
+
+    async def test_単体_パース失敗のログに抽出本文を出さない(
+        self, session_repo, make_client, caplog
+    ):
+        # 無いと: 抽出された困りごとの要約 (このプロダクトで最も機微なテキスト) が
+        # ERROR ログ経由で Log Analytics に流れ続ける (Issue #313 / rubric S3)。
+        # デバッグ可能性は ref + 指紋で残すので、ここは「本文が出ない」だけを見る。
+        await _seed(session_repo)
+        secret = "妻との関係で限界が来ていて、毎晩眠れない"
+        client_mock = make_client(f"not json: {secret}")
+
+        with caplog.at_level(logging.DEBUG):
+            with pytest.raises(ExtractionParseError) as excinfo:
+                await extract("s1", [], session_repo, client_mock)
+
+        logged = "\n".join(r.getMessage() for r in caplog.records)
+        assert secret not in logged
+        assert secret not in str(excinfo.value)
+        # 追える形は残っている: 同じ ref がログとクライアント向けメッセージの両方にある
+        ref = str(excinfo.value).split("ref: ")[1].rstrip(")")
+        assert ref in logged
+        assert "hmac=" in logged  # 指紋はプロセス鍵つき HMAC (PR #324 P2)
 
     async def test_l1_unknown_theme_falls_back_to_michubunrui(
         self, session_repo, make_client

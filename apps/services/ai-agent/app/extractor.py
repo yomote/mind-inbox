@@ -22,9 +22,10 @@ import uuid
 from datetime import datetime, timezone
 
 from agent_framework import BaseChatClient
-from semantic_kernel.contents import ChatHistory
 
 from .agents import complete
+from .history import ChatHistory
+from .observability import client_detail, fingerprint, new_ref
 from .repositories import SessionRepository
 from .schemas import (
     THEMES,
@@ -105,11 +106,10 @@ def _format_history(history: ChatHistory) -> str:
     """ChatHistory をテキストに整形する。system メッセージは除外する。"""
     lines = []
     for msg in history.messages:
-        role_name = getattr(msg.role, "value", str(msg.role)).lower()
-        if "system" in role_name:
+        if msg.role == "system":
             continue
-        label = "ユーザー" if "user" in role_name else "AI"
-        lines.append(f"{label}: {msg.content}")
+        label = "ユーザー" if msg.role == "user" else "AI"
+        lines.append(f"{label}: {msg.text}")
     return "\n".join(lines)
 
 
@@ -189,8 +189,20 @@ async def extract(
     except json.JSONDecodeError as exc:
         # 空の結果を返すと「困りごとは見つかりませんでした」と表示され、壊れたことが
         # ユーザーにもログにも伝わらない (#183)。失敗として上げる。
-        logger.error("Extract JSON parse failed: %r", raw)
-        raise ExtractionParseError("LLM の応答を解釈できませんでした") from exc
+        #
+        # ただし `raw` は**抽出された困りごとの要約そのもの** = このプロダクトで最も
+        # 機微なテキスト。ログに出すのは指紋 (長さ + ハッシュ先頭) までに留め、
+        # ref でクライアント側のエラーと突き合わせられるようにする (Issue #313)。
+        ref = new_ref()
+        logger.error(
+            "Extract JSON parse failed ref=%s session=%s response=%s",
+            ref,
+            session_id,
+            fingerprint(raw),
+        )
+        raise ExtractionParseError(
+            client_detail(ref, "LLM の応答を解釈できませんでした")
+        ) from exc
 
     known = {p.id: p for p in existing_problems}
     now = datetime.now(timezone.utc).isoformat()

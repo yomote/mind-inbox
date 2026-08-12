@@ -13,13 +13,20 @@ HTTP レイヤをバイパスし FastAPI を in-process に叩く。
 - LLM 出力品質 — prompt engineering の領域
 - BFF 側の tRPC 挙動 — それは BFF L2
 - 実 Azure 環境疎通 — それは L4 smoke
+
+fixture 置き換え (M1-5 / #82): SK 依存除去に伴い、
+- 履歴 fixture を SK ChatHistory から app.history.ChatHistory (MAF Message ベース /
+  追記 API は同形) へ差し替えた
+- /chat /approve 系の workflow fake から第 5 引数 (旧 SK kernel) を外した —
+  endpoint はもう kernel を渡さない (chat client は workflow 内で遅延解決)
+検証意図 (status code / passthrough payload) は不変。
 """
 
 import json
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from semantic_kernel.contents import ChatHistory
+from app.history import ChatHistory
 
 from app import main as app_main
 from app.main import app, get_approval_repo, get_session_repo
@@ -61,7 +68,7 @@ class TestChat:
     async def test_l2_chat_pass_through_workflow_response(self, client, monkeypatch):
         # 無いと: workflow が返した requires_approval / approval_request_id / citations を
         # endpoint が pass-through せず欠落させる退行が静かに通る
-        async def fake_run_workflow(session_id, message, sr, ar, k):
+        async def fake_run_workflow(session_id, message, sr, ar):
             return ChatResponse(
                 reply="整理しましょう",
                 requires_approval=True,
@@ -110,7 +117,7 @@ class TestChatStream:
     ):
         # 無いと: SSE の枠組み (data 行 / event 順序 / content-type) が壊れても
         # BFF は素通しするだけなので、フロントの逐次表示が全滅する退行が静かに通る
-        async def fake_stream(session_id, message, sr, ar, k):
+        async def fake_stream(session_id, message, sr, ar):
             from app.schemas import ChatStreamDelta, ChatStreamDone
 
             yield ChatStreamDelta(text="こん")
@@ -141,7 +148,7 @@ class TestChatStream:
     ):
         # 無いと: ストリーム途中の例外が接続切断だけで終わり、フロントが
         # フォールバックの判断材料 (error イベント) を得られない退行が静かに通る
-        async def broken_stream(session_id, message, sr, ar, k):
+        async def broken_stream(session_id, message, sr, ar):
             from app.schemas import ChatStreamDelta
 
             yield ChatStreamDelta(text="途中")
@@ -158,7 +165,54 @@ class TestChatStream:
 
         events = _parse_sse_events(body)
         assert events[-1]["type"] == "error"
-        assert "LLM connection lost" in events[-1]["message"]
+        # 追跡できる形は保つ (ref があればサーバのログ行に辿り着ける)
+        assert "ref:" in events[-1]["message"]
+
+    async def test_単体_ストリームのエラー本文に上流の例外文を載せない(
+        self, client, monkeypatch
+    ):
+        # 無いと: Azure OpenAI SDK の例外文 (エンドポイント URL / デプロイ名 /
+        # api-version / コンテンツフィルタが引用したプロンプト断片) が
+        # BFF の素通しでブラウザの devtools まで届く (Issue #313 / rubric S3)
+        upstream = (
+            "AuthenticationError: https://aoai-dev-mindbox.openai.azure.com/"
+            " deployment=gpt-4o api-version=preview 「転職したい」"
+        )
+
+        async def broken_stream(session_id, message, sr, ar):
+            raise RuntimeError(upstream)
+            yield  # pragma: no cover — 非同期ジェネレータにするためだけの行
+
+        monkeypatch.setattr(app_main, "run_workflow_stream", broken_stream)
+
+        async with client.stream(
+            "POST", "/chat/stream", json={"session_id": "s1", "message": "転職したい"}
+        ) as res:
+            body = ""
+            async for chunk in res.aiter_text():
+                body += chunk
+
+        message = _parse_sse_events(body)[-1]["message"]
+        for leaked in ("openai.azure.com", "gpt-4o", "api-version", "転職したい"):
+            assert leaked not in message, leaked
+
+    async def test_単体_chat_の_500_応答に上流の例外文を載せない(
+        self, client, monkeypatch
+    ):
+        # 無いと: 同じ流出が非ストリーミング経路 (detail=str(exc)) から起き続ける
+        async def boom(*args, **kwargs):
+            raise RuntimeError(
+                "https://aoai-dev-mindbox.openai.azure.com/ deployment=gpt-4o"
+            )
+
+        monkeypatch.setattr(app_main, "run_workflow", boom)
+
+        res = await client.post("/chat", json={"session_id": "s1", "message": "テスト"})
+        assert res.status_code == 500
+        detail = res.json()["detail"]
+        assert "openai.azure.com" not in detail
+        assert "gpt-4o" not in detail
+        assert "ref:" in detail
 
 
 # ---- /extract ---------------------------------------------------------------
@@ -272,7 +326,7 @@ class TestApprove:
         self, client, monkeypatch, approved, expected
     ):
         # 無いと: approved boolean の意味反転 / endpoint の reply field 欠落が静かに通る
-        async def fake_resume(approval_id, _approved, sr, ar, k):
+        async def fake_resume(approval_id, _approved, sr, ar):
             return expected
 
         monkeypatch.setattr(app_main, "resume_after_approval", fake_resume)

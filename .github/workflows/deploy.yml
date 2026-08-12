@@ -61,7 +61,7 @@ jobs:
       RG: rg-${{ github.event.inputs.environment || 'dev' }}-mind-inbox
       DEPLOYMENT: main-bootstrap
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # OIDC 未設定（repo Variables 未登録）の間は、誤実行を赤くせず skip。
       - name: Guard — OIDC 設定済みか
@@ -98,9 +98,20 @@ jobs:
             echo "::notice::自動デプロイは未解禁のため skip しました。認可の設定 (docs/runbooks/entra-spa-auth-and-budget.md) を終えたあと、リポジトリ Variables に AUTO_DEPLOY_ENABLED=true を設定すると main マージで常設 dev へ自動反映されます。"
           fi
 
+      # 状況ページ (cicd/scripts/status-page) が「この run はデプロイ経路に入ったか」を
+      # 読むための痕跡。**失敗し得る処理より前**に置くのが要点 — Azure login や
+      # IMAGE_TAG 解決で落ちると後続の `Provision + deploy (up)` は skipped になり、
+      # 「試みて失敗した」と「そもそも走らなかった (guard skip)」が区別できなくなる。
+      # 区別できないと、デプロイ赤なのに状況ページが緑に見える (PR #281)。
+      # **ステップ名を変えたら product_status.py の MARKER_STEP も直すこと。**
+      # 実行内容は echo だけ (デプロイの挙動は変えない)。条件は下のデプロイ step 群と同一。
+      - name: デプロイ経路に入った (marker)
+        if: steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
+        run: echo "deploy path entered (marker for status-page)"
+
       - name: Azure login (OIDC, no stored secret)
         if: steps.guard.outputs.run == 'true'
-        uses: azure/login@v2
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -111,6 +122,9 @@ jobs:
       # 一時的に畳みたいときの手段としてスクリプトと手動 down は残す。
       # cleanup-env.sh は冪等（内部 rg_exists ガードで RG 不在なら group delete を skip）。
       # `|| true` は付けない（purge 失敗等の本当のエラーは赤くして気づきたいため）。
+      # ADR 0046 D6 以降、soft-delete の purge は既定 off。よって down のあとの up が
+      # 名前衝突（"already exists in soft-deleted state"）で落ちることがある。
+      # それは想定内の症状で、手当ては purge フラグを立てた再 down（下のログが案内する）。
       - name: Tear down (cleanup-env)
         if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'down'
         run: |
@@ -122,13 +136,13 @@ jobs:
       # （ADR 0013「既存 IaC / スクリプトを唯一の真実として再利用」）。
       - name: Setup Node 22
         if: steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
       - name: Setup pnpm
         if: steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 9
 
@@ -237,6 +251,7 @@ jobs:
       # VITE_* 焼き込みミス・実オリジン CORS・フロント↔BFF の結線破壊 (TTS のオリジン
       # 違い等, 2026-08-08 実事象) まで検知する。ログイン経路のカナリア込み。
       - name: Golden path scenario（UI 込み E2E・実環境）
+        id: e2e
         if: steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
         run: |
           OUTPUTS="$(az deployment group show -g "$RG" -n "$DEPLOYMENT" --query 'properties.outputs' -o json)"
@@ -252,6 +267,61 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm exec playwright install --with-deps chromium
           pnpm run test:e2e:live
+
+      # E2E が落ちたとき、runner 上には Playwright の証拠 (スクリーンショット /
+      # error-context / trace) が出るが、これまで**どこにも上げていなかった**ため
+      # runner ごと消えていた。結果として過去の実環境 E2E 失敗はどれも事後に
+      # 診断できず、#293 は丸一日「SSE がハングする」という仮説のまま動けなかった。
+      #
+      # ⚠️ **trace.zip は上げない。** e2e-live/entra-login.ts が偽装トークン
+      # エンドポイントの応答として **実 BFF アクセストークン (LIVE_BFF_TOKEN) を
+      # ブラウザへ注入**しており、trace はネットワークのやり取りを丸ごと記録する。
+      # 上の `::add-mask::` は Actions のログにしか効かないので、trace を artifact に
+      # すると**生きた Azure アクセストークンを配布する**ことになる。
+      # 上げるのはスクリーンショット (画像) と error-context.md (aria スナップショット)
+      # だけ — どちらもトークンを載せる経路が無く、「画面がどうなっていたか」という
+      # 診断に必要な情報はここに入っている。
+      - name: E2E の失敗証拠を残す（trace は実トークンを含むため除外）
+        if: always() && steps.e2e.conclusion == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-live-failure-${{ github.run_id }}
+          path: |
+            apps/frontend/test-results-live/**/*.png
+            apps/frontend/test-results-live/**/error-context.md
+          retention-days: 14
+          if-no-files-found: warn
+
+      # trace は診断価値が最も高いが、実 BFF アクセストークンを含む (上のステップの
+      # コメント参照)。**public リポジトリなので artifact のアクセス制限は使えない**
+      # ため、公開鍵で暗号化してから上げる (ADR 0045)。
+      #
+      # スクラブ (文字列置換) を選ばなかった理由: 秘密は trace 内の 3 種類のエントリ
+      # (spec のソース / アクション記録 / DOM スナップショット) に散らばっており、
+      # 外科的な除去は列挙漏れで**静かに漏れる** (失敗が公開側に倒れる)。暗号化は
+      # 中身の形に依存しないので、その失敗モードが存在しない。
+      #
+      # 鍵の準備・復号手順は cicd/keys/README.md。
+      - name: E2E の trace を公開鍵で暗号化して残す
+        id: encrypt_trace
+        if: always() && steps.e2e.conclusion == 'failure'
+        env:
+          PUBKEY: cicd/keys/e2e-artifacts.pub.asc
+        run: |
+          cicd/scripts/deploy/encrypt-e2e-traces.sh \
+            "$PUBKEY" apps/frontend/test-results-live e2e-trace-enc
+
+      # **暗号化ステップの成功を必須にする。** hashFiles だけで判定すると、途中で
+      # 暗号化が失敗した run でも「.gpg が 1 つでもあれば」部分成果物が上がる
+      # (Codex P1 / PR #300)。outcome を条件に入れて fail closed にする。
+      - name: 暗号化した trace をアップロードする
+        if: always() && steps.e2e.conclusion == 'failure' && steps.encrypt_trace.outcome == 'success' && hashFiles('e2e-trace-enc/**/*.gpg') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-live-trace-${{ github.run_id }}
+          path: e2e-trace-enc/**/*.gpg
+          retention-days: 14
+          if-no-files-found: error
 
       - name: SWA URL を Actions サマリに出す
         # smoke が落ちても URL は出す（切り分けの手掛かりになるため）。

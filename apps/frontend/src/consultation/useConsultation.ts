@@ -12,15 +12,24 @@
 import * as React from "react";
 import {
   ExtractFailed,
+  commitPreview,
   createProblemPlan,
   extractMentions,
   loadProblem,
   loadProblems,
+  previewExtraction,
+  previewSupported,
   sendMessage,
   startNewConsultation,
   triageProblem,
 } from "../api";
-import type { ConsultationSession, ExtractionResult, Problem, TriageInput } from "../api";
+import type {
+  ChatMessage,
+  ConsultationSession,
+  ExtractionResult,
+  Problem,
+  TriageInput,
+} from "../api";
 import type { AppRoute } from "../Router";
 import { deriveSessionTitle } from "./sessionTitle";
 
@@ -37,6 +46,16 @@ export type Consultation = {
   extraction: ExtractionResult | null;
   problems: Problem[];
   selectedProblem: Problem | null;
+
+  /**
+   * 「整理されつつある困りごと」の揮発する下書き (#187 / ADR 0039 D1)。
+   * 読み取り専用 — 確定 (extract) して初めて Problem リポジトリに書かれる。
+   */
+  preview: ExtractionResult | null;
+  /** error は右ペイン内に表示する (会話を止めない — Snackbar には出さない)。 */
+  previewStatus: "idle" | "updating" | "error";
+  /** 手動「今すぐ整理」(ADR 0039 D2)。 */
+  refreshPreview: () => void;
 
   startConsultation: () => Promise<void>;
   sendDraftMessage: () => Promise<void>;
@@ -61,6 +80,8 @@ const FAILURE_MESSAGE = {
   startConsultation: "相談を開始できませんでした。通信状況を確認して、もう一度お試しください。",
   sendMessage: "メッセージを送れませんでした。入力はそのまま残っています。もう一度お試しください。",
   extract: "困りごとを抽出できませんでした。通信状況を確認して、もう一度お試しください。",
+  commitPreview:
+    "下書きを確定できませんでした。下書きは残っています。通信状況を確認して、もう一度お試しください。",
   createPlan: "次の一歩を作れませんでした。通信状況を確認して、もう一度お試しください。",
   openProblemList: "困りごと一覧を開けませんでした。通信状況を確認して、もう一度お試しください。",
   openProblem: "困りごとを開けませんでした。通信状況を確認して、もう一度お試しください。",
@@ -109,6 +130,49 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
   const [problems, setProblems] = React.useState<Problem[]>([]);
   const [selectedProblem, setSelectedProblem] = React.useState<Problem | null>(null);
 
+  const [preview, setPreview] = React.useState<ExtractionResult | null>(null);
+  const [previewStatus, setPreviewStatus] = React.useState<"idle" | "updating" | "error">("idle");
+  // preview の世代トークン (PR #282 Codex P2): セッションが変わったら +1 し、飛行中だった
+  // 古い応答を無条件に破棄する。preview は 600ms 級 / 相談開始は 350ms 級で、
+  // 「今すぐ整理 → 中断 → 新規相談」で旧セッションの下書きが新セッションに出る競合が実在する。
+  const previewGenerationRef = React.useRef(0);
+  // preview は会話 (loading / runAction) と独立に走る。多重実行だけ自前で防ぐ
+  // (ADR 0039 D2: in-flight 1 本 — LLM 呼び出しを重ねない)。世代で持つのは、
+  // 旧セッションの飛行中リクエストが新セッションの初回 preview を塞がないようにするため。
+  const previewInFlightGenerationRef = React.useRef<number | null>(null);
+  // 実行中に届いた更新要求の持ち越し先 (PR #282 再レビュー P2)。**最新の 1 件だけ**持つ —
+  // 中間状態の下書きを順に流しても意味がなく、LLM 呼び出しだけが増えるため。
+  const pendingPreviewRef = React.useRef<{ sessionId: string; messages: ChatMessage[] } | null>(
+    null,
+  );
+
+  /** 下書きを揮発させ、飛行中の preview 応答を無効化する (セッション跨ぎ / reset)。 */
+  const invalidatePreview = React.useCallback(() => {
+    previewGenerationRef.current += 1;
+    pendingPreviewRef.current = null;
+    setPreview(null);
+    setPreviewStatus("idle");
+  }, []);
+
+  /**
+   * 表示中の下書きを固定する (PR #282 再レビュー P1)。
+   *
+   * 確定は「今画面に出ている内容」を保存する操作なので、確定の最中に飛行中の更新が
+   * 返ってきて表示だけ差し替わると、**保存した内容と画面の内容がずれる**
+   * (preview 600ms / commit 400ms で実際に起きる)。確定開始時に世代を進めて
+   * 飛行中の応答を捨て、表示はそのまま (= 保存する内容と一致) に保つ。
+   * `invalidatePreview` と違い**下書きは消さない** — 確定が失敗しても画面は変わらない。
+   */
+  const freezePreview = React.useCallback(() => {
+    previewGenerationRef.current += 1;
+    // 確定中に届いていた自動更新の要求は繰り越さない — 確定が成功すれば下書きは揮発する
+    // ので更新しても捨てるだけ、失敗した場合は「押した時点の内容」を残す方が確定操作の
+    // 約束 (この内容で確定) と一致するため。
+    pendingPreviewRef.current = null;
+    // 破棄した更新のスピナーを残さない (更新は起きなかったことになる)。
+    setPreviewStatus("idle");
+  }, []);
+
   // loading は多重実行ガードにだけ使うので、ハンドラの identity を安定させるため ref でも持つ。
   const loadingRef = React.useRef(false);
   const setBusy = React.useCallback((next: boolean) => {
@@ -149,6 +213,64 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     [setBusy],
   );
 
+  /**
+   * 下書きプレビューを更新する (#187 / ADR 0039)。
+   *
+   * runAction を通さない: 失敗しても会話は続けられる背景処理なので、Snackbar と
+   * 多重実行ガード (loading) を会話と共有しない。ただし**無音にはしない** —
+   * 失敗は previewStatus="error" として右ペイン内に表示する (ADR 0018)。
+   *
+   * 実行中に届いた要求は**捨てずに最新 1 件だけ持ち越し、完了後に走らせる**
+   * (PR #282 再レビュー P2)。捨てると「整理中に 2 往復目を送ると自動更新の契機が
+   * 消え、手動で押すか更に 2 往復するまで下書きが古いまま」になり、§5.8 の
+   * 「2 往復ごとに更新」が満たされなくなる。重ねて実行はしない (LLM 呼び出しは 1 本)。
+   */
+  const runPreview = React.useCallback(async (sessionId: string, messages: ChatMessage[]) => {
+    if (!previewSupported) return;
+    const generation = previewGenerationRef.current;
+    // in-flight 1 本 (ADR 0039 D2)。世代で比較するのは、旧セッションの飛行中リクエストが
+    // 新セッションの初回 preview を塞がないようにするため。
+    if (previewInFlightGenerationRef.current === generation) {
+      pendingPreviewRef.current = { sessionId, messages };
+      return;
+    }
+    previewInFlightGenerationRef.current = generation;
+    try {
+      let request: { sessionId: string; messages: ChatMessage[] } | null = { sessionId, messages };
+      while (request) {
+        setPreviewStatus("updating");
+        try {
+          const result = await previewExtraction(request.sessionId, request.messages);
+          // 応答が返るまでにセッションが変わっていたら捨てる (PR #282 Codex P2)。
+          // 旧セッションの下書きを新セッションに出すと「確定すると関係ない困りごとが
+          // 保存される」誤操作の入口になる。
+          if (previewGenerationRef.current !== generation) return;
+          setPreview(result);
+          setPreviewStatus("idle");
+        } catch (err) {
+          if (previewGenerationRef.current !== generation) return;
+          console.error("[useConsultation] 下書きプレビューの更新に失敗", err);
+          setPreviewStatus("error");
+        }
+
+        // 実行中に会話が進んでいたら、最新の会話で続けて 1 回だけ走らせる。
+        // 世代が変わっていれば (セッション切替 / 確定) 持ち越しは無効なので捨てる。
+        request = pendingPreviewRef.current;
+        pendingPreviewRef.current = null;
+        if (previewGenerationRef.current !== generation) request = null;
+      }
+    } finally {
+      if (previewInFlightGenerationRef.current === generation) {
+        previewInFlightGenerationRef.current = null;
+      }
+    }
+  }, []);
+
+  const refreshPreview = React.useCallback(() => {
+    if (!session) return;
+    void runPreview(session.id, session.messages);
+  }, [runPreview, session]);
+
   const startConsultation = React.useCallback(async () => {
     // テーマ入力画面は廃止 (home.mdx)。常に空で開始し、AI の問いかけから対話が始まる。
     const outcome = await runAction(FAILURE_MESSAGE.startConsultation, () =>
@@ -157,8 +279,11 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     if (!outcome.ok) return;
 
     setSession(outcome.value);
+    // 前セッションの下書きを持ち込まない + 飛行中の旧応答を無効化する
+    // (下書きはセッション内で揮発 — ADR 0039 / PR #282 Codex P2)。
+    invalidatePreview();
     transition("session");
-  }, [runAction, transition]);
+  }, [invalidatePreview, runAction, transition]);
 
   const sendDraftMessage = React.useCallback(async () => {
     if (!session || !draftMessage.trim() || loadingRef.current) return;
@@ -189,13 +314,48 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     }
 
     setSession((prev) => (prev ? { ...prev, messages: [...prev.messages, outcome.value] } : prev));
-  }, [draftMessage, runAction, session]);
+
+    // ユーザー発話 2 往復ごとに下書きプレビューを自動更新する (#187 / ADR 0039 D2)。
+    // 毎ターンは LLM 呼び出しが倍増するため間引く。fire-and-forget — 会話を待たせない。
+    const messagesAfterReply = [...session.messages, userMessage, outcome.value];
+    const userTurnCount = messagesAfterReply.filter((m) => m.role === "user").length;
+    if (userTurnCount > 0 && userTurnCount % 2 === 0) {
+      void runPreview(session.id, messagesAfterReply);
+    }
+  }, [draftMessage, runAction, runPreview, session]);
 
   const extract = React.useCallback(async () => {
     if (!session) return;
-    // 会話はこちらが持っているので渡す (#183)。ai-agent のセッション履歴はプロセスメモリで、
-    // scale-to-zero・スケールアウト・リビジョン差し替えのいずれでも消えるため、
-    // それに依存すると「対話はできたのに抽出だけ 404」になる。
+
+    // プレビュー有効環境では「この内容で確定」= **表示中の下書きをそのまま永続化する**
+    // (ADR 0039 D1・D3 / PR #282 Codex P1)。抽出は非決定的なので、確定時に抽出し直すと
+    // 画面で確認した内容と違うものが保存されうる — 再抽出はしない。
+    if (previewSupported) {
+      // 下書きが無い間はボタンが disabled (dialogue-session.mdx §5.8)。二重ガード。
+      // **ここで従来の一発抽出に落とさない** — 「この内容で確定」が「今から抽出し直す」に
+      // 化けると、画面で確認していない内容が保存されうる (PR #282 Codex P1 の否決理由)。
+      // 更新が失敗し続けているときの復帰導線は「今すぐ整理」の再実行 (§5.8)。
+      if (!preview) return;
+      // 確定するのは**押した時点で画面に出ている内容**。飛行中の更新はここで捨て、
+      // 保存対象をスナップショットとして固定する (PR #282 再レビュー P1)。
+      const snapshot = preview;
+      freezePreview();
+      const outcome = await runAction(FAILURE_MESSAGE.commitPreview, () =>
+        commitPreview(session.id, snapshot.items),
+      );
+      if (!outcome.ok) return;
+
+      setExtraction(outcome.value);
+      // 確定済みの下書きを「未確定の下書き」として残さない (揮発 — ADR 0039 D1)。
+      invalidatePreview();
+      transition("extractReview");
+      return;
+    }
+
+    // プレビュー無効環境 (BFF `consultation.preview` 未結線の real — #283 で結線) は
+    // 従来の一発抽出。会話はこちらが持っているので渡す (#183)。ai-agent のセッション履歴は
+    // プロセスメモリで、scale-to-zero・スケールアウト・リビジョン差し替えのいずれでも
+    // 消えるため、それに依存すると「対話はできたのに抽出だけ 404」になる。
     const outcome = await runAction(extractFailureMessage, () =>
       extractMentions(session.id, session.messages),
     );
@@ -203,7 +363,7 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
 
     setExtraction(outcome.value);
     transition("extractReview");
-  }, [runAction, session, transition]);
+  }, [freezePreview, invalidatePreview, preview, runAction, session, transition]);
 
   const openProblemList = React.useCallback(async () => {
     const outcome = await runAction(FAILURE_MESSAGE.openProblemList, () => loadProblems());
@@ -296,7 +456,8 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     setExtraction(null);
     setProblems([]);
     setSelectedProblem(null);
-  }, [setBusy]);
+    invalidatePreview();
+  }, [invalidatePreview, setBusy]);
 
   return {
     loading,
@@ -308,6 +469,9 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     extraction,
     problems,
     selectedProblem,
+    preview,
+    previewStatus,
+    refreshPreview,
     startConsultation,
     sendDraftMessage,
     extract,
