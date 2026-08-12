@@ -121,6 +121,8 @@ paths:
                               minimum: 0
                               maximum: 1
                               nullable: true
+                            reopenedProblem:
+                              type: boolean
                           required:
                             - id
                             - sessionId
@@ -292,6 +294,8 @@ paths:
                                 minimum: 0
                                 maximum: 1
                                 nullable: true
+                              reopenedProblem:
+                                type: boolean
                             required:
                               - id
                               - sessionId
@@ -441,6 +445,8 @@ paths:
                               minimum: 0
                               maximum: 1
                               nullable: true
+                            reopenedProblem:
+                              type: boolean
                           required:
                             - id
                             - sessionId
@@ -786,6 +792,8 @@ paths:
                           minimum: 0
                           maximum: 1
                           nullable: true
+                        reopenedProblem:
+                          type: boolean
                       required:
                         - id
                         - sessionId
@@ -958,6 +966,8 @@ paths:
                           minimum: 0
                           maximum: 1
                           nullable: true
+                        reopenedProblem:
+                          type: boolean
                       required:
                         - id
                         - sessionId
@@ -1133,6 +1143,8 @@ paths:
                             minimum: 0
                             maximum: 1
                             nullable: true
+                          reopenedProblem:
+                            type: boolean
                         required:
                           - id
                           - sessionId
@@ -1325,6 +1337,8 @@ paths:
                                 minimum: 0
                                 maximum: 1
                                 nullable: true
+                              reopenedProblem:
+                                type: boolean
                             required:
                               - id
                               - sessionId
