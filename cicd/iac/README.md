@@ -72,6 +72,11 @@ RG=<rg-name> DEPLOYMENT=main-bootstrap ./scripts/deploy/deploy-all.sh
 - Azure CLI ログイン済み
 - サブスクリプション選択済み
 - Bicep 利用可能
+- **既存の手動ロール割り当てが残っていないこと** — スクリプト時代（`az role assignment create`）に
+  作られた ai-agent MI → Cognitive Services OpenAI User の割り当てが残っていると、bicep の
+  宣言が `RoleAssignmentExists` で拒否され bootstrap ごと落ちる。あれば **1 回だけ手で削除**する
+  （Issue #297 / 手順は [`scripts/deploy/README.md`](../scripts/deploy/README.md#前提条件-古い手動割り当てが残っていないこと-297)）。
+  ロール割り当ての持ち主は bicep 1 本で、シェルからは作らない
 
 ```bash
 az login
@@ -359,12 +364,30 @@ gh secret list -R yomote/mind-inbox   # GITHUB_TOKEN は表示されない（自
 
 **現状ここが宣言の外にあるため、bicep から環境を作り直しても、デプロイが走るまで設定が入りません。**
 
-| スクリプト                                       | 何を設定しているか                                                                                                 |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| `cicd/scripts/deploy/deploy-ai-agent.sh`         | Container App の環境変数（`--set-env-vars`）/ **OpenAI ロール付与**（`az role assignment create`）                 |
-| `cicd/scripts/deploy/deploy-voicevox-wrapper.sh` | Container App の環境変数                                                                                           |
-| `cicd/scripts/deploy/deploy-backend.sh`          | Function App の appsettings（`az functionapp config appsettings set`）                                             |
-| `cicd/scripts/deploy/provision.sh`               | `manageAiAgentOpenAiRoleAssignment=false` — **bicep に宣言させない逃げ道**（PR #290 の応急処置。本治療は PR #292） |
+| スクリプト | 何を設定しているか | 持ち主 |
+| --- | --- | --- |
+| `cicd/scripts/deploy/deploy-ai-agent.sh` | Container App の環境変数（`--set-env-vars`） | **シェルのみ**（宣言の外） |
+| `cicd/scripts/deploy/deploy-voicevox-wrapper.sh` | Container App の環境変数 | **シェルのみ**（宣言の外） |
+| `cicd/scripts/deploy/deploy-backend.sh` | Function App の appsettings（`az functionapp config appsettings set`） | **シェルのみ**（宣言の外） |
+
+> **⚠️ 認証ゲート（[ADR 0017](../../docs/adr/0017-container-apps-access-via-auth-gate.md)）はこの表に入りません — 宣言の外ではなく「二重管理」です。**
+> `bootstrap-core.bicep:1133-1187` の `aiAgentAuthConfig` / `voicevoxWrapperAuthConfig` が
+> `containerAppsGateClientId` 非空のとき同じ `current` authConfig を**既に宣言しており**、
+> かつ `deploy-ai-agent.sh` / `deploy-voicevox-wrapper.sh` も
+> `az containerapp auth ... update` で設定しています。
+> つまり「デプロイが走るまで設定が入らない」のではなく、**どちらが勝つかが曖昧**な状態です。
+> 守るべき資源（OpenAI の課金）に直結する門なので、持ち主の一本化は [#303](https://github.com/yomote/mind-inbox/issues/303) の対象。
+> **本 PR のスコープ外**（本 PR はロール割り当ての一本化のみ）。
+>
+> ---
+>
+> **ロール割り当てもこの表に載りません（本 PR で撤去済み）。** 以前は `deploy-ai-agent.sh` が
+> `az role assignment create` で OpenAI User を付与し、`provision.sh` が
+> `manageAiAgentOpenAiRoleAssignment=false` という「bicep に宣言させない逃げ道」を渡していました。
+> **どちらも削除済み**で、**持ち主は bicep 1 本**です（`bootstrap-core.bicep` の
+> `aiAgentOpenAiRoleAssignment` が `guid()` の決定的名で宣言する）。
+> **この表を見てシェル側に付与を足し戻さないでください** — それが #262 で dev を 9 回落とした
+> 二重宣言の再導入になります。前提は [1. 前提](#1-前提)（古い手動割り当てが残っていないこと）。
 
 **確認する**（実環境の実際の値を読む）:
 

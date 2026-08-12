@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # Deploy AI Agent to Azure Container Apps.
 #
-# 1. az containerapp      — Container App を作成 or 更新（ghcr の事前ビルド image を差し替え）
-# 2. az role assignment   — Managed Identity に OpenAI User を付与
+# 1. az containerapp — Container App を作成 or 更新（ghcr の事前ビルド image を差し替え）
+# 2. Managed Identity が付いていることの確認（**ロール付与はしない**）
+#
+# ロール割り当ての持ち主は bicep 1 本 (#261 / #297)。このスクリプトは `az role assignment create`
+# を叩かない — シェルと bicep の二重宣言は、名前の違う同一 (principal+role+scope) を生んで
+# ARM の RoleAssignmentExists を招き、bootstrap ごと落とす (#262)。MI に OpenAI User が
+# 付くのは bootstrap-core.bicep の aiAgentOpenAiRoleAssignment。
 #
 # image は build-images.yml が main マージ時に ghcr へ push 済み（#67 / ADR 0013）。
 # このスクリプトはビルドしない（`az acr build` 廃止）: 既存タグを Container App に差し替えるだけ。
@@ -24,9 +29,6 @@ TARGET_PORT="${TARGET_PORT:-8000}"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-ghcr.io}"
 IMAGE_REPO="${IMAGE_REPO:-yomote/mind-inbox}"
 
-# Role definition IDs (built-in)
-ROLE_OPENAI_USER="5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"
-
 need() {
   command -v "$1" >/dev/null 2>&1 || { echo "ERROR: missing command: $1" >&2; exit 1; }
 }
@@ -46,7 +48,6 @@ CA_NAME="${CA_NAME:-$(_val aiAgentContainerAppName)}"
 CAE_NAME="${CAE_NAME:-$(_val aiAgentContainerAppsEnvironmentName)}"
 OPENAI_ENDPOINT="${OPENAI_ENDPOINT:-$(_val openAiEndpoint)}"
 OPENAI_DEPLOYMENT="${OPENAI_DEPLOYMENT:-$(_val openAiDeploymentName)}"
-OPENAI_ACCOUNT_NAME="${OPENAI_ACCOUNT_NAME:-$(_val openAiAccountName)}"
 
 if [[ -z "$CA_NAME" ]]; then
   echo "ERROR: Container App name not found. Re-run bootstrap with enableAiAgentAca=true, or set CA_NAME=<name>." >&2; exit 1
@@ -112,9 +113,13 @@ else
     --query 'properties.configuration.ingress.fqdn' -o tsv)"
 fi
 
-# ── Role assignments ──────────────────────────────────────────────────────────
+# ── Managed Identity (確認のみ / 付与は bicep) ────────────────────────────────
+# ここでロールは付けない。OpenAI User の割り当ては bootstrap-core.bicep が宣言する
+# (#261)。シェルからも作ると別名の同一割り当てになり、bicep 適用が
+# RoleAssignmentExists で落ちる (#262)。
+# MI が付いていないと bicep 側の割り当てが結び付く相手を失うので、ここは確認だけする。
 echo ""
-echo "=== Assigning roles ==="
+echo "=== Verifying managed identity ==="
 
 PRINCIPAL_ID="$(az containerapp show -g "$RG" -n "$CA_NAME" \
   --query 'identity.principalId' -o tsv)"
@@ -124,63 +129,7 @@ if [[ -z "$PRINCIPAL_ID" ]]; then
   exit 1
 fi
 echo "  Principal ID: $PRINCIPAL_ID"
-
-# 許容するのは「既に同じ割り当てがある」だけ。それ以外の失敗 (権限不足・throttling)
-# を done と表示すると、bicep 側が宣言を見送った run で付与の保証が丸ごと消え、
-# provision は緑のまま ai-agent が OpenAI を呼べなくなる。
-_assign_role() {
-  local role="$1" scope="$2" label="$3" out rc
-  set +e
-  out="$(az role assignment create \
-    --assignee-object-id "$PRINCIPAL_ID" \
-    --assignee-principal-type ServicePrincipal \
-    --role "$role" \
-    --scope "$scope" \
-    --output none 2>&1)"
-  rc=$?
-  set -e
-
-  if [[ $rc -eq 0 ]]; then
-    echo "  $label: done."
-    return 0
-  fi
-  # 一意性は principal+role+scope で決まるので、重複エラーは目的が達成済みという意味
-  if grep -qiE "already exists|RoleAssignmentExists" <<<"$out"; then
-    echo "  $label: already assigned."
-    return 0
-  fi
-  echo "ERROR: $label のロール付与に失敗しました (az exit $rc)" >&2
-  echo "$out" >&2
-  return "$rc"
-}
-
-if [[ -n "$OPENAI_ACCOUNT_NAME" ]]; then
-  # scope が引けなければ _assign_role に到達しない = ロール未付与のまま緑になる。
-  # 「アカウントが無い」(az は exit 3) だけを許容し、参照エラーは落とす。
-  _OAI_ERR="$(mktemp)"
-  set +e
-  OPENAI_ID="$(az cognitiveservices account show -g "$RG" -n "$OPENAI_ACCOUNT_NAME" \
-    --query id -o tsv 2>"$_OAI_ERR")"
-  _OAI_RC=$?
-  set -e
-
-  if [[ $_OAI_RC -ne 0 ]] \
-     && [[ $_OAI_RC -ne 3 ]] \
-     && ! grep -qiE 'ResourceNotFound|was not found|could not be found|does not exist' "$_OAI_ERR"; then
-    echo "ERROR: OpenAI アカウント '$OPENAI_ACCOUNT_NAME' を参照できませんでした (az exit $_OAI_RC)。" >&2
-    echo "       ロール付与の可否を判定できないため中断します (未付与のまま緑にしない)。" >&2
-    cat "$_OAI_ERR" >&2
-    rm -f "$_OAI_ERR"
-    exit "$_OAI_RC"
-  fi
-  rm -f "$_OAI_ERR"
-
-  if [[ -n "$OPENAI_ID" ]]; then
-    _assign_role "$ROLE_OPENAI_USER" "$OPENAI_ID" "Cognitive Services OpenAI User"
-  else
-    echo "  WARNING: OpenAI account '$OPENAI_ACCOUNT_NAME' not found. Skipping OpenAI role." >&2
-  fi
-fi
+echo "  Role assignment (Cognitive Services OpenAI User) は bicep が宣言する — ここでは作らない。"
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
