@@ -114,14 +114,14 @@ sha は GitHub の `ro.sh` のページで `y` を押す (Copy permalink) と UR
 Azure login やクエリで落ちるまで不完全な構成に気づけないため。原因を直してそのまま再実行してよい
 (全ステップ冪等)。
 
-### この構成のトレードオフ ([ADR 0047](../adr/0047-readonly-investigation-identity-on-unprotected-branch.md) — Proposed)
+### この構成のトレードオフ ([ADR 0048](../adr/0048-readonly-investigation-identity-on-unprotected-branch.md) — Proposed)
 
 `ops/inspect` に保護を掛けると「調査のたびに直 push して dispatch する」という用途が成立しないため、
 **保護なしのまま受容している**。つまり**このリポジトリに push できる主体は、read-only の Azure
 資格情報 (Reader / Cost Management Reader / Log Analytics Reader) を実質的に取得できる**。
 Log Analytics には相談ログや例外詳細が載りうるので、「read-only だから無害」ではない。
 
-受容の条件は ADR 0047 に 4 つ書いてある (書き込みロールを足さない / workflow は読むだけ /
+受容の条件は ADR 0048 に 4 つ書いてある (書き込みロールを足さない / workflow は読むだけ /
 `ro.sh` は sha 固定 / **共同作業者が増えたら再判断**)。条件を外すときは ADR を先に改訂すること。
 
 ### どう使われるか
