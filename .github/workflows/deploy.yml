@@ -237,6 +237,7 @@ jobs:
       # VITE_* 焼き込みミス・実オリジン CORS・フロント↔BFF の結線破壊 (TTS のオリジン
       # 違い等, 2026-08-08 実事象) まで検知する。ログイン経路のカナリア込み。
       - name: Golden path scenario（UI 込み E2E・実環境）
+        id: e2e
         if: steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
         run: |
           OUTPUTS="$(az deployment group show -g "$RG" -n "$DEPLOYMENT" --query 'properties.outputs' -o json)"
@@ -252,6 +253,30 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm exec playwright install --with-deps chromium
           pnpm run test:e2e:live
+
+      # E2E が落ちたとき、runner 上には Playwright の証拠 (スクリーンショット /
+      # error-context / trace) が出るが、これまで**どこにも上げていなかった**ため
+      # runner ごと消えていた。結果として過去の実環境 E2E 失敗はどれも事後に
+      # 診断できず、#293 は丸一日「SSE がハングする」という仮説のまま動けなかった。
+      #
+      # ⚠️ **trace.zip は上げない。** e2e-live/entra-login.ts が偽装トークン
+      # エンドポイントの応答として **実 BFF アクセストークン (LIVE_BFF_TOKEN) を
+      # ブラウザへ注入**しており、trace はネットワークのやり取りを丸ごと記録する。
+      # 上の `::add-mask::` は Actions のログにしか効かないので、trace を artifact に
+      # すると**生きた Azure アクセストークンを配布する**ことになる。
+      # 上げるのはスクリーンショット (画像) と error-context.md (aria スナップショット)
+      # だけ — どちらもトークンを載せる経路が無く、「画面がどうなっていたか」という
+      # 診断に必要な情報はここに入っている。
+      - name: E2E の失敗証拠を残す（trace は実トークンを含むため除外）
+        if: always() && steps.e2e.conclusion == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-live-failure-${{ github.run_id }}
+          path: |
+            apps/frontend/test-results-live/**/*.png
+            apps/frontend/test-results-live/**/error-context.md
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: SWA URL を Actions サマリに出す
         # smoke が落ちても URL は出す（切り分けの手掛かりになるため）。
