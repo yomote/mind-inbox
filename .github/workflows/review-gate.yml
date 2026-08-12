@@ -31,6 +31,17 @@
 #   PR にコメント / needs-human Issue・Proposed ADR の 48h 停滞 → @yomote へ通知
 #   (再通知は 24h クールダウン)。
 #
+# merge_group (ADR 0042 — Merge Queue。有効化は needs-human #269):
+#   queue が作る一時 branch にも同じ判定で status を貼る (queue の required check は
+#   merge group の head SHA を見るため、ここが無いと queue の PR は永遠に pending)。
+#   判定材料は head_ref から解決した対象 PR。PR を解決できないときは failure を貼る
+#   (安全側 — 静かに通さない)。pm-accept は「実装差分が不変の main 追随」なら
+#   引き継がれる (check.py / ADR 0042 D1)。
+#   **merge_group の checkout は queue の一時 branch = PR が改変したコードを含む**
+#   ため、gate-pr と同じ理由で特権を渡せない — この job は default branch の
+#   信頼版スクリプトだけを実行し、権限は statuses:write のみ (マージは queue が
+#   実行するので contents:write は不要 / ADR 0042 D3・D4)。
+#
 # 注意: issue_comment / schedule トリガーは main に入った版でしか発火しない。
 #       コメント後の再評価が要るときは **PR に任意のコメントを 1 本投稿する**
 #       (issue_comment で gate-trusted が再評価する)。workflow_dispatch は置かない —
@@ -43,6 +54,8 @@ name: review-gate
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested] # merge queue (ADR 0042)。queue 有効化は needs-human #269
   issue_comment:
     types: [created, edited]
   pull_request_review:
@@ -51,10 +64,11 @@ on:
     - cron: "*/30 * * * *" # advisory sweep (ADR 0038 / PR #238 P1)
 
 # 同じ PR への run を直列化する (2 重投稿レースの防御 a / PR #238 P2)。
+# merge_group は head SHA ごとに一意 (group 内の他 PR と混ざらない)。
 # schedule は run_id で group が一意になり直列化されない —
 # そちらは check.py の投稿直前再フェッチ確認 (防御 b) が塞ぐ。
 concurrency:
-  group: review-gate-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  group: review-gate-${{ github.event.pull_request.number || github.event.issue.number || github.event.merge_group.head_sha || github.run_id }}
   cancel-in-progress: false
 
 # 権限の分離 (Codex P1 / PR #258): pull_request イベントの run は **workflow 定義も
@@ -140,6 +154,32 @@ jobs:
           AUTO_DEPLOY_ENABLED: ${{ vars.AUTO_DEPLOY_ENABLED }}
           PR_NUMBER: ${{ github.event.issue.number }}
         run: python3 cicd/scripts/review-gate/check.py "$PR_NUMBER"
+
+  # merge queue の一時 branch へ status を貼る (ADR 0042)。判定材料は head_ref から
+  # 解決した対象 PR。**queue ref のコードは checkout しない** — 信頼版 (default
+  # branch) のスクリプトだけを実行する (判定材料は全て API 経由なので queue ref の
+  # 作業ツリーは不要 / ADR 0042 D3)。
+  # 権限は statuses:write のみ: advisory は投稿しない (PR 側イベント / sweep が持つ)、
+  # マージは queue が実行する (contents:write を持たない = 二重執行にしない / D4)。
+  gate-merge-group:
+    name: マージの門を判定 (merge_group / main のコードで実行)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'merge_group'
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # queue の一時 branch (= PR 由来コード) ではなく信頼版を明示 (ADR 0042 D3)
+          ref: ${{ github.event.repository.default_branch }}
+      - name: 判定して commit status を貼る (merge_group)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEW_GATE_REQUIRE_CODEX: ${{ vars.REVIEW_GATE_REQUIRE_CODEX }}
+          MERGE_GROUP_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: python3 cicd/scripts/review-gate/check.py --merge-group
 
   # イベントが来ない PR の advisory・マージ執行・ストール検知を拾う
   # (ADR 0038 / PR #238 P1、ADR 0040 D1 / #253)。schedule も定義・checkout とも
