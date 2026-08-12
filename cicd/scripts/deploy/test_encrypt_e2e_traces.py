@@ -42,6 +42,8 @@ for a in "$@"; do
     if grep -q 'PGP-CIPHERTEXT' "$target" 2>/dev/null; then
       echo "# off=0 ctb=85 tag=1 hlen=3 plen=524"
       echo ":pubkey enc packet: version 3, algo 1, keyid DEADBEEFDEADBEEF"
+      # 実データのパケットは「切り詰められていない」ときだけ出る (実 gpg と同じ)
+      grep -q 'DATA' "$target" 2>/dev/null && echo ":aead encrypted packet: cipher=9 aead=2 cb=16"
     fi
     exit "${STUB_LIST_PACKETS_RC:-2}"
   fi
@@ -54,7 +56,8 @@ for a in "$@"; do
   prev="$a"
 done
 case "${STUB_MODE:-ok}" in
-  ok)        printf 'PGP-CIPHERTEXT' > "$out"; exit 0 ;;
+  ok)        printf 'PGP-CIPHERTEXT+DATA' > "$out"; exit 0 ;;
+  truncated) printf 'PGP-CIPHERTEXT' > "$out"; exit 0 ;;  # ← PKESK だけの部分書き込み
   fail)      exit 2 ;;
   empty)     : > "$out"; exit 0 ;;   # ← rc=0 なのに中身が空 (2026-08-12 に踏んだ失敗)
   plaintext) cp "${!#}" "$out"; exit 0 ;;  # ← 暗号化せず平文を置く最悪ケース
@@ -158,6 +161,26 @@ def test_単体_検証に落ちたファイルはディスクに残さない(tmp
     env["STUB_MODE"] = "plaintext"
     r = _run(tmp_path, key, env)
     assert r.returncode == 1
+    leftovers = list((tmp_path / "out").glob("*")) if (tmp_path / "out").exists() else []
+    assert leftovers == [], f"検証に落ちたファイルが残っている: {leftovers}"
+
+
+def test_単体_PKESK_だけに切り詰められた暗号文は落とす(tmp_path: Path):
+    """Codex P2 (PR #300) の回帰テスト。実鍵でも再現を確認済み。
+
+    暗号文を先頭のセッション鍵パケットだけに切り詰めても `gpg --list-packets` は
+    rc=0 で `:pubkey enc packet:` を出す。セッション鍵パケットだけを見る検査は
+    **復号不能な部分書き込みを通してしまう**。
+
+    無いと何が静かに通るか: 「暗号化済み」として artifact に上がるが、いざ調査
+    しようとすると復号できない。証拠が無いことに気づくのは必要になった瞬間で、
+    しかも元の trace は既に消えている。
+    """
+    key, env = _setup(tmp_path)
+    env["STUB_MODE"] = "truncated"
+    r = _run(tmp_path, key, env)
+    assert r.returncode == 1, "切り詰められた暗号文を正常扱いしている"
+    assert "OpenPGP" in r.stdout
     leftovers = list((tmp_path / "out").glob("*")) if (tmp_path / "out").exists() else []
     assert leftovers == [], f"検証に落ちたファイルが残っている: {leftovers}"
 

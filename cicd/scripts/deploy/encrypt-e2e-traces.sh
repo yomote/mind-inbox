@@ -63,10 +63,18 @@ for t in "${traces[@]}"; do
   # (`decryption failed: No secret key`)。rc を見る実装は本番で 100% 落ち、trace が
   # 永久に上がらない。2026-08-12 に実鍵で踏んで気づいた。
   #
-  # 代わりに stdout のパケットダンプを見る。`:pubkey enc packet:` はロケールに
-  # 依存せず、平文ファイルに対しては 1 行も出ない (実測で確認済み)。
+  # 代わりに stdout のパケットダンプを見る。パケット名はロケールに依存せず、
+  # 平文ファイルに対しては 1 行も出ない (実測で確認済み)。
+  #
+  # **セッション鍵パケット (`:pubkey enc packet:`) だけを見てはいけない** — 暗号文を
+  # 先頭の PKESK だけに切り詰めても `--list-packets` は rc=0 でその 1 行を出すため、
+  # **復号不能な部分書き込みが検査を通ってしまう** (Codex P2 / 実鍵で再現済み)。
+  # 実データのパケット (新しい gpg は `:aead encrypted packet:` / 旧 cipher は
+  # `:encrypted data packet:`) の存在まで確認する。
   packets="$(gpg --batch --list-packets "$out" 2>/dev/null || true)"
-  if [ ! -s "$out" ] || ! printf '%s' "$packets" | grep -q ':pubkey enc packet:'; then
+  if [ ! -s "$out" ] \
+     || ! printf '%s' "$packets" | grep -q ':pubkey enc packet:' \
+     || ! printf '%s' "$packets" | grep -qE ':(aead encrypted packet|encrypted data packet):'; then
     echo "::error::出力が OpenPGP メッセージになっていません: $out"
     # **検証に落ちたファイルを残さない。** 残すと、後続の upload ステップが
     # `hashFiles` で「.gpg が 1 つでもあれば真」と判定して部分成果物を公開しうる
