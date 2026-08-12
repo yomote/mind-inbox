@@ -363,6 +363,26 @@ param appSubnetPrefix string = '10.10.20.0/24'
 @description('Log Analytics workspace name')
 param lawName string = 'law-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-ops'
 
+// -------------------- 監査ログのコスト境界 (#313 / ADR 0046 Phase 3) --------------------
+// Log Analytics は「取り込んだ GB」で課金される。無料枠は **請求アカウントあたり月 5 GB**
+// (Analytics Logs) と **31 日ぶんの保持** の 2 つで、どちらも超えた瞬間から課金が始まる。
+// 出典: https://azure.microsoft.com/en-us/pricing/details/monitor/ ("The first 5 GB/month per
+// billing account in this tier are free." / "31 days – data ingested into Analytics Logs")
+// および https://learn.microsoft.com/en-us/azure/azure-monitor/logs/cost-logs
+//
+// ADR 0013 の「追加課金ゼロ」を**設定の善意ではなく構造**で守るため、ここでは 2 つ効かせる:
+//   1. 保持 30 日 (< 31 日) — 保持料金の発生条件そのものを満たさない
+//   2. 取り込みの日次上限 (workspaceCapping) — 想定外の増加を Azure 側で止める
+// 下限 30 は PerGB2018 のワークスペース保持設定の最小値 (30〜730 日)。上限 31 は課金の境界。
+// つまり指定できるのは 30 か 31 の 2 択で、どちらでも保持課金は発生しない。
+@minValue(30)
+@maxValue(31)
+@description('Log Analytics の保持日数。**31 日までは Analytics Logs の取り込み料金に含まれ、保持の追加課金が発生しない** (32 日目から従量課金)。上限を 31 に固定しているのは「知らないうちに保持課金が乗る」経路を塞ぐため。')
+param lawRetentionInDays int = 30
+
+@description('Log Analytics の日次取り込み上限 (GB/日)。Bicep に小数リテラルが無いため文字列で受けて json() で数値化する。既定 0.15 GB/日 = 31 日で約 4.65 GB となり、無料枠 5 GB/月 の内側で頭打ちになる (上限超過分は捨てられるので課金されない)。実測値の 20 倍以上の余裕があり通常運転では当たらない — これは「日常のコスト調整」ではなく**暴走時のブレーカー**。無効化するなら -1 (無制限)。ARM の最小値は 0.023。')
+param lawDailyQuotaGb string = '0.15'
+
 @description('Provision the Azure SQL stack (SQL Server/DB + admin Key Vault + Private Endpoint/DNS/VNet link + diagnostics). Default false: v1 はアプリが SQL を一切参照せず in-memory のみで動く (ADR 0013)。永続化が要る Phase 2 (Redis + Cosmos) で必要になれば true にする。')
 param enableSql bool = false
 
@@ -399,12 +419,18 @@ resource law 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: lawName
   location: location
   properties: {
-    retentionInDays: 30
+    // 31 日以内 = 保持料金ゼロ (param 定義箇所のコメント参照)。
+    retentionInDays: lawRetentionInDays
     features: {
       enableLogAccessUsingOnlyResourcePermissions: true
     }
     sku: {
       name: 'PerGB2018'
+    }
+    // 取り込みのブレーカー。ここに当たると当日ぶんの収集が止まる = 課金ではなく可視性を失う。
+    // 「監視が止まる」より「請求が跳ねる」方が痛い、という ADR 0013 の優先順位に従う。
+    workspaceCapping: {
+      dailyQuotaGb: json(lawDailyQuotaGb)
     }
   }
 }
@@ -593,6 +619,10 @@ resource sqlPeDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGro
 //   az monitor diagnostic-settings categories list --resource <resourceId> -o table
 //
 // Below is a SAFE skeleton: enable a few typical categories once you confirm names.
+//
+// NOTE: enableSql=false が既定なので**この設定は一度もデプロイされていない**。実際に効いている
+// 監査ログはファイル後方の「監査ログ / 診断設定 (#313 / ADR 0046 Phase 3)」セクション
+// (diagCosmosAudit / diagFunctionApp) — カテゴリ選択とコストの根拠はそちらに書いてある。
 
 resource diagSqlServer 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (enableSql) {
   name: 'diag-${sqlServerName}'
@@ -1406,6 +1436,93 @@ resource cosmosDataRoleAssignmentAiAgent 'Microsoft.DocumentDB/databaseAccounts/
   }
 ]
 
+// -------------------- 監査ログ / 診断設定 (#313 / ADR 0046 Phase 3) --------------------
+// 動機: このプロダクトが Cosmos に置いているのは「ユーザーのモヤモヤ」= メンタルヘルスに
+// 近い個人の悩みで、security-rubric.md は PII 以上の慎重さを求めている。その保管先は
+// disableLocalAuth + Entra RBAC (ADR 0030 D3) の 1 層で守られているが、**アクセスの記録が
+// 1 本も無かった** ため、事故が起きても「何が読まれたか」を答えられなかった。
+//
+// 設計方針は「全部 on」ではなく **監査・認可に効くカテゴリだけ**。Log Analytics は
+// 取り込み GB 課金なので、カテゴリ選択がそのままコスト設計になる (無料枠は lawDailyQuotaGb /
+// lawRetentionInDays の定義箇所参照)。
+//
+// 選ばなかったものと理由 (再検討する人がゼロから調べ直さずに済むよう明示する):
+//   - **metrics (AllMetrics)**: プラットフォームメトリックは Azure Monitor の metrics ストアで
+//     既に**無料**。診断設定で LAW に流すと同じ値に取り込み課金が乗るだけで、監査の情報量は増えない
+//   - **Cosmos QueryRuntimeStatistics / PartitionKey* **: 性能チューニング用。誰が何を読んだかは
+//     DataPlaneRequests 側にあり、責任範囲が重なる (ADR 0046「2 つが同じものを吠えると読まれなくなる」)
+//   - **Cosmos DataPlaneRequests - Aggregated 5/15 Min**: 集計済みで個別リクエストを追えないため
+//     監査に使えない。加えて "Costs to export: Yes" のカテゴリ
+//   - **Cosmos MongoRequests / CassandraRequests / GremlinRequests / TableApiRequests**: API 違い
+//     (このアカウントは NoSQL / GlobalDocumentDB)。1 行も出ない
+//   - **Container Apps (ai-agent / voicevox / vv-wrapper)**: 既に CAE の appLogsConfiguration が
+//     console / system ログを**この同じ LAW へ送っている**。診断設定を足すと同じログが二重に
+//     取り込まれ、監査の情報量は増えずコストだけ倍になる。認証の門 (ADR 0017) の 401 は
+//     どの診断カテゴリにも現れないので、ここで拾えるものは無い
+//   - **Storage (func 用ストレージ)**: StorageRead/Write/Delete は Functions ランタイムの
+//     lease/heartbeat で常時大量に出るうえ、この口座に入っているのは**ランタイムの作業領域だけ**
+//     (ユーザーデータは全て Cosmos)。守る対象が無いところに最大の取り込み量を払うことになる
+//   - **Function App の AppServiceHTTPLogs / AppServiceAuthenticationLogs**: 監査価値は高いが
+//     **Linux Consumption (Y1) では出力されない** (AppServiceAuthenticationLogs は "Costs to
+//     export: Yes" でもある)。EasyAuth の認証記録が要るなら plan の変更が前提になるので、
+//     ここでは扱わず Issue に残す判断
+//
+// なお Cosmos の control plane 監査は本来 disableKeyBasedMetadataWriteAccess が前提だが、
+// このアカウントは disableLocalAuth: true でキー経路自体が存在しない (ADR 0030 D3) ため
+// 追加の設定は要らない。
+@description('診断設定 (監査ログ) を作る。Log Analytics の取り込みは無料枠 5 GB/月 の内側に収まる見積もり (#313) だが、課金が疑われたときに宣言ごと落とせるよう flag を残す。')
+param enableDiagnostics bool = true
+
+@description('Cosmos の DataPlaneRequests (1 リクエスト 1 行) を記録する。**「何が読まれたか」に答えられる唯一のカテゴリ**なので既定 true。取り込み量が最も大きいカテゴリでもあるため、ここだけ独立に落とせるようにしてある (落としても ControlPlaneRequests は残る)。')
+param enableCosmosDataPlaneAudit bool = true
+
+// Cosmos: 機微データの保管先。ここが本命。
+// logAnalyticsDestinationType: 'Dedicated' は AzureDiagnostics 共用テーブルではなく
+// リソース固有テーブル (CDBDataPlaneRequests / CDBControlPlaneRequests) へ書く指定。
+// 列がスキーマに合うぶんデータフットプリントが小さくなり、取り込み・保持の両方が安くなる。
+resource diagCosmosAudit 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (enableDiagnostics && enableCosmos) {
+  name: 'diag-audit-${cosmosAccountName}'
+  scope: cosmosAccount
+  properties: {
+    workspaceId: law.id
+    logAnalyticsDestinationType: 'Dedicated'
+    logs: [
+      // 設定変更の追跡。ロール割り当て / ファイアウォール / バックアップ方針 / アカウント削除まで
+      // 拾う。デプロイのたびにしか出ないので量は小さく、監査価値は最も高い。
+      {
+        category: 'ControlPlaneRequests'
+        enabled: true
+      }
+      // データ面のアクセス記録。read/write のどちらも 1 行として残るため、
+      // 「事故のとき何が読まれたか」に答えられるのはここだけ。
+      {
+        category: 'DataPlaneRequests'
+        enabled: enableCosmosDataPlaneAudit
+      }
+    ]
+    // metrics は意図的に空 (上のコメント参照)。
+    metrics: []
+  }
+}
+
+// Function App (BFF): Linux Consumption で実際に出力される唯一のカテゴリ。
+// 実行されたファンクションと例外が残るので、Cosmos 側の記録と突き合わせて
+// 「どのリクエスト経由で読まれたか」を辿れる。
+resource diagFunctionApp 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (enableDiagnostics) {
+  name: 'diag-audit-${functionAppName}'
+  scope: functionApp
+  properties: {
+    workspaceId: law.id
+    logs: [
+      {
+        category: 'FunctionAppLogs'
+        enabled: true
+      }
+    ]
+    metrics: []
+  }
+}
+
 // -------------------- Static Web Apps (frontend) --------------------
 var staticSiteRepoProps = (staticSiteRepositoryUrl != '')
   ? {
@@ -1773,3 +1890,12 @@ output cosmosLocation string = enableCosmos ? cosmosLocation : ''
 // (枠が消費済みなら enableFreeTier: true の作成は失敗するため / ADR 0030 D2)。
 output cosmosFreeTierEnabled bool = enableCosmos && enableCosmosFreeTier && !cosmosServerless
 output cosmosServerless bool = enableCosmos && cosmosServerless
+
+// 監査ログ (#313 / ADR 0046 Phase 3)。「入れたつもり」を避けるため、何が実際に
+// 有効なのかをデプロイ出力に残す (CLAUDE.md:「動いたら痕跡がリポジトリに残ること」)。
+output diagnosticsEnabled bool = enableDiagnostics
+output cosmosAuditLogsEnabled bool = enableDiagnostics && enableCosmos
+output cosmosDataPlaneAuditEnabled bool = enableDiagnostics && enableCosmos && enableCosmosDataPlaneAudit
+output logAnalyticsWorkspaceName string = lawName
+output logAnalyticsRetentionInDays int = lawRetentionInDays
+output logAnalyticsDailyQuotaGb string = lawDailyQuotaGb
