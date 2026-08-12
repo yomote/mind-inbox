@@ -41,7 +41,7 @@ Technical Story: 2026-08-12、[#293](https://github.com/yomote/mind-inbox/issues
 - **Option A: 何も上げない (現状復帰)** — 安全だが、1 日空転した状態に戻る
 - **Option B: スクラブしてから平文で上げる** — 組み込みが無いため一般的な回避策だが、失敗が公開側に倒れる
 - **Option C: artifact のアクセスを制限する** — 業界標準だが **public リポジトリでは選べない**
-- **Option D: 公開鍵で暗号化して上げ、秘密鍵は管理系 RG の Key Vault に置いて device-code で取る** (採用)
+- **Option D: 公開鍵で暗号化して上げ、秘密鍵は持続層 RG の Key Vault に非エクスポートで置き、復号は Key Vault の中で行う** (採用 / 2026-08-12 の debrief で「鍵を取り出して手元で復号」から改訂)
 - **Option E: 対称鍵 (GitHub Secrets のパスフレーズ)** — GitHub Secrets は**入れた値を画面から読み出せない**ため、控えを失うと過去の artifact が永久に開けない
 
 ## Decision Outcome
@@ -57,14 +57,19 @@ Chosen option: **"Option D"**。
 - **D5 秘密鍵は持続層 RG の Key Vault に「鍵オブジェクト」として非エクスポートで置き、復号は Key Vault の中で行う** (2026-08-12 の debrief で PO 裁定により改訂)。**エージェントは復号してよい。ただし鍵そのものは一度も Key Vault の外に出ない。**
   - **やり方**: artifact に添えた wrap 済み AES 鍵を `az keyvault key decrypt` で Key Vault に開かせ、返ってきた AES 鍵で手元のデータを復号する。認証は [ADR 0006](0006-azure-access-via-device-code.md) の device-code (短命トークン)
   - **なぜ「鍵を取り出して手元で復号」にしないか**: `gpg --import` 相当をやると秘密鍵がサンドボックスのディスクに落ち、以降そのセッションの任意コードが読める。**一度読み出せばセッションの外へ持ち出せる**ため、鍵を交換するまでの**全 artifact** が復号可能になる。「サンドボックスは使い捨てだから被害は限定的」は成り立たない
-  - **非エクスポート方式ならこの穴が構造的に無い** — エージェントが持てるのは「1 つの artifact を開いた結果」だけで、次の artifact を開くにはまた Key Vault に頼む (= device-code の認証が要る)
+  - **非エクスポート方式で消える穴 / 消えない穴** (2026-08-12 の Codex P1 指摘で訂正)
+    - **消える**: 鍵そのものが持ち出せない。侵害されても**再利用可能な鍵は残らず**、az のトークンが切れれば復号能力も消える
+    - **消えない**: `az login` の資格情報は**セッション内にキャッシュされる**ため、そのトークンの有効期間中は同じセッションの任意コードが `az keyvault key decrypt` を**何度でも**呼べる。露出は「1 artifact 単位」ではなく**セッション単位**で、保持中 (14 日) の wrapped key が全部対象になりうる
+    - **本当に 1 件ごとに絞りたい場合**は、ブローカー (1 件だけ復号して結果を返す仲介) か JIT 権限が要る。**本 ADR では採らない** — セッション単位の露出を受け入れる
   - **GitHub Secrets を選ばない理由**: workflow が復号できても、**public リポジトリでは Actions のログが公開**なので復号結果の出力先が無い
   - **環境変数を選ばない理由**: [ADR 0031](0031-agent-reaches-outside-via-github-actions.md) の「サンドボックスに長期クレデンシャルを置かない」に反する。加えて Claude Code の公式ドキュメントが「**cloud environments have no dedicated secrets store, so don't add API keys or other credentials**」と明示している ([Configure cloud environments](https://code.claude.com/docs/en/cloud-environments))
   - **置き場所は持続層 RG** — 環境 (`rg-{env}-mind-inbox`) の中に置くと `cleanup-env.sh` の RG 削除に巻き込まれる ([#302](https://github.com/yomote/mind-inbox/issues/302) / [ADR 0046](0046-environment-rebuildable-from-declaration.md) D1 が層の実体を定義)
   - **#302 が完了するまでの暫定**: 持続層 RG がまだ無いため、それまでは秘密鍵を PO の手元に置き、**復号は PO のみ**。2026-08-12 の debrief で「Key Vault だけ先に作る」案は**採らない**と PO が判断したため、**エージェント復号が使えるようになるのは #302 の完了時**
-  - **移行**: 既に GPG 形式で残っている artifact (例: `e2e-live-trace-31571455835`) は**現行の GPG 鍵で PO が復号する**。封筒暗号への切り替えは新規分から
+  - **移行**: 既に GPG 形式で残っている artifact (例: `e2e-live-trace-31571455835`) は**現行の GPG 鍵で PO が復号する**。封筒暗号への切り替えは新規分から。切り替え時は **D7 の許可拡張子 (`.gpg` → `.enc`) と `deploy.yml` の upload path を同じ PR で替える** (片方だけだと成果物が上がらない)
 - **D6 公開鍵が無い間は trace を残さず、warning を出して続行する** — 鍵の準備前に平文で上がる事故を構造的に防ぐ (fail closed)。「鍵が無いから黙って何もしない」ではなく**必ず 1 行喋る**
-- **D7 暗号化の結果を機械で検証する** — 出力ディレクトリに `.gpg` 以外のファイルが 1 つでもあれば **run を落とす**。「暗号化したつもり」で平文が混ざる事故を、成功パスの中で潰す
+- **D7 暗号化の結果を機械で検証する** — 出力ディレクトリに**許可された拡張子以外のファイルが 1 つでもあれば run を落とす**。「暗号化したつもり」で平文が混ざる事故を、成功パスの中で潰す
+  - **封筒暗号でも成果物は 1 ファイルに束ねる** (2026-08-12 の Codex P2 指摘で明確化) — wrapped AES 鍵・nonce・暗号文を**単一の `*.enc` に含める**。別ファイルに分けると (a) upload の glob から漏れて復号不能になる (b) 許可拡張子を増やして D7 の検査が緩む、のどちらかが起きる
+  - したがって**許可拡張子は移行前が `.gpg`、移行後が `.enc` の 1 種類だけ**。`deploy.yml` の upload path (`e2e-trace-enc/**/*.gpg`) も同時に `.enc` へ替える。**片方だけ替えると成果物が上がらない**
 - **D8 `sources: false` で spec を trace に同梱しない** — 実測で trace は**テストのソースコードを含んでいた**。spec にハードコードされた秘密がそれだけで載るため、live 設定では落とす
 
 ### 暗号方式 — gpg から封筒暗号へ (2026-08-12 改訂)
@@ -88,14 +93,15 @@ Chosen option: **"Option D"**。
 
 > Anyone who uses the environment can read the values, and **cloud environments have no dedicated secrets store, so don't add API keys or other credentials.**
 
-独立した 2 つの情報源が同じ結論だったため、**D5 を書き換えて衝突を解消した**。現在の D5 は:
+独立した 2 つの情報源が同じ結論だったため、**D5 を書き換えて衝突を解消した**。さらに 2026-08-12 の debrief で「鍵を取り出さず Key Vault の中で復号する」形に改訂した。**現在の D5 は**:
 
-- **保存された秘密を増やさない** — 鍵は Key Vault にあり、取得は PO の管理環境で device-code の短命トークン ([ADR 0006](0006-azure-access-via-device-code.md))
-- **サンドボックスに長期クレデンシャルを置かない** — 環境変数にも GitHub Secrets にも置かず、**鍵に触る操作 (生成・ローテーション・復号) をエージェント環境で行わない**
+- **保存された秘密を増やさない** — 鍵は Key Vault の鍵オブジェクトにあり、認証は device-code の短命トークン ([ADR 0006](0006-azure-access-via-device-code.md))
+- **サンドボックスに長期クレデンシャルを置かない** — 環境変数にも GitHub Secrets にも置かず、**秘密鍵そのものはエージェント環境に一度も現れない**
+- **ただし復号はエージェントがしてよい** — `az keyvault key decrypt` を呼ぶだけで、鍵は Key Vault の外に出ない。**旧版の「鍵に触る操作をエージェント環境で行わない」は、この形に置き換わった**
 
-つまり 0031 を supersede する必要はなく、**0006 (device-code) と 0009 (no stored secret) の延長線上に収まった**。
+つまり 0031 を supersede する必要はなく、**0006 (device-code) と 0009 (no stored secret) の延長線上に収まったまま、driver「エージェントがボトルネックなく調査できること」も満たせる**。
 
-**そして 2026-08-12 の debrief で、エージェント復号も両立できることが確認された。** 鍵を取り出さず Key Vault の中で復号すれば、「サンドボックスに長期クレデンシャルを置かない」を守ったまま driver「エージェントがボトルネックなく調査できること」を満たせる (D5)。
+**残る露出はセッション単位** — 認証済みセッションが侵害されれば、トークンの有効期間中は保持中の wrapped key を何度でも開ける (D5 の「消えない」参照)。鍵が持ち出せる旧案との差は「**再利用可能な鍵が残らない / 時間で切れる**」ことで、ゼロではない。
 
 ### 残る前提
 
@@ -118,7 +124,8 @@ Chosen option: **"Option D"**。
 - **秘密鍵を失うと過去の暗号化 artifact は開けない** — ただし artifact の保持は 14 日なので損失は限定的。鍵の再生成は公開鍵を差し替えるだけ
 - **#302 が終わるまでは PO がボトルネックになる** — その間エージェントは復号できない。**[#293](https://github.com/yomote/mind-inbox/issues/293) が実例で、artifact の保持期限 (8/26) が実質の締切**になっている。なお鍵が漏れた場合に読めるのは「dev の BFF を 1 時間叩けるトークンを含む trace」まで (トークンの audience は BFF アプリで、Azure Resource Manager ではない)
 - **封筒暗号は自前で組み合わせる** — 標準の AES + RSA-OAEP を使うので独自アルゴリズムではないが、実装ミスの余地はある。往復テスト (暗号化 → 復号 → 一致) を機械で置くこと
-- **復号のたびに device-code の承認が要る** — 非エクスポート方式の代償。「毎回 PO が復号する」よりは軽いが、完全な無人化ではない
+- **露出はセッション単位で残る** — 非エクスポート方式でも、認証済みセッションが侵害されればトークン有効期間中は保持中の wrapped key を何度でも開ける。「1 artifact ごとに承認」ではない (2026-08-12 の Codex P1 で訂正)。**再利用可能な鍵が残らず時間で切れる**点が旧案との差
+- **復号には device-code の認証が要る** — 完全な無人化ではない。セッションを跨ぐたびに PO の承認が要る
 - 暗号化された artifact は**人間がそのままでは中身を見られない** — 復号手順を Runbook に置く必要がある
 
 ### エージェント復号をどう扱ったか (経緯)
