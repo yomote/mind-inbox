@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # Deploy AI Agent to Azure Container Apps.
 #
-# 1. az containerapp      — Container App を作成 or 更新（ghcr の事前ビルド image を差し替え）
-# 2. az role assignment   — Managed Identity に OpenAI User を付与
+# 1. az containerapp — Container App を作成 or 更新（ghcr の事前ビルド image を差し替え）
+# 2. Managed Identity が付いていることの確認（**ロール付与はしない**）
+#
+# ロール割り当ての持ち主は bicep 1 本 (#261 / #297)。このスクリプトは `az role assignment create`
+# を叩かない — シェルと bicep の二重宣言は、名前の違う同一 (principal+role+scope) を生んで
+# ARM の RoleAssignmentExists を招き、bootstrap ごと落とす (#262)。MI に OpenAI User が
+# 付くのは bootstrap-core.bicep の aiAgentOpenAiRoleAssignment。
 #
 # image は build-images.yml が main マージ時に ghcr へ push 済み（#67 / ADR 0013）。
 # このスクリプトはビルドしない（`az acr build` 廃止）: 既存タグを Container App に差し替えるだけ。
@@ -24,9 +29,6 @@ TARGET_PORT="${TARGET_PORT:-8000}"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-ghcr.io}"
 IMAGE_REPO="${IMAGE_REPO:-yomote/mind-inbox}"
 
-# Role definition IDs (built-in)
-ROLE_OPENAI_USER="5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"
-
 need() {
   command -v "$1" >/dev/null 2>&1 || { echo "ERROR: missing command: $1" >&2; exit 1; }
 }
@@ -46,7 +48,6 @@ CA_NAME="${CA_NAME:-$(_val aiAgentContainerAppName)}"
 CAE_NAME="${CAE_NAME:-$(_val aiAgentContainerAppsEnvironmentName)}"
 OPENAI_ENDPOINT="${OPENAI_ENDPOINT:-$(_val openAiEndpoint)}"
 OPENAI_DEPLOYMENT="${OPENAI_DEPLOYMENT:-$(_val openAiDeploymentName)}"
-OPENAI_ACCOUNT_NAME="${OPENAI_ACCOUNT_NAME:-$(_val openAiAccountName)}"
 
 if [[ -z "$CA_NAME" ]]; then
   echo "ERROR: Container App name not found. Re-run bootstrap with enableAiAgentAca=true, or set CA_NAME=<name>." >&2; exit 1
@@ -112,9 +113,13 @@ else
     --query 'properties.configuration.ingress.fqdn' -o tsv)"
 fi
 
-# ── Role assignments ──────────────────────────────────────────────────────────
+# ── Managed Identity (確認のみ / 付与は bicep) ────────────────────────────────
+# ここでロールは付けない。OpenAI User の割り当ては bootstrap-core.bicep が宣言する
+# (#261)。シェルからも作ると別名の同一割り当てになり、bicep 適用が
+# RoleAssignmentExists で落ちる (#262)。
+# MI が付いていないと bicep 側の割り当てが結び付く相手を失うので、ここは確認だけする。
 echo ""
-echo "=== Assigning roles ==="
+echo "=== Verifying managed identity ==="
 
 PRINCIPAL_ID="$(az containerapp show -g "$RG" -n "$CA_NAME" \
   --query 'identity.principalId' -o tsv)"
@@ -124,26 +129,7 @@ if [[ -z "$PRINCIPAL_ID" ]]; then
   exit 1
 fi
 echo "  Principal ID: $PRINCIPAL_ID"
-
-_assign_role() {
-  local role="$1" scope="$2" label="$3"
-  az role assignment create \
-    --assignee-object-id "$PRINCIPAL_ID" \
-    --assignee-principal-type ServicePrincipal \
-    --role "$role" \
-    --scope "$scope" \
-    --output none 2>&1 | grep -v "already exists" || true
-  echo "  $label: done."
-}
-
-if [[ -n "$OPENAI_ACCOUNT_NAME" ]]; then
-  OPENAI_ID="$(az cognitiveservices account show -g "$RG" -n "$OPENAI_ACCOUNT_NAME" --query id -o tsv 2>/dev/null || true)"
-  if [[ -n "$OPENAI_ID" ]]; then
-    _assign_role "$ROLE_OPENAI_USER" "$OPENAI_ID" "Cognitive Services OpenAI User"
-  else
-    echo "  WARNING: OpenAI account '$OPENAI_ACCOUNT_NAME' not found. Skipping OpenAI role." >&2
-  fi
-fi
+echo "  Role assignment (Cognitive Services OpenAI User) は bicep が宣言する — ここでは作らない。"
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
