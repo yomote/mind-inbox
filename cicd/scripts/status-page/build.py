@@ -25,6 +25,8 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 
+import product_status
+
 JST = timezone(timedelta(hours=9))
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 # 既定は隣の watchers.json。テストは環境変数で自前の定義に差し替える —
@@ -76,6 +78,37 @@ def gh_lines(*args: str) -> list[str] | None:
     ) as e:
         print(f"WARN: gh {' '.join(args)} 失敗: {e}", file=sys.stderr)
         return None
+
+
+def gh_objects(*args: str) -> list[dict] | None:
+    """`--paginate` で **1 行 1 オブジェクト** を吐かせ、全ページ分を結合して返す。
+
+    一覧 API (PR / Issue) は per_page の上限を超えると静かに切り捨てられる —
+    `gh()` で 1 ページだけ読むと「51 件目以降が存在しない」ように見える
+    (PR #281 Codex P2)。`--paginate` + `--jq` は**ページごとに** jq を適用するため
+    `[...]` で包むと配列が複数個並んで `json.loads` が落ちる。`.[] | {...}` の形で
+    1 行 1 オブジェクトにして、ここで畳む。
+
+    1 行でも JSON として読めなければ **None (未検証)** にする — 一部だけ黙って
+    捨てると「取れなかった」が「無かった」に化ける。
+    """
+    lines = gh_lines(*args)
+    if lines is None:
+        return None
+    out = []
+    for ln in lines:
+        try:
+            obj = json.loads(ln)
+        except json.JSONDecodeError as e:
+            print(f"WARN: gh {' '.join(args)} の出力を読めません: {e}", file=sys.stderr)
+            return None
+        if not isinstance(obj, dict):
+            print(
+                f"WARN: gh {' '.join(args)} が dict 以外を返しました", file=sys.stderr
+            )
+            return None
+        out.append(obj)
+    return out
 
 
 def parse(ts: str | None) -> datetime | None:
@@ -307,11 +340,14 @@ def pending() -> dict:
         "--jq",
         "[.[] | {n: .number, t: .title}]",
     )
-    prs = gh(
+    # 全ページ取る — 51 件目以降が黙って消えると「main 向け以外の PR」の
+    # 補完元も欠ける (PR #281 Codex P2)
+    prs = gh_objects(
         "api",
-        "repos/{owner}/{repo}/pulls?state=open&per_page=50",
+        "--paginate",
+        "repos/{owner}/{repo}/pulls?state=open&per_page=100",
         "--jq",
-        "[.[] | {n: .number, t: .title, d: .created_at}]",
+        ".[] | {n: .number, t: .title, d: .created_at}",
     )
     proposed = []
     for f in sorted((REPO_ROOT / "docs" / "adr").glob("0*.md")):
@@ -639,41 +675,21 @@ def build(out_dir: pathlib.Path) -> int:
         headline = "全部動いています"
         head_class = "ok"
 
-    def li_pending() -> str:
-        # 想定外の形が返っても**ページごと落とさない**。落ちると gh-pages が
-        # 更新されず、古い緑が残り続けて赤を見落とす。
-        parts = []
-        if not isinstance(pend["needs_human"], list):
-            parts.append(
-                "<li>(未検証: needs-human の Issue を取得できませんでした)</li>"
-            )
-        else:
-            for i in pend["needs_human"]:
-                parts.append(
-                    f'<li><a href="https://github.com/yomote/mind-inbox/issues/{i["n"]}">'
-                    f"#{i['n']}</a> {html.escape(i['t'])}</li>"
-                )
-        for a in pend["proposed"]:
-            parts.append(f"<li>ADR 未裁定: {html.escape(a['title'])}</li>")
-        if not isinstance(pend["prs"], list):
-            parts.append("<li>(未検証: open PR を取得できませんでした)</li>")
-        else:
-            for p in pend["prs"]:
-                parts.append(
-                    f'<li>開いたままの PR: <a href="https://github.com/yomote/mind-inbox/pull/{p["n"]}">'
-                    f"#{p['n']}</a> {html.escape(p['t'])}</li>"
-                )
-        return "\n".join(parts) or "<li>ありません</li>"
+    # プロダクトの現在地 (Issue #280) — 「あなたの番」「開いたままの PR」も
+    # このセクションに畳んだ (needs-human / Proposed ADR は pend から渡す)
+    product = product_status.render(
+        product_status.collect(gh, gh_lines, gh_objects), pend
+    )
 
     page = TEMPLATE.format(
         now=now,
         headline=headline,
         head_class=head_class,
+        product=product,
         broken_rows=rows(broken)
         or '<tr><td colspan="4" class="none">ありません</td></tr>',
         wf_rows=rows(wf),
         rt_rows=rows(rt),
-        pending=li_pending(),
         ux_trend=ux_trend_section(),
     )
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -727,6 +743,16 @@ tr.unknown .detail {{ color:var(--ink-muted); }}
 .chip.avg {{ background:var(--chart-avg); }} .chip.max {{ background:var(--chart-max); }}
 .chip.warnline {{ background:var(--amber); }}
 details {{ margin-top:.6rem; font-size:.85rem; }} summary {{ cursor:pointer; color:var(--ink-muted); }}
+.product {{ background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:.4rem 1.1rem .9rem; }}
+.product h3 {{ font-size:.98rem; color:var(--ink-strong); margin:1.1rem 0 .2rem; }}
+.product h4 {{ font-size:.85rem; color:var(--ink-muted); margin:.4rem 0 .2rem; font-weight:normal; }}
+.product p {{ margin:.25rem 0; font-size:.92rem; }}
+.product ul {{ margin:.2rem 0; }}
+.cols {{ display:flex; flex-wrap:wrap; gap:0 1.5rem; }}
+.cols > div {{ flex:1 1 20rem; min-width:0; }}
+.devwarn {{ border-left:4px solid var(--red); background:var(--red-soft); padding:.5rem .8rem;
+  border-radius:0 6px 6px 0; }}
+.note {{ font-size:.78rem; color:var(--ink-muted); font-weight:normal; }}
 ul {{ padding-left:1.2rem; }} li {{ margin:.3rem 0; font-size:.92rem; }}
 footer {{ margin-top:3rem; font-size:.8rem; color:var(--ink-muted); border-top:1px solid var(--line); padding-top:1rem; }}
 a {{ color:var(--accent); }}
@@ -736,6 +762,8 @@ a {{ color:var(--accent); }}
 <div class="stamp">{now} 時点。GitHub の実データから毎回作り直しています（手で書いている欄はありません）。</div>
 
 <div class="headline {head_class}">{headline}</div>
+
+{product}
 
 <h2>いま壊れているもの</h2>
 <div class="tablewrap"><table>{broken_rows}</table></div>
@@ -752,9 +780,6 @@ a {{ color:var(--accent); }}
 蓄積は <code>data/ux-observations</code> ブランチ (ADR 0041)。</div>
 {ux_trend}
 </div>
-
-<h2>あなたの番</h2>
-<ul>{pending}</ul>
 
 <footer>
 <p><strong>❓ は「動いていない」ではなく「生きているか確かめる方法が無い」です。</strong>
