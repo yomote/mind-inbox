@@ -25,6 +25,7 @@
 | [`review-agents.md`](review-agents.md)                         | リリース PR で独立 judge (security / QA / biz-owner / release) を回す                     |
 | [`ux-probe-judge.md`](ux-probe-judge.md)                       | UX プローブの記録を採点する / 採点 Routine を運用する                                     |
 | [`ops-inspect.md`](ops-inspect.md)                             | サンドボックス外の事実 (Azure の実態 / egress の外) をエージェントが取る                  |
+| [`child-sessions.md`](child-sessions.md)                       | 子セッションを起こす / 追加指示を届ける / 生死を見る / 片付ける (ADR 0048)                |
 | [`github-projects-setup.md`](github-projects-setup.md)         | **退役** — board は再建しない (ADR 0044。地図は `stream:*` ラベル / 見る手段は `/status`) |
 
 ## 新しく書くとき

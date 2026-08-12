@@ -58,7 +58,8 @@ Chosen option: **"Option B"**。`create_session` が通るようになった以�
 
   - **片方の名前だけだと、もう片方の系統で毎回承認プロンプトが出る** — 従来 UUID 名の `list_triggers` 1 個だけが許可されていたのが、承認が飛び続けていた原因
   - **サーバ単位 (`mcp__<server>`) の allow だけでは `delete_trigger` が止まった。** ツール単位で明示して初めてゼロになった (2026-08-12 実測)
-  - **`settings.json` の変更は実行中のセッションには反映されない。** 効くのは次に開くセッションから。「直したのにまだ承認が飛ぶ」の大半はこれ
+  - **`settings.json` の変更は実行中のセッションには反映されない。** 効くのは次に開くセッションから。「直したのにまだ承認が飛ぶ」の大半はこれ。**起動済みの子にも効かない** — 子は clone 時点のブランチの設定を読むので、allow を足したら子を起こし直す
+  - **`mcp__github` もサーバ単位で許可する** (PM ループの主要ツールであり、1 件ずつ承認させると窓口が止まるため)。ただし **PR を経由せずリポジトリを直接書き換える系と、レビューの解決は `ask` に落とす** — `delete_file` / `push_files` / `create_or_update_file` / `resolve_review_thread`。前 3 つは PR とレビューの経路を丸ごと迂回でき、`resolve_review_thread` は CLAUDE.md が「Codex の再レビューが OK を出してから」と定めた判断を機械が先回りできてしまう
 
 - **D5 子の生死は `get_session` の `post_turn_summary` で見る。** `status_category` が `need_input` なら権限待ちで止まっている。**`needs_action` に出るツール名を D4 の allow に足す** のが恒久対応で、その場しのぎで user に承認させない
 
@@ -66,7 +67,9 @@ Chosen option: **"Option B"**。`create_session` が通るようになった以�
 
   **`fire_trigger` による即時 poke は使わない** — API は成功を返すが配送されない。2026-08-12 に親 → 子 (idle) / 子 → 親 / 自己宛の 3 方向で試し、いずれも `last_fired_at` すら付かなかった。**「送信 API が成功した」を「届いた」と読み替えないこと**
 
-- **D7 会話が続く相手には、返信先を必ず明示する。** 送るメッセージに**自分のセッション ID** と「返信は `create_trigger` + `run_once_at` でこの ID に bind して送る」ことを書く。相手は親の ID を知らないので、書かなければ返せない
+- **D7 子 → 親の報告は GitHub (Issue コメント) を既定にする。** 子は `mcp__github__*` を承認プロンプト無しで使え、記録も残る ([ADR 0021](0021-parent-session-as-pm-orchestrator.md) 条項 3・4 と同じ形)。
+
+  **D6 の Routine 経路を子 → 親に使うのは未検証**。仕組みは同じはずだが、2026-08-12 に実測したのは**親 → 子の向きだけ**で、逆向きで成功を確認していない。当てにすると親が返信待ちのまま沈黙する。使う前に実測し、通ったらこの ADR を更新すること (「通ったはず」で規約に書かない)
 
 - **Routine (`create_trigger`) はエージェントから作れる。** ただし**このツールで作った Routine は MCP connector を保存しない** (作成時に warning が出る) ため、発火セッションは Gmail 等の connector ツール無しで動く。connector が要る Routine は claude.ai の web UI から作る
 
@@ -133,6 +136,7 @@ Chosen option: **"Option B"**。`create_session` が通るようになった以�
 | 同じ経路で送った指示を子が**実行**するか | **実行する**。`last_fired_at 14:54:00` → 子が 14:54:16 に受信 → 14:54:26 に [#353 へコメント投稿](https://github.com/yomote/mind-inbox/issues/353#issuecomment-5268488790)。**`disconnected` になっていた子も起き直した** |
 | 子が `mcp__github__*` を持つか | **持つ**。承認プロンプト無しで Issue コメントを投稿できた (子 → 親の恒久的な回収経路になる) |
 | 子が自分のセッション ID を知っているか | 知っている (システムプロンプトのセッションリンクから)。返信先として使える |
+| **子 → 親を `run_once_at` で送る** | **未検証**。この向きは通していない (D7)。子 → 親の既定は Issue コメント |
 
 ## Links
 

@@ -107,7 +107,7 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md) — 永続化は Cosmos DB 1 本に寄せ、BFF の内側だけに置く (Redis は廃止予定のため不採用)
 - [0031](0031-agent-reaches-outside-via-github-actions.md) — サンドボックスの外にある事実は GitHub Actions 経由で取る (その場しのぎの回避策を作らない)
 - [0032](0032-use-case-acceptance-tests-against-real-wiring.md) — ユースケース受け入れテストを「mock を通らない実配線」で持つ (L3-real)
-- [0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) — 子セッションを起動できない環境では、親が subagent で実装を回す (ADR 0021 条項の改訂)
+- [0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) — 子セッションを起動できない環境では、親が subagent で実装を回す (ADR 0021 条項の改訂) — 一部 Superseded by 0048 (前提「`create_session` が弾かれる」は 2026-08-12 に解消。D1 の分配表を 0048 が置き換え)
 - [0034](0034-remove-legacy-session-centric-flow.md) — UC に無い会話中心モデルの残骸 (整理結果 / 行動プラン / 履歴) を撤去する
 - [0035](0035-role-split-across-agents-and-actions.md) — 開発ループの役割を分け、それぞれを「生死が見える場所」に置く (実装 Claude / レビュー Codex / 監視 Actions) — 一部 Superseded by 0040 (D1 の「Routine ゼロ」のみ)
 - [0036](0036-merge-gate-as-required-check-and-pm-cadence.md) — マージの門を required check (review-gate) で機構化し、PM の運転リズムを定める
@@ -121,3 +121,4 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0045](0045-e2e-artifacts-are-secret-by-default.md) — 実環境 E2E の成果物は既定で秘密扱いにし、trace は公開鍵で暗号化して残す (public リポジトリのため artifact のアクセス制限が使えない) — **Proposed**
 - [0046](0046-environment-rebuildable-from-declaration.md) — 環境を「宣言から作り直せるもの」にする — ライフサイクル 3 層分断 / Entra の Graph Bicep 宣言 / 週次プロビジョンテスト (ADR 0013 の「常設」を追補)
 - [0047](0047-security-posture-in-layers-free-tier-first.md) — セキュリティ対策を「無料枠優先 + 責任分担が重ならない層」で段階導入する (public リポジトリの無料枠を先に使い切り、アプリ内側の穴は design-gate 経由で塞ぐ / ADR 0038 の続き) — **Proposed**
+- [0048](0048-child-sessions-are-usable-again-with-a-one-way-poke-channel.md) — 子セッションは再び起動できる — 会話は Routine 経由で片道 1 分なので、分配先は往復の少ない作業に限る (ADR 0033 D1 を置き換え)
