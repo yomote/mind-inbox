@@ -109,10 +109,13 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0032](0032-use-case-acceptance-tests-against-real-wiring.md) — ユースケース受け入れテストを「mock を通らない実配線」で持つ (L3-real)
 - [0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) — 子セッションを起動できない環境では、親が subagent で実装を回す (ADR 0021 条項の改訂)
 - [0034](0034-remove-legacy-session-centric-flow.md) — UC に無い会話中心モデルの残骸 (整理結果 / 行動プラン / 履歴) を撤去する
-- [0035](0035-role-split-across-agents-and-actions.md) — 開発ループの役割を分け、それぞれを「生死が見える場所」に置く (実装 Claude / レビュー Codex / 監視 Actions)
+- [0035](0035-role-split-across-agents-and-actions.md) — 開発ループの役割を分け、それぞれを「生死が見える場所」に置く (実装 Claude / レビュー Codex / 監視 Actions) — 一部 Superseded by 0040 (D1 の「Routine ゼロ」のみ)
 - [0036](0036-merge-gate-as-required-check-and-pm-cadence.md) — マージの門を required check (review-gate) で機構化し、PM の運転リズムを定める
 - [0037](0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md) — 定期評価を「機械計測 = Actions」と「LLM 採点 = PM tick」に分ける (ADR 0035 D1 の残作業)
-- [0038](0038-security-checks-as-mechanized-triggers.md) — セキュリティ検査のトリガーを人の判断から機構へ移す (週次 sweep / PR 自動指名 / リリース judge) — **Proposed**
+- [0038](0038-security-checks-as-mechanized-triggers.md) — セキュリティ検査のトリガーを人の判断から機構へ移す (週次 sweep / PR 自動指名 / リリース judge)
 - [0039](0039-dialogue-live-preview-and-character.md) — 対話画面を「キャラと話すと右で困りごとが形になる」構成にする (読み取り専用プレビュー + 独自マスコット)
-- [0040](0040-project-continuity-three-layers.md) — プロジェクト継続性を 3 層 (機構化された完遂 / 当番 PM / 窓口 PM) で保証する — **Proposed**
+- [0040](0040-project-continuity-three-layers.md) — プロジェクト継続性を 3 層 (機構化された完遂 / 当番 PM / 窓口 PM) で保証する
 - [0041](0041-ux-observations-on-git-data-branch.md) — UX 観測データの蓄積先を Issue コメントから git データブランチへ移す — **Proposed**
+- [0042](0042-pm-accept-carryover-and-merge-queue.md) — pm-accept は「実装差分が不変の main 追随」に引き継ぎ、直列化は Merge Queue に任せる (0036 の運用改訂) — **Proposed**
+- [0044](0044-stream-lanes-as-the-project-map.md) — プロジェクトの地図を固定レーン (stream ラベル) で持ち、Projects board を正式に畳む (ADR 0011 の描画面を改訂 / ADR 0043 を補完)
+- [0045](0045-e2e-artifacts-are-secret-by-default.md) — 実環境 E2E の成果物は既定で秘密扱いにし、trace は公開鍵で暗号化して残す (public リポジトリのため artifact のアクセス制限が使えない) — **Proposed**

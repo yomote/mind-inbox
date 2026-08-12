@@ -59,8 +59,16 @@ elif "/files" in url:
     print("apps/frontend/src/App.tsx")
     print("docs/x.md")
 elif "/runs" in url:
-    emit([{"id": 1, "c": "success", "s": "completed", "t": "2099-01-01T00:00:00Z",
-           "sha": "abc1234def5678", "e": "push", "u": "https://example.test/run"}])
+    # event=schedule で絞った照会にだけ失敗 run を返す — 「イベント種別を絞らない
+    # と、schedule の連続失敗が直後の PR run の成功に隠れる」(#258) を再現する。
+    # フィルタ無しの照会 (従来の watcher) は success のまま。
+    if "event=schedule" in url:
+        emit([{"id": 2, "c": "failure", "s": "completed", "t": "2099-01-01T00:00:00Z",
+               "sha": "abc1234def5678", "e": "schedule",
+               "u": "https://example.test/sweep-run"}])
+    else:
+        emit([{"id": 1, "c": "success", "s": "completed", "t": "2099-01-01T00:00:00Z",
+               "sha": "abc1234def5678", "e": "push", "u": "https://example.test/run"}])
 elif "pulls" in url:
     # 一覧は --paginate で 1 行 1 オブジェクト。付いていなければ 1 ページ目しか
     # 見ていないので、stub 側で落として気づけるようにする
@@ -258,6 +266,47 @@ def test_L1_open_PRの一覧は両方とも全ページ取得する(tmp_path):
         "pending 側 (main 向け以外の脚注) が 1 ページ目で切れている"
     )
     assert "取得できませんでした" not in html
+
+
+def test_L1_eventフィルタ付きwatcherはその種別のrunだけを見る(tmp_path):
+    """review-gate は PR・コメントイベントでも起動する。イベント種別を絞らないと
+    「schedule sweep (マージ再試行・補償) が毎回失敗していても、直後の PR 再評価
+    run の成功で緑かつ期限内」になる (#258 / Codex P2)。
+
+    無いと何が静かに通るか:
+        『最悪 30 分でマージ』の下限保証を担う sweep の停止が状況ページで
+        緑に見え続ける — 2026-08-11 に PO が滞留 PR を手動発見した状況が、
+        監視を付けたのに再発する。stub は event=schedule で絞った照会にだけ
+        失敗 run を返すため、build.py がフィルタを付け落とすと未絞りの成功
+        run を拾って緑になり、このテストが赤くなる (mutation で検証済み)。
+    """
+    html = _run(tmp_path, defs={
+        "workflows": [{
+            "id": "review-gate.yml",
+            "name": "マージの門 (review-gate)",
+            "what": "sweep の死活",
+            "event": "schedule",
+            "expect_hours": 2,
+        }],
+        "routines": [],
+    })
+    assert "🔴" in html, "schedule run の失敗が PR run の成功に隠れている"
+    assert "https://example.test/sweep-run" in html, (
+        "リンク先も schedule run のもの (未絞りの run ではない)"
+    )
+
+
+def test_L1_eventフィルタ無しのwatcherは従来どおり全runで判定する(tmp_path):
+    """後方互換: フィルタを持たない既存 watcher の判定を変えない。"""
+    html = _run(tmp_path, defs={
+        "workflows": [{
+            "id": "deploy.yml",
+            "name": "自動デプロイ",
+            "what": "main が動いたら dev に配る",
+        }],
+        "routines": [],
+    })
+    assert "🟢" in html
 
 
 def test_L1_定義ファイルが読める():
