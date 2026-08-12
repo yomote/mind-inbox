@@ -43,12 +43,43 @@ Chosen option: **"Option A"**。**PO が 2026-08-12 に選択肢形式で「置�
 
 決定の内訳:
 
-- **D1 `REVIEW_GATE_REQUIRE_CODEX` を false にする** (PO がクリック)。Codex レビューの有無を required check の条件から外し、マージ経路を開ける。Codex 復帰時に true へ戻す
+- **D1 ~~`REVIEW_GATE_REQUIRE_CODEX` を false にする~~ (PO がクリック)。Codex レビューの有無を required check の条件から外し、マージ経路を開ける。Codex 復帰時に true へ戻す**
+  → **2026-08-12 に D7 が置き換えた** (PO 裁定)。門を**開ける**のではなく、門が要求する独立レビューの**担い手を差し替える**。`REVIEW_GATE_REQUIRE_CODEX` は `true` のまま据え置き、PO のクリックは不要になった
 - **D2 `.github/claude/review-rubric.md` を実データ由来の内容に全面置換する。** ファイル名は変えない ([`security-rubric.md`](../../.github/claude/security-rubric.md) `:113` 等から参照されているため)。構成は「指摘の書き方 (R1〜R7) → Severity → 何を探すか (C1〜C9・頻度順) → 再レビューの規律 (R8〜R10) → 自制ルール (R11〜R17) → 出力形式」。**各項目に Codex の原文引用を根拠として添える** — 抽象カテゴリから演繹した項目を 1 つも作らない
 - **D3 実測 0 件だった観点を落とす** — 旧・軸 C (PR 本文の評価) と軸 B の「簡素化 / 過剰抽象 / 再実装」。落とした事実と理由は rubric 本文に 1 行残す (黙って消すと、次に誰かが同じ観点を「抜けている」と足し戻す)
 - **D4 代役 judge `.claude/agents/code-reviewer.md` を新設する** — [ADR 0019](0019-independent-judge-agents-security-qa-release.md) の judge 群と同じ形 (新品コンテキストの subagent / rubric-as-truth / コードを変更しない / 投稿は呼び出し元)。セキュリティの深掘りは従来どおり security-reviewer へ委譲する
 - **D5 CLAUDE.md の resolve 規律を書き換える** — 「指摘者 (Codex) の再レビューが OK を出してから」を「代役 judge (code-reviewer) の再レビューが OK を出してから」に。**2026-08-11 の PO 決定を上書きする変更**であることと、Codex 復帰時の戻し方を明記する
 - **D6 分析の全文をリポジトリに残す** — [`docs/reviews/codex-review-analysis-2026-08-12.md`](../reviews/codex-review-analysis-2026-08-12.md)。rubric の各項目が「なぜ存在するか」の唯一の説明が原文引用なので、rubric だけ残して根拠を捨てない
+
+### 2026-08-12 追加裁定 (PO / 選択肢形式) — 門は開けず、起動経路を作る
+
+上の D1〜D6 を書いた時点で 2 つ open だった: **門をどう扱うか** (D1 は「開ける」と書いていた) と、Negative Consequences に挙げた「**起動を引く自動経路が無い**」。PO が [ADR 0020](0020-hitl-choice-format-and-needs-human-queue.md) の選択肢形式で両方を裁定した。
+
+- **D7 門は開けず、独立レビューの担い手を差し替える** (D1 を置き換え)。`review-gate` の合否条件 3 を「Codex のレビューがある」から「**独立レビューが 1 本ある**」に読み替え、担い手を Codex **または** 代役 judge のどちらでもよいとする ([`check.py`](../../cicd/scripts/review-gate/check.py) の `decide` / `has_standin_review`)。
+  - **代役のレビューは pm-accept と同じ強度で push に失効する** — 権限保持者が投稿した `<!-- standin-review -->` + **現 head SHA** を含むコメントだけを数える。**Codex は SHA を縛っていないので非対称だが意図的**: Codex は別アカウント (`chatgpt-codex-connector[bot]`) なので実装者は自分でレビューを貼れないが、**代役の投稿はレビュー対象を書いた本人と同じアカウントから出る**。SHA を縛らないと「1 回レビューを貼れば以後は何を push しても門が開いたまま」になり、[#331](https://github.com/yomote/mind-inbox/issues/331) と同種の穴が代役の導入で新たに空く
+  - **却下した案**: (a) `REVIEW_GATE_REQUIRE_CODEX=false` (旧 D1) — 「**上限に当たる → 門を開ける**」を前例にすると門が有限資源の都合で開く運用になる (Option C の Bad と同じ理由が、変数 1 つでも成立してしまう)。(b) dependabot PR だけ Codex 要求から外す — 6 本は解放されるが **#347 が止まったままで、ruleset が読めず [#327](https://github.com/yomote/mind-inbox/issues/327) の auto-merge 405 の原因特定に進めない** (下の「なぜ急ぐか」)
+  - 環境変数名 `REVIEW_GATE_REQUIRE_CODEX` は**改名しない** — repository variable なので改名すると PO が web UI で作り直す作業を負う。機構の都合で人に作業を回さない
+- **D8 起動経路として専用の PR レビュー Routine を置く** (Negative Consequences の「自動起動が無く、呼ばれなければ沈黙する」への対処)。
+  - **当番 PM Routine に相乗りさせない** — [ADR 0035](0035-role-split-across-agents-and-actions.md) D3 が「**やってほしいことがそこにあるか** (意図との一致 = PM)」と「**コードとして正しいか** (意図を知らない別モデル)」を意図的に分けている。同一セッションが両方やると、分けた意味が消える
+  - **[ADR 0040](0040-project-continuity-three-layers.md) の条件付き Routine の枠に載せる** — ADR 0035 D1 が Routine を 0 本にした理由は「生死が見えない」。よって (1) **発火ごとに必ず痕跡を Issue コメントに残す** (レビュー対象が 0 本でも「対象なし」と書く — 沈黙と正常を区別するため)、(2) **`watchers.json` に登録して欠落自体を状況ページが検出する**、の 2 条件を満たす形でのみ置く
+  - **Routine は `create_trigger` でエージェントが作れる** (実測) — claude.ai の web UI 設定ではないので、[ADR 0008](0008-pr-review-via-cloud-routine.md) の Negative「設定がリポジトリ管理外」は**プロンプト本文については解消していない**点に注意 (Routine の実体は依然 claude.ai 側にあり、プロンプトは git に無い。**リポジトリ側の正典は rubric で、Routine のプロンプトは「rubric を読んで回せ」に留める**)
+
+### なぜ急ぐか (2026-08-12 時点の詰まり)
+
+Codex 停止は 1 本の PR の問題ではなく、**依存関係で 8 本が連鎖して止まっていた**:
+
+```
+Codex 停止 (#345)
+  └→ review-gate が「Codex レビューが無い」でコード PR を赤 (6 本) /
+     再レビューできず未解決スレッドが畳めない (2 本: #330 #222)
+       └→ #347 (GitHub 設定を宣言から点検・適用する) がマージできない
+            └→ ruleset / ブランチ保護を読めない
+               (エージェントの管理系 API は 403 — 2026-08-12 に本セッションでも再実測)
+                 └→ #327 auto-merge が GITHUB_TOKEN で 405 になる原因が特定できない
+                      └→ マージ執行機構 (ADR 0040 D1) が死んだまま
+```
+
+**代役 judge は、この連鎖の最上流を外す最小の一手**である。
 
 ### 動作検証条件 (ADR 0018 — 実測で確かめる)
 
@@ -59,6 +90,9 @@ Chosen option: **"Option A"**。**PO が 2026-08-12 に選択肢形式で「置�
 3. **偽陽性の率**を数える — 「開いていないファイルを根拠にした」「宣言を実環境と同一視した」(R11 / R12 違反) が出たら rubric に条件を足す
 4. **収束するか** — Codex は #288 で 25 件・#258 で 20 件まで再提起を続け全て PM が打ち切った。代役が R15 (収束宣言) に従い 3 ラウンド以内に終えられるかを見る
 5. Codex 復帰後、同じ PR に両方を当てて**代役が落とした指摘**を数える (独立性の劣化を数字で持つ)
+
+6. **D7 の門が実際に開くか** — 代役レビューを貼った PR で `review-gate` の commit status が 🟢 になり、`REVIEW_GATE_REQUIRE_CODEX` を触らずにコード PR がマージできること。**そして SHA 失効が効くこと** — レビュー後に 1 コミット push したら赤に戻ること (機構が「押し流し」を本当にやるかは実 PR でしか測れない)
+7. **D8 の Routine が痕跡を残すか** — 発火ごとに追跡 Issue にコメントが増え、状況ページの Routine 行が 🟢 になること。**レビュー対象 0 本の回でもコメントが増えること** (沈黙と正常の区別が本当に付いているか)
 
 1 と 5 が満たせないなら、この ADR は Rejected に倒す。
 
@@ -89,7 +123,8 @@ Chosen option: **"Option A"**。**PO が 2026-08-12 に選択肢形式で「置�
 ### Negative Consequences
 
 - **⚠️ Claude が Claude をレビューしても独立性は回復しない。** [ADR 0035](0035-role-split-across-agents-and-actions.md) `:56` (D4) の根拠は「**同じモデルは同じ盲点を持つ**」であり、実装も代役レビューも Claude である以上この前提は満たされない。**これは Codex の代役ではなく、Codex が戻るまで目隠しを薄くする措置**である。rubric がどれだけ精緻でも、実装時に見えなかったものは同じモデルのレビューでも見えない可能性が高い。Codex が復帰したら D1 を戻し、代役は「Codex を待つ間の埋め合わせ」と「Codex 対象外の PR」に退く
-- **起動を引く自動経路が無い。** Codex は PR に対して自動で起動していたが、この judge は**人か PM セッションが呼ばないと走らない**。呼び忘れれば静かにレビュー無しで進む (「沈黙と正常が区別できない」形 — CLAUDE.md が禁じている状態)。自動起動 (Actions か Routine) は別 Issue
+- ~~**起動を引く自動経路が無い。**~~ → **D8 で対処**。ただし残る弱点が 2 つある: (1) Routine は 6 時間おきなので、**Codex の「PR ごとに即座」に比べてレビューが遅い** (最悪 6 時間の遅延)、(2) **Routine のプロンプト本文は git に無い** (claude.ai 側)。プロンプトが壊れても diff に出ないので、`watchers.json` の痕跡監視が唯一の検出手段になる
+- **代役レビューは同一アカウントから投稿される。** 機構では「実装者 ≠ レビュアー」を保証できない (D7 で SHA 失効までは縛ったが、**同じセッションが自分の PR にレビューを貼ることは技術的に可能**)。担保は「judge が新品コンテキストの subagent / Routine セッションであること」と「痕跡が public なコメントとして残り PO が後から読めること」の 2 つだけで、これは [ADR 0035](0035-role-split-across-agents-and-actions.md) D4 の「別モデル系統」より明確に弱い
 - **rubric が長い。** judge が毎回読むコストが増える (原文引用を根拠として残す代償)。引用を削れば「なぜこの項目があるか」が失われるので、削るなら項目ごと落とす
 - 45 時間・46 PR という**短い窓**から導出している。大規模リファクタリング PR / 新機能の初回設計 PR / 依存更新 PR (dependabot は全件レビュー対象外だった) に対する振る舞いは観測できておらず、rubric に書けていない
 - Codex の弱点 (R11〜R14 の自制ルール) は写せるが、Codex の強み (`gpg` / `curl` / `git` を実際に叩いて数値で示す) は**代役が実際にコマンドを叩かないと再現しない**。rubric に書いてあることと実行することは別

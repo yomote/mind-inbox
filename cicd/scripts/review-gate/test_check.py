@@ -27,6 +27,8 @@ from check import (
     latest_pm_accept_token,
     parse_merge_group_pr,
     human_queue_issues,
+    STANDIN_REVIEW_MARKER,
+    has_standin_review,
     is_bot_login,
     is_code_pr,
     is_codex_review_result,
@@ -103,6 +105,82 @@ def test_l1_コードprはcodex必須_docsは不要() -> None:
 def test_l1_codexフラグが切のときは要求しない() -> None:
     # REVIEW_GATE_REQUIRE_CODEX 未設定 (= #205 の有効化前) は advisory に留める
     assert decide(HEAD, ["apps/bff/x.ts"], [ACCEPT_OK], 0, False, False).ok
+
+
+# ---- 代役 judge の独立レビュー (ADR 0052 D7) ----
+
+STANDIN_OK = (
+    f"{STANDIN_REVIEW_MARKER}\n代役レビュー ({HEAD[:7]}): blocker なし",
+    "OWNER",
+)
+
+
+def test_l1_代役レビューはcodexの代わりに独立レビュー条件を満たす() -> None:
+    """Codex が居なくても代役レビューがあればコード PR の門が開くこと。
+
+    無いと何が静かに通るか:
+        Codex が利用上限で黙っている間 (#345)、コード PR は全部
+        「独立レビューが無い」で永久に赤のまま。門を開ける (require を false)
+        以外に進む道が無くなり、**有限資源の都合で門が開く**前例になる。
+    """
+    code = ["apps/bff/x.ts"]
+    assert decide(HEAD, code, [ACCEPT_OK, STANDIN_OK], 0, False, True).ok
+
+
+def test_l1_古いshaの代役レビューは押し流される() -> None:
+    """代役レビューは push で失効すること (pm-accept と同じ強度)。
+
+    無いと何が静かに通るか:
+        代役の投稿はレビュー対象を書いた本人と同じアカウントから出るため、
+        SHA を縛らないと「1 回レビューを貼ってから、以後は何を push しても
+        門が開いたまま」になる。実装者が自分で門を開けられる状態
+        (#331 と同種の穴) が、代役の導入で新たに空く。
+    """
+    stale = (f"{STANDIN_REVIEW_MARKER}\n代役レビュー (9999999): blocker なし", "OWNER")
+    assert not has_standin_review([stale], HEAD)
+    assert not decide(HEAD, ["apps/bff/x.ts"], [ACCEPT_OK, stale], 0, False, True).ok
+
+
+def test_l1_代役レビューはマーカーとshaの両方が要る() -> None:
+    """マーカーだけ・SHA だけでは代役レビューと数えないこと。
+
+    無いと何が静かに通るか:
+        SHA を書かずマーカーだけ貼れば恒久的に門が開く (上のテストの抜け道)。
+        逆に SHA だけで数えると、head SHA に言及した**ただの雑談コメント**が
+        独立レビュー扱いになる (PR 本文に SHA を貼る運用があるので現実に起きる)。
+    """
+    assert not has_standin_review(
+        [(f"{STANDIN_REVIEW_MARKER} SHA なし", "OWNER")], HEAD
+    )
+    assert not has_standin_review([(f"{HEAD[:7]} を見た", "OWNER")], HEAD)
+
+
+def test_l1_第三者の代役レビューは数えない() -> None:
+    """権限保持者以外の投稿は代役レビューと数えないこと。
+
+    無いと何が静かに通るか:
+        このリポジトリは public なので誰でも PR にコメントできる。
+        マーカーと SHA は本文に書くだけなので、第三者が
+        `<!-- standin-review --> <sha>` と書けば門が開く (pm-accept で
+        2026-08-10 に実際に見つかった穴と同型)。
+    """
+    outsider = (f"{STANDIN_REVIEW_MARKER} {HEAD[:7]} LGTM", "NONE")
+    assert not has_standin_review([outsider], HEAD)
+    assert not decide(HEAD, ["apps/bff/x.ts"], [ACCEPT_OK, outsider], 0, False, True).ok
+
+
+def test_l1_独立レビュー不足の文言は担い手を限定しない() -> None:
+    """欠落メッセージが「Codex が無い」と読めないこと。
+
+    無いと何が静かに通るか:
+        代役でも満たせる条件なのに status が「Codex レビューが無い」と出ると、
+        PO と当番 PM は「Codex 復帰を待つしかない」と読んで詰まる
+        (#345 で実際に 8 本の PR が待たされた読み方)。
+    """
+    v = decide(HEAD, ["apps/bff/x.ts"], [ACCEPT_OK], 0, False, True)
+    assert not v.ok
+    assert any("独立レビュー" in m for m in v.missing)
+    assert not any("Codex" in m for m in v.missing)
 
 
 def test_l1_説明文は140字に収まる() -> None:
