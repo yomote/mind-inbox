@@ -46,13 +46,16 @@ from settings_diff import (  # noqa: E402
     Operation,
     Unavailable,
     build_plan,
+    decide_apply,
     diff_settings,
     normalize_branch_protection,
     normalize_security,
     plan_digest,
     render_report,
     render_snapshot,
+    validate_branch_name,
     validate_declaration,
+    validate_repository,
     weakening_operations,
 )
 
@@ -158,6 +161,10 @@ def read_security(repo: str) -> dict:
 
 
 def read_branch_protection(repo: str, branch: str) -> dict | Unavailable:
+    # 読み取りでもパスを組む以上、名前は検証してから使う (宣言は既に
+    # validate_declaration を通っているが、ここを素通しにすると
+    # 「検証したのは呼び出し元だから」という前提が 1 箇所でも崩れた瞬間に破れる)
+    validate_branch_name(branch)
     rc, out, err = gh_api(f"repos/{repo}/branches/{branch}/protection")
     if rc == 0:
         raw = parse_json(out)
@@ -251,8 +258,12 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     repo = args.repository or os.environ.get("GITHUB_REPOSITORY", "")
-    if not repo or repo.count("/") != 1:
-        log("対象リポジトリが分かりません (--repository か $GITHUB_REPOSITORY)")
+    try:
+        # `owner/repo` の形だけでなく**中身も**検証する — `../victim` はスラッシュ 1 個
+        # なので「形」の検査だけでは抜ける (write-snapshot.sh は同じ検査を掛けている)
+        validate_repository(repo)
+    except DeclarationError as exc:
+        log(f"対象リポジトリが分かりません (--repository か $GITHUB_REPOSITORY): {exc}")
         return 1
 
     try:
@@ -276,25 +287,14 @@ def main(argv: list[str]) -> int:
     exit_code = 0
 
     if args.mode == "apply":
-        if not plan:
-            log("差分がありません — 適用するものはありません")
-        elif args.expect_digest != digest:
-            log(
-                "ダイジェストが一致しません。**何も適用していません**。\n"
-                f"  期待 (入力): {args.expect_digest or '(空)'}\n"
-                f"  実際 (いま計算した計画): {digest}\n"
-                "  宣言か現実が check の時点から変わっています。"
-                "check をもう一度流し、出てきた差分を読んでからやり直してください。"
-            )
+        # 安全弁の判定は純関数 (settings_diff.decide_apply) が持つ。
+        # ここは「判定に従って実行するか / run を落とすか」だけ
+        decision = decide_apply(plan, args.expect_digest, args.allow_weakening)
+        if decision.message:
+            log(decision.message)
+        if decision.is_refusal:
             exit_code = 1
-        elif weak and not args.allow_weakening:
-            log(
-                f"保護を弱める操作が {len(weak)} 件あります。"
-                "allow_weakening が無いので**何も適用していません**。\n"
-                + "\n".join(f"  - {o.op_id}: {o.summary}" for o in weak)
-            )
-            exit_code = 1
-        else:
+        if decision.proceed:
             applied, failed, skipped = apply_plan(plan)
             # 適用したと言い切る前に、もう一度読み直して振る舞いで確かめる (ADR 0018)
             actual = read_actual(repo, declaration)

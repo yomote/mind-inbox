@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -127,6 +128,81 @@ BRANCH_REQUIRED_KEYS = (
 
 class DeclarationError(ValueError):
     """宣言ファイルが期待した形をしていない (= 実行してはいけない)。"""
+
+
+# 宣言のブランチ名として認める文字。**この値は API のパスにそのまま入る**ので、
+# 中身と同じ厳しさで名前も検証する (write-snapshot.sh が REPO_SLUG に掛けている
+# `*..*|*//*|/*|*/` と同じ規律。片方だけ守っても意味が無い)。
+# 照合は必ず fullmatch — Python の `$` は**末尾の改行 1 個を許す**ので、
+# `re.match(r"^...$", "main\n")` は成功してしまう (ヘッダ注入の常套手段)
+BRANCH_NAME_PATTERN = re.compile(r"[A-Za-z0-9._/-]+")
+# GitHub の ref 名の長さの上限より十分大きいところで頭打ちにする
+# (無制限にすると、宣言 1 行で異常に長い URL を組める)
+BRANCH_NAME_MAX_LENGTH = 255
+
+
+def validate_branch_name(branch: Any) -> str:
+    """宣言のブランチ名 (YAML のキー) を検証する。**入口で落とす**。
+
+    無いと何が静かに通るか: ブランチ名は `repos/{owner}/{repo}/branches/{branch}/
+    protection` のパスに文字列連結されるので、`../../../../repos/victim/repo/
+    branches/main` のような値を書くと **別リポジトリへの PUT / DELETE** を組める。
+    しかもその操作は「宣言どおりにする」ので `risk=strengthen` に分類され、
+    `allow_weakening` の門も素通りする (= 弱化ゲートでは止まらない)。
+
+    検証は「何が正しいか」だけを許す (allowlist)。`..` は git の ref 名としても
+    禁止されているので、宣言の表現力は落ちない。
+    """
+    if not isinstance(branch, str) or isinstance(branch, bool):
+        # YAML は `on:` / `true:` のようなキーを bool として読む
+        raise DeclarationError(
+            f"branch_protection のキー (ブランチ名) は文字列です (実際: {branch!r})"
+        )
+    if not branch:
+        raise DeclarationError("branch_protection のキー (ブランチ名) が空です")
+    if len(branch) > BRANCH_NAME_MAX_LENGTH:
+        raise DeclarationError(
+            f"branch_protection のブランチ名が長すぎます "
+            f"({len(branch)} 文字 > {BRANCH_NAME_MAX_LENGTH})"
+        )
+    if not BRANCH_NAME_PATTERN.fullmatch(branch):
+        raise DeclarationError(
+            f"branch_protection のブランチ名に使えない文字が入っています: {branch!r} "
+            f"(使えるのは英数字と . _ / - だけ)"
+        )
+    if ".." in branch or branch.startswith("/") or branch.endswith("/"):
+        raise DeclarationError(
+            f"branch_protection のブランチ名が不正です: {branch!r} "
+            "(`..` / 先頭・末尾の `/` は API のパスを組み替えられるため禁止)"
+        )
+    if "//" in branch:
+        raise DeclarationError(
+            f"branch_protection のブランチ名が不正です: {branch!r} (空のパス要素)"
+        )
+    return branch
+
+
+# 適用先 (owner/repo)。これも API のパスに入るので同じ規律で検証する
+# (write-snapshot.sh は REPO_SLUG に同じ検査を掛けている)。
+REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
+
+
+def validate_repository(repo: Any) -> str:
+    """適用先リポジトリ (owner/repo) を検証する。
+
+    無いと何が静かに通るか: `--repository ../victim` のような値は `owner/repo` の
+    形 (スラッシュ 1 個) を満たすので既存の検査を抜け、`repos/../victim/...` という
+    **別リポジトリへのパス**になる。宣言に repository を書けない設計 (settings.yml
+    の冒頭) が守っているのは宣言側だけで、CLI / 環境変数側には門が無かった。
+    """
+    if not isinstance(repo, str) or not REPOSITORY_PATTERN.fullmatch(repo):
+        raise DeclarationError(
+            f"適用先リポジトリが owner/repo の形ではありません: {repo!r} "
+            "(使えるのは英数字と . _ - だけ)"
+        )
+    if ".." in repo:
+        raise DeclarationError(f"適用先リポジトリが不正です: {repo!r} (`..` は禁止)")
+    return repo
 
 
 # --- 値の扱い ---------------------------------------------------------------
@@ -271,6 +347,9 @@ def validate_declaration(doc: Any) -> dict:
 
 
 def _validate_branch(branch: str, spec: Any) -> None:
+    # **名前が先** — 中身が正しくても、名前が API のパスを組み替えられるなら
+    # その宣言は実行してはいけない
+    validate_branch_name(branch)
     where = f"branch_protection.{branch}"
     if not isinstance(spec, dict):
         raise DeclarationError(f"{where} が map ではありません")
@@ -428,10 +507,22 @@ def normalize_security(
         out["secret_scanning"] = repo
         out["secret_scanning_push_protection"] = repo
     else:
-        analysis = (repo or {}).get("security_and_analysis") or {}
-        for name in ("secret_scanning", "secret_scanning_push_protection"):
-            status = (analysis.get(name) or {}).get("status")
-            out[name] = ENABLED if status == ENABLED else DISABLED
+        analysis = repo.get("security_and_analysis") if isinstance(repo, dict) else None
+        if not isinstance(analysis, dict):
+            # 200 が返っても、**admin 権限が無い呼び出しでは security_and_analysis が
+            # 応答から丸ごと消える** (キーが無い / null)。「無い = 無効」と読むと、
+            # 読めていないだけの状態が `"secret_scanning": "disabled"` という**事実**
+            # として public のデータブランチに永続し、さらに「宣言どおり enabled に
+            # 戻す」計画が毎回立つ。読めなかったものは読めなかったと書く
+            missing = Unavailable(
+                "security_and_analysis が応答にありません (admin 権限が無い可能性)"
+            )
+            out["secret_scanning"] = missing
+            out["secret_scanning_push_protection"] = missing
+        else:
+            for name in ("secret_scanning", "secret_scanning_push_protection"):
+                status = (analysis.get(name) or {}).get("status")
+                out[name] = ENABLED if status == ENABLED else DISABLED
 
     if isinstance(vulnerability_alerts, Unavailable):
         out["dependabot_alerts"] = vulnerability_alerts
@@ -675,6 +766,9 @@ def build_plan(declaration: dict, report: Report, repo: str) -> tuple[Operation,
         )
 
     for branch, spec in sorted(declaration["branch_protection"].items()):
+        # 二重で検証する (validate_declaration を通していない dict を build_plan に
+        # 渡す経路が将来できても、**書き込みの API パスを組む直前で必ず落ちる**)
+        validate_branch_name(branch)
         prefix = f"branch_protection.{branch}."
         found = tuple(f for f in report.findings if f.path.startswith(prefix))
         if not found:
@@ -749,6 +843,77 @@ def plan_digest(plan: tuple[Operation, ...]) -> str:
 
 def weakening_operations(plan: tuple[Operation, ...]) -> tuple[Operation, ...]:
     return tuple(o for o in plan if o.risk == WEAKEN)
+
+
+# --- apply の安全弁 ---------------------------------------------------------
+
+APPLY_PROCEED = "proceed"
+APPLY_NOTHING_TO_DO = "nothing-to-do"
+APPLY_DIGEST_MISMATCH = "digest-mismatch"
+APPLY_WEAKENING_NOT_ALLOWED = "weakening-not-allowed"
+
+
+@dataclass(frozen=True)
+class ApplyDecision:
+    """apply を実行してよいか。**判定はここ (純関数) / 実行は sync.py**。
+
+    outcome:
+        proceed               = 計画を実行してよい
+        nothing-to-do         = 差分が無い (実行しないが失敗でもない → exit 0)
+        digest-mismatch       = PO が見た計画と今の計画が違う (→ exit 1)
+        weakening-not-allowed = 弱める操作があるのに許可が無い (→ exit 1)
+    """
+
+    outcome: str
+    message: str = ""
+
+    @property
+    def proceed(self) -> bool:
+        return self.outcome == APPLY_PROCEED
+
+    @property
+    def is_refusal(self) -> bool:
+        """「実行しなかった」ではなく「実行を拒んだ」= run を落とすべき状態。"""
+        return self.outcome in (APPLY_DIGEST_MISMATCH, APPLY_WEAKENING_NOT_ALLOWED)
+
+
+def decide_apply(
+    plan: tuple[Operation, ...], expect_digest: str, allow_weakening: bool
+) -> ApplyDecision:
+    """apply の安全弁 2 つ。
+
+    無いと何が静かに通るか:
+        - **ダイジェスト照合** — PO が check の出力で見た差分と、apply の時点で
+          計算し直した計画がズレていても適用される (宣言の書き換え・現実の変化が
+          「見せてから適用する」約束をすり抜ける)
+        - **弱化ゲート** — 保護を外す操作が、確認なしに実行される
+
+    どちらも**先に落とす** (計画を 1 件も実行しない)。部分適用は「弱いところで
+    止まる」状態を作りうるので、拒むときは何も触らない。
+    """
+    if not plan:
+        return ApplyDecision(
+            APPLY_NOTHING_TO_DO, "差分がありません — 適用するものはありません"
+        )
+    digest = plan_digest(plan)
+    if expect_digest != digest:
+        return ApplyDecision(
+            APPLY_DIGEST_MISMATCH,
+            "ダイジェストが一致しません。**何も適用していません**。\n"
+            f"  期待 (入力): {expect_digest or '(空)'}\n"
+            f"  実際 (いま計算した計画): {digest}\n"
+            "  宣言か現実が check の時点から変わっています。"
+            "check をもう一度流し、出てきた差分を読んでからやり直してください。",
+        )
+    weak = weakening_operations(plan)
+    if weak and not allow_weakening:
+        return ApplyDecision(
+            APPLY_WEAKENING_NOT_ALLOWED,
+            f"保護を弱める操作が {len(weak)} 件あります。"
+            "allow_weakening が無いので**何も適用していません**。\n"
+            + "\n".join(f"  - {o.op_id}: {o.summary}" for o in weak),
+        )
+    return ApplyDecision(APPLY_PROCEED)
 
 
 # --- 描画 -------------------------------------------------------------------
@@ -829,7 +994,17 @@ def render_report(
     else:
         lines.append("### 差分")
         lines.append("")
-        lines.append("宣言と現実は一致しています。")
+        if report.unavailable:
+            # 読めなかった項目があるのに「一致しています」と書くと、それは
+            # **取れなかったものを異常なしと書く**ことになる (このリポジトリで
+            # 最も繰り返している事故)。読めた範囲の話であることを文面で分ける
+            lines.append(
+                f"**読めた範囲では**差分はありません。"
+                f"ただし **{len(report.unavailable)} 項目が未検証**です (下記) — "
+                "「宣言どおり」とは言えません。"
+            )
+        else:
+            lines.append("宣言と現実は一致しています。")
         lines.append("")
 
     if report.unavailable:
