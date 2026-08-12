@@ -1,4 +1,4 @@
-# review-gate の起動係 (Issue #331 / ADR 0048) — **判定は一切しない no-op**。
+# review-gate の起動係 (Issue #331 / ADR 0051) — **判定は一切しない no-op**。
 #
 # なぜ分かれているか:
 #   GitHub Actions は workflow の YAML を「どのブランチから読むか」がトリガーで違う。

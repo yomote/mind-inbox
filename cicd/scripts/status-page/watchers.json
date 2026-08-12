@@ -77,11 +77,11 @@
     {
       "id": "review-gate.yml",
       "name": "マージの門の判定 (PR イベント経路)",
-      "what": "PR の push / レビューのたびに、main の定義で門を判定して commit status `review-gate` を貼る (ADR 0048)",
+      "what": "PR の push / レビューのたびに、main の定義で門を判定して commit status `review-gate` を貼る (ADR 0051)",
       "event": "workflow_run",
       "expect": "PR ごと",
       "critical": true,
-      "note": "ADR 0048 (Issue #331) で PR イベントの判定を workflow_run に移した — 定義が常に main から読まれる代わりに、**この run は PR の Checks タブに出ない**。判定 job 自体が落ちた (例: workflow_run から PR 番号を解決できず exit 1) ことに PR 上で気づけないため、ここで見張る。赤 = その間の PR に status が貼られていない = マージが止まる (fail-closed だが原因は見えない)。起動係の review-gate-trigger.yml は権限ゼロの no-op で失敗しようがないため watcher を置かない (常に緑の watcher は沈黙と正常を区別できない)。"
+      "note": "ADR 0051 (Issue #331) で PR イベントの判定を workflow_run に移した — 定義が常に main から読まれる代わりに、**この run は PR の Checks タブに出ない**。判定 job 自体が落ちた (例: workflow_run から PR 番号を解決できず exit 1) ことに PR 上で気づけないため、ここで見張る。赤 = その間の PR に status が貼られていない = マージが止まる (fail-closed だが原因は見えない)。起動係の review-gate-trigger.yml は権限ゼロの no-op で失敗しようがないため watcher を置かない (常に緑の watcher は沈黙と正常を区別できない)。"
     },
     {
       "id": "adr-number-guard.yml",

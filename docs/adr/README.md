@@ -121,5 +121,5 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0045](0045-e2e-artifacts-are-secret-by-default.md) — 実環境 E2E の成果物は既定で秘密扱いにし、trace は公開鍵で暗号化して残す (public リポジトリのため artifact のアクセス制限が使えない) — **Proposed**
 - [0046](0046-environment-rebuildable-from-declaration.md) — 環境を「宣言から作り直せるもの」にする — ライフサイクル 3 層分断 / Entra の Graph Bicep 宣言 / 週次プロビジョンテスト (ADR 0013 の「常設」を追補)
 - [0047](0047-security-posture-in-layers-free-tier-first.md) — セキュリティ対策を「無料枠優先 + 責任分担が重ならない層」で段階導入する (public リポジトリの無料枠を先に使い切り、アプリ内側の穴は design-gate 経由で塞ぐ / ADR 0038 の続き) — **Proposed**
-- [0048](0048-review-gate-verdict-on-workflow-run.md) — マージの門の判定を `workflow_run` に移し、門の定義を被判定者 (PR) から切り離す (ADR 0036 の強制力を機構として成立させる / Issue #331) — **Proposed**
 - [0050](0050-roles-and-lifetimes.md) — 担い手の役割は、能力ではなく寿命で決める (窓口 PM はファイルを書かない / teammate は Issue に落として死ぬ / PMO は機械 / Issue #348) — **Proposed**
+- [0051](0051-review-gate-verdict-on-workflow-run.md) — マージの門の判定を `workflow_run` に移し、門の定義を被判定者 (PR) から切り離す (ADR 0036 の強制力を機構として成立させる / Issue #331) — **Proposed**

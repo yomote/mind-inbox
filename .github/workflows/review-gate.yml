@@ -42,7 +42,7 @@
 #   信頼版スクリプトだけを実行し、権限は statuses:write のみ (マージは queue が
 #   実行するので contents:write は不要 / ADR 0042 D3・D4)。
 #
-# PR イベントの経路 (ADR 0048 / Issue #331):
+# PR イベントの経路 (ADR 0051 / Issue #331):
 #   この workflow は **PR 側の定義では一切動かない**。PR イベントの受け口は
 #   `review-gate-trigger.yml` (permissions: {} の no-op) が持ち、その run の完了を
 #   `workflow_run` で受けて判定する。workflow_run の定義は常に default branch から
@@ -62,7 +62,7 @@ name: review-gate
 
 on:
   workflow_run:
-    # ADR 0048: PR / PR レビューのイベントは review-gate-trigger.yml が受ける。
+    # ADR 0051: PR / PR レビューのイベントは review-gate-trigger.yml が受ける。
     # ここを `pull_request` に戻すと Issue #331 の穴が再び開く。
     # 名前で照合するので trigger 側の `name:` と必ず揃える。
     workflows: [review-gate-trigger]
@@ -76,7 +76,7 @@ on:
 
 # 同じ PR への run を直列化する (2 重投稿レースの防御 a / PR #238 P2)。
 # merge_group は head SHA ごとに一意 (group 内の他 PR と混ざらない)。
-# workflow_run (ADR 0048) は **trigger run の head SHA** で束ねる — 同じ head に
+# workflow_run (ADR 0051) は **trigger run の head SHA** で束ねる — 同じ head に
 # 対する push イベントとレビューイベントは同じ group に入るので、旧 gate-pr が
 # PR 番号で得ていた直列化はほぼそのまま残る (payload の pull_requests[] は fork や
 # タイミングで空になりうるため、常に在る head_sha を使う)。issue_comment 由来の
@@ -91,13 +91,13 @@ concurrency:
 # マージ執行・補償 dispatch・ストール通知は issue_comment / schedule の job だけが持つ。
 # 元の動機は「pull_request イベントの run は workflow 定義も checkout も PR 側から
 # 来る」— その job に contents:write を渡すと PR 作成者が自分でマージまで実行できた。
-# ADR 0048 で PR イベントの経路も main の定義 (workflow_run) に移したが、**権限の
+# ADR 0051 で PR イベントの経路も main の定義 (workflow_run) に移したが、**権限の
 # 最小化は維持する** (多層防御: 分離が 1 枚崩れても被害を最小に保つ)。
 permissions: {}
 
 jobs:
   # PR イベント (push / レビュー) 起点の判定。**定義もコードも main から来る**
-  # (ADR 0048 / Issue #331): 受け口の review-gate-trigger.yml が完了すると
+  # (ADR 0051 / Issue #331): 受け口の review-gate-trigger.yml が完了すると
   # workflow_run が飛び、その run をこの job が判定する。workflow_run の workflow
   # 定義は常に default branch から読まれるため、PR ブランチで review-gate.yml を
   # 書き換えても**この job の定義は変わらない**。
