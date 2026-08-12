@@ -68,6 +68,46 @@ export const MAX_CONVERSATION_TOTAL_CHARS = 120_000;
 export const MAX_EXTRACTED_ITEMS = 200;
 
 /**
+ * draft の 1 item に載る本文 (`mention.statement` / `mention.excerpt`) の最大文字数。
+ *
+ * **件数だけ締めても中身が青天井なら意味がない** (PR #324 Codex 指摘 P2)。
+ * `statement` は正規化済みの困りごと 1 文 (実際は 30〜150 字)、`excerpt` は元発話からの
+ * 引用 (実際は数十〜数百字)。どちらも 2,000 字は 10 倍以上の余裕がある。
+ * 1 発話の上限 (`MAX_MESSAGE_LENGTH` = 8,000) より小さいのは、引用は発話の一部だから。
+ */
+export const MAX_EXTRACTED_TEXT_LENGTH = 2_000;
+
+/**
+ * 感情ラベル (`mention.affect.label`) の最大文字数。「不安」「焦り」「安堵」のような語。
+ */
+export const MAX_AFFECT_LABEL_LENGTH = 100;
+
+/** 自由タグ 1 個の最大文字数 (「転職」「родители」等の短い語を想定)。 */
+export const MAX_TAG_LENGTH = 100;
+
+/** 1 item に付けられる自由タグの最大個数 (実際は 1〜3 個)。 */
+export const MAX_TAGS_PER_ITEM = 20;
+
+/**
+ * タイムスタンプ文字列 (`mention.createdAt`) の最大文字数。
+ *
+ * ISO 8601 (`2026-08-12T09:00:00.000Z`) は 24〜35 字。形式そのものは検証していないので
+ * (既存ドキュメントの表記ゆれを弾かないため)、長さだけ頭打ちにする。
+ */
+export const MAX_TIMESTAMP_LENGTH = 64;
+
+/**
+ * draft 全体 (全 item の文字列の合計) の最大文字数。
+ *
+ * 件数 × 1 件の上限 (200 × 約 4,000 字) は積として大きすぎるので、会話全文と同じ考え方で
+ * **合計**を別に締める (`MAX_CONVERSATION_TOTAL_CHARS` と同じ発想)。
+ *
+ * 値を会話全文の上限と同じにしているのは根拠がそこにあるため — draft は 1 セッションの
+ * 会話から抽出された結果なので、**元の会話全文より長くなることは無い**。
+ */
+export const MAX_DRAFT_TOTAL_CHARS = MAX_CONVERSATION_TOTAL_CHARS;
+
+/**
  * TTS (`POST /api/tts`) に渡せるテキストの最大文字数。
  *
  * 読み上げ対象は ai-agent の応答 1 通で、生成側が `max_tokens=1024`

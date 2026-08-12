@@ -242,22 +242,32 @@ paths:
                             properties:
                               id:
                                 type: string
+                                minLength: 1
+                                maxLength: 200
                               sessionId:
                                 type: string
+                                minLength: 1
+                                maxLength: 200
                               dumpId:
                                 type: string
+                                minLength: 1
+                                maxLength: 200
                                 nullable: true
                               createdAt:
                                 type: string
+                                maxLength: 64
                               statement:
                                 type: string
+                                maxLength: 2000
                               excerpt:
                                 type: string
+                                maxLength: 2000
                               affect:
                                 type: object
                                 properties:
                                   label:
                                     type: string
+                                    maxLength: 100
                                   valence:
                                     type: string
                                     enum:
@@ -288,8 +298,12 @@ paths:
                                 type: array
                                 items:
                                   type: string
+                                  maxLength: 100
+                                maxItems: 20
                               problemId:
                                 type: string
+                                minLength: 1
+                                maxLength: 200
                                 nullable: true
                               groupingConfidence:
                                 type: number
@@ -319,8 +333,11 @@ paths:
                                   - existing
                               problemId:
                                 type: string
+                                minLength: 1
+                                maxLength: 200
                               problemTitle:
                                 type: string
+                                maxLength: 200
                               problemTheme:
                                 type: string
                                 enum:

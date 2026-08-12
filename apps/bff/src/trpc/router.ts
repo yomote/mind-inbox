@@ -15,11 +15,17 @@ import {
 } from "../clients/aiAgentClient";
 import { issueSpeechAuthToken } from "../clients/speechTokenClient";
 import {
+  MAX_AFFECT_LABEL_LENGTH,
   MAX_CONVERSATION_MESSAGES,
   MAX_CONVERSATION_TOTAL_CHARS,
+  MAX_DRAFT_TOTAL_CHARS,
   MAX_EXTRACTED_ITEMS,
+  MAX_EXTRACTED_TEXT_LENGTH,
   MAX_ID_LENGTH,
   MAX_MESSAGE_LENGTH,
+  MAX_TAG_LENGTH,
+  MAX_TAGS_PER_ITEM,
+  MAX_TIMESTAMP_LENGTH,
   MAX_TITLE_LENGTH,
 } from "../limits";
 import { deriveTitle } from "../domain/title";
@@ -32,8 +38,10 @@ import {
 } from "../domain/problem";
 import type { ProblemRepository } from "../repositories/problemRepository";
 import {
-  ExtractedItemSchema,
+  AffectSchema,
   ExtractionResultSchema,
+  GroupingOutcomeSchema,
+  MentionSchema,
   ProblemSchema,
   ProblemStatusSchema,
   ThemeSchema,
@@ -72,6 +80,78 @@ const ConversationMessagesInputSchema = z
     (messages) =>
       messages.reduce((total, m) => total + m.text.length, 0) <= MAX_CONVERSATION_TOTAL_CHARS,
     { message: `会話全文が長すぎます (最大 ${MAX_CONVERSATION_TOTAL_CHARS} 文字)` },
+  );
+
+/**
+ * `consultation.extract` の `draft.items` として**クライアントから来る**抽出結果。
+ *
+ * ドメイン側の `ExtractedItemSchema` を再利用**しない** (PR #324 Codex 指摘 P2)。
+ * 再利用すると「件数だけ 200 に締めたが、1 item の中身は青天井」という穴が残る —
+ * draft 経路は ai-agent を呼ばないので抽出側の上限では守れず、巨大な `statement` /
+ * `excerpt` や大量のタグをそのまま Cosmos へ書ける。
+ *
+ * 独立定義ではなく `.extend()` で派生させているのは、**形をドメインと分岐させない**ため
+ * (手で書き写すと、ドメイン側のフィールド追加・削除に気づかず契約がずれる)。上書きするのは
+ * 「長さの制約」だけで、`domain.ts` 側には上限を足さない (`../limits.ts` の方針 =
+ * 入力側にだけ置く。既存ドキュメントを読めなくしないため)。
+ *
+ * ただし **`.extend()` は新フィールドに上限を自動では付けない** — ドメインに文字列
+ * フィールドが増えたらここにも 1 行足す必要がある。忘れたことは `limits.test.ts` の
+ * 「どの文字列フィールドを巨大にしても拒否する」(item の全 string leaf を走査する)
+ * が落として教える。
+ */
+const DraftMentionInputSchema = MentionSchema.extend({
+  id: IdInputSchema,
+  sessionId: IdInputSchema,
+  dumpId: IdInputSchema.nullable(),
+  createdAt: z.string().max(MAX_TIMESTAMP_LENGTH),
+  statement: z.string().max(MAX_EXTRACTED_TEXT_LENGTH),
+  excerpt: z.string().max(MAX_EXTRACTED_TEXT_LENGTH),
+  affect: AffectSchema.extend({ label: z.string().max(MAX_AFFECT_LABEL_LENGTH) }),
+  proposedTags: z.array(z.string().max(MAX_TAG_LENGTH)).max(MAX_TAGS_PER_ITEM),
+  problemId: IdInputSchema.nullable(),
+});
+
+const DraftGroupingInputSchema = GroupingOutcomeSchema.extend({
+  problemId: IdInputSchema,
+  problemTitle: z.string().max(MAX_TITLE_LENGTH),
+});
+
+const DraftItemInputSchema = z.object({
+  mention: DraftMentionInputSchema,
+  grouping: DraftGroupingInputSchema,
+});
+
+/** 1 item の文字列の合計。合計上限 (`MAX_DRAFT_TOTAL_CHARS`) の数え方を 1 箇所に置く。 */
+function draftItemChars(item: z.infer<typeof DraftItemInputSchema>): number {
+  const { mention, grouping } = item;
+  return (
+    mention.id.length +
+    mention.sessionId.length +
+    (mention.dumpId?.length ?? 0) +
+    mention.createdAt.length +
+    mention.statement.length +
+    mention.excerpt.length +
+    mention.affect.label.length +
+    mention.proposedTags.reduce((total, tag) => total + tag.length, 0) +
+    (mention.problemId?.length ?? 0) +
+    grouping.problemId.length +
+    grouping.problemTitle.length
+  );
+}
+
+/**
+ * draft 全体。**件数・1 フィールドの長さ・合計文字数の 3 つで締める**。
+ *
+ * 合計を別に見るのは、件数 × 1 件の上限の積 (200 × 約 4,000 字) が 1 リクエストの
+ * 書き込み量として大きすぎるため — 会話全文で既に採った考え方と同じ。
+ */
+const DraftInputSchema = z
+  .object({ items: z.array(DraftItemInputSchema).max(MAX_EXTRACTED_ITEMS) })
+  .refine(
+    (draft) =>
+      draft.items.reduce((total, item) => total + draftItemChars(item), 0) <= MAX_DRAFT_TOTAL_CHARS,
+    { message: `下書き全体が長すぎます (最大 ${MAX_DRAFT_TOTAL_CHARS} 文字)` },
   );
 
 const ChatMessageSchema = z.object({
@@ -567,11 +647,10 @@ const consultationRouter = router({
         // ai-agent を呼ばずこれを確定する。optional なのは後方互換 (プレビューを経ない
         // 旧クライアント / preview 未対応ビルドは従来どおり抽出してから確定)。
         //
-        // items に上限を入れているのは、この配列が**そのまま Cosmos への書き込み件数**に
-        // なるため (#313 C-1)。ai-agent を経由しない経路なので、抽出側の上限では守れない。
-        draft: z
-          .object({ items: z.array(ExtractedItemSchema).max(MAX_EXTRACTED_ITEMS) })
-          .optional(),
+        // 上限を入れているのは、この配列が**そのまま Cosmos への書き込み**になるため
+        // (#313 C-1)。ai-agent を経由しない経路なので、抽出側の上限では守れない。
+        // 件数だけでなく 1 item の中身と合計文字数も締める (DraftInputSchema / PR #324)。
+        draft: DraftInputSchema.optional(),
       }),
     )
     .output(ExtractionReplySchema)

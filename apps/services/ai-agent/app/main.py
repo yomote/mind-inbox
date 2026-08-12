@@ -19,7 +19,12 @@ from fastapi.responses import StreamingResponse
 from .agents import get_chat_client
 from .config import get_settings
 from .extractor import ExtractionParseError, ExtractionUnavailable, extract
-from .observability import client_detail, exception_kind, new_ref
+from .observability import (
+    client_detail,
+    exception_frames,
+    exception_kind,
+    new_ref,
+)
 from .planner import generate_plan
 from .repositories import (
     ApprovalRepository,
@@ -87,10 +92,18 @@ def _fail(endpoint: str, exc: Exception) -> HTTPException:
 
     タイムアウトは 504 に分けて写す — 「上流が遅くて諦めた」と「こちらが壊れた」は
     運用上まったく別の事象で、まとめて 500 にすると切り分けができなくなる。
+
+    ログ側も `exc_info=True` は使わない — traceback の最終行が例外メッセージそのもの
+    (= コンテンツフィルタの引用や検証に落ちた値) なので、サーバのログが機微データの
+    出口として残ってしまう。フレームだけを `exception_frames` で残す (PR #324 P1)。
     """
     ref = new_ref()
     logger.error(
-        "%s failed ref=%s kind=%s", endpoint, ref, exception_kind(exc), exc_info=True
+        "%s failed ref=%s kind=%s at=%s",
+        endpoint,
+        ref,
+        exception_kind(exc),
+        exception_frames(exc),
     )
     if isinstance(exc, TimeoutError):
         return HTTPException(
@@ -159,10 +172,10 @@ async def chat_stream(
             # 例外文ではなく一般化した文言 + ref を載せる (Issue #313)。
             ref = new_ref()
             logger.error(
-                "POST /chat/stream failed ref=%s kind=%s",
+                "POST /chat/stream failed ref=%s kind=%s at=%s",
                 ref,
                 exception_kind(exc),
-                exc_info=True,
+                exception_frames(exc),
             )
             error = ChatStreamError(message=client_detail(ref))
             yield f"data: {error.model_dump_json()}\n\n"

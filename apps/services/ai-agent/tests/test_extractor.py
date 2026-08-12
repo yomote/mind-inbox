@@ -298,7 +298,7 @@ class TestExtractRobustness:
         # 追える形は残っている: 同じ ref がログとクライアント向けメッセージの両方にある
         ref = str(excinfo.value).split("ref: ")[1].rstrip(")")
         assert ref in logged
-        assert "sha256=" in logged
+        assert "hmac=" in logged  # 指紋はプロセス鍵つき HMAC (PR #324 P2)
 
     async def test_l1_unknown_theme_falls_back_to_michubunrui(
         self, session_repo, make_client

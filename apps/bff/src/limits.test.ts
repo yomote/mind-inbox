@@ -44,16 +44,24 @@ import type { TrpcContext } from "./trpc/context";
 import {
   MAX_CONVERSATION_MESSAGES,
   MAX_CONVERSATION_TOTAL_CHARS,
+  MAX_DRAFT_TOTAL_CHARS,
+  MAX_EXTRACTED_ITEMS,
+  MAX_EXTRACTED_TEXT_LENGTH,
   MAX_MESSAGE_LENGTH,
   MAX_TTS_TEXT_LENGTH,
 } from "./limits";
 
-function makeCaller() {
+function makeCallerWithRepo() {
+  const problemRepo = new InMemoryProblemRepository();
   const ctx: TrpcContext = {
     req: new Request("http://localhost/api/trpc"),
-    problemRepo: new InMemoryProblemRepository(),
+    problemRepo,
   };
-  return appRouter.createCaller(ctx);
+  return { caller: appRouter.createCaller(ctx), problemRepo };
+}
+
+function makeCaller() {
+  return makeCallerWithRepo().caller;
 }
 
 /** 長さだけが意味を持つのでダミー文字で埋める (日本語 1 文字 = 1 code point)。 */
@@ -183,6 +191,145 @@ describe("[単体] consultation.extract — 会話全文の上限は件数と合
       makeCaller().consultation.extract({ sessionId: "s1", messages }),
     ).resolves.toMatchObject({ newProblemCount: 0 });
     expect(extractAiAgent).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---- draft commit 経路 (#283 / ADR 0039 D1/D3) の上限 ------------------------
+//
+// この経路は **ai-agent を呼ばない** ので、抽出側 (LLM) の上限では一切守れない。
+// クライアントが送った items がそのまま Cosmos への書き込みになる = ここが唯一の門。
+
+/** 実際に画面から確定される形の draft item (1 件)。 */
+function draftItem(index: number) {
+  return {
+    mention: {
+      id: `men-${index}`,
+      sessionId: "s1",
+      dumpId: "s1",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      statement: "転職すべきか迷っている",
+      excerpt: "転職しようか迷ってて",
+      affect: { label: "不安", valence: "negative" as const, intensity: 0.6 },
+      proposedTheme: "仕事・キャリア" as const,
+      proposedTags: ["転職"],
+      problemId: `prob-${index}`,
+      groupingConfidence: null,
+    },
+    grouping: {
+      kind: "new" as const,
+      problemId: `prob-${index}`,
+      problemTitle: "転職の迷い",
+      problemTheme: "仕事・キャリア" as const,
+      isRecurrence: false,
+      mentionCount: 1,
+      reignited: false,
+      groupingConfidence: null,
+    },
+  };
+}
+
+type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
+
+/** `obj` の中の文字列 leaf / 配列すべての位置。**新しく増えたフィールドも自動で拾う**。 */
+function paths(value: Json, kind: "string" | "array", prefix: string[] = []): string[][] {
+  if (Array.isArray(value)) {
+    return [
+      ...(kind === "array" ? [prefix] : []),
+      ...value.flatMap((v, i) => paths(v, kind, [...prefix, String(i)])),
+    ];
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.entries(value).flatMap(([k, v]) => paths(v, kind, [...prefix, k]));
+  }
+  return kind === "string" && typeof value === "string" ? [prefix] : [];
+}
+
+function mutate(root: Json, path: string[], next: (current: Json) => Json): Json {
+  const clone = structuredClone(root) as Record<string, Json>;
+  let cursor: Record<string, Json> = clone;
+  for (const key of path.slice(0, -1)) cursor = cursor[key] as Record<string, Json>;
+  const last = path[path.length - 1];
+  cursor[last] = next(cursor[last]);
+  return clone;
+}
+
+describe("[単体] consultation.extract の draft — 件数だけでなく中身も締まっている", () => {
+  it("どの文字列フィールドを巨大にしても、Problem を 1 件も書かずに拒否する", async () => {
+    // 無いと: 件数 200 の上限は残ったまま、1 item に巨大な statement / excerpt /
+    // problemTitle / 感情ラベルを詰めてリクエストサイズと書き込み量の上限を迂回できる
+    // (PR #324 Codex 指摘 P2)。**item を走査して全 string leaf を試す**ので、
+    // 上限のない新しいフィールドが domain に増えた場合もここで落ちる。
+    const item = draftItem(1) as unknown as Json;
+    const stringPaths = paths(item, "string");
+    expect(stringPaths.length).toBeGreaterThan(5); // 走査が空振りしていないこと
+
+    for (const path of stringPaths) {
+      const { caller, problemRepo } = makeCallerWithRepo();
+      const huge = mutate(item, path, () => filler(50_000));
+
+      await expect(
+        caller.consultation.extract({
+          sessionId: "s1",
+          draft: { items: [huge] } as never,
+        }),
+      ).rejects.toThrow();
+      expect(await problemRepo.list()).toHaveLength(0);
+    }
+  });
+
+  it("どの配列フィールドを巨大にしても、Problem を 1 件も書かずに拒否する", async () => {
+    // 無いと: タグを 1 item に何万個も詰める経路が残る (文字列長を締めても件数で抜ける)。
+    const item = draftItem(1) as unknown as Json;
+    const arrayPaths = paths(item, "array");
+    expect(arrayPaths.length).toBeGreaterThan(0);
+
+    for (const path of arrayPaths) {
+      const { caller, problemRepo } = makeCallerWithRepo();
+      const huge = mutate(item, path, (current) =>
+        Array.from({ length: 10_000 }, () => (current as Json[])[0] ?? "x"),
+      );
+
+      await expect(
+        caller.consultation.extract({
+          sessionId: "s1",
+          draft: { items: [huge] } as never,
+        }),
+      ).rejects.toThrow();
+      expect(await problemRepo.list()).toHaveLength(0);
+    }
+  });
+
+  it("件数も 1 フィールドの長さも上限内でも、draft 全体の合計が上限を超えたら拒否する", async () => {
+    // 無いと: 「1 件 2,000 字 × 200 件」の積 (40 万字) がそのまま 1 回の書き込みとして
+    // 通り、フィールド単位の上限を入れたのに 1 リクエストの書き込み量は実質青天井のまま。
+    // 会話全文で採ったのと同じ考え方 (合計を別に締める)。
+    const perItem = MAX_EXTRACTED_TEXT_LENGTH;
+    const count = Math.floor(MAX_DRAFT_TOTAL_CHARS / perItem) + 1;
+    expect(count).toBeLessThanOrEqual(MAX_EXTRACTED_ITEMS); // 件数上限では止まらない構成
+
+    const items = Array.from({ length: count }, (_, i) => ({
+      ...draftItem(i),
+      mention: { ...draftItem(i).mention, statement: filler(perItem) },
+    }));
+    const { caller, problemRepo } = makeCallerWithRepo();
+
+    await expect(
+      caller.consultation.extract({ sessionId: "s1", draft: { items } }),
+    ).rejects.toThrow();
+    expect(await problemRepo.list()).toHaveLength(0);
+  });
+
+  it("実際に画面から確定される規模の draft (10 件) は今までどおり書ける", async () => {
+    // 無いと: 上限を厳しくしすぎて「この内容で確定」が壊れても気づけない
+    // (上限の役目は正常な操作を切らずに青天井を潰すこと)。
+    const items = Array.from({ length: 10 }, (_, i) => draftItem(i));
+    const { caller, problemRepo } = makeCallerWithRepo();
+
+    const result = await caller.consultation.extract({ sessionId: "s1", draft: { items } });
+
+    expect(result.items).toHaveLength(10);
+    expect(await problemRepo.list()).toHaveLength(10);
+    expect(extractAiAgent).not.toHaveBeenCalled(); // draft 経路は再抽出しない
   });
 });
 

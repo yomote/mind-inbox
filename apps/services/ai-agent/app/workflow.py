@@ -51,7 +51,7 @@ from pydantic import BaseModel
 from .agents import chat, chat_stream, complete, get_chat_client
 from .config import get_settings
 from .history import ChatHistory
-from .observability import exception_kind, fingerprint, new_ref
+from .observability import exception_frames, exception_kind, fingerprint, new_ref
 from .prompts import CHAT_SYSTEM_PROMPT
 from .rag import retrieve
 from .repositories import ApprovalRepository, SessionRepository
@@ -531,11 +531,11 @@ class ExecuteToolExecutor(Executor):
                 # 詳細はサーバのログにだけ残し、ref で突き合わせる (Issue #313)。
                 ref = new_ref()
                 logger.error(
-                    "Tool execution failed ref=%s tool=%s kind=%s",
+                    "Tool execution failed ref=%s tool=%s kind=%s at=%s",
                     ref,
                     invocation.tool_name,
                     exception_kind(exc),
-                    exc_info=True,
+                    exception_frames(exc),
                 )
                 history.add_system_message(
                     f"Tool error ({invocation.tool_name}): "
