@@ -618,7 +618,11 @@ def has_pm_accept(comments: list[tuple[str, str]], head_sha: str) -> bool:
     )
 
 
-def has_standin_review(comments: list[tuple[str, str]], head_sha: str) -> bool:
+def has_standin_review(
+    comments: list[tuple[str, str]],
+    head_sha: str,
+    carried_short: str | None = None,
+) -> bool:
     """代役 judge の独立レビューが**現 head に対して**投稿されているか (ADR 0052 D7)。
 
     数える条件は 3 つ全部 — has_pm_accept と同形にしている:
@@ -633,10 +637,17 @@ def has_standin_review(comments: list[tuple[str, str]], head_sha: str) -> bool:
     代役の投稿はレビュー対象を書いた本人と同じアカウントから出る。SHA を縛らないと
     「1 回レビューを貼ってから、以後は何を push しても門が開いたまま」になる。
     """
-    short = head_sha[:SHORT_SHA_LEN]
+    accepted = {head_sha[:SHORT_SHA_LEN]}
+    # pm-accept と同じ引き継ぎを効かせる (ADR 0042 / PR #330 の代役レビュー指摘)。
+    # 引き継ぎが成立している = 「実装差分が不変の base 追随」なので、レビュー対象の
+    # コードは 1 文字も変わっていない。ここを揃えないと「PM 受け入れは carryover で
+    # 生き残るのに独立レビューだけ失効する」非対称が出て、main を追随するたびに
+    # 門が赤へ戻る (実測: 両 PR を 3-way マージした tree で再現)。
+    if carried_short:
+        accepted.add(carried_short)
     return any(
         STANDIN_REVIEW_MARKER in body
-        and short in body
+        and any(s in body for s in accepted)
         and (association or "").upper() in TRUSTED_ASSOCIATIONS
         for body, association in comments
     )
@@ -803,7 +814,8 @@ def decide(
     # 環境変数名 REVIEW_GATE_REQUIRE_CODEX はそのまま — repository variable なので
     # 改名すると PO が web UI で作り直すことになる (機構の都合で人に作業を回さない)。
     if require_independent_review and is_code_pr(changed_paths):
-        if not codex_present and not has_standin_review(comments, head_sha):
+        carried = carryover.accepted_short if (carryover and carryover.ok) else None
+        if not codex_present and not has_standin_review(comments, head_sha, carried):
             missing.append("独立レビューが無い (コード PR)")
     return Verdict(ok=not missing, missing=missing, note=note)
 

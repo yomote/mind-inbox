@@ -169,6 +169,48 @@ def test_l1_第三者の代役レビューは数えない() -> None:
     assert not decide(HEAD, ["apps/bff/x.ts"], [ACCEPT_OK, outsider], 0, False, True).ok
 
 
+def test_l1_代役レビューもpm_acceptと同じ引き継ぎが効く() -> None:
+    """差分不変の base 追随では代役レビューも引き継がれること (ADR 0042 と同形)。
+
+    無いと何が静かに通るか:
+        pm-accept は carryover で生き残るのに独立レビューだけが失効するため、
+        **main を追随するたびに門が「独立レビューが無い」で赤へ戻る**。
+        受け入れ済み・レビュー済みの PR が、実装を 1 文字も変えていないのに
+        延々とマージできなくなる (PR #330 の代役レビューが実測で見つけた非対称)。
+    """
+    carried = Carryover(ok=True, accepted_short="9999999")
+    old_review = (
+        f"{STANDIN_REVIEW_MARKER}\n代役レビュー (9999999): blocker なし",
+        "OWNER",
+    )
+    assert has_standin_review([old_review], HEAD, "9999999")
+    v = decide(HEAD, ["apps/bff/x.ts"], [old_review], 0, False, True, carried)
+    assert v.ok, v.missing
+
+
+def test_l1_引き継ぎが不成立なら代役レビューは失効する() -> None:
+    """carryover が成立していないときは古い代役レビューを数えないこと。
+
+    無いと何が静かに通るか:
+        「引き継ぎ元 SHA も許す」を無条件にすると、実装を書き換える push でも
+        古いレビューが生き続け、**1 回レビューを貼れば何を push しても門が開く**
+        状態に戻る (SHA を縛った理由そのものが消える)。
+    """
+    old_review = (
+        f"{STANDIN_REVIEW_MARKER}\n代役レビュー (9999999): blocker なし",
+        "OWNER",
+    )
+    assert not has_standin_review([old_review], HEAD, None)
+    # accepted_short を**あえて埋める** — 空だと carryover.ok を見ない実装でも
+    # テストが通ってしまい、この検査が何も守らなくなる (ミューテーションで確認済み)
+    failed = Carryover(
+        ok=False, detail="実装差分が受け入れ時点から変化", accepted_short="9999999"
+    )
+    v = decide(HEAD, ["apps/bff/x.ts"], [ACCEPT_OK, old_review], 0, False, True, failed)
+    assert not v.ok
+    assert any("独立レビュー" in m for m in v.missing)
+
+
 def test_l1_独立レビュー不足の文言は担い手を限定しない() -> None:
     """欠落メッセージが「Codex が無い」と読めないこと。
 
