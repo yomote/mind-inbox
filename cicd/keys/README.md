@@ -33,10 +33,18 @@ GitHub ユーザーなら誰でもダウンロードできる。したがって 
 秘密鍵の設置状態は workflow が確認しません (確認する必要がない — CI は暗号化しかしない)。
 つまり秘密鍵がまだ Key Vault に無くても **artifact は溜まり、後から復号できます**。
 
-## ⚠️ GNUPGHOME は短いパスにする
+## ⚠️ 鍵に触る操作はすべて PO の管理環境で行う
 
-**先に読むこと。** gpg 2.x の秘密鍵操作は gpg-agent 経由で、agent の Unix ドメイン
-ソケットには**パス長制限 (約 108 文字)** がある。`GNUPGHOME` が長いと
+**鍵の生成・ローテーション・復号は、いずれも PO の管理環境でのみ行う。**
+**エージェントのサンドボックスで実行しないこと** — パスフレーズ無しの長期秘密鍵が
+ディスクに置かれ、そのセッション内の任意コードから読める状態になる
+([ADR 0045](../../docs/adr/0045-e2e-artifacts-are-secret-by-default.md)
+「エージェント復号を保留する理由」)。
+
+### gpg 実行時の注意: GNUPGHOME は短いパスにする
+
+gpg 2.x の秘密鍵操作は gpg-agent 経由で、agent の Unix ドメインソケットには
+**パス長制限 (約 108 文字)** がある。`GNUPGHOME` が長いと
 
 ```text
 gpg-agent: socket name '…/S.gpg-agent.browser' is too long
@@ -44,8 +52,7 @@ gpg: agent_genkey failed: No agent running
 ```
 
 で失敗し、**「この環境では gpg が使えない」と誤診しやすい** (2026-08-12 に実際に
-踏んだ)。エージェントのサンドボックスは作業ディレクトリのパスが長いので、
-`GNUPGHOME=/tmp/gk` のような短いパスを明示して使う。
+踏んだ)。深い階層で作業している場合は短いパスを明示すること。
 
 ## 鍵を作る (作成済み)
 
@@ -53,10 +60,10 @@ gpg: agent_genkey failed: No agent running
 おり、秘密鍵の設置先は [#301](https://github.com/yomote/mind-inbox/issues/301) で扱う
 (恒久解は管理系 RG の Key Vault / [#302](https://github.com/yomote/mind-inbox/issues/302))。
 
-作り直すときの手順:
+作り直すときの手順 (**PO の管理環境でのみ実行する**。エージェントのサンドボックスでは実行しない):
 
 ```bash
-export GNUPGHOME=/tmp/gk; mkdir -p $GNUPGHOME; chmod 700 $GNUPGHOME
+export GNUPGHOME="$HOME/.gnupg-e2e"; mkdir -p "$GNUPGHOME"; chmod 700 "$GNUPGHOME"
 echo "allow-loopback-pinentry" > $GNUPGHOME/gpg-agent.conf
 
 # 1. 鍵ペア (パスフレーズ無し — Key Vault に入れて機械が使うため)
@@ -101,8 +108,8 @@ gpg --armor --export-secret-keys "mind-inbox e2e artifacts"
 PO の管理環境で実行する:
 
 ```bash
-# 短い GNUPGHOME を用意する (上の警告を参照)
-export GNUPGHOME=/tmp/gk; mkdir -p $GNUPGHOME; chmod 700 $GNUPGHOME
+# GNUPGHOME を用意する (パス長の注意は上を参照)
+export GNUPGHOME="$HOME/.gnupg-e2e"; mkdir -p "$GNUPGHOME"; chmod 700 "$GNUPGHOME"
 echo "allow-loopback-pinentry" > $GNUPGHOME/gpg-agent.conf
 
 # 秘密鍵を取り込む (Key Vault から / #302 完了までは手元の控えから)
@@ -129,6 +136,6 @@ artifact の取得自体はエージェントからも可能 (`download_workflow
 
 ## 鍵を替えるとき
 
-`e2e-artifacts.pub.asc` を差し替えて commit し、Key Vault の秘密鍵を入れ替えるだけ。
+**PO の管理環境で**鍵を作り直し、`e2e-artifacts.pub.asc` を差し替えて commit し、Key Vault の秘密鍵を入れ替えるだけ。
 CI 側の変更は要らない (秘密を持っていないため)。**古い鍵で暗号化済みの artifact は
 古い秘密鍵でしか開けない**点にだけ注意する (保持は 14 日)。
