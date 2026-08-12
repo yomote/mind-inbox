@@ -42,71 +42,80 @@
 #   信頼版スクリプトだけを実行し、権限は statuses:write のみ (マージは queue が
 #   実行するので contents:write は不要 / ADR 0042 D3・D4)。
 #
-# 注意: issue_comment / schedule トリガーは main に入った版でしか発火しない。
-#       コメント後の再評価が要るときは **PR に任意のコメントを 1 本投稿する**
-#       (issue_comment で gate-trusted が再評価する)。workflow_dispatch は置かない —
-#       `gh workflow run --ref <branch>` は指定 branch の workflow 定義の版を実行する
-#       ため、特権 (contents:write) を持つこの workflow に付けると PR 作成者が
-#       自ブランチで yml を改変して特権 dispatch できてしまう (Codex P1 / PR #258)。
+# PR イベントの経路 (ADR 0048 / Issue #331):
+#   この workflow は **PR 側の定義では一切動かない**。PR イベントの受け口は
+#   `review-gate-trigger.yml` (permissions: {} の no-op) が持ち、その run の完了を
+#   `workflow_run` で受けて判定する。workflow_run の定義は常に default branch から
+#   読まれるため、PR ブランチで review-gate.yml を「無条件 success」に書き換えても
+#   使われない。trigger 側を改竄すれば起動を止められるが、止まると status が
+#   付かない = required check 未達 = マージ不能 (fail-closed)。
+#
+# 注意: issue_comment / schedule / workflow_run トリガーは main に入った版でしか
+#       発火しない。コメント後の再評価が要るときは **PR に任意のコメントを 1 本
+#       投稿する** (issue_comment で gate-trusted が再評価する)。
+#       workflow_dispatch は置かない — `gh workflow run --ref <branch>` は指定
+#       branch の workflow 定義の版を実行するため、特権 (contents:write) を持つ
+#       この workflow に付けると PR 作成者が自ブランチで yml を改変して特権
+#       dispatch できてしまう (Codex P1 / PR #258)。
 
 name: review-gate
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_run:
+    # ADR 0048: PR / PR レビューのイベントは review-gate-trigger.yml が受ける。
+    # ここを `pull_request` に戻すと Issue #331 の穴が再び開く。
+    # 名前で照合するので trigger 側の `name:` と必ず揃える。
+    workflows: [review-gate-trigger]
+    types: [completed] # conclusion では絞らない (trigger が失敗しても判定は行う)
   merge_group:
     types: [checks_requested] # merge queue (ADR 0042)。queue 有効化は needs-human #269
   issue_comment:
     types: [created, edited]
-  pull_request_review:
-    types: [submitted, edited, dismissed]
   schedule:
     - cron: "*/30 * * * *" # advisory sweep (ADR 0038 / PR #238 P1)
 
 # 同じ PR への run を直列化する (2 重投稿レースの防御 a / PR #238 P2)。
 # merge_group は head SHA ごとに一意 (group 内の他 PR と混ざらない)。
-# schedule は run_id で group が一意になり直列化されない —
-# そちらは check.py の投稿直前再フェッチ確認 (防御 b) が塞ぐ。
+# workflow_run (ADR 0048) は **trigger run の head SHA** で束ねる — 同じ head に
+# 対する push イベントとレビューイベントは同じ group に入るので、旧 gate-pr が
+# PR 番号で得ていた直列化はほぼそのまま残る (payload の pull_requests[] は fork や
+# タイミングで空になりうるため、常に在る head_sha を使う)。issue_comment 由来の
+# run とは group が分かれるが、そこは schedule と同じく check.py の投稿直前
+# 再フェッチ確認 (防御 b) が塞ぐ。
+# schedule は run_id で group が一意になり直列化されない — 同上。
 concurrency:
-  group: review-gate-${{ github.event.pull_request.number || github.event.issue.number || github.event.merge_group.head_sha || github.run_id }}
+  group: review-gate-${{ github.event.issue.number || github.event.merge_group.head_sha || github.event.workflow_run.head_sha || github.run_id }}
   cancel-in-progress: false
 
-# 権限の分離 (Codex P1 / PR #258): pull_request イベントの run は **workflow 定義も
-# checkout も PR 側** から来る — その job に contents:write を渡すと、同一リポの
-# PR 作成者が check.py を改変して自分でマージまで実行できてしまう (門の無効化)。
-# 既定はゼロにして job 単位で最小権限を宣言する。マージ執行・補償 dispatch・
-# ストール通知は「定義も checkout も main から来るイベント」の job だけが持つ。
+# 権限の分離 (Codex P1 / PR #258): 既定はゼロにして job 単位で最小権限を宣言する。
+# マージ執行・補償 dispatch・ストール通知は issue_comment / schedule の job だけが持つ。
+# 元の動機は「pull_request イベントの run は workflow 定義も checkout も PR 側から
+# 来る」— その job に contents:write を渡すと PR 作成者が自分でマージまで実行できた。
+# ADR 0048 で PR イベントの経路も main の定義 (workflow_run) に移したが、**権限の
+# 最小化は維持する** (多層防御: 分離が 1 枚崩れても被害を最小に保つ)。
 permissions: {}
 
 jobs:
-  # PR 側の**定義**で走るイベント (pull_request / pull_request_review) 専用 —
-  # **最小権限**。pull_request_review も GITHUB_REF/GITHUB_SHA が PR の merge ref を
-  # 指し、workflow 定義も checkout も PR 側から来る (公式 events リファレンスの
-  # GITHUB_SHA = "Last merge commit on the GITHUB_REF branch") ため、特権 job に
-  # 置くと PR が check.py どころか yml ごと書き換えて権限昇格できる (Codex P1-a)。
-  # やることは「push で門を failure に戻す」「レビュー到着/取り消しの再判定」等の
-  # 判定 status 貼りと advisory まで。verdict が緑でもマージはしない
+  # PR イベント (push / レビュー) 起点の判定。**定義もコードも main から来る**
+  # (ADR 0048 / Issue #331): 受け口の review-gate-trigger.yml が完了すると
+  # workflow_run が飛び、その run をこの job が判定する。workflow_run の workflow
+  # 定義は常に default branch から読まれるため、PR ブランチで review-gate.yml を
+  # 書き換えても**この job の定義は変わらない**。
+  # 経緯: #311 / PR #324 で checkout を `ref: default_branch` に固定して判定
+  # ロジック (check.py) を PR 側から読む経路は塞いだが、**どの YAML を使うかは
+  # checkout より前に決まる**ため、yml 自体を「無条件 success」に書き換える経路が
+  # 残っていた (Codex 指摘 / #324)。トリガーを分離してそこを塞いだ。
+  # 権限は旧 gate-pr と同じ最小のまま。verdict が緑でもマージはしない
   # (REVIEW_GATE_EXECUTE_MERGE=false) — マージは pm-accept コメント (issue_comment)
-  # か 30 分毎の sweep が main 側コードで行う (レビュー到着時の即時マージは
-  # 失われるが sweep が 30 分以内に回収する)。
-  # **判定ロジックは常に default branch のものを実行する** (Issue #311 / #313):
-  # 以前はここが ref 無しの checkout = PR 側の作業ツリーで check.py を走らせていた。
-  # fork PR は GITHUB_TOKEN が read-only なので無害だが、このリポの運用は
-  # 「エージェントが同一リポにブランチを push して PR を出す」— 同一リポ PR なら
-  # statuses:write が生きるため、PR が cicd/scripts/review-gate/check.py を
-  # 書き換えるだけで required check `review-gate` に**偽の success** を貼れた
-  # (= ADR 0036 の門を被判定者自身が開けられる)。gate-merge-group / gate-trusted /
-  # sweep が既に採っている `ref: default_branch` と同形に揃えて塞ぐ。
+  # か 30 分毎の sweep が行う (レビュー到着時の即時マージは失われるが sweep が
+  # 30 分以内に回収する)。
   # 判定材料 (PR のコメント・レビュースレッド・差分) は全て GitHub API 経由で
-  # 取るので、PR の作業ツリーは不要 — PR の内容は**判定対象としてのみ**読む。
-  # 残る残余リスクは workflow 定義そのもの (pull_request イベントの run は yml も
-  # PR 側から来る) — こちらはブランチ保護 / 定義変更のレビューが担う。
+  # 取るので、PR の作業ツリーは checkout しない — PR の内容は**判定対象としてのみ**
+  # 読む (gate-merge-group / gate-trusted / sweep と同形)。
   gate-pr:
-    name: マージの門を判定 (PR イベント / main のコードで実行)
+    name: マージの門を判定 (PR イベント / main の定義とコードで実行)
     runs-on: ubuntu-latest
-    if: >-
-      github.event_name == 'pull_request'
-      || github.event_name == 'pull_request_review'
+    if: github.event_name == 'workflow_run'
     permissions:
       contents: read
       statuses: write
@@ -118,17 +127,51 @@ jobs:
           # PR 側の作業ツリーは checkout しない — 判定スクリプトは必ず信頼版
           # (default branch) を実行する (#311 / gate-merge-group と同形)
           ref: ${{ github.event.repository.default_branch }}
+      - name: 判定対象の PR を解決する
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 同一リポの PR なら payload に入っている。fork PR や payload 生成の
+          # タイミングによっては **空配列** になりうるので、下の API 経路が要る
+          EVENT_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          number="${EVENT_PR_NUMBER:-}"
+          if [ -n "$number" ]; then
+            echo "payload の pull_requests から解決: #${number}"
+          else
+            echo "payload の pull_requests が空 — head_sha から PR を引き直す"
+            # 同じ head SHA の open PR を引く。head_branch が一致するものを優先。
+            # API 自体が失敗しても下の「解決できなかった」分岐に落として
+            # 明示的なエラーで終わらせる (|| true — 素の pipefail 死だと理由が薄い)
+            number="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/pulls" \
+              | jq -r --arg sha "$HEAD_SHA" --arg branch "$HEAD_BRANCH" '
+                  [ .[] | select(.state == "open") | select(.head.sha == $sha) ]
+                  | (map(select(.head.ref == $branch)) + .)
+                  | .[0].number // empty' || true)"
+          fi
+          if [ -z "$number" ]; then
+            # 「PR が引けなかった」を**静かな成功にしない** (CLAUDE.md: 沈黙と正常を
+            # 区別する)。ここで失敗すると status が付かない = required check 未達 =
+            # マージ不能 — 安全側に倒れる
+            echo "::error::workflow_run から判定対象の PR を解決できなかった (head_sha=${HEAD_SHA} / branch=${HEAD_BRANCH})。commit status は貼らずに失敗する。"
+            exit 1
+          fi
+          echo "number=${number}" >> "$GITHUB_OUTPUT"
       - name: 判定して commit status を貼る
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REVIEW_GATE_REQUIRE_CODEX: ${{ vars.REVIEW_GATE_REQUIRE_CODEX }}
           # Codex 再トリガー依頼の猶予 (分)。未設定なら既定 10 (ADR 0038)
           CODEX_RETRIGGER_MINUTES: ${{ vars.CODEX_RETRIGGER_MINUTES }}
-          # PR 側コードで走る run にマージ権限は無い — 執行も試みない (Codex P1)
+          # PR イベント起点の run にマージ権限は無い — 執行も試みない (Codex P1)
           REVIEW_GATE_EXECUTE_MERGE: "false"
-          # pull_request / pull_request_review はどちらも payload に
-          # event.pull_request.number を持つ (issue.number は無い — Codex P1-b)
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ steps.resolve.outputs.number }}
+        # status の貼り先は check.py が **API で引いた PR の head SHA** —
+        # workflow_run.head_sha ではなく現在の head に貼る (判定材料と貼り先を
+        # ずらさない。head が動いていれば新しい trigger run が別途走る)
         run: python3 cicd/scripts/review-gate/check.py "$PR_NUMBER"
 
   # workflow 定義と checkout が main から来るイベント (issue_comment。公式 events

@@ -1,0 +1,54 @@
+# review-gate の起動係 (Issue #331 / ADR 0048) — **判定は一切しない no-op**。
+#
+# なぜ分かれているか:
+#   GitHub Actions は workflow の YAML を「どのブランチから読むか」がトリガーで違う。
+#     - pull_request / pull_request_review → **その PR 側** (merge ref) の定義
+#     - workflow_run / schedule / issue_comment → **default branch (main)** の定義
+#   合否を commit status に貼る job は `statuses: write` を持つため、PR 側の定義で
+#   動かすと「PR ブランチで review-gate.yml を『無条件 success』に書き換えて
+#   自分に合格を貼る」ができてしまう (Issue #331)。PR #324 で判定ロジック
+#   (check.py) は main から checkout するようにしたが、**どの YAML を使うかは
+#   checkout より前に決まる**ので穴は塞がっていなかった。
+#
+#   そこで PR イベントの受け口だけをこの workflow に残し、判定本体は
+#   `review-gate.yml` の `workflow_run` job (= 定義もコードも常に main) に置く。
+#
+# fail-closed であること (この設計の要):
+#   この workflow は **PR 側から書き換えられる**。しかし持っているのは
+#   `permissions: {}` (何の権限も無い) と「完了して workflow_run イベントを
+#   起こす」ことだけなので、改竄でできるのは高々**起動しないこと**——
+#   つまり `review-gate` の commit status が付かない → required check が
+#   未達 → **マージ不能**。攻撃者が得るのは「自分の PR が止まる」だけで、
+#   偽の合格は作れない。名前 (`name:` / job) を変えても workflow_run の
+#   `workflows:` フィルタに掛からなくなるだけで、結果は同じく status 無し。
+#
+# 触るときの注意:
+#   - **ここに権限を足さない / checkout を足さない**。足した瞬間に「PR が
+#     書き換えられる定義に特権がある」状態に戻る (この分離の意味が消える)
+#   - `name:` を変えるなら review-gate.yml の `workflow_run.workflows` も同時に。
+#     片方だけ変えると gate が起動しなくなり全 PR が詰まる
+#   - トリガー種別は review-gate.yml の旧 gate-pr と同一に保つ (増減させない)
+
+name: review-gate-trigger
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+
+# 何も持たせない (改竄されても失うものが無い状態にする)
+permissions: {}
+
+jobs:
+  trigger:
+    name: 判定 (review-gate) を起動する
+    runs-on: ubuntu-latest
+    steps:
+      - name: no-op (workflow_run イベントを起こすだけ)
+        env:
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          echo "event=${EVENT} head_sha=${SHA}"
+          echo "判定は review-gate.yml の workflow_run job (main の定義) が行う。"
