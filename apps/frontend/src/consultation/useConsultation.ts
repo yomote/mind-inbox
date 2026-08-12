@@ -332,6 +332,9 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     // 画面で確認した内容と違うものが保存されうる — 再抽出はしない。
     if (previewSupported) {
       // 下書きが無い間はボタンが disabled (dialogue-session.mdx §5.8)。二重ガード。
+      // **ここで従来の一発抽出に落とさない** — 「この内容で確定」が「今から抽出し直す」に
+      // 化けると、画面で確認していない内容が保存されうる (PR #282 Codex P1 の否決理由)。
+      // 更新が失敗し続けているときの復帰導線は「今すぐ整理」の再実行 (§5.8)。
       if (!preview) return;
       // 確定するのは**押した時点で画面に出ている内容**。飛行中の更新はここで捨て、
       // 保存対象をスナップショットとして固定する (PR #282 再レビュー P1)。
