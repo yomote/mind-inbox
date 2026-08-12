@@ -30,12 +30,12 @@
 
 **宣言へ切り替える前に実測で確かめること** ([#306](https://github.com/yomote/mind-inbox/issues/306) 第 1 段階の成果物):
 
-| # | 確かめること | 外れたときに起きること |
-| --- | --- | --- |
-| 1 | 既存アプリ (`appId a0f2c66e-…`) に **`uniqueName` を後から付けられるか**。`uniqueName` は Immutable なので「変更」ではなく「初回設定」が通るかどうか | 付けられないと bicep は既存を採用できず**新しい登録を作る** → `appId` が一度だけ変わる |
-| 2 | `identifierUris` (`api://{appId}`) を **2 パス目で渡す形**で意図どおり入るか | EasyAuth の `allowedAudiences` と対にならず、`az account get-access-token --scope api://…/.default` が解決先を失う |
-| 3 | 既存の `access_as_user` スコープの **GUID をそのまま宣言できるか** (`existingScopeId` で渡す) | 別 GUID になるとスコープが作り直され、**事前 consent がやり直しになる** |
-| 4 | `oauth2PermissionGrants` の宣言が、手作業の `az ad app permission grant --consent-type AllPrincipals` と同じ結果になるか | `.default` が解決先を持たず、ログイン後に API が 401 |
+| #   | 確かめること                                                                                                                                         | 外れたときに起きること                                                                                             |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| 1   | 既存アプリ (`appId a0f2c66e-…`) に **`uniqueName` を後から付けられるか**。`uniqueName` は Immutable なので「変更」ではなく「初回設定」が通るかどうか | 付けられないと bicep は既存を採用できず**新しい登録を作る** → `appId` が一度だけ変わる                             |
+| 2   | `identifierUris` (`api://{appId}`) を **2 パス目で渡す形**で意図どおり入るか                                                                         | EasyAuth の `allowedAudiences` と対にならず、`az account get-access-token --scope api://…/.default` が解決先を失う |
+| 3   | 既存の `access_as_user` スコープの **GUID をそのまま宣言できるか** (`existingScopeId` で渡す)                                                        | 別 GUID になるとスコープが作り直され、**事前 consent がやり直しになる**                                            |
+| 4   | `oauth2PermissionGrants` の宣言が、手作業の `az ad app permission grant --consent-type AllPrincipals` と同じ結果になるか                             | `.default` が解決先を持たず、ログイン後に API が 401                                                               |
 
 1 が「付けられない」だった場合の影響範囲は特定済み: `cicd/iac/main-bootstrap.parameters.json` の `functionAuthEntraClientId` / フロントのビルド時変数 / 事前 consent のやり直し。**毎週変わるわけではない一度きりの移行コスト**なので、設計はどちらでも成立する。
 

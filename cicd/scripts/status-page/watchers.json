@@ -35,6 +35,12 @@
       "expect_hours": 192
     },
     {
+      "id": "codeql.yml",
+      "name": "SAST (CodeQL)",
+      "what": "自分たちが書いたコードの injection / SSRF 等を PR と週次で解析し、Security タブの alert に積む (依存の CVE は security-sweep の担当)",
+      "expect_hours": 192
+    },
+    {
       "id": "security-sweep.yml",
       "name": "週次のセキュリティスキャン",
       "what": "npm audit / pip-audit / gitleaks を回し、依存の既知 CVE とコミットされた秘密を Issue に積む (カバー外領域は本文に明示)",
