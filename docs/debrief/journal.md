@@ -18,6 +18,14 @@
 - **持ち越し**: {未消化の項目・次回に回した判断。無ければ「なし」}
 ```
 
+## 2026-08-12 — design-gate (合成ユーザー探索 PoC)
+
+- **対象**: [ADR 0053](../adr/0053-synthetic-user-exploration-poc.md) (合成ユーザー探索 PoC の設計 / [#304](https://github.com/yomote/mind-inbox/issues/304) の次段階)。発端は PO の問い「PM セッションが二つになってしまい、窓口一本化が動かない」で、その追跡の副産物として、spend limit で中身ゼロのまま死んでいた `合成ユーザーでのUX探索` セッションの仕事が未消化だと判明したこと
+- **決定**: ADR 0053 を **Accepted**。5 ペルソナ × 3 走行を**週 1・手動起動 1 回**から。成功条件は発見件数ではなく**同一 commit SHA での再現性**。着工は 3 段階で、**Phase 0 = [#354](https://github.com/yomote/mind-inbox/issues/354) の採点接続**を飛ばさない。「再訪して過去 Problem を再燃させる」ペルソナは dev に永続化が繋がっていない (実測: `enableCosmos` を渡す deploy 経路が無く既定 `false`) ため除外し、接続時に再裁定する
+- **学びメモ**: 理解確認 (「Phase 0 を飛ばすと何が起きるか」) は一発で正答 — **記録だけが 15 倍に積み、採点されないまま残る**。順序の帰結が伝わっていたので、D8 の段取りはそのまま採用した。ペルソナ除外の判断も「永続化を繋いだら戻す」で即決。**設計の説明より先に「既存ループのどこが切れているか」を図で 1 枚出したのが効いた**と思われる — 新機能の設計を出すとき、まず既存の断線を見せると順序の議論が要らなくなる
+- **特記**: この design-gate 自体が**窓口一本化の効果測定**になった。#304 (構想) / #354 (断線) / ADR 0022・0027・0041 (既存ループ) は**それぞれ別のセッションが作った資産**で、どれも単体では「探索を足すと採点が追いつかない」に到達していない。窓口 1 本に集約して初めて連鎖が見えた。同型の発見がこの日もう 1 件あり、[PR #284](https://github.com/yomote/mind-inbox/pull/284) (承認済み ADR 0043) が **Codex のレビュー枠切れ ([#345](https://github.com/yomote/mind-inbox/issues/345)) で 1 日半マージできずにいた** — 外部サービスの枠切れが PO の承認を人質に取る経路が実在した。resolve 規約に例外条項を足して解消
+- **持ち越し**: Phase 0 ([#354](https://github.com/yomote/mind-inbox/issues/354)) の**実測** — Routine のプロンプトに採点を足しても、次の発火でデータブランチに `ux-judge-score` が積まれるまで「載っていない」として扱う。Phase 1 の着工は #304 の着手条件 (工場の混雑 = [#345](https://github.com/yomote/mind-inbox/issues/345) / [#327](https://github.com/yomote/mind-inbox/issues/327) / [#331](https://github.com/yomote/mind-inbox/issues/331) の収束) 待ち。[#349](https://github.com/yomote/mind-inbox/issues/349) (claim ref の 2 穴) は次回 debrief の裁定事項として残っている
+
 ## 2026-08-12 — debrief
 
 - **対象**: [ADR 0048](../adr/0048-child-sessions-are-usable-again-with-a-one-way-poke-channel.md) (子セッションの復活と親子セッション間通信)。PO の質問「Claude のルーティン一覧は見えるか / コセッションは作れるか」から実測を始め、[ADR 0033](../adr/0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) の前提が崩れていることが判明したため起案。Proposed 5 本 (0041 / 0042 / 0045 / 0047 / 0048) のうち **0048 のみを裁定**する方針を PO が選択
