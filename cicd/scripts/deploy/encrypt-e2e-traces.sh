@@ -57,7 +57,16 @@ for t in "${traces[@]}"; do
   fi
   # 出力が本当に OpenPGP メッセージかを確かめる。gpg が失敗しても空ファイルが残る
   # ことがあり、拡張子だけの検査は素通りする (2026-08-12 に実際に踏んだ)。
-  if [ ! -s "$out" ] || ! gpg --list-packets "$out" >/dev/null 2>&1; then
+  #
+  # **終了コードで判定してはいけない** — `--list-packets` は秘密鍵があれば復号まで
+  # 試みるため、**公開鍵しか持たない CI ランナーでは必ず非ゼロ**になる
+  # (`decryption failed: No secret key`)。rc を見る実装は本番で 100% 落ち、trace が
+  # 永久に上がらない。2026-08-12 に実鍵で踏んで気づいた。
+  #
+  # 代わりに stdout のパケットダンプを見る。`:pubkey enc packet:` はロケールに
+  # 依存せず、平文ファイルに対しては 1 行も出ない (実測で確認済み)。
+  packets="$(gpg --batch --list-packets "$out" 2>/dev/null || true)"
+  if [ ! -s "$out" ] || ! printf '%s' "$packets" | grep -q ':pubkey enc packet:'; then
     echo "::error::出力が OpenPGP メッセージになっていません: $out"
     exit 1
   fi

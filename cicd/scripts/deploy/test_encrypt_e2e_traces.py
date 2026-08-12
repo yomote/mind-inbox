@@ -33,8 +33,18 @@ done
 case "$1 $2" in
   *"--import"*) exit 0 ;;
 esac
+# --list-packets: **実 gpg の振る舞いを模す**。公開鍵しか無い環境では復号を試みて
+# 失敗するので rc は非ゼロ (既定 2)。ただし暗号化パケットの情報は stdout に出る。
+# 中身が暗号文のときだけダンプを出し、平文・空には出さない。
 for a in "$@"; do
-  [ "$a" = "--list-packets" ] && exit "${STUB_LIST_PACKETS_RC:-0}"
+  if [ "$a" = "--list-packets" ]; then
+    target="${!#}"
+    if grep -q 'PGP-CIPHERTEXT' "$target" 2>/dev/null; then
+      echo "# off=0 ctb=85 tag=1 hlen=3 plen=524"
+      echo ":pubkey enc packet: version 3, algo 1, keyid DEADBEEFDEADBEEF"
+    fi
+    exit "${STUB_LIST_PACKETS_RC:-2}"
+  fi
 done
 # --encrypt 経路: -o の次の引数が出力先
 out=""
@@ -44,9 +54,10 @@ for a in "$@"; do
   prev="$a"
 done
 case "${STUB_MODE:-ok}" in
-  ok)      printf 'PGP-CIPHERTEXT' > "$out"; exit 0 ;;
-  fail)    exit 2 ;;
-  empty)   : > "$out"; exit 0 ;;   # ← rc=0 なのに中身が空 (今日踏んだ失敗)
+  ok)        printf 'PGP-CIPHERTEXT' > "$out"; exit 0 ;;
+  fail)      exit 2 ;;
+  empty)     : > "$out"; exit 0 ;;   # ← rc=0 なのに中身が空 (2026-08-12 に踏んだ失敗)
+  plaintext) cp "${!#}" "$out"; exit 0 ;;  # ← 暗号化せず平文を置く最悪ケース
 esac
 exit 0
 """
@@ -124,15 +135,33 @@ def test_単体_出力が空なら_成功扱いにせず落とす(tmp_path: Path
     assert "OpenPGP" in r.stdout
 
 
-def test_単体_OpenPGP_として読めない出力は落とす(tmp_path: Path):
+def test_単体_平文がそのまま置かれたら落とす(tmp_path: Path):
     """無いと何が静かに通るか: 中身が平文のままでも拡張子が .gpg なら通ってしまう。
-    サイズだけでなく **中身が暗号文か** を確かめる必要がある。
+    サイズだけでなく **中身が暗号文か** を確かめる必要がある。ここが素通りすると
+    実トークンを含む trace が public な artifact として公開される。
     """
     key, env = _setup(tmp_path)
-    env["STUB_LIST_PACKETS_RC"] = "2"
+    env["STUB_MODE"] = "plaintext"
     r = _run(tmp_path, key, env)
     assert r.returncode == 1
     assert "OpenPGP" in r.stdout
+
+
+def test_単体_秘密鍵が無くて_list_packets_が非ゼロでも暗号化できていれば通す(tmp_path: Path):
+    """2026-08-12 に実鍵で踏んだ失敗の回帰テスト。
+
+    `gpg --list-packets` は秘密鍵があれば復号まで試みるため、**公開鍵しか持たない
+    CI ランナーでは必ず非ゼロ**で終わる。終了コードで判定する実装は本番で 100%
+    落ち、trace が永久にアップロードされない (しかもテストは緑のまま)。
+
+    無いと何が静かに通るか: 「安全側に倒れている」ように見えて、実際は機能が
+    まるごと死んでいる状態に気づけない。
+    """
+    key, env = _setup(tmp_path)
+    env["STUB_LIST_PACKETS_RC"] = "2"  # 公開鍵しか無いランナーと同じ条件
+    r = _run(tmp_path, key, env)
+    assert r.returncode == 0, f"秘密鍵が無い環境で誤って落ちている: {r.stdout}"
+    assert (tmp_path / "out").exists()
 
 
 def test_単体_trace_が複数でも全件暗号化される(tmp_path: Path):

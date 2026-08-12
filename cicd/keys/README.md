@@ -29,19 +29,39 @@ GitHub ユーザーなら誰でもダウンロードできる。したがって 
 **公開鍵が無い間、deploy は trace を残さず `::warning::` を出して続行する**
 (ADR 0045 D6)。鍵の準備前に平文で上がる事故を構造的に防ぐため。
 
-## 鍵を作る (人間の作業・1 回だけ)
+## ⚠️ GNUPGHOME は短いパスにする
 
-エージェントは秘密鍵を生成しない (生成すると秘密鍵がセッションの記録に残るため)。
-PO が手元で実行する:
+**先に読むこと。** gpg 2.x の秘密鍵操作は gpg-agent 経由で、agent の Unix ドメイン
+ソケットには**パス長制限 (約 108 文字)** がある。`GNUPGHOME` が長いと
+
+```text
+gpg-agent: socket name '…/S.gpg-agent.browser' is too long
+gpg: agent_genkey failed: No agent running
+```
+
+で失敗し、**「この環境では gpg が使えない」と誤診しやすい** (2026-08-12 に実際に
+踏んだ)。エージェントのサンドボックスは作業ディレクトリのパスが長いので、
+`GNUPGHOME=/tmp/gk` のような短いパスを明示して使う。
+
+## 鍵を作る (作成済み)
+
+鍵ペアは 2026-08-12 に作成済み。公開鍵は `e2e-artifacts.pub.asc` として commit されて
+おり、秘密鍵は PO が環境変数へ設置する ([#301](https://github.com/yomote/mind-inbox/issues/301))。
+
+作り直すときの手順:
 
 ```bash
-# 1. 鍵ペアを作る (パスフレーズ無し — 環境変数に入れて機械が使うため)
-gpg --batch --quick-generate-key "mind-inbox e2e artifacts <noreply@example.com>" default default never
+export GNUPGHOME=/tmp/gk; mkdir -p $GNUPGHOME; chmod 700 $GNUPGHOME
+echo "allow-loopback-pinentry" > $GNUPGHOME/gpg-agent.conf
 
-# 2. 公開鍵を書き出す → この中身を cicd/keys/e2e-artifacts.pub.asc として commit
-gpg --armor --export "mind-inbox e2e artifacts"
+# 1. 鍵ペア (パスフレーズ無し — 環境変数に入れて機械が使うため)
+gpg --batch --pinentry-mode loopback --passphrase '' \
+    --quick-generate-key "mind-inbox e2e artifacts <noreply@mind-inbox.invalid>" rsa4096 encr never
 
-# 3. 秘密鍵を書き出す → Claude Code 環境の環境変数 E2E_ARTIFACT_PRIVATE_KEY に貼る
+# 2. 公開鍵 → cicd/keys/e2e-artifacts.pub.asc として commit
+gpg --armor --export "mind-inbox e2e artifacts" > cicd/keys/e2e-artifacts.pub.asc
+
+# 3. 秘密鍵 → Claude Code 環境の環境変数 E2E_ARTIFACT_PRIVATE_KEY に貼る
 #    (あわせてパスワードマネージャにも控える。失うと過去の artifact は開けない)
 gpg --armor --export-secret-keys "mind-inbox e2e artifacts"
 ```
@@ -52,14 +72,23 @@ gpg --armor --export-secret-keys "mind-inbox e2e artifacts"
 ## 復号して trace を見る (エージェント / PO)
 
 ```bash
+# 短い GNUPGHOME を用意する (上の警告を参照)
+export GNUPGHOME=/tmp/gk; mkdir -p $GNUPGHOME; chmod 700 $GNUPGHOME
+echo "allow-loopback-pinentry" > $GNUPGHOME/gpg-agent.conf
+
 # 秘密鍵を取り込む (エージェントは環境変数から)
 printf '%s' "$E2E_ARTIFACT_PRIVATE_KEY" | gpg --batch --import
 
 # artifact を取得して復号
-#   artifact 名: e2e-live-trace-<run_id>  /  中身: <test-name>__trace.zip.gpg
-gpg --batch --yes --decrypt -o trace.zip <name>__trace.zip.gpg
+#   artifact 名: e2e-live-trace-<run_id>  /  中身: <test-name>_trace.zip.gpg
+gpg --batch --yes --pinentry-mode loopback --passphrase '' \
+    --decrypt -o trace.zip <name>_trace.zip.gpg
 pnpm --dir apps/frontend exec playwright show-trace trace.zip
 ```
+
+2026-08-12 に実鍵で往復を実測済み: 暗号化 → 別キーリングで取り込み → 復号で
+**sha256 が元と一致**し、秘密鍵を持たない環境では `decryption failed: No secret key`
+になることを確認した。
 
 artifact の取得はエージェントからも可能 (`download_workflow_run_artifact` で署名付き
 URL を得て取得する。2026-08-12 に実測済み)。
