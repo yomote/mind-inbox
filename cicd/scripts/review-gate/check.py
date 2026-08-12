@@ -8,6 +8,12 @@
       # ストール検知を適用する。status は貼らない。イベント駆動だけだと
       # 「push 直後は猶予内 → その後イベントが来ない」で advisory が一度も
       # 発火しないため (PR #238 P1 指摘)
+    python3 cicd/scripts/review-gate/check.py --merge-group
+      # merge_group イベント用 (ADR 0042): env MERGE_GROUP_HEAD_REF から対象 PR を
+      # 解決し、同じ判定を行って **merge group の head SHA** (env MERGE_GROUP_HEAD_SHA)
+      # に status を貼る (merge queue の required check はそこを見る)。
+      # PR を解決できない場合は failure を貼る (安全側 — 静かに通さない)。
+      # advisory もマージ執行もしない (マージは queue が実行する — ADR 0042 D4)
       要: `gh` が認証済み (Actions では GH_TOKEN を渡す) / GITHUB_REPOSITORY
 
 仕組み:
@@ -17,7 +23,13 @@
 条件 (全部揃うまで failure):
     1. PM の受け入れコメント — `[pm-accept]` マーカー + いまの head SHA (先頭 7 桁) を
        含むコメントが PR にある。**SHA を含める規約により push で自動的に無効化される**
-       (受け入れ後に積まれた未レビューコードのマージを防ぐ)
+       (受け入れ後に積まれた未レビューコードのマージを防ぐ)。
+       例外 (ADR 0042 — pm-accept の引き継ぎ): 最新の `[pm-accept] <sha>` の <sha> から
+       現 head までの追加コミットが **base (main) からのマージのみ** で、かつ
+       **PR の実装差分 (base...head) が受け入れ時点と同一** なら、受け入れは現 head に
+       引き継がれる。実装差分が 1 文字でも変わる push は従来どおり再受け入れが要る。
+       判定は evaluate_gate → decide の共通経路にあるため、**マージ執行 (下) の
+       「受け入れ済み」判定にも同じ引き継ぎが効く**
     2. レビュースレッドが全部解決している
     3. コード PR (apps/ か cicd/ に触れる) かつ REVIEW_GATE_REQUIRE_CODEX=true のとき、
        Codex のレビューが付いている (login が CODEX_LOGIN_PATTERN にマッチする投稿。
@@ -67,11 +79,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -85,6 +99,18 @@ TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 CODE_PREFIXES = ("apps/", "cicd/")
 STATUS_CONTEXT = "review-gate"
 SHORT_SHA_LEN = 7
+
+# ---- pm-accept の引き継ぎ / merge_group (ADR 0042) ----
+
+# pm-accept コメント本文から受け入れ SHA を拾うトークン (7〜40 桁の hex)
+HEX_TOKEN_RE = re.compile(r"\b[0-9a-fA-F]{7,40}\b")
+# merge queue の一時 branch ref: gh-readonly-queue/<base>/pr-<番号>-<sha>
+MERGE_GROUP_REF_RE = re.compile(r"(?:^|/)gh-readonly-queue/.+?/pr-(\d+)-")
+# compare API の files は 300 件で打ち切られる (ページングなし)。
+# 打ち切られた diff を「同一」と誤判定しないための上限。
+COMPARE_FILES_CAP = 300
+# pulls/N/commits は 250 コミットで打ち切られる。全量が見えない PR は引き継ぎ判定不能。
+PR_COMMITS_CAP = 250
 
 # ---- Codex 自動再トリガー / 敏感パス指名 (ADR 0038 — advisory、合否には入れない) ----
 
@@ -532,14 +558,19 @@ def recently_merged(
 class Verdict:
     ok: bool
     missing: list[str] = field(default_factory=list)
+    # 緑の補足 (例: pm-accept 引き継ぎ — ADR 0042)。判定理由を status に可視化する
+    note: str = ""
 
     @property
     def description(self) -> str:
-        text = (
-            "OK: 受け入れ・スレッド・レビューが揃った"
-            if self.ok
-            else " / ".join(self.missing)
-        )
+        if self.ok:
+            text = (
+                f"OK: {self.note}"
+                if self.note
+                else "OK: 受け入れ・スレッド・レビューが揃った"
+            )
+        else:
+            text = " / ".join(self.missing)
         return text[:137] + "…" if len(text) > 140 else text
 
 
@@ -577,6 +608,137 @@ def has_pm_accept(comments: list[tuple[str, str]], head_sha: str) -> bool:
     )
 
 
+def latest_pm_accept_token(comments: list[tuple[str, str]]) -> str | None:
+    """最新の信頼できる pm-accept コメントから受け入れ SHA トークンを取る (ADR 0042)。
+
+    comments は API 取得順 (created_at 昇順) の (本文, author_association)。
+    末尾から走査して最初に見つかった信頼できる `[pm-accept]` コメントの、
+    マーカーより後ろにある最初の hex トークン (7〜40 桁) を小文字で返す。
+    **最新の受け入れだけを見る** — 古い受け入れへ遡って引き継がない
+    (PM が受け入れをやり直したら新しい方が意思)。
+    """
+    for body, association in reversed(comments):
+        if (association or "").upper() not in TRUSTED_ASSOCIATIONS:
+            continue
+        if PM_ACCEPT_MARKER not in body:
+            continue
+        tail = body[body.index(PM_ACCEPT_MARKER) + len(PM_ACCEPT_MARKER) :]
+        m = HEX_TOKEN_RE.search(tail)
+        return m.group(0).lower() if m else None
+    return None
+
+
+def parse_merge_group_pr(head_ref: str) -> int | None:
+    """merge_group の head_ref (`gh-readonly-queue/<base>/pr-<N>-<sha>`) から PR 番号を返す。
+
+    解決できなければ None — 呼び出し側は **failure を貼る** (安全側。
+    静かに緑を貼ると未受け入れの PR が queue を通ってしまう)。
+    """
+    m = MERGE_GROUP_REF_RE.search(head_ref or "")
+    return int(m.group(1)) if m else None
+
+
+def diff_digest_from_files(files: list[dict]) -> str | None:
+    """compare API の files[] から「PR の実装差分」の指紋を作る (ADR 0042)。
+
+    filename / status / rename 元 / blob SHA / patch 本文を全部畳む —
+    **1 文字でも変われば指紋が変わる** (引き継ぎ判定を緩めない要)。
+    compare API は files を 300 件で打ち切る (ページング不可) ため、
+    打ち切りの可能性がある場合は None = 判定不能を返す (「見えなかったものを
+    同一と書かない」— status-page と同じ規律)。
+    """
+    if len(files) >= COMPARE_FILES_CAP:
+        return None
+    entries = sorted(
+        (
+            f.get("filename") or "",
+            f.get("status") or "",
+            f.get("previous_filename") or "",
+            f.get("sha") or "",
+            f.get("patch") or "",
+        )
+        for f in files
+    )
+    return hashlib.sha256(json.dumps(entries, ensure_ascii=False).encode()).hexdigest()
+
+
+@dataclass
+class Carryover:
+    """pm-accept 引き継ぎ (ADR 0042) の判定結果。"""
+
+    ok: bool
+    accepted_short: str = ""
+    detail: str = ""  # 不成立の理由 (status description に出して可視化する)
+
+
+def evaluate_carryover(
+    accepted_token: str,
+    head_sha: str,
+    pr_commits: list[dict],
+    is_from_base: Callable[[str], bool],
+    diff_digest: Callable[[str], str | None],
+) -> Carryover:
+    """受け入れ SHA から現 head への pm-accept 引き継ぎを判定する (ADR 0042 の核)。
+
+    成立条件 (**全部**):
+      1. accepted_token が PR のコミット列の中の 1 つに一意に解決できる
+      2. 現 head から受け入れコミットまで **第一親を辿って到達できる**
+         (rebase / force-push でコミットが書き換わっていない)
+      3. その間の追加コミットが **すべて「base からのマージコミット」**
+         (ちょうど 2 親、第二親が base に到達済み)。実装コミットが 1 つでも
+         混ざれば不成立
+      4. 実装差分 (base...head の compare) の指紋が受け入れ時点と **完全一致**。
+         evil merge (マージに紛れた実装変更) はここで落ちる
+
+    pr_commits: [{"sha": str, "parents": [str, ...]}, ...] (pulls/N/commits の写像)。
+    is_from_base / diff_digest は I/O (compare API) を注入する — 構造条件が
+    落ちたら呼ばれない (API 節約 + テスト可能性)。
+    """
+    shas = [c["sha"] for c in pr_commits]
+    if head_sha.startswith(accepted_token):
+        # 現 head そのものへの受け入れ — 引き継ぎ不要 (直接判定が通っているはず)
+        return Carryover(ok=True, accepted_short=accepted_token[:SHORT_SHA_LEN])
+    matches = [s for s in shas if s.startswith(accepted_token)]
+    if len(matches) != 1:
+        return Carryover(
+            ok=False, detail="受け入れ SHA を PR コミット列に一意解決できない"
+        )
+    accepted = matches[0]
+    parents_by_sha = {c["sha"]: list(c.get("parents") or []) for c in pr_commits}
+
+    # head → accepted へ第一親で辿る。辿れなければ (rebase 等) 不成立
+    chain: list[str] = []
+    cur = head_sha
+    while cur != accepted:
+        if cur not in parents_by_sha or len(chain) > len(pr_commits):
+            return Carryover(
+                ok=False, detail="head から受け入れ SHA へ第一親で辿れない"
+            )
+        chain.append(cur)
+        parents = parents_by_sha[cur]
+        if not parents:
+            return Carryover(
+                ok=False, detail="head から受け入れ SHA へ第一親で辿れない"
+            )
+        cur = parents[0]
+
+    for sha in chain:
+        parents = parents_by_sha[sha]
+        if len(parents) != 2 or not is_from_base(parents[1]):
+            return Carryover(
+                ok=False,
+                detail=f"{sha[:SHORT_SHA_LEN]} が base からのマージでない",
+            )
+
+    digest_accepted = diff_digest(accepted)
+    digest_head = diff_digest(head_sha)
+    if digest_accepted is None or digest_head is None:
+        return Carryover(ok=False, detail="実装差分を取得しきれない (files 300 件超)")
+    if digest_accepted != digest_head:
+        return Carryover(ok=False, detail="実装差分が受け入れ時点から変化")
+    return Carryover(ok=True, accepted_short=accepted[:SHORT_SHA_LEN])
+
+
 def decide(
     head_sha: str,
     changed_paths: list[str],
@@ -584,15 +746,25 @@ def decide(
     unresolved_threads: int,
     codex_present: bool,
     require_codex: bool,
+    carryover: Carryover | None = None,
 ) -> Verdict:
     missing: list[str] = []
-    if not has_pm_accept(comments, head_sha):
-        missing.append(f"PM 受け入れ ([pm-accept] + {head_sha[:SHORT_SHA_LEN]}) が無い")
+    note = ""
+    if has_pm_accept(comments, head_sha):
+        pass  # 現 head への直接の受け入れ (従来どおり)
+    elif carryover is not None and carryover.ok:
+        # ADR 0042: 実装差分が不変の main 追随なら受け入れを引き継ぐ
+        note = f"pm-accept を {carryover.accepted_short} から引き継ぎ (差分不変)"
+    else:
+        item = f"PM 受け入れ ([pm-accept] + {head_sha[:SHORT_SHA_LEN]}) が無い"
+        if carryover is not None and carryover.detail:
+            item += f" (引き継ぎ不成立: {carryover.detail})"
+        missing.append(item)
     if unresolved_threads > 0:
         missing.append(f"未解決スレッド {unresolved_threads} 件")
     if require_codex and is_code_pr(changed_paths) and not codex_present:
         missing.append("Codex レビューが無い (コード PR)")
-    return Verdict(ok=not missing, missing=missing)
+    return Verdict(ok=not missing, missing=missing, note=note)
 
 
 # ---- ここから下は GitHub との入出力 (テスト対象は上の純粋ロジック) ----
@@ -817,10 +989,62 @@ def fetch_comments_with_times(repo: str, number: int) -> list[tuple[str, str, st
     ]
 
 
-def evaluate_gate(repo: str, number: int, head_sha: str) -> GateEval:
+def compute_carryover(
+    repo: str, pr: dict, comment_pairs: list[tuple[str, str]]
+) -> Carryover | None:
+    """pm-accept 引き継ぎ (ADR 0042) の I/O 部。判定は evaluate_carryover (純関数)。
+
+    最新の pm-accept から SHA トークンが取れなければ None (引き継ぎの試行自体なし)。
+    compare API は遅延評価 — 構造条件 (マージのみ) が落ちたら差分比較まで行かない。
+    """
+    token = latest_pm_accept_token(comment_pairs)
+    if not token:
+        return None
+    number = pr["number"]
+    base_ref = pr["base"]["ref"]
+    commits = gh("api", f"repos/{repo}/pulls/{number}/commits", "--paginate")
+    if len(commits) >= PR_COMMITS_CAP:  # type: ignore[arg-type]
+        # エンドポイントの打ち切り — 全量が見えない PR は判定不能 (安全側)
+        return Carryover(ok=False, detail=f"コミット {PR_COMMITS_CAP} 件超で判定不能")
+    pr_commits = [
+        {
+            "sha": c["sha"],  # type: ignore[index, union-attr]
+            "parents": [p["sha"] for p in (c.get("parents") or [])],  # type: ignore[union-attr]
+        }
+        for c in commits  # type: ignore[union-attr]
+    ]
+
+    def is_from_base(sha: str) -> bool:
+        # base...sha の ahead_by == 0 ⇔ sha は base に到達済み (= main 由来)
+        data = gh("api", f"repos/{repo}/compare/{base_ref}...{sha}")
+        return data.get("ahead_by") == 0  # type: ignore[union-attr]
+
+    def diff_digest(sha: str) -> str | None:
+        # base...sha = merge-base からの三点比較 = PR の実装差分 (Files changed 相当)
+        data = gh("api", f"repos/{repo}/compare/{base_ref}...{sha}")
+        return diff_digest_from_files(data.get("files") or [])  # type: ignore[union-attr]
+
+    return evaluate_carryover(
+        accepted_token=token,
+        head_sha=pr["head"]["sha"],
+        pr_commits=pr_commits,
+        is_from_base=is_from_base,
+        diff_digest=diff_digest,
+    )
+
+
+def evaluate_gate(
+    repo: str, number: int, head_sha: str, pr: dict | None = None
+) -> GateEval:
     """門の 3 条件 (pm-accept + head SHA / スレッド解決 / Codex) を現在の API
     状態から評価する。イベント経路 (main) と sweep のマージ直前再評価 (Codex
-    P1 / PR #258) の共通実装 — 判定材料の取り方を 1 箇所にする。"""
+    P1 / PR #258) の共通実装 — 判定材料の取り方を 1 箇所にする。
+
+    pm-accept の引き継ぎ判定 (ADR 0042) もここに置く — **マージ執行の経路
+    (reverify_and_merge) も同じ関数を通る**ので、「追随しただけの PR」が
+    マージ直前の再評価で門を閉じられることがない。pr は base ref / head を
+    見るために使う (省略時は取得する)。
+    """
     owner, name = repo.split("/")
     files = gh("api", f"repos/{repo}/pulls/{number}/files", "--paginate")
     changed_paths = [f["filename"] for f in files]  # type: ignore[union-attr]
@@ -841,6 +1065,12 @@ def evaluate_gate(repo: str, number: int, head_sha: str) -> GateEval:
         (c.get("body") or "", c.get("author_association") or "")  # type: ignore[union-attr]
         for c in comments
     ]
+    # 直接の受け入れが無いときだけ引き継ぎ (ADR 0042) を試す — API 節約
+    carryover = None
+    if not has_pm_accept(comment_pairs, head_sha):
+        if pr is None:
+            pr = gh("api", f"repos/{repo}/pulls/{number}")  # type: ignore[assignment]
+        carryover = compute_carryover(repo, pr, comment_pairs)  # type: ignore[arg-type]
     verdict = decide(
         head_sha=head_sha,
         changed_paths=changed_paths,
@@ -848,6 +1078,7 @@ def evaluate_gate(repo: str, number: int, head_sha: str) -> GateEval:
         unresolved_threads=unresolved,
         codex_present=codex_present,
         require_codex=require_codex,
+        carryover=carryover,
     )
     return GateEval(
         verdict=verdict,
@@ -1427,20 +1658,25 @@ def post_status(repo: str, sha: str, state: str, description: str) -> None:
     )
 
 
-def main() -> int:
-    repo = os.environ["GITHUB_REPOSITORY"]
-    if len(sys.argv) < 2 or not sys.argv[1].strip():
-        # イベント payload から PR 番号を解決できなかった (yml の式の取り漏れ等 —
-        # Codex P1-b: pull_request_review には issue.number が無い)。int("") の
-        # スタックトレースではなく、何が起きたかをログに残して赤にする
-        print("::error::PR 番号が渡されていない — イベント payload の解決式を確認")
-        return 1
-    if sys.argv[1] == "--advisory-sweep":
-        return run_advisory_sweep(repo)
-    number = int(sys.argv[1])
+def evaluate_pr(
+    repo: str,
+    number: int,
+    *,
+    status_sha: str | None = None,
+    advisories: bool = True,
+    execute_merge: bool = True,
+) -> int:
+    """PR を判定して commit status を貼る (イベント経路の本体)。
 
+    status_sha: status の貼り先。省略時は PR の head (従来どおり)。merge_group
+    (ADR 0042) では merge group の head SHA を渡す — 判定材料は PR 側のまま、
+    **required check が読む場所**だけが merge group 側になる。
+    advisories / execute_merge: merge_group では両方 False (advisory は PR 側
+    イベントが持つ / マージは queue が実行する — ADR 0042 D4)。
+    """
     pr = gh("api", f"repos/{repo}/pulls/{number}")
     head_sha = pr["head"]["sha"]
+    target_sha = status_sha or head_sha
 
     if pr["base"]["ref"] != "main":
         print(f"skip: base が main でない ({pr['base']['ref']}) — 門の対象外")
@@ -1450,7 +1686,7 @@ def main() -> int:
         return 0
 
     try:
-        ev = evaluate_gate(repo, number, head_sha)
+        ev = evaluate_gate(repo, number, head_sha, pr=pr)  # type: ignore[arg-type]
     except (
         subprocess.CalledProcessError,
         subprocess.TimeoutExpired,
@@ -1458,18 +1694,19 @@ def main() -> int:
         json.JSONDecodeError,
     ) as e:
         # 取れなかったものを「合格」と書かない — error を貼って赤のまま残す
-        post_status(repo, head_sha, "error", f"評価に失敗: {e}"[:140])
+        post_status(repo, target_sha, "error", f"評価に失敗: {e}"[:140])
         raise
 
     verdict = ev.verdict
     changed_paths = ev.changed_paths
     post_status(
-        repo, head_sha, "success" if verdict.ok else "failure", verdict.description
+        repo, target_sha, "success" if verdict.ok else "failure", verdict.description
     )
     print(
-        f"review-gate → {'🟢' if verdict.ok else '🔴'} {verdict.description} (sha {head_sha[:7]})"
+        f"review-gate → {'🟢' if verdict.ok else '🔴'} {verdict.description}"
+        f" (PR head {head_sha[:7]} / status 先 {target_sha[:7]})"
     )
-    if verdict.ok:
+    if verdict.ok and execute_merge:
         # マージ執行 (ADR 0040 D1 / #253): この success status が「最後の required
         # check の緑」だった場合、GITHUB_TOKEN 起点のため GitHub の auto-merge は
         # 発火しない。auto-merge を武装済みの PR に限り、自分でマージまで執行する。
@@ -1477,6 +1714,8 @@ def main() -> int:
         merged = maybe_execute_merge(repo, number, pr, head_sha, changed_paths)
         if merged:
             return 0  # マージ済み — advisory 投稿は不要
+    if not advisories:
+        return 0
     # 合否の後に advisory (ADR 0038)。ここで失敗しても status は貼れているが、
     # run は赤にして「投稿できなかったこと」を隠さない
     maybe_post_advisories(
@@ -1489,6 +1728,50 @@ def main() -> int:
         codex_present=ev.codex_present,
     )
     return 0
+
+
+def run_merge_group(repo: str) -> int:
+    """merge_group イベント: 対象 PR を解決して同じ判定を merge group SHA に貼る。
+
+    安全側の挙動 (ADR 0042): PR 番号を解決できない場合は **failure を merge group
+    SHA に貼る** — 静かに緑を貼ると、受け入れの無い PR が queue を素通りする。
+    failure なら queue から外れて PR 側に戻るだけで不可逆でない。
+
+    マージ執行 (ADR 0040 D1) はここでは**行わない** — queue がマージまで実行する
+    ので二重機構になる (ADR 0042 D4)。PR 側の経路 (イベント / sweep) の執行は
+    そのまま残す: queue 未有効の間 (#269 前) はそちらが唯一のマージ経路であり、
+    有効化後も「auto-merge 武装 = queue 投入」の入口として整合する。
+    """
+    head_ref = os.environ.get("MERGE_GROUP_HEAD_REF", "")
+    mg_sha = os.environ["MERGE_GROUP_HEAD_SHA"]
+    number = parse_merge_group_pr(head_ref)
+    if number is None:
+        post_status(
+            repo,
+            mg_sha,
+            "failure",
+            f"merge_group ref から PR を解決できない ({head_ref})"[:140],
+        )
+        print(f"review-gate → 🔴 merge_group ref から PR を解決できない: {head_ref}")
+        return 1
+    return evaluate_pr(
+        repo, number, status_sha=mg_sha, advisories=False, execute_merge=False
+    )
+
+
+def main() -> int:
+    repo = os.environ["GITHUB_REPOSITORY"]
+    if len(sys.argv) < 2 or not sys.argv[1].strip():
+        # イベント payload から PR 番号を解決できなかった (yml の式の取り漏れ等 —
+        # Codex P1-b: pull_request_review には issue.number が無い)。int("") の
+        # スタックトレースではなく、何が起きたかをログに残して赤にする
+        print("::error::PR 番号が渡されていない — イベント payload の解決式を確認")
+        return 1
+    if sys.argv[1] == "--advisory-sweep":
+        return run_advisory_sweep(repo)
+    if sys.argv[1] == "--merge-group":
+        return run_merge_group(repo)
+    return evaluate_pr(repo, int(sys.argv[1]))
 
 
 if __name__ == "__main__":

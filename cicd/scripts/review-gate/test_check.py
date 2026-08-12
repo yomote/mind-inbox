@@ -15,12 +15,17 @@ from check import (
     HUMAN_STALL_MARKER,
     MERGE_STALL_HOURS,
     MERGE_STALL_MARKER,
+    Carryover,
     all_check_runs_green,
     codex_present_in,
     deploy_gate_anchor,
+    diff_digest_from_files,
     earliest_iso,
     decide,
+    evaluate_carryover,
     has_pm_accept,
+    latest_pm_accept_token,
+    parse_merge_group_pr,
     human_queue_issues,
     is_bot_login,
     is_code_pr,
@@ -124,6 +129,196 @@ def test_l1_権限保持者の受け入れは通る() -> None:
     body = "[pm-accept] abc1234 受け入れます"
     for association in ("OWNER", "MEMBER", "COLLABORATOR", "owner"):
         assert has_pm_accept([(body, association)], HEAD), association
+
+
+# ---- pm-accept の引き継ぎ (ADR 0042) ----
+
+# 受け入れ済みコミット A の上に「main からのマージ」M1, M2 が積まれた PR
+BASE_PARENT = "0000000basecommit000"
+A_SHA = "aaa1111acceptedaaaaa"
+M1_SHA = "bbb2222mergemain1bbb"
+M2_SHA = "ccc3333mergemain2ccc"
+MAIN_TIP_1 = "ddd4444mainside1"
+MAIN_TIP_2 = "eee5555mainside2"
+PR_COMMITS = [
+    {"sha": A_SHA, "parents": [BASE_PARENT]},
+    {"sha": M1_SHA, "parents": [A_SHA, MAIN_TIP_1]},
+    {"sha": M2_SHA, "parents": [M1_SHA, MAIN_TIP_2]},
+]
+
+
+def _from_base(sha: str) -> bool:
+    return sha in {MAIN_TIP_1, MAIN_TIP_2}
+
+
+def _carryover(**overrides) -> Carryover:
+    """成立する既定値からの差分で書く (どの条件で落ちたかをテスト名で示す)。"""
+    kwargs = dict(
+        accepted_token=A_SHA[:7],
+        head_sha=M2_SHA,
+        pr_commits=PR_COMMITS,
+        is_from_base=_from_base,
+        diff_digest=lambda sha: "same-digest",
+    )
+    kwargs.update(overrides)
+    return evaluate_carryover(**kwargs)
+
+
+def test_l1_引き継ぎはmainマージのみかつ差分不変なら成立() -> None:
+    """ADR 0042 の主目的: 追いつき競争 (base 追随 push のたびに pm-accept が失効し
+    再受け入れ→また追いつかれる) を、実装差分が不変な限り引き継ぎで断つ。
+
+    無いと何が静かに通るか: 逆方向 (成立すべきものが不成立) は「毎周 PM の
+    再受け入れが要る」に戻るだけで気づけるが、判定式の退行で**成立しすぎる**
+    方向は門が開くのに誰も気づかない。下の各否定テストとセットで固定する。
+    """
+    result = _carryover()
+    assert result.ok
+    assert result.accepted_short == A_SHA[:7]
+
+
+def test_l1_引き継ぎ成立時のdescriptionに由来shaが出る() -> None:
+    v = decide(M2_SHA, ["apps/x.ts"], [], 0, True, True, carryover=_carryover())
+    assert v.ok
+    assert f"pm-accept を {A_SHA[:7]} から引き継ぎ" in v.description
+    assert "差分不変" in v.description
+
+
+def test_l1_実装コミットが混ざると引き継ぎ不成立() -> None:
+    """無いと何が静かに通るか: 受け入れ後に積んだ実装コミットが「main 追随」に
+    紛れてレビューなしでマージされる (門の穴)。"""
+    impl = {"sha": M2_SHA, "parents": [M1_SHA]}  # 1 親 = 普通の実装コミット
+    result = _carryover(pr_commits=[PR_COMMITS[0], PR_COMMITS[1], impl])
+    assert not result.ok
+    assert "マージでない" in result.detail
+
+
+def test_l1_マージ元がmain由来でないと引き継ぎ不成立() -> None:
+    # 2 親のマージでも、第二親が base に無い (= 別ブランチの取り込み) なら実装変更
+    result = _carryover(is_from_base=lambda sha: False)
+    assert not result.ok
+    assert "base からのマージでない" in result.detail
+
+
+def test_l1_実装差分が変わると引き継ぎ不成立() -> None:
+    """判定を緩めない要: 差分が 1 文字でも変わる push (evil merge 含む) は
+    従来どおり新しい pm-accept を要求する。"""
+    result = _carryover(diff_digest=lambda sha: f"digest-of-{sha}")
+    assert not result.ok
+    assert "実装差分が受け入れ時点から変化" in result.detail
+
+
+def test_l1_差分が取得しきれないときは引き継ぎ不成立() -> None:
+    # compare API の files 打ち切り (300 件) — 「見えなかったものを同一」と書かない
+    result = _carryover(diff_digest=lambda sha: None)
+    assert not result.ok
+    assert "取得しきれない" in result.detail
+
+
+def test_l1_受け入れshaがPRコミットに無いと引き継ぎ不成立() -> None:
+    # rebase / force-push でコミットが書き換わった場合もここに落ちる (安全側)
+    result = _carryover(accepted_token="fffffff")
+    assert not result.ok
+    assert "一意解決できない" in result.detail
+
+
+def test_l1_第一親で辿れない履歴は引き継ぎ不成立() -> None:
+    # マージの向きが逆 (第一親が main 側) — PR ブランチの継続性が壊れている
+    twisted = [
+        PR_COMMITS[0],
+        {"sha": M2_SHA, "parents": [MAIN_TIP_2, A_SHA]},
+    ]
+    result = _carryover(pr_commits=twisted)
+    assert not result.ok
+    assert "第一親で辿れない" in result.detail
+
+
+def test_l1_受け入れが現headそのものなら引き継ぎ扱いで成立() -> None:
+    result = _carryover(accepted_token=M2_SHA[:7])
+    assert result.ok
+
+
+def test_l1_引き継ぎ不成立の理由はdescriptionに出る() -> None:
+    v = decide(
+        M2_SHA,
+        [],
+        [],
+        0,
+        False,
+        False,
+        carryover=Carryover(ok=False, detail="実装差分が受け入れ時点から変化"),
+    )
+    assert not v.ok
+    assert "引き継ぎ不成立: 実装差分が受け入れ時点から変化" in v.description
+
+
+def test_l1_最新のpm_acceptコメントからshaトークンを取る() -> None:
+    comments = [
+        ("[pm-accept] aaa1111 一次受け入れ", "OWNER"),
+        ("経過コメント", "OWNER"),
+        ("[pm-accept] BBB2222 受け入れをやり直し", "OWNER"),
+    ]
+    # 最新の受け入れが意思 — 古い受け入れへ遡らない。大文字は小文字化される
+    assert latest_pm_accept_token(comments) == "bbb2222"
+
+
+def test_l1_第三者のpm_acceptはトークン抽出でも無視される() -> None:
+    comments = [
+        ("[pm-accept] aaa1111 正規の受け入れ", "OWNER"),
+        ("[pm-accept] ccc9999 攻撃コメント", "NONE"),
+    ]
+    assert latest_pm_accept_token(comments) == "aaa1111"
+
+
+def test_l1_最新のpm_acceptにshaが無ければトークンなし() -> None:
+    # sha 無しの受け入れやり直しは「どのコミットへの受け入れか」が無い — 引き継がない
+    assert latest_pm_accept_token([("[pm-accept] sha を書き忘れ", "OWNER")]) is None
+    assert latest_pm_accept_token([("ただのコメント", "OWNER")]) is None
+    assert latest_pm_accept_token([]) is None
+
+
+def test_l1_差分指紋は内容が同じなら順序によらず一致() -> None:
+    files_a = [
+        {"filename": "a.ts", "status": "modified", "sha": "s1", "patch": "@@ -1 +1 @@"},
+        {"filename": "b.ts", "status": "added", "sha": "s2", "patch": "@@ +1 @@"},
+    ]
+    assert diff_digest_from_files(files_a) == diff_digest_from_files(files_a[::-1])
+
+
+def test_l1_差分指紋はpatchやblobの変化で変わる() -> None:
+    """無いと何が静かに通るか: 指紋が差分の一部しか見ていないと、実装が変わった
+    push を「差分不変」と誤判定して未レビューコードが引き継ぎで通る。"""
+    base = [{"filename": "a.ts", "status": "modified", "sha": "s1", "patch": "@@ x"}]
+    changed_patch = [dict(base[0], patch="@@ y")]
+    changed_blob = [dict(base[0], sha="s2")]
+    renamed = [dict(base[0], previous_filename="old.ts")]
+    d = diff_digest_from_files(base)
+    assert d != diff_digest_from_files(changed_patch)
+    assert d != diff_digest_from_files(changed_blob)
+    assert d != diff_digest_from_files(renamed)
+
+
+def test_l1_差分指紋は300件で打ち切りの可能性があると判定不能() -> None:
+    files = [{"filename": f"f{i}.ts", "status": "modified"} for i in range(300)]
+    assert diff_digest_from_files(files) is None
+    assert diff_digest_from_files(files[:299]) is not None
+
+
+# ---- merge_group (ADR 0042) ----
+
+
+def test_l1_merge_group_refからPR番号を解決できる() -> None:
+    """無いと何が静かに通るか: ref 形式の読み違いは「queue に入るたび review-gate が
+    誤った PR (または PR なし) を判定する」— check は貼られるが中身が別物になる。"""
+    assert parse_merge_group_pr("gh-readonly-queue/main/pr-267-0f1e2d3c") == 267
+    assert parse_merge_group_pr("refs/heads/gh-readonly-queue/main/pr-8-abc123") == 8
+
+
+def test_l1_merge_group_refが解決できないときはNone() -> None:
+    # None は呼び出し側で failure (安全側) — 静かに緑を貼らない
+    assert parse_merge_group_pr("") is None
+    assert parse_merge_group_pr("refs/heads/feature/pr-12-abc") is None
+    assert parse_merge_group_pr("gh-readonly-queue/main/pr-abc") is None
 
 
 # ---- Codex 自動再トリガー / 敏感パス指名 (ADR 0038) ----
@@ -403,6 +598,67 @@ def test_l1_マージ直前の再取得に失敗したらマージしない(monk
     monkeypatch.setattr(check, "gh", failing_gh)
     merged, reason = check.try_merge("o/r", 1, "abc1234")
     assert not merged and "再取得に失敗" in reason
+
+
+# ---- #258 (マージ執行) と ADR 0042 (pm-accept 引き継ぎ) の合流点 ----
+
+
+def _stub_gate_io(monkeypatch, comments: list[dict], carryover) -> list[dict]:
+    """evaluate_gate の I/O (files / comments / スレッド / Codex / 引き継ぎ) を差し替える。
+    戻り値は compute_carryover が呼ばれた記録 (呼ばれなかったことも見たいので list)。"""
+    carryover_calls: list[dict] = []
+
+    def fake_gh(*args):
+        path = args[1]
+        if path.endswith("/files"):
+            return [{"filename": "docs/x.md"}]
+        if path.endswith("/comments"):
+            return comments
+        raise AssertionError(f"想定外の gh 呼び出し: {args}")
+
+    monkeypatch.setattr(check, "gh", fake_gh)
+    monkeypatch.setattr(check, "fetch_unresolved_threads", lambda *a: 0)
+    monkeypatch.setattr(check, "fetch_codex_present", lambda *a: True)
+    monkeypatch.setattr(
+        check,
+        "compute_carryover",
+        lambda repo, pr, pairs: carryover_calls.append(pr) or carryover,
+    )
+    return carryover_calls
+
+
+def test_l1_引き継ぎはマージ直前のフル再評価でも効く(monkeypatch) -> None:
+    """引き継ぎ判定を evaluate_gate に置く (= マージ執行の再評価も同じ関数を通る)
+    という設計を固定する。
+
+    無いと何が静かに通るか: 引き継ぎをイベント経路だけに置き直すと、
+    reverify_and_merge の再評価が引き継ぎを見ずに「PM 受け入れが無い」と判断し、
+    緑の status を failure に**訂正して**マージを止める — PM から見えるのは
+    「一度緑になった PR が 30 分後に赤に戻る」で、ADR 0042 が消したはずの
+    追いつき競争が sweep 側にだけ残る。赤方向の退行なので門は破れず、
+    テストが無ければ誰も気づかない。
+    """
+    pr = _mergeable_pr(head={"sha": "abc1234def5678"})
+    carried = check.Carryover(ok=True, accepted_short="aaa1111")
+    calls = _stub_gate_io(monkeypatch, comments=[], carryover=carried)
+
+    ev = check.evaluate_gate("o/r", 1, "abc1234def5678", pr)
+    assert ev.verdict.ok, "引き継ぎ成立なら再評価も緑 (failure へ訂正しない)"
+    assert "pm-accept を aaa1111 から引き継ぎ" in ev.verdict.description
+    assert calls == [pr], "引き継ぎ判定に渡すのは評価中の PR そのもの"
+
+
+def test_l1_直接の受け入れがあるとき引き継ぎ判定は呼ばれない(monkeypatch) -> None:
+    """API 節約 (ADR 0042) の実装契約。無いと何が静かに通るか: compare API を
+    毎回 2 往復以上叩くようになり、sweep が open PR 数に比例して重くなる
+    (レート制限に触れて sweep 全体が落ちる = マージの下限保証が消える) —
+    判定結果は同じなのでテストが無ければ気づけない。"""
+    accepted = [{"body": "[pm-accept] abc1234", "author_association": "OWNER"}]
+    calls = _stub_gate_io(monkeypatch, comments=accepted, carryover=None)
+
+    ev = check.evaluate_gate("o/r", 1, "abc1234def5678")
+    assert ev.verdict.ok
+    assert calls == [], "現 head への直接の受け入れがあるなら compare API を叩かない"
 
 
 def test_l1_sweepはpm_acceptが消えたprをマージしない(monkeypatch) -> None:
