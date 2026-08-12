@@ -59,7 +59,7 @@ Chosen option: **"Option D"**。
   - **環境変数を選ばない理由**: [ADR 0031](0031-agent-reaches-outside-via-github-actions.md) の「サンドボックスに長期クレデンシャルを置かない」に反する。加えて Claude Code の公式ドキュメントが「**cloud environments have no dedicated secrets store, so don't add API keys or other credentials**」と明示している ([Configure cloud environments](https://code.claude.com/docs/en/cloud-environments))
   - **取得経路**: [ADR 0006](0006-azure-access-via-device-code.md) の device-code ログイン (`az login --use-device-code` → `az keyvault secret show`)。**静的シークレットを持たず、人間の承認を 1 回挟むだけ**で、エージェント自身が復号できる
   - **置き場所は管理系 RG** — 環境 (`rg-{env}-mind-inbox`) の中に置くと `cleanup-env.sh` が RG 削除に加えて **Key Vault の soft-delete を purge** するため、撤収のたびに鍵が救済不能に消える ([#302](https://github.com/yomote/mind-inbox/issues/302))
-  - **#302 が完了するまでの暫定**: 管理系 RG がまだ無いため、それまでは秘密鍵を PO の手元に置く。**暫定期間中は trace の復号が PO 経由になる** (頻度は低い — 2026-08-12 の [#293](https://github.com/yomote/mind-inbox/issues/293) はスクリーンショットだけで原因が特定できた)
+  - **#302 が完了するまでの暫定**: 管理系 RG がまだ無いため、それまでは秘密鍵を PO の手元に置く。**公開鍵は既に commit 済みなので暗号化 artifact はこの時点から残る** — 変わるのは復号できる人だけで、暫定期間中は PO のみ (頻度は低い — 2026-08-12 の [#293](https://github.com/yomote/mind-inbox/issues/293) はスクリーンショットだけで原因が特定できた)
 - **D6 公開鍵が無い間は trace を残さず、warning を出して続行する** — 鍵の準備前に平文で上がる事故を構造的に防ぐ (fail closed)。「鍵が無いから黙って何もしない」ではなく**必ず 1 行喋る**
 - **D7 暗号化の結果を機械で検証する** — 出力ディレクトリに `.gpg` 以外のファイルが 1 つでもあれば **run を落とす**。「暗号化したつもり」で平文が混ざる事故を、成功パスの中で潰す
 - **D8 `sources: false` で spec を trace に同梱しない** — 実測で trace は**テストのソースコードを含んでいた**。spec にハードコードされた秘密がそれだけで載るため、live 設定では落とす
@@ -101,10 +101,22 @@ GitHub の ubuntu ランナーに**最初から入っている** (`age` は導�
 
 ### Negative / リスク
 
-- **管理系 RG と Key Vault の用意が要る** ([#302](https://github.com/yomote/mind-inbox/issues/302))。**用意されるまで trace は残らない** (D6 により平文では上がらない)。暫定期間は PO の手元運用
+- **暫定期間中は復号が PO 経由になる** — 公開鍵は既に commit 済みなので、**暗号化された trace は今この瞬間から artifact として残る**。変わるのは「誰が復号できるか」だけで、管理系 RG ([#302](https://github.com/yomote/mind-inbox/issues/302)) ができるまでは秘密鍵が PO の手元にあるため、**エージェントは自力で復号できない**
 - **秘密鍵を失うと過去の暗号化 artifact は開けない** — ただし artifact の保持は 14 日なので損失は限定的。鍵の再生成は公開鍵を差し替えるだけ
 - **復号のたびに device-code の承認が要る** — 完全な無人にはならない。ただし静的シークレットを持たない代償としては軽い。想定被害も限定的で、鍵が漏れても読めるのは「dev の BFF を 1 時間叩けるトークンを含む trace」まで (トークンの audience は BFF アプリで、Azure Resource Manager ではない)
 - 暗号化された artifact は**人間がそのままでは中身を見られない** — 復号手順を Runbook に置く必要がある
+
+### 既知の限界 — device-code が守るのは「取得時」まで
+
+**復号のために `gpg --import` した時点で、秘密鍵はサンドボックスのディスク上に置かれる** (`$GNUPGHOME/private-keys-v1.d/*.key`)。以降はそのセッション内の**任意のコードが鍵を読める**し、2 回目以降の復号に device-code の承認は要らない。つまり **Key Vault + device-code が守っているのは「鍵を取り出す瞬間」までで、取り出した後は守っていない** (2026-08-12 の Codex レビュー P1 指摘。ローカルで再現確認済み)。
+
+現状の割り切りと、その根拠:
+
+- **サンドボックスは使い捨て**なので、鍵がディスクに残るのは 1 セッションの間だけ (永続的な保存ではない)
+- **鍵が守っているものは dev の trace 1 種類**で、そこから読めるのは期限 1 時間の dev BFF トークン
+- **取得のたびに人間の承認が要る**ので、無人セッションが勝手に鍵を取ることはない
+
+**恒久解は「秘密鍵をサンドボックスに出さない」こと。** Key Vault の**鍵オブジェクト** (secret ではなく key) に非エクスポートで置き、`az keyvault key decrypt` で**復号処理自体を Key Vault 側で行う**形にすれば、鍵は一度も外に出ない。ただしこれは GPG のファイル形式をやめて**ハイブリッド暗号を自前で組む**ことを意味する (データは AES で暗号化し、その鍵を Key Vault の RSA で wrap する)。**自前で暗号を組むこと自体のリスク**があるため、本 ADR では採用せず、別途検討とする。
 
 ### 適用範囲
 
