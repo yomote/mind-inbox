@@ -53,13 +53,27 @@ GitHub ユーザーなら誰でもダウンロードできる。したがって 
 秘密鍵の設置状態は workflow が確認しません (確認する必要がない — CI は暗号化しかしない)。
 つまり秘密鍵がまだ Key Vault に無くても **artifact は溜まり、後から復号できます**。
 
-## ⚠️ 鍵に触る操作はすべて PO の管理環境で行う
+## ⚠️ 鍵に触る操作をどこで行うか — 方式で変わる
 
-**鍵の生成・ローテーション・復号は、いずれも PO の管理環境でのみ行う。**
-**エージェントのサンドボックスで実行しないこと** — パスフレーズ無しの長期秘密鍵が
-ディスクに置かれ、そのセッション内の任意コードから読める状態になる
-([ADR 0045](../../docs/adr/0045-e2e-artifacts-are-secret-by-default.md)
-「エージェント復号を保留する理由」)。
+**この制限は GPG 方式に固有のもので、恒久方式には適用されない。** どちらの方式かは
+リポジトリの公開鍵ファイルの形で判る (`*.pub.asc` = GPG / `*.pub.json` = 恒久)。
+
+| | GPG (#302 完了まで) | 恒久 (Key Vault の非エクスポート鍵オブジェクト) |
+| --- | --- | --- |
+| 鍵の生成・ローテーション | **PO の管理環境のみ** | **PO の管理環境のみ** |
+| **復号** | **PO の管理環境のみ** | **エージェントが実行してよい** |
+
+**GPG で復号をエージェントにやらせない理由**: `gpg --import` した時点でパスフレーズ無しの
+長期秘密鍵がディスクに置かれ、そのセッション内の任意コードから読める状態になる。
+一度読み出せばセッションの外へ持ち出せるため、**鍵を交換するまでの全 artifact** が
+復号可能になる。
+
+**恒久方式で許される理由**: `az keyvault key decrypt` は Key Vault の中で復号するので、
+**RSA 秘密鍵は一度も外に出ない**。ただし露出がゼロになるわけではない — 侵害された
+セッションは保持中の wrapped key を順に開けるし、**返ってきた AES 鍵は失効できない**。
+残る露出の正確な範囲は
+[ADR 0045](../../docs/adr/0045-e2e-artifacts-are-secret-by-default.md) D5
+「消える穴 / 消えない穴」が正典。
 
 ### gpg 実行時の注意: GNUPGHOME は短いパスにする
 
@@ -164,11 +178,35 @@ pnpm --dir apps/frontend exec playwright show-trace trace.zip
 **sha256 が元と一致**し、秘密鍵を持たない環境では `decryption failed: No secret key`
 になることを確認した。
 
-**エージェントが読めるのは平文で上げている証拠だけ** (スクリーンショット / `error-context.md`)。
-実際 2026-08-12 の [#293](https://github.com/yomote/mind-inbox/issues/293) は
+**この方式の間、エージェントが読めるのは平文で上げている証拠だけ** (スクリーンショット /
+`error-context.md`)。実際 2026-08-12 の [#293](https://github.com/yomote/mind-inbox/issues/293) は
 スクリーンショット 1 枚で原因を特定できており、trace が要る場面は限られる。
 artifact の取得自体はエージェントからも可能 (`download_workflow_run_artifact` で
 署名付き URL を得る。2026-08-12 に実測済み)。
+
+## 復号して trace を見る (#302 完了後 / **エージェントも実行してよい**)
+
+恒久方式では**秘密鍵が Key Vault から出ない**ので、この手順はエージェントのサンドボックスで
+実行してよい ([ADR 0045](../../docs/adr/0045-e2e-artifacts-are-secret-by-default.md) D5)。
+
+```bash
+az login --use-device-code            # ADR 0006。短命トークン
+
+# artifact 名: e2e-live-trace-<run_id> / 中身: <test-name>_trace.zip.enc
+#   .enc には version / wrapped AES 鍵 + 鍵バージョン / nonce / 暗号文+タグ が入る (D9)
+
+# 1. .enc から wrapped AES 鍵と「wrap したときの鍵バージョン」を取り出す
+# 2. Key Vault に開かせる (鍵は外に出ない。バージョンは .enc に書かれたものを使う)
+az keyvault key decrypt --vault-name <持続層の Vault> --name e2e-artifacts \
+  --version "<.enc に記録されたバージョン>" --algorithm RSA-OAEP-256 \
+  --value "<wrapped AES 鍵>" --data-type base64
+# 3. 返った AES 鍵で AES-256-GCM 復号する。**タグ検証に失敗したら平文を出さず落とす** (D9)
+```
+
+> ⚠️ **返ってきた AES 鍵は失効できない。** Key Vault は秘密鍵を守るが、`decrypt` が返す
+> AES 鍵は手元の平文であり、`az` のトークンが切れても**その時点で開いた artifact は
+> 読める状態のまま**になる。復号は必要な artifact に絞ること。残る露出の正確な範囲は
+> ADR 0045 D5「消える穴 / 消えない穴」が正典。
 
 ## 鍵を替えるとき
 
@@ -189,21 +227,27 @@ CI 側の変更は要らない (秘密を持っていないため)。**古い鍵
    **旧バージョンは無効化も削除もしない** — 保持中 (14 日) の artifact は旧バージョンで wrap されており、
    `az keyvault key decrypt` は wrap 時のバージョンを指定して呼ぶ必要がある
    (`.enc` にどのバージョンで wrap したかが入っている / ADR 0045 D9)
-2. **公開鍵とバージョンを一緒に commit する** — `e2e-artifacts.pub.json` の `publicKeyPem` と
-   `keyVersion` を**同時に**書き換える。**CI は Azure の資格情報を持たないので、バージョンは
-   ここからしか受け取れない** (ADR 0045 D4)。片方だけ直すと、CI は新しい鍵で暗号化しながら
-   `.enc` には旧バージョンを記録する — **暗号化は成功し、復号だけができない artifact** ができる:
+2. **`e2e-artifacts.pub.json` を「スクリプトで」作り直して commit する** — 手で 2 つのコマンド結果を
+   貼り合わせない。**CI は Azure の資格情報を持たないので、バージョンはこのファイルからしか
+   受け取れない** (ADR 0045 D4)。
 
-   ```bash
-   # 新バージョンの ID と公開鍵 PEM を 1 度に取り、1 ファイルとして書く
-   ver="$(az keyvault key show --vault-name <Vault> --name e2e-artifacts \
-            --query 'key.kid' -o tsv | awk -F/ '{print $NF}')"
-   pem="$(az keyvault key download --vault-name <Vault> --name e2e-artifacts \
-            --version "$ver" --encoding PEM -f /dev/stdout)"
-   # → vault / keyName / keyVersion / wrapAlgorithm / publicKeyPem を含む JSON を書き出して commit
-   ```
+   **`publicKeyPem` と `keyVersion` が食い違うと、暗号化は成功して復号だけができない
+   artifact ができる** — JSON の読み込みも公開鍵での wrap も通るので、成功パスは緑のまま。
+   気づくのは復号を試みた時 (最大 14 日後) になる。1 ファイルにしても**この 2 つは独立に
+   編集できる**ので、ファイルを分けないだけでは防げない。だから 2 つを契約にする
+   ([ADR 0045](../../docs/adr/0045-e2e-artifacts-are-secret-by-default.md) D4):
 
-   **ここを忘れると CI は旧バージョンで wrap し続ける** (壊れはしないが、ローテーションが効いていない)
+   - **JSON 全体を 1 つの Azure 応答から生成する** — `az keyvault key show` の
+     応答は `key.kid` (末尾がバージョン) と公開鍵の材料 (`key.n` / `key.e`) を**同時に**返す。
+     ここから PEM を組み立てれば、バージョンと鍵が同じ応答に由来することが保証される。
+     **`show` と `download` を別々に呼んで貼り合わせない** (その 2 回の間にローテーションが
+     挟まりうるし、人が片方だけ更新できてしまう)
+   - **commit 前に wrap → decrypt の往復を実測する** — 書いた `publicKeyPem` で試しに
+     wrap し、書いた `keyVersion` を指定した `az keyvault key decrypt` で開いて、元に戻ることを
+     確かめる。**これが通らない JSON は commit しない**。「同じ応答から作った」を主張ではなく
+     実測で担保する
+
+   **この更新を忘れると CI は旧バージョンで wrap し続ける** (壊れはしないが、ローテーションが効いていない)
 
 3. **旧バージョンを消してよいのは、それで wrap された artifact が全部期限切れになってから**。
    消すと**その artifact は永久に開けない** (鍵が Key Vault の外に無い = 復旧手段が存在しない)
