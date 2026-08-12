@@ -49,6 +49,21 @@ export type ExtractFailureKind =
  */
 export type StubMarked<T> = T & { stubbed?: boolean };
 
+/**
+ * この BFF が **今** stub フォールバックで動いているか (#283 / ADR 0039 D6)。
+ *
+ * 判定は `AI_AGENT_BASE_URL` の有無だけ = 各 stub 応答が `stubbed: true` を立てるのと
+ * まったく同じ条件で、**サーバ側だけで決まる**。preview を経ずに永続化される確定
+ * (`consultation.extract` の draft 経路) は ai-agent を呼ばないので応答由来のフラグを
+ * 持てないが、その確定結果が stub 由来かどうかはこれで判定できる。
+ *
+ * クライアント申告の `stubbed` を信じない理由: 偽装できるうえ、**フラグを落とす**方向に
+ * 偽装されると「本物のふりをした stub」(#146 で潰した状態) が復活するため。
+ */
+export function isStubMode(): boolean {
+  return !config.aiAgentBaseUrl;
+}
+
 export class ExtractError extends Error {
   // パラメータプロパティ短縮記法は erasableSyntaxOnly で使えないため明示代入する。
   readonly kind: ExtractFailureKind;

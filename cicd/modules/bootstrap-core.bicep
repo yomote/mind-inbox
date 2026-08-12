@@ -363,7 +363,7 @@ param appSubnetPrefix string = '10.10.20.0/24'
 @description('Log Analytics workspace name')
 param lawName string = 'law-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-ops'
 
-// -------------------- 監査ログのコスト境界 (#313 / ADR 0046 Phase 3) --------------------
+// -------------------- 監査ログのコスト境界 (#313 / ADR 0047 Phase 3) --------------------
 // Log Analytics は「取り込んだ GB」で課金される。無料枠は **請求アカウントあたり月 5 GB**
 // (Analytics Logs) と **31 日ぶんの保持** の 2 つで、どちらも超えた瞬間から課金が始まる。
 // 出典: https://azure.microsoft.com/en-us/pricing/details/monitor/ ("The first 5 GB/month per
@@ -621,7 +621,7 @@ resource sqlPeDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGro
 // Below is a SAFE skeleton: enable a few typical categories once you confirm names.
 //
 // NOTE: enableSql=false が既定なので**この設定は一度もデプロイされていない**。実際に効いている
-// 監査ログはファイル後方の「監査ログ / 診断設定 (#313 / ADR 0046 Phase 3)」セクション
+// 監査ログはファイル後方の「監査ログ / 診断設定 (#313 / ADR 0047 Phase 3)」セクション
 // (diagCosmosAudit / diagFunctionApp) — カテゴリ選択とコストの根拠はそちらに書いてある。
 
 resource diagSqlServer 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (enableSql) {
@@ -1436,7 +1436,7 @@ resource cosmosDataRoleAssignmentAiAgent 'Microsoft.DocumentDB/databaseAccounts/
   }
 ]
 
-// -------------------- 監査ログ / 診断設定 (#313 / ADR 0046 Phase 3) --------------------
+// -------------------- 監査ログ / 診断設定 (#313 / ADR 0047 Phase 3) --------------------
 // 動機: このプロダクトが Cosmos に置いているのは「ユーザーのモヤモヤ」= メンタルヘルスに
 // 近い個人の悩みで、security-rubric.md は PII 以上の慎重さを求めている。その保管先は
 // disableLocalAuth + Entra RBAC (ADR 0030 D3) の 1 層で守られているが、**アクセスの記録が
@@ -1450,7 +1450,7 @@ resource cosmosDataRoleAssignmentAiAgent 'Microsoft.DocumentDB/databaseAccounts/
 //   - **metrics (AllMetrics)**: プラットフォームメトリックは Azure Monitor の metrics ストアで
 //     既に**無料**。診断設定で LAW に流すと同じ値に取り込み課金が乗るだけで、監査の情報量は増えない
 //   - **Cosmos QueryRuntimeStatistics / PartitionKey* **: 性能チューニング用。誰が何を読んだかは
-//     DataPlaneRequests 側にあり、責任範囲が重なる (ADR 0046「2 つが同じものを吠えると読まれなくなる」)
+//     DataPlaneRequests 側にあり、責任範囲が重なる (ADR 0047「2 つが同じものを吠えると読まれなくなる」)
 //   - **Cosmos DataPlaneRequests - Aggregated 5/15 Min**: 集計済みで個別リクエストを追えないため
 //     監査に使えない。加えて "Costs to export: Yes" のカテゴリ
 //   - **Cosmos MongoRequests / CassandraRequests / GremlinRequests / TableApiRequests**: API 違い
@@ -1891,7 +1891,7 @@ output cosmosLocation string = enableCosmos ? cosmosLocation : ''
 output cosmosFreeTierEnabled bool = enableCosmos && enableCosmosFreeTier && !cosmosServerless
 output cosmosServerless bool = enableCosmos && cosmosServerless
 
-// 監査ログ (#313 / ADR 0046 Phase 3)。「入れたつもり」を避けるため、何が実際に
+// 監査ログ (#313 / ADR 0047 Phase 3)。「入れたつもり」を避けるため、何が実際に
 // 有効なのかをデプロイ出力に残す (CLAUDE.md:「動いたら痕跡がリポジトリに残ること」)。
 output diagnosticsEnabled bool = enableDiagnostics
 output cosmosAuditLogsEnabled bool = enableDiagnostics && enableCosmos

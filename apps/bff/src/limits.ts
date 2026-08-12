@@ -55,6 +55,19 @@ export const MAX_CONVERSATION_MESSAGES = 200;
 export const MAX_CONVERSATION_TOTAL_CHARS = 120_000;
 
 /**
+ * `consultation.extract` の `draft.items` に渡せる件数の上限。
+ *
+ * 確定時に再抽出しない commit 経路 (#283 / ADR 0039 D1/D3) では、クライアントが
+ * 表示中の preview 結果をそのまま送り返して永続化する。**この配列はそのまま
+ * Cosmos への書き込み件数になる**ので、締めないと 1 リクエストで無制限に書ける。
+ *
+ * 1 セッションの吐き出しから採れる困りごとは実際は数件〜十数件。抽出元の会話が
+ * 最大 200 件である以上、そこから生まれる item がそれを超えることは無いため、
+ * 会話件数と同じ 200 を天井に置く。
+ */
+export const MAX_EXTRACTED_ITEMS = 200;
+
+/**
  * TTS (`POST /api/tts`) に渡せるテキストの最大文字数。
  *
  * 読み上げ対象は ai-agent の応答 1 通で、生成側が `max_tokens=1024`

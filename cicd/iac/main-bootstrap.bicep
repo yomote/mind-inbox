@@ -146,7 +146,7 @@ param cosmosThroughput int = 400
 @description('Provision the Azure SQL stack. Default false: v1 は in-memory のみで SQL 未使用 (ADR 0013)。永続化は Cosmos DB (ADR 0030) が担うため、SQL は引き続き不要。')
 param enableSql bool = false
 
-// -------------------- 監査ログ / 診断設定 (#313 / ADR 0046 Phase 3) --------------------
+// -------------------- 監査ログ / 診断設定 (#313 / ADR 0047 Phase 3) --------------------
 // カテゴリ選択の根拠とコスト見積もりは modules/bootstrap-core.bicep の同名セクションが正典。
 @description('診断設定 (監査ログ) を作る。Cosmos の ControlPlane/DataPlane と Function App の FunctionAppLogs のみ。無料枠 5 GB/月 の内側に収まる見積もり (#313)。')
 param enableDiagnostics bool = true

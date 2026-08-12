@@ -122,6 +122,9 @@ jobs:
       # 一時的に畳みたいときの手段としてスクリプトと手動 down は残す。
       # cleanup-env.sh は冪等（内部 rg_exists ガードで RG 不在なら group delete を skip）。
       # `|| true` は付けない（purge 失敗等の本当のエラーは赤くして気づきたいため）。
+      # ADR 0046 D6 以降、soft-delete の purge は既定 off。よって down のあとの up が
+      # 名前衝突（"already exists in soft-deleted state"）で落ちることがある。
+      # それは想定内の症状で、手当ては purge フラグを立てた再 down（下のログが案内する）。
       - name: Tear down (cleanup-env)
         if: steps.guard.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'down'
         run: |
