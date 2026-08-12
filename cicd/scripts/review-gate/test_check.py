@@ -27,6 +27,8 @@ from check import (
     latest_pm_accept_token,
     parse_merge_group_pr,
     human_queue_issues,
+    STANDIN_REVIEW_MARKER,
+    has_standin_review,
     is_bot_login,
     is_code_pr,
     is_codex_review_result,
@@ -103,6 +105,151 @@ def test_l1_コードprはcodex必須_docsは不要() -> None:
 def test_l1_codexフラグが切のときは要求しない() -> None:
     # REVIEW_GATE_REQUIRE_CODEX 未設定 (= #205 の有効化前) は advisory に留める
     assert decide(HEAD, ["apps/bff/x.ts"], [ACCEPT_OK], 0, False, False).ok
+
+
+# ---- 代役 judge の独立レビュー (ADR 0052 D7) ----
+
+STANDIN_OK = (
+    f"{STANDIN_REVIEW_MARKER}\n代役レビュー ({HEAD[:7]}): blocker なし",
+    "OWNER",
+)
+
+
+def test_l1_代役レビューはcodexの代わりに独立レビュー条件を満たす() -> None:
+    """Codex が居なくても代役レビューがあればコード PR の門が開くこと。
+
+    無いと何が静かに通るか:
+        Codex が利用上限で黙っている間 (#345)、コード PR は全部
+        「独立レビューが無い」で永久に赤のまま。門を開ける (require を false)
+        以外に進む道が無くなり、**有限資源の都合で門が開く**前例になる。
+    """
+    code = ["apps/bff/x.ts"]
+    assert decide(HEAD, code, [ACCEPT_OK, STANDIN_OK], 0, False, True).ok
+
+
+def test_l1_古いshaの代役レビューは押し流される() -> None:
+    """代役レビューは push で失効すること (pm-accept と同じ強度)。
+
+    無いと何が静かに通るか:
+        代役の投稿はレビュー対象を書いた本人と同じアカウントから出るため、
+        SHA を縛らないと「1 回レビューを貼ってから、以後は何を push しても
+        門が開いたまま」になる。実装者が自分で門を開けられる状態
+        (#331 と同種の穴) が、代役の導入で新たに空く。
+    """
+    stale = (f"{STANDIN_REVIEW_MARKER}\n代役レビュー (9999999): blocker なし", "OWNER")
+    assert not has_standin_review([stale], HEAD)
+    assert not decide(HEAD, ["apps/bff/x.ts"], [ACCEPT_OK, stale], 0, False, True).ok
+
+
+def test_l1_代役レビューはマーカーとshaの両方が要る() -> None:
+    """マーカーだけ・SHA だけでは代役レビューと数えないこと。
+
+    無いと何が静かに通るか:
+        SHA を書かずマーカーだけ貼れば恒久的に門が開く (上のテストの抜け道)。
+        逆に SHA だけで数えると、head SHA に言及した**ただの雑談コメント**が
+        独立レビュー扱いになる (PR 本文に SHA を貼る運用があるので現実に起きる)。
+    """
+    assert not has_standin_review(
+        [(f"{STANDIN_REVIEW_MARKER} SHA なし", "OWNER")], HEAD
+    )
+    assert not has_standin_review([(f"{HEAD[:7]} を見た", "OWNER")], HEAD)
+
+
+def test_l1_引用された代役マーカーは数えない() -> None:
+    """権限保持者が第三者の投稿を引用しても門が開かないこと。
+
+    無いと何が静かに通るか:
+        マーカーは HTML コメントで**画面に見えない**。第三者が不可視の
+        `<!-- standin-review --> <sha>` を投稿し、権限保持者が GitHub の
+        "Quote reply" で返信すると raw markdown が `> ` 付きで複製され、
+        association が NONE → OWNER に化けて **誰もレビューしていないのに
+        門が開く** (security-reviewer が PR #361 で実測した経路)。
+        `[pm-accept]` と違い可視の痕跡が PR 画面に残らないので、
+        後から気づく手段も無い。
+    """
+    quoted = (
+        f"> {STANDIN_REVIEW_MARKER}\n> 代役レビュー ({HEAD[:7]}): blocker なし\n\n"
+        "ありがとうございます、確認します",
+        "OWNER",
+    )
+    assert not has_standin_review([quoted], HEAD)
+    assert not decide(HEAD, ["apps/bff/x.ts"], [ACCEPT_OK, quoted], 0, False, True).ok
+    # 引用行に混ざっていても、自分の行に正しく書いてあれば数える
+    mixed = (
+        f"{STANDIN_REVIEW_MARKER}\n代役レビュー ({HEAD[:7]}): blocker なし\n\n> 引用\n",
+        "OWNER",
+    )
+    assert has_standin_review([mixed], HEAD)
+
+
+def test_l1_第三者の代役レビューは数えない() -> None:
+    """権限保持者以外の投稿は代役レビューと数えないこと。
+
+    無いと何が静かに通るか:
+        このリポジトリは public なので誰でも PR にコメントできる。
+        マーカーと SHA は本文に書くだけなので、第三者が
+        `<!-- standin-review --> <sha>` と書けば門が開く (pm-accept で
+        2026-08-10 に実際に見つかった穴と同型)。
+    """
+    outsider = (f"{STANDIN_REVIEW_MARKER} {HEAD[:7]} LGTM", "NONE")
+    assert not has_standin_review([outsider], HEAD)
+    assert not decide(HEAD, ["apps/bff/x.ts"], [ACCEPT_OK, outsider], 0, False, True).ok
+
+
+def test_l1_代役レビューもpm_acceptと同じ引き継ぎが効く() -> None:
+    """差分不変の base 追随では代役レビューも引き継がれること (ADR 0042 と同形)。
+
+    無いと何が静かに通るか:
+        pm-accept は carryover で生き残るのに独立レビューだけが失効するため、
+        **main を追随するたびに門が「独立レビューが無い」で赤へ戻る**。
+        受け入れ済み・レビュー済みの PR が、実装を 1 文字も変えていないのに
+        延々とマージできなくなる (PR #330 の代役レビューが実測で見つけた非対称)。
+    """
+    carried = Carryover(ok=True, accepted_short="9999999")
+    old_review = (
+        f"{STANDIN_REVIEW_MARKER}\n代役レビュー (9999999): blocker なし",
+        "OWNER",
+    )
+    assert has_standin_review([old_review], HEAD, "9999999")
+    v = decide(HEAD, ["apps/bff/x.ts"], [old_review], 0, False, True, carried)
+    assert v.ok, v.missing
+
+
+def test_l1_引き継ぎが不成立なら代役レビューは失効する() -> None:
+    """carryover が成立していないときは古い代役レビューを数えないこと。
+
+    無いと何が静かに通るか:
+        「引き継ぎ元 SHA も許す」を無条件にすると、実装を書き換える push でも
+        古いレビューが生き続け、**1 回レビューを貼れば何を push しても門が開く**
+        状態に戻る (SHA を縛った理由そのものが消える)。
+    """
+    old_review = (
+        f"{STANDIN_REVIEW_MARKER}\n代役レビュー (9999999): blocker なし",
+        "OWNER",
+    )
+    assert not has_standin_review([old_review], HEAD, None)
+    # accepted_short を**あえて埋める** — 空だと carryover.ok を見ない実装でも
+    # テストが通ってしまい、この検査が何も守らなくなる (ミューテーションで確認済み)
+    failed = Carryover(
+        ok=False, detail="実装差分が受け入れ時点から変化", accepted_short="9999999"
+    )
+    v = decide(HEAD, ["apps/bff/x.ts"], [ACCEPT_OK, old_review], 0, False, True, failed)
+    assert not v.ok
+    assert any("独立レビュー" in m for m in v.missing)
+
+
+def test_l1_独立レビュー不足の文言は担い手を限定しない() -> None:
+    """欠落メッセージが「Codex が無い」と読めないこと。
+
+    無いと何が静かに通るか:
+        代役でも満たせる条件なのに status が「Codex レビューが無い」と出ると、
+        PO と当番 PM は「Codex 復帰を待つしかない」と読んで詰まる
+        (#345 で実際に 8 本の PR が待たされた読み方)。
+    """
+    v = decide(HEAD, ["apps/bff/x.ts"], [ACCEPT_OK], 0, False, True)
+    assert not v.ok
+    assert any("独立レビュー" in m for m in v.missing)
+    assert not any("Codex" in m for m in v.missing)
 
 
 def test_l1_説明文は140字に収まる() -> None:

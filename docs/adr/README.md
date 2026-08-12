@@ -123,4 +123,5 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0046](0046-environment-rebuildable-from-declaration.md) — 環境を「宣言から作り直せるもの」にする — ライフサイクル 3 層分断 / Entra の Graph Bicep 宣言 / 週次プロビジョンテスト (ADR 0013 の「常設」を追補)
 - [0047](0047-security-posture-in-layers-free-tier-first.md) — セキュリティ対策を「無料枠優先 + 責任分担が重ならない層」で段階導入する (public リポジトリの無料枠を先に使い切り、アプリ内側の穴は design-gate 経由で塞ぐ / ADR 0038 の続き) — **Proposed**
 - [0048](0048-child-sessions-are-usable-again-with-a-one-way-poke-channel.md) — 子セッションは再び起動できる — 会話は Routine 経由で片道 1 分なので、分配先は往復の少ない作業に限る (ADR 0033 D1 を置き換え)
+- [0052](0052-codex-derived-review-rubric-and-stand-in-judge.md) — PR レビューの基準を Codex の実レビュー 215 件から導出し、Codex 不在の間は代役 judge が読む (独立性は回復しない埋め合わせ / Issue #345) — **Proposed**
 - [0053](0053-synthetic-user-exploration-poc.md) — 合成ユーザーによる探索テストは「採点が繋がってから」「週 1 手動 1 回」から始める — 発見件数ではなく再現性を成功条件にする (#304 の次段階 / Phase 0 は #354 の接続)
