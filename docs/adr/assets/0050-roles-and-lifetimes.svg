@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 450" width="940" height="450" role="img" aria-label="PO・窓口 PM セッション・teammate・子セッション・GitHub の関係図。teammate は窓口と一緒に消え、子セッションは独立して走り、GitHub だけが永続する。どの担い手も成果物を GitHub に置き、窓口は毎回 GitHub から状態を読み直す。">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#78858d" />
+    </marker>
+    <marker id="ahA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4880b4" />
+    </marker>
+    <marker id="ahV" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b0613a" />
+    </marker>
+  </defs>
+
+  <!-- PO -->
+  <rect x="16" y="104" width="118" height="54" fill="#33424a" />
+  <text x="75" y="128" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">PO</text>
+  <text x="75" y="146" text-anchor="middle" font-size="11" fill="#ffffff">あなた</text>
+
+  <!-- 窓口 PM container -->
+  <rect x="170" y="64" width="300" height="236" fill="#b0613a" fill-opacity="0.07" stroke="#b0613a" stroke-width="1.5" stroke-dasharray="6 4" />
+  <text x="184" y="84" font-size="12" font-weight="700" fill="#b0613a">窓口 PM セッション ＝ この会話</text>
+  <text x="184" y="292" font-size="11" fill="#b0613a">閉じると、中身ごと消える</text>
+
+  <rect x="186" y="96" width="268" height="54" fill="none" stroke="#7e8a91" />
+  <text x="320" y="118" text-anchor="middle" font-size="13" font-weight="700" fill="#68747d">窓口 PM</text>
+  <text x="320" y="136" text-anchor="middle" font-size="11" fill="#78858d">読む・喋る・配る・判定する</text>
+
+  <rect x="186" y="188" width="126" height="54" fill="none" stroke="#b0613a" stroke-dasharray="4 3" />
+  <text x="249" y="210" text-anchor="middle" font-size="12" font-weight="700" fill="#68747d">teammate</text>
+  <text x="249" y="228" text-anchor="middle" font-size="10.5" fill="#78858d">形にする</text>
+
+  <rect x="326" y="188" width="126" height="54" fill="none" stroke="#b0613a" stroke-dasharray="4 3" />
+  <text x="389" y="210" text-anchor="middle" font-size="12" font-weight="700" fill="#68747d">teammate</text>
+  <text x="389" y="228" text-anchor="middle" font-size="10.5" fill="#78858d">形にする</text>
+
+  <!-- 子セッション -->
+  <text x="534" y="84" font-size="12" font-weight="700" fill="#4f8c7e">子セッション ×N</text>
+  <rect x="534" y="96" width="170" height="54" fill="none" stroke="#4f8c7e" stroke-width="1.5" />
+  <text x="619" y="118" text-anchor="middle" font-size="12.5" font-weight="700" fill="#68747d">実装セッション</text>
+  <text x="619" y="136" text-anchor="middle" font-size="10.5" fill="#78858d">PR まで走りきる</text>
+  <rect x="534" y="164" width="170" height="54" fill="none" stroke="#4f8c7e" stroke-width="1.5" />
+  <text x="619" y="186" text-anchor="middle" font-size="12.5" font-weight="700" fill="#68747d">実装セッション</text>
+  <text x="619" y="204" text-anchor="middle" font-size="10.5" fill="#78858d">PR まで走りきる</text>
+  <text x="534" y="240" font-size="11" fill="#4f8c7e">親が死んでも走り続ける</text>
+
+  <!-- GitHub -->
+  <rect x="756" y="64" width="170" height="236" fill="#4880b4" fill-opacity="0.08" stroke="#4880b4" stroke-width="1.5" />
+  <text x="770" y="84" font-size="12" font-weight="700" fill="#4880b4">GitHub ＝ 永続</text>
+  <rect x="770" y="96" width="142" height="48" fill="none" stroke="#4880b4" />
+  <text x="841" y="116" text-anchor="middle" font-size="12.5" font-weight="700" fill="#68747d">Issue</text>
+  <text x="841" y="133" text-anchor="middle" font-size="10.5" fill="#78858d">起票パケット</text>
+  <rect x="770" y="158" width="142" height="48" fill="none" stroke="#4880b4" />
+  <text x="841" y="178" text-anchor="middle" font-size="12.5" font-weight="700" fill="#68747d">PR</text>
+  <text x="841" y="195" text-anchor="middle" font-size="10.5" fill="#78858d">実装の着地点</text>
+  <text x="770" y="232" font-size="11" fill="#4880b4">誰が死んでも</text>
+  <text x="770" y="248" font-size="11" fill="#4880b4">ここは残る</text>
+
+  <!-- PMO -->
+  <rect x="756" y="344" width="170" height="62" fill="none" stroke="#4880b4" stroke-width="1.5" />
+  <text x="841" y="366" text-anchor="middle" font-size="12.5" font-weight="700" fill="#68747d">PMO ＝ 機械</text>
+  <text x="841" y="384" text-anchor="middle" font-size="10.5" fill="#78858d">Actions ・ 当番 ・ 戦況図</text>
+  <line x1="841" y1="344" x2="841" y2="306" stroke="#4880b4" stroke-width="1.5" marker-end="url(#ahA)" />
+  <text x="748" y="330" text-anchor="end" font-size="11" fill="#4880b4">止まっていたら突く</text>
+
+  <!-- arrows -->
+  <line x1="136" y1="123" x2="182" y2="123" stroke="#78858d" stroke-width="1.5" marker-end="url(#ah)" />
+  <text x="159" y="114" text-anchor="middle" font-size="10.5" fill="#78858d">相談</text>
+
+  <polyline points="75,160 75,215 182,215" fill="none" stroke="#b0613a" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#ahV)" />
+  <text x="88" y="207" font-size="10.5" fill="#b0613a">直接話せる</text>
+
+  <line x1="272" y1="152" x2="252" y2="184" stroke="#78858d" stroke-width="1.5" marker-end="url(#ah)" />
+  <line x1="368" y1="152" x2="386" y2="184" stroke="#78858d" stroke-width="1.5" marker-end="url(#ah)" />
+  <text x="320" y="172" text-anchor="middle" font-size="10.5" fill="#78858d">配る</text>
+
+  <line x1="456" y1="123" x2="530" y2="123" stroke="#78858d" stroke-width="1.5" marker-end="url(#ah)" />
+  <text x="493" y="106" text-anchor="middle" font-size="10" fill="#78858d">起票パケット</text>
+  <text x="493" y="117" text-anchor="middle" font-size="10" fill="#78858d">を渡す</text>
+
+  <line x1="706" y1="145" x2="752" y2="172" stroke="#78858d" stroke-width="1.5" marker-end="url(#ah)" />
+  <text x="722" y="140" font-size="10.5" fill="#78858d">PR</text>
+
+  <polyline points="452,200 492,200 492,38 835,38 835,92" fill="none" stroke="#b0613a" stroke-width="1.5" marker-end="url(#ahV)" />
+  <text x="502" y="31" font-size="10.5" fill="#b0613a">形にしたものは Issue に置いてから閉じる</text>
+
+  <polyline points="756,268 470,268" fill="none" stroke="#4880b4" stroke-width="1.5" marker-end="url(#ahA)" />
+  <text x="613" y="260" text-anchor="middle" font-size="10.5" fill="#4880b4">毎回ここを読み直して状態を復元する</text>
+</svg>
