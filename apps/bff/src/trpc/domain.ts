@@ -81,17 +81,25 @@ export const MentionSchema = z.object({
   problemId: z.string().nullable(),
   /** 自動グルーピング時の類似スコア 0..1（手動リンクなら null） */
   groupingConfidence: z.number().min(0).max(1).nullable(),
-  /**
-   * この Mention の追記が棚卸し済み Problem を `open` に戻したか（再燃の来歴 / #283）。
-   * `appendMention` が**保存する Mention にだけ**立てる（抽出時の入力には無いので optional）。
-   *
-   * 無いと再燃が保存後の状態から再構成できない: 確定応答が失われて同じ下書きを再送すると、
-   * 2 回目は Mention が保存済み・Problem も `open` なので「再燃した」と判定しようがなく、
-   * 同じ確定操作なのにレビュー画面の「再燃」表示だけが消える（応答が冪等でなくなる）。
-   */
-  reopenedProblem: z.boolean().optional(),
 });
 export type Mention = z.infer<typeof MentionSchema>;
+
+/**
+ * 永続化される Mention = ワイヤの Mention + **BFF 側だけが持つ来歴** (#283)。
+ *
+ * `reopenedProblem` は「この Mention の追記が棚卸し済み Problem を `open` に戻した」という
+ * 一回きりの事実。追記後の Problem は必ず `open` なので状態からは再構成できず、確定応答が
+ * 失われて同じ下書きを再送すると「再燃」表示だけが消える (応答が冪等でなくなる) ため、
+ * 事実そのものを保存する。仕様は docs/design/domain_rules.md §3-2。
+ *
+ * **ワイヤの `MentionSchema` には足さない** — これは抽出の入出力 (ai-agent ↔ BFF) の契約で、
+ * ai-agent は再燃を知らないし決して立てない。永続化の都合を契約に混ぜると L0 契約チェックが
+ * 「片側だけ増えた」と正しく検出する (実際に検出された)。
+ */
+export const StoredMentionSchema = MentionSchema.extend({
+  reopenedProblem: z.boolean().optional(),
+});
+export type StoredMention = z.infer<typeof StoredMentionSchema>;
 
 // ---- Problem（集約・追跡対象 / = PagerDuty Incident）------------------------
 // domain_model.md §2.2 / §4.2。
@@ -112,7 +120,7 @@ export const ProblemSchema = z.object({
   /** ライフサイクル状態 */
   status: ProblemStatusSchema,
   /** 束ねられた Mention 群（最低1。最初が"種"、以降が再出現） */
-  mentions: z.array(MentionSchema).min(1),
+  mentions: z.array(StoredMentionSchema).min(1),
   /** 言及回数（= mentions の派生。繰り返し重点の指標） */
   mentionCount: z.number().int().nonnegative(),
   /** 紐づく ActionPlan（派生物。状態に影響しない） */

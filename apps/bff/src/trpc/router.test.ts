@@ -961,6 +961,45 @@ describe("[単体] consultation.extract — draft commit (#283 / ADR 0039 D1/D3)
     expect((await caller.problem.get({ id: "prob-1" })).mentionCount).toBe(2);
   });
 
+  it("keeps per-item mentionCount stable when a multi-mention commit is re-sent (応答も冪等)", async () => {
+    // 無いと: 同じ Problem に 2 件以上寄る draft で、初回は追記しながら 2, 3 と返るのに、
+    //         再送では全部が保存済みなので最終件数 (3) が全 item に返り、レビュー画面の
+    //         「🔁 N 回目」が初回と食い違う (書き込みは冪等なのに表示だけ変わる / #283 Codex P2)。
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem()); // mentions 1 件
+
+    const existingGrouping = {
+      kind: "existing" as const,
+      problemId: "prob-1",
+      problemTitle: "転職の迷い",
+      problemTheme: "仕事・キャリア" as const,
+      isRecurrence: true,
+      mentionCount: 2,
+      reignited: false,
+      groupingConfidence: 0.9,
+    };
+    const draft = {
+      items: [
+        {
+          mention: makeMention({ id: "men-x", createdAt: "2026-02-01T00:00:00.000Z" }),
+          grouping: existingGrouping,
+        },
+        {
+          mention: makeMention({ id: "men-y", createdAt: "2026-02-02T00:00:00.000Z" }),
+          grouping: existingGrouping,
+        },
+      ],
+    };
+
+    const first = await caller.consultation.extract({ sessionId: "s2", draft });
+    const second = await caller.consultation.extract({ sessionId: "s2", draft });
+
+    // 保存順の位置 = 「何回目の言及か」。既存 1 件 + 2 件なので 2 回目 / 3 回目
+    expect(first.items.map((i) => i.grouping.mentionCount)).toEqual([2, 3]);
+    expect(second).toEqual(first);
+    expect((await caller.problem.get({ id: "prob-1" })).mentionCount).toBe(3);
+  });
+
   it("normalizes the returned grouping from the target's state at commit time", async () => {
     // 無いと: preview 後・確定前に別タブで対象のタイトル/テーマを編集したり棚卸ししたりすると、
     //         書き込みは最新の Problem に対して行うのに返却だけ下書き時点の値のままになる。

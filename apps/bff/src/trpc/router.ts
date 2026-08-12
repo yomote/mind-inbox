@@ -145,6 +145,13 @@ async function materializeExtraction(
       const after = alreadyCommitted ? target : appendMention(target, mention);
       if (!alreadyCommitted) await repo.upsert(after);
 
+      // **「何回目の言及か」は保存済みの並び順から取る** — Problem の最終件数ではない。
+      // 同じ Problem に複数の Mention が寄る draft では、初回は 1 件ずつ追記しながら
+      // 処理するので item ごとに 2, 3, ... と増えるが、再送では全部が保存済みなので
+      // 最終件数 (3) が全 item に返り、レビュー画面の「N 回目」が初回と食い違う (#283)。
+      // 追記専用 (domain_model §2.1) なので位置は不変で、初回・再送で同じ値になる。
+      const positionInProblem = after.mentions.findIndex((m) => m.id === mention.id) + 1;
+
       materialized.push({
         mention,
         grouping: {
@@ -156,7 +163,7 @@ async function materializeExtraction(
           // 行うのに、返却だけ下書き時点のままだとレビュー画面が古い姿を見せる。
           problemTitle: after.title,
           problemTheme: after.theme,
-          mentionCount: after.mentionCount,
+          mentionCount: positionInProblem > 0 ? positionInProblem : after.mentionCount,
           isRecurrence: !isNew,
           reignited,
         },

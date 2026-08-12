@@ -6,7 +6,7 @@
  * 型の真実は `../trpc/domain.ts` (zod)。仕様の明文化は docs/design/domain_rules.md。
  */
 
-import type { GroupingOutcome, Mention, Problem } from "../trpc/domain";
+import type { GroupingOutcome, Mention, Problem, StoredMention } from "../trpc/domain";
 
 export function dedupe(values: string[]): string[] {
   return [...new Set(values)];
@@ -56,7 +56,7 @@ export function appendMention(existing: Problem, mention: Mention): Problem {
   // 再燃は「**この** Mention が棚卸し済みを open に戻した」という一回きりの事実。追記後の
   // Problem (status: open / Mention 保存済み) からは再構成できないので、Mention 自身に
   // 来歴として残す — 同じ下書きの再送でも確定応答を同じにするため (#283)。
-  const stored: Mention =
+  const stored: StoredMention =
     existing.status === "open" ? mention : { ...mention, reopenedProblem: true };
   return withDerived({
     ...existing,
