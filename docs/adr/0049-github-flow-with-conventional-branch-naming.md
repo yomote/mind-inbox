@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-08-12
 - Deciders: yomote (PO — 「ベストプラクティスがあればそれで決めて ADR に残して」/ 裁定は次回 debrief) / PM セッション
-- Related: [ADR 0011](0011-github-projects-as-execution-dashboard.md) (実行状態の真実は GitHub) / [ADR 0021](0021-parent-session-as-pm-orchestrator.md) (hub-and-spoke) / [ADR 0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) (分配基準) / [ADR 0036](0036-merge-gate-as-required-check-and-pm-cadence.md) (マージの門 / WIP 上限 2) / [ADR 0041](0041-ux-observations-on-git-data-branch.md) (`data/ux-observations` — 機械が読むブランチ) / [ADR 0043](0043-pm-self-driving-mode.md) (D5 の `claim/<Issue 番号>` 着工ロック) / [ADR 0044](0044-stream-lanes-as-the-project-map.md) (地図)
+- Related: [ADR 0011](0011-github-projects-as-execution-dashboard.md) (実行状態の真実は GitHub) / [ADR 0021](0021-parent-session-as-pm-orchestrator.md) (hub-and-spoke) / [ADR 0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) (分配基準) / [ADR 0036](0036-merge-gate-as-required-check-and-pm-cadence.md) (マージの門 / WIP 上限 2) / [ADR 0041](0041-ux-observations-on-git-data-branch.md) (`data/ux-observations` — 機械が読むブランチ) / ADR 0043 (**`main` に未収録** — PR [#284](https://github.com/yomote/mind-inbox/pull/284)) (D5 の `claim/<Issue 番号>` 着工ロック) / [ADR 0044](0044-stream-lanes-as-the-project-map.md) (地図)
 
 Technical Story: 2026-08-12 の PO 依頼。ブランチ戦略・命名規約がリポジトリのどこにも文書化されていないことが判明した (`grep` で確認 — ヒットしたのは ADR 0033 と CLAUDE.md の「セッション名」の話で、ブランチではない)。関連: [#175](https://github.com/yomote/mind-inbox/issues/175) (並行する作業を機械で数えられない、と同型の問題)。
 
@@ -98,7 +98,8 @@ ADR 0043 D5 との接続を明文化する。
 ### D5 — 寿命は「開いてから 3 営業日以内に merge / close」、PR の決着と同時に削除する
 
 - **目標寿命 3 営業日** — Trunk Based Development は短命ブランチを「hours 〜 a couple of days」とし、2 日を超えると long-lived branch 化のリスクとする。このリポジトリは日次 tick (ADR 0043 D4) で運転しているため tick 3 回分を上限に置く。**超えたら「分割するか close する」を検討する合図**であり、赤にはしない
-- **削除**: PR が merge / close された時点で head ブランチを削除する。GitHub の "Automatically delete head branches" を有効化して機構化する — **web UI 操作なので `needs-human` Issue に積む** (ADR 0020)。有効化されるまでは手動
+- **削除 (merged)**: PR が merged になった時点で head ブランチを削除する。GitHub の "Automatically delete head branches" (`delete_branch_on_merge`) を有効化して機構化する — **web UI 操作なので `needs-human` Issue に積む** (ADR 0020)。有効化されるまでは手動
+- **削除 (未マージ close)**: **この設定は merge 時にしか働かない。** 未マージのまま close した PR の head は残り続けるため、close 側は**機構化されていない**。当面は close した本人が消し、恒常化するなら「closed かつ head が残っている PR」を当番 tick か Actions が掃除する。**エージェントセッションからは ref の削除ができない実測がある** (2026-08-12 / `git push --delete` が 3 回とも失敗) ため、**実施主体は人間か Actions に限られる**
 - **判定基準は ancestry ではなく PR の状態** — squash merge で `--merged` が使えない実測 (3 本しか返らない) があるため、掃除の条件は「対応する PR が merged / closed」とする
 - 長命を許すブランチは D4 の予約名前空間のみ
 
@@ -170,7 +171,7 @@ ADR 0043 D5 との接続を明文化する。
 
 1. 本 ADR マージ後に切られた作業ブランチが `^(claude|codex)/[0-9]+-` に合致している (実測: `git ls-remote --heads origin` の日付順)
 2. `claim/*` `data/*` に作業ブランチが切られていない
-3. merge / close された PR の head ブランチが残っていない (Automatically delete head branches 有効化後)
+3. **merged** な PR の head ブランチが残っていない (Automatically delete head branches 有効化後)。**未マージ close は自動削除の対象外**なので、別途「closed かつ head が残っている PR」の件数が増え続けていないこと
 4. `git ls-remote --heads origin` の総数が減少に転じる (置き去り 115 本の掃除 Issue の完了後)
 
 ## Links
@@ -191,7 +192,7 @@ ADR 0043 D5 との接続を明文化する。
 
 ### 関連 ADR / Issue
 
-- [ADR 0043](0043-pm-self-driving-mode.md) D5 — `refs/heads/claim/<Issue 番号>` の CAS 着工ロック (本 ADR D4 の接続先 / PR [#284](https://github.com/yomote/mind-inbox/pull/284) がマージされるまで `main` に存在しない)
+- ADR 0043 (**`main` に未収録** — PR [#284](https://github.com/yomote/mind-inbox/pull/284)) D5 — `refs/heads/claim/<Issue 番号>` の CAS 着工ロック (本 ADR D4 の接続先 / PR [#284](https://github.com/yomote/mind-inbox/pull/284) がマージされるまで `main` に存在しない)
 - [ADR 0041](0041-ux-observations-on-git-data-branch.md) — `data/ux-observations` (機械が読み書きするブランチ / D4 の予約名前空間)
 - [ADR 0036](0036-merge-gate-as-required-check-and-pm-cadence.md) D2 / D5 — ブランチ保護と WIP 上限 2 (D7 の機構化条件)
 - [ADR 0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) / [ADR 0021](0021-parent-session-as-pm-orchestrator.md) — セッション分配 (ブランチが増える源)
