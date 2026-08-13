@@ -1,6 +1,6 @@
 # 0045. 実環境 E2E の成果物は既定で秘密扱いにし、trace は公開鍵で暗号化して残す
 
-- Status: Proposed
+- Status: Accepted (2026-08-12, debrief にて PO 承認)
 - Date: 2026-08-12
 - Deciders: PO (yomote) / 窓口 PM セッション
 - Related: [ADR 0018](0018-runtime-verification-in-the-loop.md) (動作検証をループに組み込む — 証拠が残らないと検証が成立しない) / [ADR 0031](0031-agent-reaches-outside-via-github-actions.md) (外の事実は Actions 経由) / [ADR 0017](0017-container-apps-access-via-auth-gate.md) (実環境は認証の門で閉じる — 門が本物だから実トークンが要る)
