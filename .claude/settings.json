@@ -38,7 +38,13 @@
       "Bash(git push -u origin claude/:*)",
       "Bash(git push origin claude/:*)",
       "Bash(git push -u origin pm-:*)",
-      "Bash(git push origin pm-:*)"
+      "Bash(git push origin pm-:*)",
+      "mcp__Claude_Code_Remote__list_triggers",
+      "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__list_triggers",
+      "mcp__Claude_Code_Remote__get_session",
+      "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__get_session",
+      "mcp__Claude_Code_Remote__list_sessions",
+      "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__list_sessions"
     ],
     "deny": [
       "mcp__github__delete_file",
