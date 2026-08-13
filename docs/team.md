@@ -48,7 +48,7 @@ user の対話窓口。**常に 1 本**で、使い捨てローテーション�
 - **担う** — GitHub のライブ状態 (open PR / `needs-human` / Proposed ADR / 自動起票 Issue) の復元と「🙋 あなたの番」付きの報告 / design-gate の実施 / 作業の分配と起票パケットの作成 / PR の受け入れレビュー (`[pm-accept]` + 現 head SHA + 判定理由) / PR 追従とマージ / `stream:*` レーンの整備 / 旧窓口の退役
 - **担わない** — 技術レビュー (judge が担う) / リリース PR の merge・deploy / design-gate 対象の設計判断を子や subagent へ分配すること / 不可逆な判断を無人で進めること
 - **名乗りと退役** — 自分に `[PM] Mind Inbox ハブ (YYYY-MM-DD〜)` を `set_session_title` で付け、旧窓口を `[PM-retired] <元タイトル>` にリネームして `archive_session` する。**これを行えるのは新しく開かれた対話セッションだけ** (当番 Routine・子・subagent は退役操作をしない)。実行中の窓口は退役させず、archive の前に in-flight を GitHub へ書き出す
-- **着工の排他** — 同じ仕事の二重着工は `refs/heads/claim/<Issue 番号>` への空コミット push (compare-and-swap) で機構的に決める。push 後に ref を fetch し直して自分のコミットが載っていることを確認してから着工する
+- **着工の排他** — **機構は無い** (claim ref は設計だけで未実装 — 下の「未定 / 未検証」)。今は WIP 上限 2 本と起票パケットの**ファイル境界**、着手前の open PR / ブランチ確認で防いでいる
 - **痕跡** — 対話そのもの / PR の `[pm-accept]` コメント / Issue / PM ハブ Issue の引き継ぎ宣言 / journal
 
 ### 当番 PM (Routine)
@@ -116,7 +116,7 @@ user の対話窓口。**常に 1 本**で、使い捨てローテーション�
 - マージ可否は明文の解釈ではなく **`review-gate` の色**で読む。受け入れは head SHA を含む規約により **push で機械的に失効する**
 - main のブランチ保護は **Bypass list を空**にする — エージェントも PO と同じアカウント (admin) で操作するため、admin バイパスを残すと門が門でなくなる。緊急時の脱出口は ruleset の一時 Disable
 - PR を経ずリポジトリを直接書き換える MCP ツール (`delete_file` / `push_files` / `create_or_update_file`) は `deny` に置く。**`ask` は使わない** — 人が張り付いていないセッション (当番 Routine / 子) では `ask` は永久に止まり、沈黙と正常の区別が壊れる
-- 二重着工は claim ref の compare-and-swap で決める。並行作業の衝突は起票パケットの**ファイル境界**で防ぐ
+- 並行作業の衝突は起票パケットの**ファイル境界**で防ぐ。**二重着工の排他だけはまだ機構が無い** (claim ref は未実装 — 下の「未定 / 未検証」) ので、ここは規律で持っている = 破られる前提で見ておく
 - **腐敗は隠さず膨らませる** — `stream:*` の無い Issue は「未分類 n 件」として必ず数え、Routine の痕跡が欠けたら status ページが赤くなる。静かに腐る仕組みは作らない
 
 ## 役割はセッションの起こされ方で決まる
@@ -146,6 +146,7 @@ user の対話窓口。**常に 1 本**で、使い捨てローテーション�
 
 ## 未定 / 未検証 (推測で埋めないこと)
 
+- **claim ref による着工排他 (`refs/heads/claim/<Issue 番号>`)** — **設計だけで、実装も運用も無い** (2026-08-13 実測: `git ls-remote origin 'refs/heads/claim/*'` は 0 件 / origin の 138 本にも無く、`cicd/` `.github/` `.claude/` に claim ref を触るコードも 0 件)。採るなら**排他 (取得) だけを書かない** — **解放** (PR の merge / close で ref を削除。取りこぼしは当番が掃除) と**失効** (claim から一定時間経ち対応する PR も動いていない claim は死んだとみなし、`--force-with-lease` で観測した旧 SHA を expect に置いて奪う) を同時に持たせること。取得だけだと、**着工セッションがクラッシュ・退役した瞬間にその Issue が恒久的に着工不能になる** — 使い捨てローテーション前提のこの体制では、それは異常系ではなく通常運転
 - **子 → 親の Routine 経路** — 実測できているのは親 → 子の向きだけ。逆向きは未検証なので、子 → 親の報告は Issue コメントを既定にする
 - **`fire_trigger` による即時 poke が配送されない理由** — 未特定 ([#353](https://github.com/yomote/mind-inbox/issues/353))
 - **judge の frontmatter `tools:` が MCP ツール名を受け付けるか** — 未検証。次に judge を回したとき、GitHub の読み取りが実際に通ったかを確認する

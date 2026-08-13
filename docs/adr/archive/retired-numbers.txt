@@ -2,8 +2,12 @@
 #
 # **この番号は二度と使わない。** ファイル名から番号を落としているため、
 # docs/adr/NNNN-*.md を数えるだけでは「使用済み」と分からなくなる。
-# 採番機構 (.claude/hooks/session-start.sh / .github/workflows/adr-number-guard.yml)
-# はこの一覧を docs/adr/ の実ファイルと合算して最大番号・衝突を判定する。
+# この一覧を docs/adr/ の実ファイルと合算するのは次の 3 つ:
+#   - .github/workflows/adr-number-guard.yml (CI) — 退役番号の再利用と、この一覧からの
+#     行の削除を赤にする
+#   - docs/adr/README.md 「1. 番号を決める」 — 採番手順の正典
+#   - .claude/skills/adr/SKILL.md Step 2 — README のコマンドの写し
+# SessionStart フックは採番を出さない (書く瞬間に取らないと腐るため)。
 #
 # 退避の経緯と対応表: README.md
 # 形式: 1 行 1 番号 (4 桁)。'#' 始まりはコメント。

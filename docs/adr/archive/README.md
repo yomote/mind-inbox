@@ -51,8 +51,10 @@
 ### この退避とは無関係の欠番
 
 - **0049** — open PR [#342](https://github.com/yomote/mind-inbox/pull/342) にあり、main には未着地
-- **0050 / 0051** — main に存在しない。`docs/runbooks/claude-pr-review.md` が 0051 を
-  参照しているが**リンク切れ** (`debt-check` が検出済み)
+- **0050 / 0051** — main に存在しない。**退役でも欠番でもなく、着地しなかった採番**
+  (未マージのブランチで取られ、PR も無い)。`retired-numbers.txt` には**載せない** —
+  この一覧が持つのは退避した 29 本だけ。参照している docs はもう無い
+  (`debt-check` の `broken-doc-links` が 0 件)。番号自体は取られているので**再利用しない**
 
 ## 退避した 29 本
 
