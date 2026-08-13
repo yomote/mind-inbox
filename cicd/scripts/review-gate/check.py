@@ -32,9 +32,14 @@
        「受け入れ済み」判定にも同じ引き継ぎが効く**
     2. レビュースレッドが全部解決している
     3. コード PR (apps/ か cicd/ に触れる) かつ REVIEW_GATE_REQUIRE_CODEX=true のとき、
-       Codex のレビューが付いている (login が CODEX_LOGIN_PATTERN にマッチする投稿。
-       指摘ゼロの clean review は issue コメントにしか痕跡が残らないため、
-       「Codex Review」ヘッダを持つ issue コメントも数える — PR #239 実測)
+       **独立レビューが 1 本ある** — 担い手は次のどちらでもよい (ADR 0052 D7):
+       (a) Codex のレビュー (login が CODEX_LOGIN_PATTERN にマッチする投稿。
+           指摘ゼロの clean review は issue コメントにしか痕跡が残らないため、
+           「Codex Review」ヘッダを持つ issue コメントも数える — PR #239 実測)
+       (b) 代役 judge (code-reviewer subagent) のレビュー — 権限保持者が投稿した
+           `<!-- standin-review -->` + 現 head SHA を含むコメント。**Codex と違い
+           SHA を縛る** (代役の投稿は実装者と同じアカウントから出るため / has_standin_review)
+       変数名が REQUIRE_CODEX のままなのは repository variable の改名を避けるため
 
 付随して、合否とは別に advisory のコメントを 2 種類だけ自動投稿する (ADR 0038):
     A. Codex 自動レビューの再トリガー依頼 — コード PR に Codex レビューが
@@ -98,6 +103,11 @@ PM_ACCEPT_MARKER = "[pm-accept]"
 TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 CODE_PREFIXES = ("apps/", "cicd/")
 STATUS_CONTEXT = "review-gate"
+# 代役 judge の独立レビュー (ADR 0050)。Codex が使えない間、門の「独立レビュー」
+# 条件をこちらでも満たせるようにする。**Codex より条件を強くする** — 代役は
+# 実装者と同じ GitHub アカウントから投稿されるため、SHA を縛らないと
+# 「1 回レビューを貼ってから何でも push できる」門になる (pm-accept と同形の失効)。
+STANDIN_REVIEW_MARKER = "<!-- standin-review -->"
 SHORT_SHA_LEN = 7
 
 # ---- pm-accept の引き継ぎ / merge_group (ADR 0042) ----
@@ -122,7 +132,24 @@ DEFAULT_RETRIGGER_MINUTES = 10.0
 
 # security review を自動指名する敏感パス (初期セット — ADR 0038)。
 # prefix 一致するもの:
-SENSITIVE_PREFIXES = ("cicd/iac/", ".github/workflows/", ".github/actions/")
+#
+# 2026-08-12 追加の 3 つは、いずれも「特権 workflow の *中身* は敏感なのに、
+# それが呼ぶスクリプトと宣言は敏感でない」という穴を塞ぐもの (PO 指摘):
+#   - cicd/github/           … ブランチ保護・required check 等の**宣言**。
+#                              ここが弱まると apply でリポジトリの保護が下がる
+#   - cicd/scripts/github-settings/ … 管理系 API を叩き、device flow で
+#                              アカウント全体 repo スコープのトークンを扱う実体。
+#                              PR #347 はこの穴のため無審査で main に入った
+#   - cicd/scripts/review-gate/ … マージの門そのもの。**PR が自分の門を緩められる**
+#                              経路 (#331) なので、変更は必ず人の目を通す
+SENSITIVE_PREFIXES = (
+    "cicd/iac/",
+    "cicd/github/",
+    "cicd/scripts/github-settings/",
+    "cicd/scripts/review-gate/",
+    ".github/workflows/",
+    ".github/actions/",
+)
 # apps/bff/src/** のうち、パスに認証・トークン・CORS の匂いがあるもの
 # (機構で判定できる近似。取り逃しは release-gate の security-reviewer が持つ):
 _SENSITIVE_BFF_PATTERN = re.compile(r"auth|token|cors", re.IGNORECASE)
@@ -608,6 +635,59 @@ def has_pm_accept(comments: list[tuple[str, str]], head_sha: str) -> bool:
     )
 
 
+def _without_quotes(body: str) -> str:
+    """引用行 (`>` 始まり) を落とした本文を返す。
+
+    マーカーが HTML コメント = **画面に見えない**ため、第三者が不可視の
+    `<!-- standin-review --> <sha>` を投稿し、権限保持者が GitHub の
+    "Quote reply" で返信すると、raw markdown がそのまま `> ` 付きで複製されて
+    **association が NONE → OWNER に化け、誰もレビューしていないのに門が開く**
+    (security-reviewer が実測: 第三者単体は False → OWNER の引用返信で True)。
+    `[pm-accept]` は可視文字列なので誤爆が目に見えるが、こちらは PR 画面に
+    痕跡が一切出ない。よって**引用された本文は数えない**。
+    """
+    return "\n".join(
+        line for line in body.splitlines() if not line.lstrip().startswith(">")
+    )
+
+
+def has_standin_review(
+    comments: list[tuple[str, str]],
+    head_sha: str,
+    carried_short: str | None = None,
+) -> bool:
+    """代役 judge の独立レビューが**現 head に対して**投稿されているか (ADR 0052 D7)。
+
+    数える条件は 3 つ全部 — has_pm_accept と同形にしている:
+
+    1. マーカー `<!-- standin-review -->` を含む
+    2. **いまの** head SHA (先頭 7 桁) を含む — push で自動失効させるため
+    3. **投稿者がこのリポジトリの権限保持者** (author_association)
+
+    Codex の判定 (codex_present_in) は SHA を見ない。**代役だけ条件を強くするのは
+    非対称だが意図的**で、理由は投稿者が誰かにある: Codex は別アカウント
+    (chatgpt-codex-connector[bot]) なので実装者は自分でレビューを貼れないが、
+    代役の投稿はレビュー対象を書いた本人と同じアカウントから出る。SHA を縛らないと
+    「1 回レビューを貼ってから、以後は何を push しても門が開いたまま」になる。
+    """
+    accepted = {head_sha[:SHORT_SHA_LEN]}
+    # pm-accept と同じ引き継ぎを効かせる (ADR 0042 / PR #330 の代役レビュー指摘)。
+    # 引き継ぎが成立している = 「実装差分が不変の base 追随」なので、レビュー対象の
+    # コードは 1 文字も変わっていない。ここを揃えないと「PM 受け入れは carryover で
+    # 生き残るのに独立レビューだけ失効する」非対称が出て、main を追随するたびに
+    # 門が赤へ戻る (実測: 両 PR を 3-way マージした tree で再現)。
+    if carried_short:
+        accepted.add(carried_short)
+    return any(
+        STANDIN_REVIEW_MARKER in own
+        and any(s in own for s in accepted)
+        and (association or "").upper() in TRUSTED_ASSOCIATIONS
+        for own, association in (
+            (_without_quotes(body), assoc) for body, assoc in comments
+        )
+    )
+
+
 def latest_pm_accept_token(comments: list[tuple[str, str]]) -> str | None:
     """最新の信頼できる pm-accept コメントから受け入れ SHA トークンを取る (ADR 0042)。
 
@@ -745,7 +825,7 @@ def decide(
     comments: list[tuple[str, str]],
     unresolved_threads: int,
     codex_present: bool,
-    require_codex: bool,
+    require_independent_review: bool,
     carryover: Carryover | None = None,
 ) -> Verdict:
     missing: list[str] = []
@@ -762,8 +842,16 @@ def decide(
         missing.append(item)
     if unresolved_threads > 0:
         missing.append(f"未解決スレッド {unresolved_threads} 件")
-    if require_codex and is_code_pr(changed_paths) and not codex_present:
-        missing.append("Codex レビューが無い (コード PR)")
+    # 門が要求するのは「独立レビューが 1 本あること」で、担い手は Codex でも
+    # 代役 judge でもよい (ADR 0052 D7)。Codex が上限で黙っている間、門を開ける
+    # (require を false にする) のではなく担い手を差し替えることで、
+    # 「有限資源の都合で門が開く」前例を作らずに済む。
+    # 環境変数名 REVIEW_GATE_REQUIRE_CODEX はそのまま — repository variable なので
+    # 改名すると PO が web UI で作り直すことになる (機構の都合で人に作業を回さない)。
+    if require_independent_review and is_code_pr(changed_paths):
+        carried = carryover.accepted_short if (carryover and carryover.ok) else None
+        if not codex_present and not has_standin_review(comments, head_sha, carried):
+            missing.append("独立レビューが無い (コード PR)")
     return Verdict(ok=not missing, missing=missing, note=note)
 
 
@@ -1050,15 +1138,19 @@ def evaluate_gate(
     changed_paths = [f["filename"] for f in files]  # type: ignore[union-attr]
     comments = gh("api", f"repos/{repo}/issues/{number}/comments", "--paginate")
     unresolved = fetch_unresolved_threads(owner, name, number)
-    require_codex = os.environ.get("REVIEW_GATE_REQUIRE_CODEX", "").lower() == "true"
+    # 変数名は「Codex 必須」だが、意味は「独立レビュー必須」— 担い手は Codex か
+    # 代役 judge (ADR 0052 D7)。repository variable なので改名しない (上の decide 参照)
+    require_independent_review = (
+        os.environ.get("REVIEW_GATE_REQUIRE_CODEX", "").lower() == "true"
+    )
     code_pr = is_code_pr(changed_paths)
-    # 合否 (require_codex) だけでなく自動再トリガー (ADR 0038) もコード PR で
+    # 合否だけでなく自動再トリガー (ADR 0038) もコード PR で
     # Codex の既着を見るので、コード PR なら常に取得する
     codex_present = (
         fetch_codex_present(
             repo, number, os.environ.get("CODEX_LOGIN_PATTERN", "codex")
         )
-        if (require_codex or code_pr)
+        if (require_independent_review or code_pr)
         else False
     )
     comment_pairs = [
@@ -1077,7 +1169,7 @@ def evaluate_gate(
         comments=comment_pairs,
         unresolved_threads=unresolved,
         codex_present=codex_present,
-        require_codex=require_codex,
+        require_independent_review=require_independent_review,
         carryover=carryover,
     )
     return GateEval(
