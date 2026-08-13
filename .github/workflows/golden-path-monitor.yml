@@ -132,11 +132,16 @@ jobs:
           EOF
 
       # 記録 JSON は artifact とデータブランチの両方に残す (ADR 0029 → ADR 0041)。
-      # artifact = 障害調査用の一次情報 (人間が gh で取る)。
-      # データブランチ data/ux-observations = 毎朝の採点の入力 (ux-eval.yml と
-      # PM tick が読む)。agent セッションからは artifact をダウンロードできない
-      # (ダウンロード先の *.blob.core.windows.net が egress ポリシーで拒否される) が、
-      # git の fetch/push は通るため、データブランチなら採点ループが agent だけで閉じる。
+      # artifact = 障害調査用の一次情報。データブランチ data/ux-observations =
+      # 毎朝の採点の入力 (ux-eval.yml と PM tick が読む)。採点ループは git の
+      # fetch/push だけで閉じるので、artifact の可否に依存しない。
+      #
+      # 注: 以前ここには「agent セッションからは artifact をダウンロードできない」と
+      # 書いてあったが、**これは 2026-08-13 時点では成り立たない**。ADR 0029 を書いた
+      # 2026-08-09 の直後に `*.blob.core.windows.net` が egress 許可へ入っており
+      # (#168 / docs/runbooks/ops-inspect.md)、再測定しないまま前提だけが残っていた。
+      # この 1 行が #287 / #293 の調査を止めていた (失敗の証拠が目の前にあるのに
+      # 「取れない」と信じて needs-human にしていた)。取り方は ops-inspect.md 参照。
       - name: UX プローブ記録を artifact として保存
         if: always() && steps.guard.outputs.run == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
