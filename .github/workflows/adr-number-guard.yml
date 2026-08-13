@@ -51,10 +51,16 @@ jobs:
           retired_of() {
             # $1 = git ref。docs/adr/archive/ へ退避した番号 (ファイル名から番号を落として
             # あるため nums_of では拾えない)。この一覧が無いと **退役番号が再利用される**。
-            # 一覧そのものが消えたら「退役ゼロ」に見えて静かに壊れるので、
-            # ファイルが読めなかった場合は下で明示的に落とす。
+            #
+            # 末尾の `|| true` は必須。この一覧が**まだ無い ref** (機構の導入前の base) では
+            # `git show` が失敗し、`grep` も 0 件で 1 を返す。`set -euo pipefail` 下では
+            # 代入ごと失敗してガード全体が exit 1 になり、**番号を一度も検査せずに落ちる**
+            # (2026-08-13 に PR #385 自身で発生させた)。
+            #
+            # **これは握り潰しではない** — ここで空になるのは「その ref に一覧が無い」場合だけで、
+            # 「base にあったのに PR 側で消えた」は下の検査 0 が別途赤にする。
             git show "$1:docs/adr/archive/retired-numbers.txt" 2>/dev/null \
-              | grep -oE '^[0-9]{4}$' | sort
+              | grep -oE '^[0-9]{4}$' | sort || true
           }
 
           git fetch --no-tags --depth=1 origin "$BASE_SHA" 2>/dev/null \
