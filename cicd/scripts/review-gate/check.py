@@ -329,14 +329,48 @@ def should_execute_merge(pr: dict) -> tuple[bool, str]:
     return (True, "auto-merge 有効")
 
 
+def github_error_message(error_text: str) -> str:
+    """`gh api` の失敗出力から GitHub 自身の説明文だけを抜く (純関数)。
+
+    `gh api` は失敗時に `gh: <message> (HTTP 405)` を stderr に出し、JSON body が
+    そのまま乗ることもある。**この 1 文が「なぜ弾かれたか」の唯一の一次情報**
+    (「At least 1 approving review is required」「Required status check ... is
+    expected」等) なので、分類のために捨ててはいけない。抜けなければ空文字。
+    """
+    # JSON body が乗っているならパーサに解かせる。正規表現で `"message": "..."` を
+    # 拾うと、値の中のエスケープ済み引用符 (`Required status check \"foo\" is expected.`)
+    # で途中で切れ、**まさに調べたい check 名が落ちる** (PR #330 Codex P2)。
+    decoder = json.JSONDecoder()
+    for brace in re.finditer(r"\{", error_text):
+        try:
+            obj, _ = decoder.raw_decode(error_text[brace.start() :])
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and isinstance(obj.get("message"), str):
+            return " ".join(obj["message"].split())
+    match = re.search(r"gh:\s*(.+?)\s*\(HTTP \d{3}\)", error_text, re.DOTALL)
+    if match:
+        return " ".join(match.group(1).split())
+    return ""
+
+
 def merge_failure_reason(error_text: str) -> str:
     """マージ API の失敗をログ向けの理由に翻訳する (純関数)。
 
     405/409 は「まだマージできない」だけの正常系 (他 check 未完・base 遅れ・競合)
     なので黙ってスキップする — ただし理由はログに残す (Issue #253)。
+
+    **405 は GitHub の説明文をそのまま添える** (Issue #327): 2026-08-12 に PR #286 で
+    「全 check 緑・auto-merge 武装済みなのに 405 が 3 回続き、OWNER 権限では即マージ
+    できる」状態が起きた。原因の切り分けに必要な一次情報 (承認不足なのか / 保護ルール
+    なのか / check 未完なのか) を、この関数が分類名に丸めて捨てていたため、
+    「まだマージできない」だけが 3 回ログに残り、機構が死んでいることに気づけなかった。
     """
     if "405" in error_text:
-        return "405: まだマージできない (他 required check 未完 / 保護ルール未達)"
+        detail = github_error_message(error_text)
+        if detail:
+            return f"405: まだマージできない — GitHub の理由: {detail}"
+        return "405: まだマージできない (GitHub の理由を取り出せず — 出力の形が変わった可能性)"
     if "409" in error_text:
         return "409: head SHA が動いた — 次のイベント / sweep が再評価する"
     if "404" in error_text:

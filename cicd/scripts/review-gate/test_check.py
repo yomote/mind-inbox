@@ -1084,6 +1084,29 @@ def test_l1_マージ失敗の翻訳は405と409を正常系として区別す�
     assert "想定外" in merge_failure_reason("connection reset by peer")
 
 
+def test_l1_405はgithubの理由をそのまま残す() -> None:
+    """無いと何が静かに通るか: 405 を「まだマージできない」に丸めると、
+    「承認が足りない」「保護ルールで弾かれた」「check が未完」が全部同じ 1 行になる。
+    2026-08-12 に PR #286 でこれが起き、全 check 緑・auto-merge 武装済みなのに
+    405 が 3 回続いた原因を切り分けられなかった (#327)。マージ執行機構が
+    仕事をしていないことに、同じログが並ぶだけで誰も気づけない。"""
+    approval = merge_failure_reason(
+        "gh: At least 1 approving review is required by reviewers with write access. (HTTP 405)"
+    )
+    assert "At least 1 approving review is required" in approval
+
+    # JSON body がそのまま乗る経路 (gh のバージョン差) でも同じ 1 文を拾う。
+    # **エスケープされた引用符で切ってはいけない** — 切ると調べたい check 名が落ちる
+    # (正規表現で "message": "..." を拾う実装はここで落ちる / PR #330 Codex P2)
+    body = merge_failure_reason(
+        '{"message": "Required status check \\"foo / bar\\" is expected.", "status": "405"}'
+    )
+    assert 'Required status check "foo / bar" is expected.' in body
+
+    # 理由が取り出せないときは「取れなかった」と書く (推測で埋めない)
+    assert "取り出せず" in merge_failure_reason("HTTP 405")
+
+
 def test_l1_review_gate_statusの抽出はsuccessのときだけ時刻を返す() -> None:
     """無いと何が静かに通るか: pending/failure でも時刻が返ると、sweep が
     門の赤い PR にマージを試み続ける (405 連発のログノイズ + 門の意味の希薄化)。"""
