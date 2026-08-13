@@ -41,7 +41,7 @@
 | --- | --- |
 | `/dev` | ローカルで起動する / ブラウザで確かめる / テスト・lint を回す |
 | `/adr` | ADR を書く / 採番する / Status を動かす |
-| `/dispatch` | 作業を分ける / 子セッション・subagent を起こす |
+| `/dispatch` | 作業を分ける / 子セッション・subagent を起こす (**窓口 PM は 1 行でも自分で書かない**) |
 | `/merge` | PR を出したあと / マージしてよいかを判断する |
 | `/design-gate` | 新機能・Phase 着手・ADR 級判断の**実装を始める前** |
 | `/debrief` `/briefing` | マージや Proposed ADR が溜まった / リリース級の節目 |
