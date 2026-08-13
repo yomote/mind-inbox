@@ -93,7 +93,7 @@ Codex が応答できない間 ([#345](https://github.com/yomote/mind-inbox/issu
 - diff に認証・入力検証・秘密情報・インフラ (Bicep / workflow)・依存追加が含まれる場合は、あわせて security-reviewer も起動する (code-reviewer 側はセキュリティの深掘りを委譲する規約)
 - 修正 push 後は**同じ subagent を再起動して再レビュー**し、同じ指摘が再提起されないことを確認してから PM がスレッドを resolve する (CLAUDE.md の PO 決定 / 2026-08-12 改訂)
 - **resolve する前に「対策の強さ」を見る** ([#351](https://github.com/yomote/mind-inbox/issues/351) Phase 0 — 受け取り方の修正)。judge は finding ごとに `書けなくする` (型・ラッパで封じる) / `機械に探させる` (lint・契約テスト) / `レビューで見る` (判断が要る) のどれかを宣言する ([rubric R4-b](../../.github/claude/review-rubric.md))。**前 2 つの指摘を点修正で resolve しない** — 機構に落とすか、落とす Issue を分ける。実測 62 件のうち **35.5% は機構に落とせた**のに点修正で畳まれ、`createdAt` のソート汚染 ([#274](https://github.com/yomote/mind-inbox/issues/274)) は同じ型のバグが**今も 2 箇所生きている**
-- **Codex が復帰したら指摘者を Codex に戻す** (`REVIEW_GATE_REQUIRE_CODEX` を true のまま、[巡回 Routine を退役](#巡回-routine-を退役させる-codex-復帰時))
+- **Codex が復帰したら指摘者を Codex に戻す** (`REVIEW_GATE_REQUIRE_CODEX` を true のまま、[Codex が復帰したら](#codex-が復帰したら))
 
 #### 巡回手順 (このリポジトリの正典 — Routine もこれを読んで従う)
 
@@ -103,69 +103,36 @@ Codex が応答できない間 ([#345](https://github.com/yomote/mind-inbox/issu
    - 複数あるときは**更新が古い順に最大 3 本**。残りは痕跡に「未着手 n 本」と書く (全部やろうとして途中で力尽きるより、3 本を rubric どおり書き切る)
 2. **1 本ずつ `code-reviewer` subagent を起動する** (Agent tool / `subagent_type: code-reviewer`)。**自分で diff を読んでレビューを書かない** — judge を新品コンテキストの subagent に分けているのが独立性の担保そのもの。対象 PR 番号と head SHA を渡す
 3. **返ってきたレポートを PR に投稿する** — サマリコメント 1 本 + 行が特定できる `blocker` / `major` の inline コメント。サマリ先頭 2 行は [`review-rubric.md`](../../.github/claude/review-rubric.md) Part 6 の**必須ヘッダ**を厳守 (これが無いと `review-gate` が独立レビューとして数えず、PR は赤のまま動かない)。SHA は**投稿直前に取り直した現 head**。レビュー中に push があったらそのレビューは古い — 投稿せず次回に回す
-4. **痕跡を必ず残す** — [Issue #360](https://github.com/yomote/mind-inbox/issues/360) に先頭マーカー `<!-- pr-review-routine-tick -->` 付きコメントを 1 本。内容はレビューした PR と verdict / findings 件数 (severity 別) / 未着手の残り本数 / 異常。**対象 0 本の回も必ず書く** (「対象なし」)。異常ゼロで黙ると沈黙と正常が区別できず、`watchers.json` の監視が意味を失う。取れなかったものは `未検証: 理由` の形で書く
+4. **痕跡を必ず残す** — **PR に投稿したレビューそのものが痕跡**。加えて呼び出し元が結果を 1 行残す: 当番 PM tick なら [Issue #254](https://github.com/yomote/mind-inbox/issues/254) の巡回レポートに、実装セッションなら PR のスレッドに。**対象 0 本の回も「対象なし」と書く** — 異常ゼロで黙ると沈黙と正常が区別できない。取れなかったものは `未検証: 理由` の形で書く
+
+   > 専用の心拍 (Issue #360 の `<!-- pr-review-routine-tick -->` マーカー) は**廃止**。専用 Routine の退役で `watchers.json` の監視対象から外れ、誰も見ないマーカーになったため。#360 は過去の検証記録として残す
 
 **やらないこと**: 実装・修正の push・マージ・auto-merge の武装・`[pm-accept]` の投稿・スレッドの **resolve** (判定は judge、操作は PM / rubric R10)・リリース PR (`main → release`) のレビュー (release-gate の担当)・設計判断。dependabot PR は rubric の C1 / C6 だけ見て短く済ませる (rubric は人が書いたコードから導出しており、依存更新 PR での振る舞いは未観測)。
 
 **詰まったら**: subagent が起動できない / GitHub に到達できない等で回らないときは、**推測で「異常なし」と書かず** #360 に何がどこで止まったかを書いて終了する (マーカー付きコメントは必ず残す)。ツール権限で止まったなら必要なツール名も残す。
 
-#### 巡回 Routine の登録 — **web UI でしか作れない (要 user・3 分・1 回きり)**
+#### 誰が巡回を引くか — **Routine は退役した (2026-08-13)**
 
-**⚠️ 未登録。** エージェントは登録できない。実測で確定した事実 (2026-08-12 / [#352](https://github.com/yomote/mind-inbox/issues/352)):
+**専用の巡回 Routine は作らない。** 代役 judge を引くのは次の 2 経路だけ:
 
-| 試したこと                                                                                 | 結果                                                                                                                                                                                                                                                                      |
-| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `create_trigger` に `source_url` / `source_revision` / `repositories` を渡す               | **黙って破棄される**。エラーも警告も出ず、`job_config.session_context` に `sources` が入らない                                                                                                                                                                            |
-| `create_session(source_url=…)` で repo 付きセッションを作る                                | **成功** (repo・rubric・`code-reviewer` 起動・`gh` / `mcp__github__*` すべて到達)                                                                                                                                                                                         |
-| その セッションに `create_trigger(persistent_session_id=…)` で束ねて `fire_trigger` で発火 | **失敗。ただし原因は束ね方ではなく `fire_trigger`** — [`child-sessions.md`](child-sessions.md) §2 が「`fire_trigger` は API は成功を返すが**配送されない**」と既に実測記録していた。束ねた先は起きず、`sources` 無しの新品セッション (`origin: force_run_trigger`) が立つ |
-| 同じ束ねに `run_once_at` (1〜2 分後) で送る                                                | **成功**。束ねた先の `updated_at` が発火時刻に動いて起動した (2026-08-12 17:11 実測)。**配送経路は `run_once_at` が正しい**                                                                                                                                               |
+| いつ | 誰が引くか |
+| --- | --- |
+| 実装が一段落して PR を出したあと | **その実装セッション自身**が `code-reviewer` subagent を起動する |
+| 誰も見ていないとき | **当番 PM tick** (`PMルーティン`) が上の「巡回手順」に従って拾う |
 
-⇒ **リポジトリを持たせること自体は可能** (repo 付きセッションに束ねて `run_once_at` で送る)。**それでも web UI が要るのは、欲しいのがイベント駆動だから**。
+**退役の理由** — 専用 Routine (`trig_01V1z4RWDomfvUTTocMWymXM` / web UI 作成) は登録から退役まで**一度も発火しませんでした**。一方で当番 PM tick は 2026-08-13 の巡回で PR #330 の代役レビューを完遂しています (`code-reviewer` subagent を新品コンテキストで起動 → スタブ HTTP サーバで実物の `gh` を叩き → ミューテーション 3 種で回帰を確認 → verdict OK → スレッド resolve → マージ)。**同じ仕事を既に動いている Routine ができるので、2 本目を持つ理由がありません。**
 
-`create_trigger` が持つのは `cron_expression` と `run_once_at` **だけで、GitHub イベント (`pull_request` の opened / synchronize) を trigger にするフィールドが無い**。未知のパラメータは黙って捨てられるので渡して通すこともできない (上表 1 行目)。cron で回すと**最悪 6 時間遅れる**うえ、束ね先が 1 セッションに固定されるのでコンテキストが積もり、コンテナ回収で束ねが腐るリスクも残る。**PR が動いた瞬間に走らせたいなら web UI しかない** — docs も「[クラウドセッションの中からは web UI で管理せよ](https://code.claude.com/docs/en/routines)」と明記している (`/schedule` は web セッションでは出ない)。
+機構としては Routine も subagent も同じ (新品コンテキストで rubric を読んで judge を回す)。違うのは「誰も見ていないときに誰が引くか」だけで、そこは当番 PM tick が埋めています。
 
-> **2026-08-12: 一度 cron (6 時間毎) の暫定 Routine を置いたが、PO 判断で削除した。** 「巡回 (ポーリング) は要らない / イベントで起動すべき」— 設計としてそれが正しく、暫定の cron を残すと**それが設計だと誤読される**。イベント駆動が入るまで自動起動は無しとし、その間のレビューは PM が手で `code-reviewer` を呼ぶ (下の「単発でレビューだけ欲しい」)。
+**「呼び忘れ」の受け皿は、引く仕組みではなく門です。** `REVIEW_GATE_REQUIRE_CODEX=true` なら、独立レビューが無い PR は `review-gate` が赤のままでマージできません。**引く仕組みを増やすより、門が開かないほうが確実です** (「規律は破られ、機構は守られる」)。
 
-**したがって [#90](https://github.com/yomote/mind-inbox/issues/90) / [#156](https://github.com/yomote/mind-inbox/issues/156) と同型の「最後の 1 クリック」**。<https://claude.ai/code/routines> → **New routine**:
+**claude.ai 側の Routine 実体は残っています** — `delete_trigger` は `created_via: http_api` の Routine に通りません (2026-08-13 実測: `the requested resource was not found`)。**削除は PO の手作業**。それまでは enabled のまま残りますが、発火しても巡回手順に従うだけなので害はありません。
 
-| 項目             | 値                                                                                                                  |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------- |
-| **Name**         | `PR review (mind-inbox)`                                                                                            |
-| **Repositories** | `yomote/mind-inbox` ← **これが本体。ここが空だと動かない**                                                          |
-| **Environment**  | 既定 (`Trusted`) でよい                                                                                             |
-| **Trigger**      | **GitHub event** → `pull_request` → `opened` + `synchronize` / filter: `Is draft` = `false`, `Base branch` = `main` |
-| **Connectors**   | 全部外してよい (GitHub は connector ではなく GitHub App 経由)                                                       |
+#### Codex が復帰したら
 
-**cron ではなく GitHub trigger を選ぶこと** — PR を出した瞬間にレビューが走る。cron だと最悪 6 時間遅れる。docs もこの用途を "Bespoke code review: A GitHub trigger runs on `pull_request.opened`" として挙げている。
-
-**プロンプト (貼り付け用 — これで全文)**:
-
-```text
-yomote/mind-inbox の PR レビュー巡回 (代役 judge) を実行して。
-あなたは使い捨ての新品セッションで、user との対話窓口ではない。
-
-手順は docs/runbooks/review-agents.md の
-「巡回手順 (このリポジトリの正典 — Routine もこれを読んで従う)」節が正典。
-まず CLAUDE.md とその節を読み、書かれているとおりに実行する。
-このプロンプトに手順を再掲しない (二重管理で片方が古くなるため)。
-
-あなたの役割は技術レビュー (judge) だけ。実装・マージ・受け入れ・resolve はしない。
-判定は gh か mcp__github__* で取る。素の curl で api.github.com を叩くと
-403 (プロキシ) になるが、それは「GitHub に到達できない」ではない。
-```
-
-**プロンプトを太らせないこと。** 手順を Routine 側に書くと、git に無い本文が正典になり、壊れても diff に出ない。
-
-**登録するまで状況ページの「PR レビュー (代役 judge)」行は 🔴 のまま** — 痕跡が無い = 動いていない、という判定は正しい。消さずに赤を残す (`watchers.json`)。
-
-**登録できたら、この節の「⚠️ 未登録」を消して trigger の実体 (routine 名) を書き足すこと。**
-
-#### 巡回 Routine を退役させる (Codex 復帰時)
-
-1. `delete_trigger` で `trig_01C4DFF8wkLnxnLeoM8QmE2b` を消す (または `update_trigger` で `enabled: false`)
-2. `cicd/scripts/status-page/watchers.json` の `routines` から該当エントリを消す — **消さないと痕跡が止まって永久に 🔴 になる**
-3. `#360` に退役した旨をコメントして close する
-4. `REVIEW_GATE_REQUIRE_CODEX` は `true` のまま (門の条件は「独立レビューが 1 本」で、担い手が Codex に戻るだけ)
+1. `REVIEW_GATE_REQUIRE_CODEX` は `true` のまま (門の条件は「独立レビューが 1 本」で、担い手が Codex に戻るだけ)
+2. `.github/claude/review-rubric.md` と巡回手順はそのまま使える (rubric は Codex の実レビュー 215 件から導出したもの)
+3. 代役 judge は「Codex 対象外の PR」と「Codex を待てない場合の埋め合わせ」に退く
 
 ### 単発でレビューだけ欲しい
 
