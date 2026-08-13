@@ -4,16 +4,20 @@
 # **記述だけでは 2 回衝突している** (0015→0019 / 0026→0027)。どちらも並行セッションが
 # ローカルの最大値から採番したことが原因。規約ではなく機械で落とす。
 #
-# 検査は 2 つ:
+# 検査は 4 つ:
+#   0. 退役番号の一覧 (docs/adr/archive/retired-numbers.txt) から行が消えている
+#      (1 行だけ消して同じ PR でその番号を足す経路を塞ぐ)
 #   1. PR 側で同一番号の ADR が複数ある (自分の中で衝突している)
 #   2. PR が追加した番号が base に既に存在する (並行採番で衝突している)
+#   3. PR が退役番号 (docs/adr/archive/ へ退避済み) を再利用している
 name: adr-number-guard
 
 on:
+  # **paths フィルタは付けない。** 付けると ADR に触れない PR ではこの check が走らず、
+  # required にした瞬間その PR が永久 pending になる (cicd/github/settings.yml の警告)。
+  # ADR 変更が無い PR では「衝突なし」で即緑になるだけなので、常時走らせて門にする。
   pull_request:
     branches: [main]
-    paths:
-      - "docs/adr/**"
   # merge queue の一時 branch でも required check を報告する (ADR 0042)。
   # merge_group に paths フィルタは効かない (push / pull_request 限定) ため常に走る —
   # ADR 変更の無い merge group では「衝突なし」で緑になるだけ。副産物として、
@@ -48,13 +52,40 @@ jobs:
               | grep -oE '[0-9]{4}' | sort
           }
 
+          retired_of() {
+            # $1 = git ref。docs/adr/archive/ へ退避した番号 (ファイル名から番号を落として
+            # あるため nums_of では拾えない)。この一覧が無いと **退役番号が再利用される**。
+            #
+            # 末尾の `|| true` は必須。この一覧が**まだ無い ref** (機構の導入前の base) では
+            # `git show` が失敗し、`grep` も 0 件で 1 を返す。`set -euo pipefail` 下では
+            # 代入ごと失敗してガード全体が exit 1 になり、**番号を一度も検査せずに落ちる**
+            # (2026-08-13 に PR #385 自身で発生させた)。
+            #
+            # **これは握り潰しではない** — ここで空になるのは「その ref に一覧が無い」場合だけで、
+            # 「base にあったのに PR 側で消えた」は下の検査 0 が別途赤にする。
+            git show "$1:docs/adr/archive/retired-numbers.txt" 2>/dev/null \
+              | grep -oE '^[0-9]{4}$' | sort || true
+          }
+
           git fetch --no-tags --depth=1 origin "$BASE_SHA" 2>/dev/null \
             || git fetch --no-tags origin "$BASE_SHA"
 
           PR_NUMS="$(nums_of HEAD)"
           BASE_NUMS="$(nums_of "$BASE_SHA")"
+          PR_RETIRED="$(retired_of HEAD)"
+          BASE_RETIRED="$(retired_of "$BASE_SHA")"
 
           FAILED=0
+
+          # 0. 退役番号の一覧から**行が消えていないか** (全消しだけでなく 1 行の削除も)。
+          #    「空かどうか」だけを見ていると、1 行だけ消して同じ PR でその番号を足す経路が
+          #    素通りする (2026-08-13 のレビューで指摘)。base 側の一覧を基準に差分を取る。
+          norm() { printf '%s\n' "${1:-}" | grep -E '^[0-9]{4}$' | sort -u || true; }
+          REMOVED="$(comm -23 <(norm "$BASE_RETIRED") <(norm "$PR_RETIRED") || true)"
+          if [ -n "$REMOVED" ]; then
+            FAILED=1
+            echo "::error title=退役番号が一覧から消えている::$(echo $REMOVED) が docs/adr/archive/retired-numbers.txt から削除されています。退役番号は再利用しません — 消す理由があるなら PO 裁定を取ってください"
+          fi
 
           # 1. PR 内での重複 (同じ番号のファイルが 2 つある)
           DUP_IN_PR="$(echo "$PR_NUMS" | uniq -d)"
@@ -89,10 +120,27 @@ jobs:
             fi
           done
 
+          # 3. PR が退役番号 (docs/adr/archive/ へ退避済み) を再利用していないか。
+          #    退避時にファイル名から番号を落としているため、nums_of では検出できない。
+          #
+          #    照合には base と PR の**和集合**を使う。PR 側だけを見ると「一覧から 1 行消して
+          #    その番号を足す」で門が開き、base 側だけを見ると一覧を導入する PR 自身で
+          #    検査が効かない。削除そのものは上の検査 0 が base 基準で赤にするので、
+          #    和集合にしても「消して足す」は塞がったまま。
+          RETIRED_ALL="$(printf '%s\n%s\n' "$BASE_RETIRED" "$PR_RETIRED" | grep -E '^[0-9]{4}$' | sort -u || true)"
+          for n in $(echo "$PR_NUMS" | uniq); do
+            if echo "$RETIRED_ALL" | grep -qx "$n"; then
+              FAILED=1
+              pr_file="$(git ls-tree -r HEAD --name-only docs/adr/ | grep "/$n-" | head -1)"
+              echo "::error file=${pr_file},title=退役した ADR 番号の再利用::番号 $n は docs/adr/archive/ へ退避済みです (retired-numbers.txt)"
+              echo "    PR: $pr_file"
+            fi
+          done
+
           {
-            echo "## adr-number-guard (ADR 0028 D3)"
+            echo "## adr-number-guard"
             echo
-            NEXT="$(echo "$BASE_NUMS" | tail -1)"
+            NEXT="$(printf '%s\n%s\n' "$BASE_NUMS" "$BASE_RETIRED" | grep -E '^[0-9]{4}$' | sort -n | tail -1)"
             if [ -n "$NEXT" ]; then
               printf -- "- base (origin/main) の最大番号: \`%s\` → 次に使えるのは \`%04d\`\n" \
                 "$NEXT" "$((10#$NEXT + 1))"

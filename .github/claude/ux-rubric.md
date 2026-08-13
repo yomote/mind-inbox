@@ -1,6 +1,6 @@
 # UX Rubric (ux-reviewer — 会話品質を採点する UX judge)
 
-> **UX judge の基準** (rubric-as-truth, [ADR 0022](../../docs/adr/0022-autonomous-ux-improvement-loop.md) / [ADR 0019](../../docs/adr/0019-independent-judge-agents-security-qa-release.md) と同型)。
+> **UX judge の基準** (rubric-as-truth, [ADR 0022](../../docs/adr/archive/operations/autonomous-ux-improvement-loop.md) / [ADR 0019](../../docs/adr/archive/operations/independent-judge-agents-security-qa-release.md) と同型)。
 > subagent `.claude/agents/ux-reviewer.md` から参照される。観点を変えたい時はここを直す。
 > **共通規約: [`_common.md`](_common.md) を必ず併せて読む** (共通の出力ルール。Severity ではなく 0–2 のスコアで採点する点だけが異なる)。
 >

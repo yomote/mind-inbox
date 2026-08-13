@@ -7,7 +7,7 @@
 >
 > **現行の渋滞対策は「Require branches to be up to date (strict) を OFF にする」**で、
 > 2026-08-11 に PO が実施済み。追いつきレースはこれで消えています
-> ([ADR 0042](../adr/0042-pm-accept-carryover-and-merge-queue.md) の「D2 の改訂」)。
+> ([ADR 0042](../adr/archive/operations/pm-accept-carryover-and-merge-queue.md) の「D2 の改訂」)。
 > **base が進んだからといって反射的に追随しないこと** — 追随が要るのはコンフリクトが
 > 実際に出たときだけです。
 >
@@ -87,6 +87,6 @@
 
 ## Related
 
-- ADR: [0042 pm-accept 引き継ぎ + Merge Queue](../adr/0042-pm-accept-carryover-and-merge-queue.md) / [0036 マージの門](../adr/0036-merge-gate-as-required-check-and-pm-cadence.md)
+- ADR: [0042 pm-accept 引き継ぎ + Merge Queue](../adr/archive/operations/pm-accept-carryover-and-merge-queue.md) / [0036 マージの門](../adr/archive/operations/merge-gate-as-required-check-and-pm-cadence.md)
 - スクリプト: `cicd/scripts/review-gate/`
 - needs-human: Issue #269 (queue 有効化)

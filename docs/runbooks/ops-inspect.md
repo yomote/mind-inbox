@@ -1,6 +1,6 @@
 # Runbook: ops-inspect — サンドボックスの外を見る
 
-エージェントのセッションから届かない「事実」を、GitHub Actions の runner を踏み台にして取るための手順。判断の根拠は [ADR 0031](../adr/0031-agent-reaches-outside-via-github-actions.md)。
+エージェントのセッションから届かない「事実」を、GitHub Actions の runner を踏み台にして取るための手順。判断の根拠は [ADR 0031](../adr/archive/operations/agent-reaches-outside-via-github-actions.md)。
 
 ## いつ使うか
 
@@ -53,6 +53,6 @@ GitHub の Actions タブ → `ops-inspect` → **Run workflow** → `check` を
 
 ## 関連
 
-- [ADR 0031](../adr/0031-agent-reaches-outside-via-github-actions.md) (この仕組みの判断) / [ADR 0018](../adr/0018-runtime-verification-in-the-loop.md) (実態の読み取り) / [ADR 0006](../adr/0006-azure-access-via-device-code.md) (Azure 対話ログインの制約)
+- [ADR 0031](../adr/archive/operations/agent-reaches-outside-via-github-actions.md) (この仕組みの判断) / [ADR 0018](../adr/archive/operations/runtime-verification-in-the-loop.md) (実態の読み取り) / [ADR 0006](../adr/0006-azure-access-via-device-code.md) (Azure 対話ログインの制約)
 - `cicd/scripts/smoke-test/inspect-env.sh` — `azure-resources` が内部で流す詳細ダンプ
 - 対: `smoke-test.sh` (合否を出して CD を止める) / `inspect-env.sh` (人が読む。判定しない) / **`ops-inspect` (エージェントが読む。判定しない)**

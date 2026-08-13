@@ -202,7 +202,7 @@ BFF は `COSMOS_ENDPOINT` が無ければ in-memory にフォールバックす�
 
 ## Related
 
-- ADR: [0030 永続化は Cosmos DB 1 本に寄せる](../adr/0030-persistence-on-cosmos-db-single-store-behind-bff.md) / [0013 常設 dev 環境の予算](../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) / [0018 動作検証をループに組み込む](../adr/0018-runtime-verification-in-the-loop.md) / [0017 Container Apps の認証の門](../adr/0017-container-apps-access-via-auth-gate.md)
+- ADR: [0030 永続化は Cosmos DB 1 本に寄せる](../adr/0030-persistence-on-cosmos-db-single-store-behind-bff.md) / [0013 常設 dev 環境の予算](../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) / [0018 動作検証をループに組み込む](../adr/archive/operations/runtime-verification-in-the-loop.md) / [0017 Container Apps の認証の門](../adr/0017-container-apps-access-via-auth-gate.md)
 - 要件: `docs/design/requirements.md` FR-4 / NFR-1
 - 関連 Runbook: [`entra-spa-auth-and-budget.md`](entra-spa-auth-and-budget.md) / [`azure-oidc-cd-setup.md`](azure-oidc-cd-setup.md)
 - スクリプト: `cicd/scripts/smoke-test/persistence-probe.sh`

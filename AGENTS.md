@@ -5,7 +5,7 @@ Claude Code は [`CLAUDE.md`](CLAUDE.md) を読む。**両者の内容は一致�
 食い違ったら CLAUDE.md が正典で、こちらを直す。
 
 このファイルは「実装するときに効くルール」に絞ってある。プロセス全体 (design-gate /
-debrief / セッション運用) は CLAUDE.md 側。
+debrief / セッション運用) は CLAUDE.md とその索引が指す [`.claude/skills/`](.claude/skills/) 側。
 
 ## PR レビューの書き方
 
@@ -82,6 +82,12 @@ uv run --directory apps/services/ai-agent pytest   # Python は uv
 
 - **アーキテクチャに関わる判断は ADR を先に書く** — `docs/adr/` に MADR 形式。
   エージェント起案は `Status: Proposed` で入れる (`Accepted` にできるのは user だけ)
+- **運用・プロセスの決め事は ADR ではない** — レビュー体制 / セッションの回し方 / CI の
+  運転ルールなどは数日で改訂されるので不変記録に載せない。置き場は `CLAUDE.md` と `.claude/skills/`。
+  過去に ADR として書かれた 29 本は `docs/adr/archive/` にあり、**現行ルールではない**
+- **採番は `origin/main` の最大番号 +1。欠番は埋めない** — 退避で 0008 / 0011 / 0014 …
+  が飛んでいる。退役番号は `docs/adr/archive/retired-numbers.txt` にあり、
+  実ファイルと合算して最大を取る (`adr-number-guard` が再利用を赤にする)
 - **Accepted の ADR 本文は書き換えない。** 状態が変わったら Status 行だけ更新するか、
   新規 ADR で supersede する。索引 `docs/adr/README.md` も同じコミットで同期する
 - **生成物は手書きしない** — OpenAPI は zod / pydantic から再生成、構成図はスクリプトから
@@ -127,7 +133,9 @@ uv run --directory apps/services/ai-agent pytest   # Python は uv
 
 - `review-gate` — PM の受け入れコメント / レビュースレッド全解決 が揃うと緑
 - `test (...)` / `lint-and-build`
-- ブランチが `main` より遅れていると弾かれる → `main` を取り込んでから push
+- **base が進んだだけで `main` を取り込まない。** 「Require branches to be up to date」
+  (strict) は OFF なので、遅れたままマージできる。反射的に追随すると受け入れが
+  失効して再受け入れが要る。追随するのは**コンフリクトが実際に出たとき**だけ
 
 **未解決のレビュースレッドを残したままマージしない。** 直せない指摘は、なぜ直さないかを
 返信し、必要なら Issue に切り出してから解決する。

@@ -29,7 +29,7 @@ user の「あれなんだっけ?」「これどういう仕組み?」「なん�
 | 質問の型 | 引く場所 |
 | --- | --- |
 | なぜ〜にした? (判断) | `docs/adr/` を grep → 該当 ADR |
-| 〜の仕組み・流れは? (構成) | `CLAUDE.md` Architecture / `docs/design/` / コード |
+| 〜の仕組み・流れは? (構成) | `docs/design/basic_design.md` / 領域別 `CLAUDE.md` (`apps/*/CLAUDE.md`・`cicd/CLAUDE.md`) / コード |
 | 画面・UI は? | `docs/frontend/ui_specs/*.mdx` / `mockApi.ts` |
 | API の形は? | `docs/api/*.yaml` / zod・pydantic 定義 |
 | 手順は? (deploy 等) | `docs/runbooks/` |
@@ -67,6 +67,6 @@ user の追撃 (「もっと詳しく」「この部分は?」) にはコード�
 
 ## 関連
 
-- ADR 0014 (この仕組みの設計判断): `docs/adr/0014-design-comprehension-gate-and-debrief.md`
+- ADR 0014 (この仕組みの設計判断): `docs/adr/archive/operations/design-comprehension-gate-and-debrief.md`
 - ドキュメント戦略 (真実の所在): `docs/documentation/strategy.md`
 - 対: `status` skill (進捗) / `debrief` skill (まとめて解説) / `design-gate` skill (事前ゲート)

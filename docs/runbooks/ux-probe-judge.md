@@ -16,7 +16,7 @@ ux-eval.yml は記録の鮮度も見る — **26 時間以内にプローブ記�
 
 観測は Issue コメントではなく **git のデータブランチに JSONL で蓄積する**
 (2026-08-11 PO 裁定 / [#197](https://github.com/yomote/mind-inbox/issues/197)。
-旧方式は [ADR 0029](../adr/0029-probe-record-transport-via-issue-comment.md))。
+旧方式は [ADR 0029](../adr/archive/operations/probe-record-transport-via-issue-comment.md))。
 
 - ブランチ: `data/ux-observations` (orphan — main と履歴を共有しない。無ければ書き込みが作る)
 - ファイル: `probes/YYYY-MM.jsonl` (プローブ記録) / `evals/YYYY-MM.jsonl` (機械計測 + LLM 採点)
@@ -36,7 +36,7 @@ ux-eval.yml は記録の鮮度も見る — **26 時間以内にプローブ記�
 - git の fetch/push ができること — **人間の手元・Actions runner・agent セッションのいずれも可**
   (git は agent セッションからも通る。`gh` は agent では使えないが、この運用ではもう不要)
 - 採点は Claude セッションから subagent `ux-reviewer` を起動できること
-- 背景理解: [ADR 0022](../adr/0022-autonomous-ux-improvement-loop.md) / [ADR 0037](../adr/0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md) / [ADR 0041](../adr/0041-ux-observations-on-git-data-branch.md) / rubric は `.github/claude/ux-rubric.md` (**真実**)
+- 背景理解: [ADR 0022](../adr/archive/operations/autonomous-ux-improvement-loop.md) / [ADR 0037](../adr/archive/operations/scheduled-evals-split-mechanical-actions-llm-pm-tick.md) / [ADR 0041](../adr/archive/operations/ux-observations-on-git-data-branch.md) / rubric は `.github/claude/ux-rubric.md` (**真実**)
 
 ## データの流れ (どこに何が残るか)
 
@@ -50,11 +50,11 @@ ux-eval.yml は記録の鮮度も見る — **26 時間以内にプローブ記�
 | トレンドの可視化                              | [ステータスページ](https://yomote.github.io/mind-inbox/status/) の「UX トレンド」節 (毎回生成) | 生成物     |
 
 artifact を併存させる理由は変わらず — 人間が障害調査で生の記録を掘る経路
-([ADR 0029](../adr/0029-probe-record-transport-via-issue-comment.md) の経緯)。採点が読む「正」はデータブランチ側。
+([ADR 0029](../adr/archive/operations/probe-record-transport-via-issue-comment.md) の経緯)。採点が読む「正」はデータブランチ側。
 
 ## Steps
 
-**機械計測は無人** (ux-eval.yml が毎朝自動)。**LLM 採点は PM セッションの日次 tick** が下の 2〜4 を回す ([ADR 0037](../adr/0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md))。以下は **PM tick が実行する手順であり、同時に手動フォールバックの手順**でもある。**human / agent で経路の違いは無い** (git だけで完結する — ADR 0041 D4)。
+**機械計測は無人** (ux-eval.yml が毎朝自動)。**LLM 採点は PM セッションの日次 tick** が下の 2〜4 を回す ([ADR 0037](../adr/archive/operations/scheduled-evals-split-mechanical-actions-llm-pm-tick.md))。以下は **PM tick が実行する手順であり、同時に手動フォールバックの手順**でもある。**human / agent で経路の違いは無い** (git だけで完結する — ADR 0041 D4)。
 
 1. プローブを回す (毎朝 07:00 JST は自動。手動なら):
 
@@ -193,7 +193,7 @@ Issue コメント時代の蓄積 (#162 / #127) をデータブランチへ取�
 
 ## Related
 
-- ADR: [0040 データブランチ蓄積](../adr/0041-ux-observations-on-git-data-branch.md) / [0022 UX 自律改善ループ](../adr/0022-autonomous-ux-improvement-loop.md) / [0037 定期評価の分担](../adr/0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md) / [0029 旧: Issue コメント運搬](../adr/0029-probe-record-transport-via-issue-comment.md) / [0019 独立 judge](../adr/0019-independent-judge-agents-security-qa-release.md) / [0018 動作検証](../adr/0018-runtime-verification-in-the-loop.md)
+- ADR: [0040 データブランチ蓄積](../adr/archive/operations/ux-observations-on-git-data-branch.md) / [0022 UX 自律改善ループ](../adr/archive/operations/autonomous-ux-improvement-loop.md) / [0037 定期評価の分担](../adr/archive/operations/scheduled-evals-split-mechanical-actions-llm-pm-tick.md) / [0029 旧: Issue コメント運搬](../adr/archive/operations/probe-record-transport-via-issue-comment.md) / [0019 独立 judge](../adr/archive/operations/independent-judge-agents-security-qa-release.md) / [0018 動作検証](../adr/archive/operations/runtime-verification-in-the-loop.md)
 - rubric: `.github/claude/ux-rubric.md` / subagent: `.claude/agents/ux-reviewer.md`
 - プローブ実装: `apps/frontend/e2e-live/ux-probe.spec.ts` / workflow: `.github/workflows/golden-path-monitor.yml` / `.github/workflows/ux-eval.yml` (機械計測: `cicd/scripts/ux-eval/ux_eval.py`) / `.github/workflows/ux-data-migrate.yml` (過去データ移行)
 - 蓄積ヘルパー: `cicd/scripts/ux-data/` (append.py / append-observation.sh / migrate-issue-comments.py)
