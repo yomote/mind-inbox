@@ -3,7 +3,7 @@
 - Status: Accepted (2026-08-10 / 報告会 #5)
 - Date: 2026-08-10
 - Deciders: yomote (PO / 2026-08-10 に撤去を選択) / 実装セッション
-- Related: [ADR 0007](0007-problem-centric-two-layer-domain-model.md) (Problem 中心 2層) / [ADR 0005](0005-mdx-ui-spec-as-truth.md) (MDX が UI の真実) / [ADR 0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md) (永続化) / [ADR 0032](0032-use-case-acceptance-tests-against-real-wiring.md) (UC 受け入れテスト) / #183 (抽出の 404 根治)
+- Related: [ADR 0007](0007-problem-centric-two-layer-domain-model.md) (Problem 中心 2層) / [ADR 0005](0005-mdx-ui-spec-as-truth.md) (MDX が UI の真実) / [ADR 0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md) (永続化) / [ADR 0032](archive/operations/use-case-acceptance-tests-against-real-wiring.md) (UC 受け入れテスト) / #183 (抽出の 404 根治)
 
 ## Context
 

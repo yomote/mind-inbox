@@ -193,7 +193,7 @@ az role assignment delete --ids "<上で確認した Contributor の id>"
 sleep 300
 ```
 
-### 5. 振る舞いで確認する（設定ではなく動作 / [ADR 0018](../adr/0018-runtime-verification-in-the-loop.md)）
+### 5. 振る舞いで確認する（設定ではなく動作 / [ADR 0018](../adr/archive/operations/runtime-verification-in-the-loop.md)）
 
 **必ずこの順で、全部緑になるまで次に進まない。**
 
@@ -366,7 +366,7 @@ Environment を作り、4 本すべてに `environment:` を宣言してから s
 ## Related
 
 - Issue: [#46 OIDC CD の SP ロールスコープ最小化](https://github.com/yomote/mind-inbox/issues/46)
-- ADR: [0009 オンデマンド CD](../adr/0009-on-demand-cd-via-github-actions-oidc.md) / [0013 常設 dev](../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) / [0006 device-code](../adr/0006-azure-access-via-device-code.md) / [0018 動作検証](../adr/0018-runtime-verification-in-the-loop.md)
+- ADR: [0009 オンデマンド CD](../adr/0009-on-demand-cd-via-github-actions-oidc.md) / [0013 常設 dev](../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) / [0006 device-code](../adr/0006-azure-access-via-device-code.md) / [0018 動作検証](../adr/archive/operations/runtime-verification-in-the-loop.md)
 - ワークフロー: `.github/workflows/deploy.yml`
 - スクリプト: `cicd/scripts/cloud-env/setup-oidc.sh` / `cicd/scripts/deploy/provision.sh` / `cicd/scripts/env/cleanup-env.sh`
 - 関連 Runbook: [claude-web-azure-access.md](./claude-web-azure-access.md) / [local-fullstack-dev.md](./local-fullstack-dev.md) / [refresh-infra-diagram.md](./refresh-infra-diagram.md)

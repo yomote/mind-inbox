@@ -1,7 +1,7 @@
 # E2E 成果物の暗号化鍵
 
 実環境 E2E (`e2e-live`) の **trace を暗号化するための公開鍵**を置く場所。判断の正典は
-[ADR 0045](../../docs/adr/0045-e2e-artifacts-are-secret-by-default.md)。
+[ADR 0045](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md)。
 
 ## なぜ鍵が要るのか
 
@@ -38,7 +38,7 @@ GitHub ユーザーなら誰でもダウンロードできる。したがって 
 **鍵の生成・ローテーション・復号は、いずれも PO の管理環境でのみ行う。**
 **エージェントのサンドボックスで実行しないこと** — パスフレーズ無しの長期秘密鍵が
 ディスクに置かれ、そのセッション内の任意コードから読める状態になる
-([ADR 0045](../../docs/adr/0045-e2e-artifacts-are-secret-by-default.md)
+([ADR 0045](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md)
 「エージェント復号を保留する理由」)。
 
 ### gpg 実行時の注意: GNUPGHOME は短いパスにする
@@ -82,7 +82,7 @@ gpg --armor --export-secret-keys "mind-inbox e2e artifacts"
 
 - GitHub Secrets: workflow が復号できても、**public リポジトリでは Actions のログが
   公開**なので復号結果の出力先が無い
-- 環境変数: [ADR 0031](../../docs/adr/0031-agent-reaches-outside-via-github-actions.md)
+- 環境変数: [ADR 0031](../../docs/adr/archive/operations/agent-reaches-outside-via-github-actions.md)
   の「サンドボックスに長期クレデンシャルを置かない」に反する。Claude Code の公式
   ドキュメントも「cloud environments have no dedicated secrets store, so don't add
   API keys or other credentials」と明示している
@@ -105,7 +105,7 @@ gpg --armor --export-secret-keys "mind-inbox e2e artifacts"
 > ディスク (`$GNUPGHOME/private-keys-v1.d/*.key`) に置かれ、**そのセッション内の任意の
 > コードが読める**。一度読み出せばセッションの外へ持ち出せるため、**鍵を交換するまでの
 > 全 artifact** が復号可能になる。サンドボックスが使い捨てであることは被害を限定しない
-> ([ADR 0045](../../docs/adr/0045-e2e-artifacts-are-secret-by-default.md) 「エージェント
+> ([ADR 0045](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md) 「エージェント
 > 復号を保留する理由」/ 2026-08-12 の Codex レビュー P1)。
 >
 > **エージェント復号を有効にできるのは、鍵をサンドボックスに出さない方式** (Key Vault の

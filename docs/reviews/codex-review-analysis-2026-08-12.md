@@ -1,11 +1,11 @@
 # Codex レビュー実データ分析 — 「良いレビュー」を実例から導く
 
 > **この文書は測定記録であり、更新しない。** 2026-08-12 時点の実データをそのまま残す (数字が動いたら新しい日付のファイルを足す)。
-> [`.github/claude/review-rubric.md`](../../.github/claude/review-rubric.md) の各項目の根拠はここにあり、判断は [ADR 0052](../adr/0052-codex-derived-review-rubric-and-stand-in-judge.md)。
+> [`.github/claude/review-rubric.md`](../../.github/claude/review-rubric.md) の各項目の根拠はここにあり、判断は [ADR 0052](../adr/archive/operations/codex-derived-review-rubric-and-stand-in-judge.md)。
 
 調査日: 2026-08-12 / 調査対象リポジトリ: `yomote/mind-inbox`
 目的: Codex ([Issue #345](https://github.com/yomote/mind-inbox/issues/345) で利用上限に到達) の代役エージェントを仕立てるため、**実際に効いた指摘の形**を実データから写し取る。
-関連: ADR 0035 の「未決」に残っていた計画 ([`docs/adr/0035-role-split-across-agents-and-actions.md`](../adr/0035-role-split-across-agents-and-actions.md) の `:132` 「Codex の指摘の質を分類して測る」) の実行。
+関連: ADR 0035 の「未決」に残っていた計画 ([`docs/adr/archive/operations/role-split-across-agents-and-actions.md`](../adr/archive/operations/role-split-across-agents-and-actions.md) の `:132` 「Codex の指摘の質を分類して測る」) の実行。
 
 ---
 
@@ -479,4 +479,4 @@ PR #222 のスレッドに残っている実物:
 
 **足りないもの**: 期間が 45 時間しかないので、(i) 大規模リファクタリング PR、(ii) 新機能の初回設計 PR、(iii) 依存更新 PR に対する Codex の振る舞いは観測できていない (dependabot PR は全てレビュー対象外だった)。これらは rubric に書けない。
 
-成果物: [`.github/claude/review-rubric.md`](../../.github/claude/review-rubric.md) (この分析から導出した rubric) / [`.claude/agents/code-reviewer.md`](../../.claude/agents/code-reviewer.md) (それを読む代役 judge) / [ADR 0052](../adr/0052-codex-derived-review-rubric-and-stand-in-judge.md) (判断記録)
+成果物: [`.github/claude/review-rubric.md`](../../.github/claude/review-rubric.md) (この分析から導出した rubric) / [`.claude/agents/code-reviewer.md`](../../.claude/agents/code-reviewer.md) (それを読む代役 judge) / [ADR 0052](../adr/archive/operations/codex-derived-review-rubric-and-stand-in-judge.md) (判断記録)

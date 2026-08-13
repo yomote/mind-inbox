@@ -130,7 +130,7 @@
 ## Related
 
 - Issue: [#344](https://github.com/yomote/mind-inbox/issues/344) (この仕組み) / [#318](https://github.com/yomote/mind-inbox/issues/318) (置き換わるクリック作業)
-- ADR: [0046 環境を宣言から作り直せるものにする](../adr/0046-environment-rebuildable-from-declaration.md) (Azure 側) / [0041 観測データを git のデータブランチへ](../adr/0041-ux-observations-on-git-data-branch.md) (state を Issue に溜めない) / [0006 device-code を主とする](../adr/0006-azure-access-via-device-code.md)
+- ADR: [0046 環境を宣言から作り直せるものにする](../adr/0046-environment-rebuildable-from-declaration.md) (Azure 側) / [0041 観測データを git のデータブランチへ](../adr/archive/operations/ux-observations-on-git-data-branch.md) (state を Issue に溜めない) / [0006 device-code を主とする](../adr/0006-azure-access-via-device-code.md)
 - 宣言 (意図): [`cicd/github/settings.yml`](../../cicd/github/settings.yml)
 - スクリプト: `cicd/scripts/github-settings/` (判定は `settings_diff.py` の純関数 / I/O は `sync.py`)
 - 関連 Runbook: [`status-page.md`](status-page.md) (この workflow の生死を見る場所)

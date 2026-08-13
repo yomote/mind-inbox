@@ -5,7 +5,7 @@
 
 > **ステータス: 受け入れテストで検証中**
 > UC-01〜05 の基本フローと主要な代替フローは `apps/frontend/e2e-uc/uc0*.spec.ts` が
-> **実配線（mock を通さない）で自動検証**している（[ADR 0032](../adr/0032-use-case-acceptance-tests-against-real-wiring.md)）。
+> **実配線（mock を通さない）で自動検証**している（[ADR 0032](../adr/archive/operations/use-case-acceptance-tests-against-real-wiring.md)）。
 > この doc を変えたら対応する spec も直すこと。逆に spec が落ちたら「実装が壊れた」か
 > 「この doc が古い」かのどちらかで、放置しないこと。
 > **未検証の前提**: 永続化（[#165](https://github.com/yomote/mind-inbox/issues/165)）。

@@ -2,7 +2,7 @@
 
 > `.github/claude/*-rubric.md` が共通で従う規約。**各 rubric の subagent は、自分の rubric とこのファイルの両方を読むこと。**
 > ここは「全 judge に共通の部分」だけを持つ。役割固有の観点・固有 Severity ラベル・レポート構成は各 rubric 側が正典。
-> 判断記録: [ADR 0019](../../docs/adr/0019-independent-judge-agents-security-qa-release.md) / [ADR 0008](../../docs/adr/0008-pr-review-via-cloud-routine.md) — 運用手順: [Runbook](../../docs/runbooks/review-agents.md)
+> 判断記録: [ADR 0019](../../docs/adr/archive/operations/independent-judge-agents-security-qa-release.md) / [ADR 0008](../../docs/adr/archive/operations/pr-review-via-cloud-routine.md) — 運用手順: [Runbook](../../docs/runbooks/review-agents.md)
 
 ## 共通スタンス
 

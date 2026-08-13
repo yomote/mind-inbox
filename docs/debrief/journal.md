@@ -1,6 +1,6 @@
 # デブリーフ journal
 
-> `design-gate` / `debrief` セッションの記録。仕組みは [ADR 0014](../adr/0014-design-comprehension-gate-and-debrief.md)。
+> `design-gate` / `debrief` セッションの記録。仕組みは [ADR 0014](../adr/archive/operations/design-comprehension-gate-and-debrief.md)。
 >
 > 役割は 2 つ: (1) `debrief` skill の「前回以降」の**起点マーカー** (最新エントリの日付を使う)、(2) user の決定と学びの**累積ログ** (解説の深さ調整・振り返りに使う)。
 
@@ -20,7 +20,7 @@
 
 ## 2026-08-12 — design-gate (合成ユーザー探索 PoC)
 
-- **対象**: [ADR 0053](../adr/0053-synthetic-user-exploration-poc.md) (合成ユーザー探索 PoC の設計 / [#304](https://github.com/yomote/mind-inbox/issues/304) の次段階)。発端は PO の問い「PM セッションが二つになってしまい、窓口一本化が動かない」で、その追跡の副産物として、spend limit で中身ゼロのまま死んでいた `合成ユーザーでのUX探索` セッションの仕事が未消化だと判明したこと
+- **対象**: [ADR 0053](../adr/archive/operations/synthetic-user-exploration-poc.md) (合成ユーザー探索 PoC の設計 / [#304](https://github.com/yomote/mind-inbox/issues/304) の次段階)。発端は PO の問い「PM セッションが二つになってしまい、窓口一本化が動かない」で、その追跡の副産物として、spend limit で中身ゼロのまま死んでいた `合成ユーザーでのUX探索` セッションの仕事が未消化だと判明したこと
 - **決定**: ADR 0053 を **Accepted**。5 ペルソナ × 3 走行を**週 1・手動起動 1 回**から。成功条件は発見件数ではなく**同一 commit SHA での再現性**。着工は 3 段階で、**Phase 0 = [#354](https://github.com/yomote/mind-inbox/issues/354) の採点接続**を飛ばさない。「再訪して過去 Problem を再燃させる」ペルソナは dev に永続化が繋がっていない (実測: `enableCosmos` を渡す deploy 経路が無く既定 `false`) ため除外し、接続時に再裁定する
 - **学びメモ**: 理解確認 (「Phase 0 を飛ばすと何が起きるか」) は一発で正答 — **記録だけが 15 倍に積み、採点されないまま残る**。順序の帰結が伝わっていたので、D8 の段取りはそのまま採用した。ペルソナ除外の判断も「永続化を繋いだら戻す」で即決。**設計の説明より先に「既存ループのどこが切れているか」を図で 1 枚出したのが効いた**と思われる — 新機能の設計を出すとき、まず既存の断線を見せると順序の議論が要らなくなる
 - **特記**: この design-gate 自体が**窓口一本化の効果測定**になった。#304 (構想) / #354 (断線) / ADR 0022・0027・0041 (既存ループ) は**それぞれ別のセッションが作った資産**で、どれも単体では「探索を足すと採点が追いつかない」に到達していない。窓口 1 本に集約して初めて連鎖が見えた。同型の発見がこの日もう 1 件あり、[PR #284](https://github.com/yomote/mind-inbox/pull/284) (承認済み ADR 0043) が **Codex のレビュー枠切れ ([#345](https://github.com/yomote/mind-inbox/issues/345)) で 1 日半マージできずにいた** — 外部サービスの枠切れが PO の承認を人質に取る経路が実在した。resolve 規約に例外条項を足して解消
@@ -28,7 +28,7 @@
 
 ## 2026-08-12 — debrief
 
-- **対象**: [ADR 0048](../adr/0048-child-sessions-are-usable-again-with-a-one-way-poke-channel.md) (子セッションの復活と親子セッション間通信)。PO の質問「Claude のルーティン一覧は見えるか / コセッションは作れるか」から実測を始め、[ADR 0033](../adr/0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) の前提が崩れていることが判明したため起案。Proposed 5 本 (0041 / 0042 / 0045 / 0047 / 0048) のうち **0048 のみを裁定**する方針を PO が選択
+- **対象**: [ADR 0048](../adr/archive/operations/child-sessions-are-usable-again-with-a-one-way-poke-channel.md) (子セッションの復活と親子セッション間通信)。PO の質問「Claude のルーティン一覧は見えるか / コセッションは作れるか」から実測を始め、[ADR 0033](../adr/archive/operations/parent-implements-via-subagent-when-child-sessions-are-gated.md) の前提が崩れていることが判明したため起案。Proposed 5 本 (0041 / 0042 / 0045 / 0047 / 0048) のうち **0048 のみを裁定**する方針を PO が選択
 - **決定**: ADR 0048 を **Accepted**。分配の基準を ADR 0033 の「作業の大きさ」から「**往復の回数**」へ置き換え、担い手を 3 択 (親が直接 / subagent / 子セッション) にする。あわせて `.claude/settings.json` の allow 修正 (MCP サーバの二重名 + 破壊的ツールのツール単位指定) と Runbook [`child-sessions.md`](../runbooks/child-sessions.md) を導入
 - **学びメモ**: 理解確認は**エージェント側の質問が不良で成立しなかった**。1 つの解説に表を 2 つ出したうえで「表のどこに当てはまるか」と聞いたため、PO から「表ってどれかよく分かんないね」と返った。**指示語で参照した表・図が複数あるときは、名前で特定するか、質問の直前に対象を 1 つだけ再掲する**。答え (レビュー指摘 5 件対応 = subagent。子だと往復 5 回 × 1 分 + 聞き返せない) は質問を撤回して直接解説し直した
 - **特記**: 今回の最大の収穫は経路そのものより**「送信 API の成功 ≠ 配送」を実測で切り分けたこと**。`fire_trigger` は 3 方向 (親→子 idle / 子→親 / 自己宛) すべてで成功を返しながら `last_fired_at` すら付かず、一方 `create_trigger` + `run_once_at` は発火 14:54:00 → 子の受信 14:54:16 → [Issue #353 への投稿 14:54:26](https://github.com/yomote/mind-inbox/issues/353#issuecomment-5268488790) と end-to-end で通った。**危うく「送れた」で報告するところだった** (CLAUDE.md「取れなかったものを異常なしと書かない」の典型例)。もう 1 件、`last_fired_at` の反映遅れで「14:53 予定が 14:56 時点で未発火」と誤読しかけた — **発火判定は trigger のフィールドではなく子の `updated_at` と GitHub 上の成果で行う**を Runbook に明記。承認プロンプトの原因も 2 段構えで、(1) 同一 MCP サーバが対話セッションでは `Claude_Code_Remote` / 子では UUID `bf7c680d-...` の**二重名**、(2) サーバ単位 allow では `delete_trigger` が止まりツール単位の明示が必要、と判明。**`settings.json` は実行中セッションに反映されない**ため、main に入るまで承認は飛び続ける
@@ -36,7 +36,7 @@
 
 ## 2026-08-12 — debrief (Proposed ADR 4 本の裁定)
 
-- **対象**: Proposed のまま溜まっていた ADR 4 本の裁定 — [0041](../adr/0041-ux-observations-on-git-data-branch.md) (UX 観測データを git データブランチへ) / [0042](../adr/0042-pm-accept-carryover-and-merge-queue.md) (pm-accept 引き継ぎ + Merge Queue) / [0045](../adr/0045-e2e-artifacts-are-secret-by-default.md) (E2E 成果物は既定で秘密扱い) / [0043 (PR #284)](https://github.com/yomote/mind-inbox/pull/284) (PM 自走モード — main 未着地)
+- **対象**: Proposed のまま溜まっていた ADR 4 本の裁定 — [0041](../adr/archive/operations/ux-observations-on-git-data-branch.md) (UX 観測データを git データブランチへ) / [0042](../adr/archive/operations/pm-accept-carryover-and-merge-queue.md) (pm-accept 引き継ぎ + Merge Queue) / [0045](../adr/archive/operations/e2e-artifacts-are-secret-by-default.md) (E2E 成果物は既定で秘密扱い) / [0043 (PR #284)](https://github.com/yomote/mind-inbox/pull/284) (PM 自走モード — main 未着地)
 - **決定**:
   - **0041 Accept** — 蓄積の正しさを「返信しないでください」というお願いから git の構造に移す
   - **0045 Accept + 宿題 1 件** — 公開鍵暗号化で trace を残す。PO の追加要望「**エージェントも復号できる安全な道を探る**」を [#325](https://github.com/yomote/mind-inbox/issues/325) に起票 (ADR 本文が「この driver は満たせていない」と自認していた箇所への対処)
@@ -56,7 +56,7 @@
 
 ## 2026-08-11 — design-gate
 
-- **対象**: プロジェクト管理の可視性 (PO 申告「何が進行しているか / ボトルネックが把握できない。大きく線があるはずで戦況的なものがない」) → [ADR 0044](../adr/0044-stream-lanes-as-the-project-map.md) 起案。関連: 別セッションの ADR 0043 (PM 自走モード / PR #284 で審議中 — マージまで `docs/adr/` に無い) / PR #281 (status ページ「プロダクトの現在地」)
+- **対象**: プロジェクト管理の可視性 (PO 申告「何が進行しているか / ボトルネックが把握できない。大きく線があるはずで戦況的なものがない」) → [ADR 0044](../adr/archive/operations/stream-lanes-as-the-project-map.md) 起案。関連: 別セッションの ADR 0043 (PM 自走モード / PR #284 で審議中 — マージまで `docs/adr/` に無い) / PR #281 (status ページ「プロダクトの現在地」)
 - **決定**: ADR 0044 を **Accepted** (design-gate で承認)。選択肢形式で PO が 2 点を選択 — 戦況図の置き場所 = **ラベル + status ページ自動生成** (Projects board 再建は不採用) / 裁定の出し方 = **定例バッチ + 上限 3 件**。あわせて ADR 0011 の描画面を改訂 (board 退役)、`stream:*` 5 レーンを全 open Issue 42 件に付与、`/status` skill を v1 Phase アンカーから戦況図アンカーへ改訂
 - **学びメモ**: 理解確認 3 問のうち 2 問は設計どおりの理解 (崩れ方 = 未分類が膨らんで見える / 裁定の寡り = 寝かせ中の件数を常時表示)。**3 問目で PO が UX 機能改善 (#242) を `ux-loop` に分類した** — これは PO の誤解ではなく**レーン名の重力**の問題と判断し、規則で名前に勝とうとせず `improve-loop` に改名して解消した。判定基準も「閉じたとき変わるのはプロダクトの挙動か、改善を回す機械か」の 1 文に固定
 - **特記**: 診断の一般論として、可視化不足ではなく **(1) 照合先の計画層が無い / (2) 制約工程が PO の意思決定帯域** の 2 点と整理した。実測の裏付け: open Issue 42 件で Projects フィールド値 **0 件** (board は静かに死んでいた) / open PR 10 本中 apps/ を触るのは 2 本 (スループットが工場に寄っている)。**エージェント側の失敗 2 件** — (a) 着工前の並行確認が甘く、別セッションが同日に ADR 0043 (PM 自走モード) と PR #281 を出していたことに実装着手後まで気づかなかった (Issue #159 と同型の再演)。番号を 0044 に採番し直し、重複部分 (週次目標・ダイジェスト) を 0043 に譲って地図・board 退役・裁定上限に絞り込んだ。(b) status ページ実装を subagent に出したが Fable 5 の月次上限で失敗。結果的に PR #281 との衝突を回避できたのは偶然。(c) **PR #288 のレビューが 3 巡した — 3 回とも同じ型「宣言と参照面の不一致」** (ADR で board 退役を決めたのに strategy / Runbook 一覧 / ADR 0020 / journal / skill に旧記述が残る、戦況図を実装する前に「status ページで見られる」と断定する)。原因は「直したつもりの範囲」を自分で決めて全体検索をしなかったこと。**教訓: 宣言を変える変更では、その主張が成り立たない場所をリポジトリ全体で検索してから push する。検索語は宣言の対象名だけでなく別名も含める** (今回 `Projects` では引けても `board` 単独の記述が漏れた)。レビューを網羅性の担保に使ってしまった
@@ -91,7 +91,7 @@
 
 ## 2026-08-10 — design-gate (マージの門 review-gate / ADR 0036)
 
-- **対象**: ループエンジニアリング体制の相談から、[ADR 0035](../adr/0035-role-split-across-agents-and-actions.md) の未決事項「レビューを待つ仕組み」の設計へ。起案: [ADR 0036](../adr/0036-merge-gate-as-required-check-and-pm-cadence.md)
+- **対象**: ループエンジニアリング体制の相談から、[ADR 0035](../adr/archive/operations/role-split-across-agents-and-actions.md) の未決事項「レビューを待つ仕組み」の設計へ。起案: [ADR 0036](../adr/archive/operations/merge-gate-as-required-check-and-pm-cadence.md)
 - **決定**: **ADR 0036 を Accept** (承認 = 実装着手可)。5 点:
   - **D1 `review-gate` を required status check として Actions に作る** — PM 受け入れコメント (`[pm-accept]` + head SHA。SHA 規約で push リセットが自動化) / スレッド全解決 / (コード PR かつ変数 ON なら) Codex レビュー、が揃うまで赤
   - **D2 main にブランチ保護** (required checks + 直 push 禁止。Bypass list は空 — 当初の「admin バイパスを脱出口に」は実測 #213 で覆り、脱出口は ruleset の一時 Disable に変更) — needs-human 1 クリック。設定までは advisory
@@ -110,7 +110,7 @@
 
 - **対象**: PO の「仕組みが多すぎて把握できない」から始まった 1 日。実バグ 1 件の根治、テスト戦略の見直し、無人の仕組みの置き場所、PO の負荷。資料: 報告会 #7 artifact (音声 10 枚)。マージ 7 本 (#198〜#207)
 - **決定**:
-  - **[ADR 0035](../adr/0035-role-split-across-agents-and-actions.md) を起案 (Proposed)** — 役割を 6 つに分け、それぞれを「生死が見える場所」に置く。**Routine をゼロにし、実装 Claude / 技術レビュー Codex / 監視 Actions**
+  - **[ADR 0035](../adr/archive/operations/role-split-across-agents-and-actions.md) を起案 (Proposed)** — 役割を 6 つに分け、それぞれを「生死が見える場所」に置く。**Routine をゼロにし、実装 Claude / 技術レビュー Codex / 監視 Actions**
   - **cd-watchdog は廃止** — 別の見張りを置かず、**落ちた workflow 自身が Issue を立てる**。これは PO の案で、エージェント案 (別の見張りを Actions に作る) より良かった
   - **レビューは 2 種類に分ける** — 「やってほしいことがそこにあるか」は意図を持つ PM、「コードとして正しいか」は意図を知らない別モデル
   - **テストは 4 層へ** (契約 / 単体 / スモーク / E2E)。**L3 mock E2E は廃止**。単体には入場条件「壊れても例外が出ず、データが静かに間違うところだけ」を付ける
@@ -130,7 +130,7 @@
 
 ## 2026-08-10 — briefing (#5, ゴールデンパスを 1 本にする)
 
-- **対象**: PO が dev の SWA で「エクストラクトとオーガナイズが機能していない / ゴールデンパスが通っていない」と報告した件。[ADR 0032](../adr/0032-use-case-acceptance-tests-against-real-wiring.md) (L3-real 受け入れテスト) と [ADR 0034](../adr/0034-remove-legacy-session-centric-flow.md) (旧 PoC 導線の撤去) の 2 本。資料: briefing #5 artifact (音声ナレーション 8 枚 / VOICEVOX ずんだもん 1.5 倍)
+- **対象**: PO が dev の SWA で「エクストラクトとオーガナイズが機能していない / ゴールデンパスが通っていない」と報告した件。[ADR 0032](../adr/archive/operations/use-case-acceptance-tests-against-real-wiring.md) (L3-real 受け入れテスト) と [ADR 0034](../adr/0034-remove-legacy-session-centric-flow.md) (旧 PoC 導線の撤去) の 2 本。資料: briefing #5 artifact (音声ナレーション 8 枚 / VOICEVOX ずんだもん 1.5 倍)
 - **決定** (5 件すべて選択肢形式で取得):
   - **ADR 0032 を Accept**
   - **裁定A: L3-real のシナリオは実装者が書く** — 分界は「doc の写経 = 実装者 / 基準の創出 = qa-reviewer」。ADR 0019 の独立 judge 原則を一般に緩めたのではなく、**緩んだのは写経に限る**
@@ -163,11 +163,11 @@
 - **学びメモ**: 質疑なしで 3 件とも即決。0026 / 0029 はいずれも**既存 ADR の原則を崩す判断ではない**ため、briefing #3 で得た仮説 (「PO は原則を曲げる判断にだけ説明を求める」) と整合した。needs-human の処遇を「やるか/やらないか」ではなく **「やらないなら close」を選択肢に入れて聞いた**ことで 4 回続いた滞留が 1 回で解けた — 任意の宿題は「保留」を選べる形で出すと積み続けることが分かったので、今後は close を既定の選択肢に含める
 - **持ち越し**: #165 (永続化) の design-gate を親セッションで通す — **A3 埋め込み索引 (#83) と保存先の設計はひと続き**なので同じゲートで見る (v2 計画 §6 の宿題)。その後 #166 (改善ループ段3) → #81/#82 (MAF 移行完遂) の順。ブランチ保護は未設定のまま (po-feedback 初回からの持ち越し)
 - **追記 (常設承認)**: PO から **「CI が緑になったらマージしていい。毎回言うのが面倒なので全セッションに効かせてほしい」**。CLAUDE.md の「PR を出したあとの追従」に常設ルールとして記載した。**例外はリリース PR (`main → release`)** — ADR 0019 の「🟢 でも merge / deploy は人間」は崩さない。ほかに needs-human ラベル / 未解決レビュー / PO が保留と言った PR / Proposed ADR に依存する不可逆な実装を除外。**「毎回聞かれるのが面倒」は仕組みで消す**という、この日の他 2 件 (ネットワーク許可・チェックインの MCP ゲート) と同じ形の要求
-- **追記 (同セッションの派生)**: ゲート後、PO から**「アクセス権限で詰まるのをどうにかしたい / もっとループを回したい」**という問題提起。壁を実測して 3 種類に分解した (egress ポリシー 403 / Azure トークン不在 / MCP 承認ゲート)。**`management.azure.com` は元から到達可能 (400 応答)** と分かり、塞がっているのはドキュメントと料金の Web サイトだけだった。**リポジトリが同じ壁に 4 回ぶつかって 4 回別々の回避策を作っていた** (`iac-validate.yml` / `tmp-open-pr-107.yml` / ADR 0029 の Issue コメント運搬 / 人手宿題) ので、[ADR 0031](../adr/0031-agent-reaches-outside-via-github-actions.md) (Proposed) でパターンを固定。PO 決定は **①ネットワークは `Custom` + 4 ドメインのみ (`Full` は不採用) → #168 (needs-human) ②`ops-inspect` ワークフローを ADR 化して起票 → #169**。**ADR 0008 の線引きは維持** — Actions に寄せるのは決定論的な取得だけで、考える定期実行は Routine のまま (API キーのメーター課金を避けるため)
+- **追記 (同セッションの派生)**: ゲート後、PO から**「アクセス権限で詰まるのをどうにかしたい / もっとループを回したい」**という問題提起。壁を実測して 3 種類に分解した (egress ポリシー 403 / Azure トークン不在 / MCP 承認ゲート)。**`management.azure.com` は元から到達可能 (400 応答)** と分かり、塞がっているのはドキュメントと料金の Web サイトだけだった。**リポジトリが同じ壁に 4 回ぶつかって 4 回別々の回避策を作っていた** (`iac-validate.yml` / `tmp-open-pr-107.yml` / ADR 0029 の Issue コメント運搬 / 人手宿題) ので、[ADR 0031](../adr/archive/operations/agent-reaches-outside-via-github-actions.md) (Proposed) でパターンを固定。PO 決定は **①ネットワークは `Custom` + 4 ドメインのみ (`Full` は不採用) → #168 (needs-human) ②`ops-inspect` ワークフローを ADR 化して起票 → #169**。**ADR 0008 の線引きは維持** — Actions に寄せるのは決定論的な取得だけで、考える定期実行は Routine のまま (API キーのメーター課金を避けるため)
 
 ## 2026-08-09 — design-gate (#4, hub-and-spoke の前提崩壊への対策)
 
-- **対象**: [Issue #159](https://github.com/yomote/mind-inbox/issues/159) — ADR 0021 の「親が子セッションへ分配する」が実行環境で成立しないことが実測で判明。起案: [ADR 0028](../adr/0028-dispatch-packet-in-issue-and-session-start-preflight.md)
+- **対象**: [Issue #159](https://github.com/yomote/mind-inbox/issues/159) — ADR 0021 の「親が子セッションへ分配する」が実行環境で成立しないことが実測で判明。起案: [ADR 0028](../adr/archive/operations/dispatch-packet-in-issue-and-session-start-preflight.md)
 - **決定**: **ADR 0028 を Accept**。3 点:
   - **D1 分配は「起票パケットを Issue 本文に残す」で完了とする** — 押すボタンが親の API 呼び出しか user の 1 クリックかは実装詳細として分岐させ、前後 (パケット作成 / 子が PR・Issue に残す / 親がライブ集約) は環境によらず同一にする。ADR 0021 は supersede せず**条項 2 のみ置き換え** (窓口一元化の 1・3・4 は維持)
   - **D2 SessionStart フックで衝突を事前提示** — origin/main の sha と遅れ / **次に使える ADR 番号** / 直近 24h の更新ブランチ
@@ -179,7 +179,7 @@
 
 ## 2026-08-08 — design-gate (#3, UX 自律改善ループ M2)
 
-- **対象**: [ADR 0022](../adr/0022-autonomous-ux-improvement-loop.md) 段 3 (改善) の詳細設計。ADR 0022 自身が「トリガー条件 / A/B の判定プロトコル / 改変対象の境界」を着手前ゲート対象と定めていた。起案: [ADR 0027](../adr/0027-ux-improvement-loop-ab-protocol-and-mutation-boundary.md)
+- **対象**: [ADR 0022](../adr/archive/operations/autonomous-ux-improvement-loop.md) 段 3 (改善) の詳細設計。ADR 0022 自身が「トリガー条件 / A/B の判定プロトコル / 改変対象の境界」を着手前ゲート対象と定めていた。起案: [ADR 0027](../adr/archive/operations/ux-improvement-loop-ab-protocol-and-mutation-boundary.md)
 - **決定**: **ADR 0027 を Accept** (承認 = 実装着手可)。4 論点すべて PO が選択:
   - **M1.5 を先に切る** — 採点の無人化 + スコアの機械可読な蓄積を独立ステップに。M2 未完成でも「劣化トレンドが見える」単体価値が先に出る
   - **プロンプトを `workflow.py` から外出し** — 自動 PR の範囲を 1 ファイルに確定させ、v2 M1-3 の移行と衝突させない
