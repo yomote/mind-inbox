@@ -33,6 +33,19 @@ export default defineConfig({
 
   use: {
     baseURL: process.env.LIVE_APP_URL ?? "",
+    // 既定の actionTimeout は **0 (無制限)**。操作の actionability
+    // (visible / enabled / editable) がいつまでも満たされないと、その操作は
+    // 黙って待ち続け、**先に鳴った別の待受のタイムアウト**がエラーとして表に出る。
+    // 2026-08-13 の deploy 連敗 (#262 / #287) が実例で、実際は
+    // `composer.fill()` が 210 秒間完了していなかったのに、表に出たのは
+    // 「`/api/chat/stream` の応答が来ない」という**無関係な**タイムアウトだった
+    // (fill 側は "Target page ... has been closed" として 2 番目に出るだけ)。
+    // 3 回の当番診断が原因の切り分けに失敗している。
+    // 上限を入れると Playwright は「どの actionability を待っていたか」の call log
+    // つきで落ちるので、**待っていた条件そのもの**がログに残る。
+    // 60 秒は live の実操作 (fill / click) の余裕として十分 — 要素の出現待ちは
+    // 各 spec が明示 timeout つきの expect / waitFor で先に取っている。
+    actionTimeout: 60_000,
     screenshot: "only-on-failure",
     // sources: false — trace に **spec のソースコードを同梱しない** (ADR 0045 D8)。
     // 2026-08-12 の実測で、trace の resources/src@*.txt にテストの中身がそのまま
