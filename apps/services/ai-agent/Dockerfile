@@ -10,6 +10,9 @@ RUN uv sync --no-dev --no-install-project --frozen
 
 COPY app/ app/
 
+# [#384 検証用] 3.14 で実際に import できるか (install だけでなく起動経路を踏む)
+RUN uv run --no-project python -c "import app.main; print('ai-agent import OK on', __import__('sys').version)"
+
 EXPOSE 8000
 
 CMD ["uv", "run", "--no-project", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
