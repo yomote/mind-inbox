@@ -25,6 +25,30 @@ class Settings(BaseSettings):
     # Set to true in ACA (managed identity); false for local dev with API key
     use_managed_identity: bool = False
 
+    # ── 外向き呼び出しのタイムアウト (Issue #313) ─────────────────────────────
+    #
+    # 上限が無いと、1 本の遅いリクエストが ACA のワーカー (maxReplicas=3 / cpu 0.5) と
+    # Azure OpenAI の TPM 枠を占有し続ける。しかも上流 (Functions) が 230s で切っても
+    # 下流は走り続けるので、誰も待っていないトークンを燃やす。
+    #
+    # 値の根拠:
+    # - `llm_request_timeout_seconds` = 60s: 1 回の HTTP 試行の上限。出力は
+    #   max_tokens=1024 で頭打ち (agents.py) なので、通常応答は十数秒で終わる。
+    #   60s は「遅いが正常」を切らずに、ぶら下がりだけを切る線。
+    # - `llm_total_timeout_seconds` = 120s: リトライ込みの 1 回の LLM 呼び出しの実時間上限
+    #   (OpenAI SDK は既定でリトライするため、HTTP 側の上限だけでは総時間を縛れない)。
+    #   **上流 Functions の 230s より必ず先に切れる**ことが条件 — 先に切れないと
+    #   「ブラウザには 230s の無言切断、こちらのログには何も無い」になる。
+    # - `llm_stream_idle_timeout_seconds` = 45s: ストリーミングは総時間ではなく
+    #   **チャンク間の無音**で測る (長い応答を正常に流し切れるようにするため)。
+    #   最初のトークンまでの待ちもこの上限で切る。
+    # - `cosmos_request_timeout_seconds` = 20s: 永続化 I/O。ここが詰まると
+    #   /chat 全体が詰まるので、LLM より短く切る。
+    llm_request_timeout_seconds: float = 60.0
+    llm_total_timeout_seconds: float = 120.0
+    llm_stream_idle_timeout_seconds: float = 45.0
+    cosmos_request_timeout_seconds: int = 20
+
     # Cosmos DB (ADR 0030 / #188) — 会話セッション・承認レコード・MAF checkpoint の永続化。
     # **cosmos_endpoint の有無が分岐点**: 未設定なら従来どおり in-memory で動く
     # (ローカル / テストの既定 = BFF の COSMOS_ENDPOINT と同じ流儀 / ADR 0030 D7)。

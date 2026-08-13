@@ -14,6 +14,7 @@
  * 実際の snake_case 変換は `aiAgentClient.ts` の各 fetch が行う。
  */
 import { z } from "zod";
+import { MAX_MESSAGE_LENGTH } from "../limits";
 import { ActionPlanSchema, ProblemStatusSchema, ThemeSchema } from "../trpc/domain";
 
 // ── /chat ────────────────────────────────────────────────────────────────────
@@ -101,10 +102,15 @@ export type ExistingProblemRef = z.infer<typeof ExistingProblemRefSchema>;
  * **会話は呼び出し側が渡す**。ai-agent のセッション履歴はプロセスメモリで、
  * scale-to-zero・スケールアウト・リビジョン差し替えのいずれでも消えるため、
  * それに依存すると「対話はできたのに抽出だけ 404」が起きる。
+ *
+ * `text` の上限は `../limits.ts` (#313 C-1)。このスキーマは `consultation.extract` の
+ * **入力**としてそのまま使われる = クライアントから来る文字列なので、ここで締めないと
+ * 1 通に巨大な文字列を詰めてプロンプトに流し込める。契約テストは min/max を表層差として
+ * 無視するので (`schemaDiff.ts` / strategy.md §2.1)、pydantic 側との差分にはならない。
  */
 export const ConversationMessageSchema = z.object({
   role: z.enum(["user", "assistant"]),
-  text: z.string(),
+  text: z.string().max(MAX_MESSAGE_LENGTH),
 });
 export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
 

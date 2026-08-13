@@ -14,6 +14,20 @@ import {
   type StubMarked,
 } from "../clients/aiAgentClient";
 import { issueSpeechAuthToken } from "../clients/speechTokenClient";
+import {
+  MAX_AFFECT_LABEL_LENGTH,
+  MAX_CONVERSATION_MESSAGES,
+  MAX_CONVERSATION_TOTAL_CHARS,
+  MAX_DRAFT_TOTAL_CHARS,
+  MAX_EXTRACTED_ITEMS,
+  MAX_EXTRACTED_TEXT_LENGTH,
+  MAX_ID_LENGTH,
+  MAX_MESSAGE_LENGTH,
+  MAX_TAG_LENGTH,
+  MAX_TAGS_PER_ITEM,
+  MAX_TIMESTAMP_LENGTH,
+  MAX_TITLE_LENGTH,
+} from "../limits";
 import { deriveTitle } from "../domain/title";
 import {
   appendMention,
@@ -24,8 +38,10 @@ import {
 } from "../domain/problem";
 import type { ProblemRepository } from "../repositories/problemRepository";
 import {
-  ExtractedItemSchema,
+  AffectSchema,
   ExtractionResultSchema,
+  GroupingOutcomeSchema,
+  MentionSchema,
   ProblemSchema,
   ProblemStatusSchema,
   ThemeSchema,
@@ -41,6 +57,102 @@ const router = t.router;
 const publicProcedure = t.procedure;
 
 // ---- shared schemas --------------------------------------------------------
+
+/**
+ * クライアントから来る識別子。**入力側にだけ上限を置く** (`../limits.ts` / #313 C-1)。
+ * 出力・永続化側 (`domain.ts`) には足さない — 既存ドキュメントを読めなくしないため。
+ */
+const IdInputSchema = z.string().min(1).max(MAX_ID_LENGTH);
+
+/**
+ * クライアントが送る会話全文。**件数と合計文字数の両方で締める** (#313 C-1)。
+ *
+ * ここが 1 リクエストで LLM に流し込める入力量の天井 = 1 リクエストあたりの課金の
+ * 天井になる。件数だけだと 1 通が長い場合を、文字数だけだと短文の大量送信を止められない。
+ *
+ * `preview` と `extract` の両方が同じ上限を持つ (どちらも ai-agent 経由で LLM を叩く)。
+ * 片方だけに置くと、上限のない方が抜け道になる。
+ */
+const ConversationMessagesInputSchema = z
+  .array(ConversationMessageSchema)
+  .max(MAX_CONVERSATION_MESSAGES)
+  .refine(
+    (messages) =>
+      messages.reduce((total, m) => total + m.text.length, 0) <= MAX_CONVERSATION_TOTAL_CHARS,
+    { message: `会話全文が長すぎます (最大 ${MAX_CONVERSATION_TOTAL_CHARS} 文字)` },
+  );
+
+/**
+ * `consultation.extract` の `draft.items` として**クライアントから来る**抽出結果。
+ *
+ * ドメイン側の `ExtractedItemSchema` を再利用**しない** (PR #324 Codex 指摘 P2)。
+ * 再利用すると「件数だけ 200 に締めたが、1 item の中身は青天井」という穴が残る —
+ * draft 経路は ai-agent を呼ばないので抽出側の上限では守れず、巨大な `statement` /
+ * `excerpt` や大量のタグをそのまま Cosmos へ書ける。
+ *
+ * 独立定義ではなく `.extend()` で派生させているのは、**形をドメインと分岐させない**ため
+ * (手で書き写すと、ドメイン側のフィールド追加・削除に気づかず契約がずれる)。上書きするのは
+ * 「長さの制約」だけで、`domain.ts` 側には上限を足さない (`../limits.ts` の方針 =
+ * 入力側にだけ置く。既存ドキュメントを読めなくしないため)。
+ *
+ * ただし **`.extend()` は新フィールドに上限を自動では付けない** — ドメインに文字列
+ * フィールドが増えたらここにも 1 行足す必要がある。忘れたことは `limits.test.ts` の
+ * 「どの文字列フィールドを巨大にしても拒否する」(item の全 string leaf を走査する)
+ * が落として教える。
+ */
+const DraftMentionInputSchema = MentionSchema.extend({
+  id: IdInputSchema,
+  sessionId: IdInputSchema,
+  dumpId: IdInputSchema.nullable(),
+  createdAt: z.string().max(MAX_TIMESTAMP_LENGTH),
+  statement: z.string().max(MAX_EXTRACTED_TEXT_LENGTH),
+  excerpt: z.string().max(MAX_EXTRACTED_TEXT_LENGTH),
+  affect: AffectSchema.extend({ label: z.string().max(MAX_AFFECT_LABEL_LENGTH) }),
+  proposedTags: z.array(z.string().max(MAX_TAG_LENGTH)).max(MAX_TAGS_PER_ITEM),
+  problemId: IdInputSchema.nullable(),
+});
+
+const DraftGroupingInputSchema = GroupingOutcomeSchema.extend({
+  problemId: IdInputSchema,
+  problemTitle: z.string().max(MAX_TITLE_LENGTH),
+});
+
+const DraftItemInputSchema = z.object({
+  mention: DraftMentionInputSchema,
+  grouping: DraftGroupingInputSchema,
+});
+
+/** 1 item の文字列の合計。合計上限 (`MAX_DRAFT_TOTAL_CHARS`) の数え方を 1 箇所に置く。 */
+function draftItemChars(item: z.infer<typeof DraftItemInputSchema>): number {
+  const { mention, grouping } = item;
+  return (
+    mention.id.length +
+    mention.sessionId.length +
+    (mention.dumpId?.length ?? 0) +
+    mention.createdAt.length +
+    mention.statement.length +
+    mention.excerpt.length +
+    mention.affect.label.length +
+    mention.proposedTags.reduce((total, tag) => total + tag.length, 0) +
+    (mention.problemId?.length ?? 0) +
+    grouping.problemId.length +
+    grouping.problemTitle.length
+  );
+}
+
+/**
+ * draft 全体。**件数・1 フィールドの長さ・合計文字数の 3 つで締める**。
+ *
+ * 合計を別に見るのは、件数 × 1 件の上限の積 (200 × 約 4,000 字) が 1 リクエストの
+ * 書き込み量として大きすぎるため — 会話全文で既に採った考え方と同じ。
+ */
+const DraftInputSchema = z
+  .object({ items: z.array(DraftItemInputSchema).max(MAX_EXTRACTED_ITEMS) })
+  .refine(
+    (draft) =>
+      draft.items.reduce((total, item) => total + draftItemChars(item), 0) <= MAX_DRAFT_TOTAL_CHARS,
+    { message: `下書き全体が長すぎます (最大 ${MAX_DRAFT_TOTAL_CHARS} 文字)` },
+  );
 
 const ChatMessageSchema = z.object({
   id: z.string(),
@@ -268,30 +380,30 @@ function countProblems(items: ExtractedItem[]): {
 // action ごとに必要な引数が違うため discriminatedUnion で受ける。
 
 const TriageInputSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("resolve"), problemId: z.string().min(1) }),
-  z.object({ action: z.literal("shelve"), problemId: z.string().min(1) }),
-  z.object({ action: z.literal("reopen"), problemId: z.string().min(1) }),
-  z.object({ action: z.literal("dismiss"), problemId: z.string().min(1) }),
+  z.object({ action: z.literal("resolve"), problemId: IdInputSchema }),
+  z.object({ action: z.literal("shelve"), problemId: IdInputSchema }),
+  z.object({ action: z.literal("reopen"), problemId: IdInputSchema }),
+  z.object({ action: z.literal("dismiss"), problemId: IdInputSchema }),
   z.object({
     action: z.literal("editTheme"),
-    problemId: z.string().min(1),
+    problemId: IdInputSchema,
     theme: ThemeSchema,
   }),
   z.object({
     action: z.literal("editTitle"),
-    problemId: z.string().min(1),
-    title: z.string().min(1),
+    problemId: IdInputSchema,
+    title: z.string().min(1).max(MAX_TITLE_LENGTH),
   }),
   z.object({
     action: z.literal("relink"),
-    mentionId: z.string().min(1),
-    fromProblemId: z.string().min(1),
-    toProblemId: z.string().min(1),
+    mentionId: IdInputSchema,
+    fromProblemId: IdInputSchema,
+    toProblemId: IdInputSchema,
   }),
   z.object({
     action: z.literal("merge"),
-    sourceProblemId: z.string().min(1),
-    targetProblemId: z.string().min(1),
+    sourceProblemId: IdInputSchema,
+    targetProblemId: IdInputSchema,
   }),
 ]);
 type TriageInput = z.infer<typeof TriageInputSchema>;
@@ -416,7 +528,7 @@ const speechRouter = router({
 
 const consultationRouter = router({
   start: publicProcedure
-    .input(z.object({ concern: z.string() }))
+    .input(z.object({ concern: z.string().max(MAX_MESSAGE_LENGTH) }))
     .output(z.object({ session: SessionSchema, stubbed: z.boolean().optional() }))
     .mutation(async ({ input }) => {
       const sessionId = randomUUID();
@@ -469,8 +581,8 @@ const consultationRouter = router({
   sendMessage: publicProcedure
     .input(
       z.object({
-        sessionId: z.string().min(1),
-        message: z.string().min(1),
+        sessionId: IdInputSchema,
+        message: z.string().min(1).max(MAX_MESSAGE_LENGTH),
       }),
     )
     .output(ChatReplySchema)
@@ -500,9 +612,9 @@ const consultationRouter = router({
   preview: publicProcedure
     .input(
       z.object({
-        sessionId: z.string().min(1),
+        sessionId: IdInputSchema,
         // 会話全文はクライアントが渡す (#183 と同じ理由 — ai-agent の履歴はプロセスメモリ)。
-        messages: z.array(ConversationMessageSchema),
+        messages: ConversationMessagesInputSchema,
       }),
     )
     .output(ExtractionReplySchema)
@@ -524,17 +636,21 @@ const consultationRouter = router({
   extract: publicProcedure
     .input(
       z.object({
-        sessionId: z.string().min(1),
+        sessionId: IdInputSchema,
         // 会話全文はクライアントが渡す (#183)。省略時は ai-agent 側の履歴に賭ける
         // (旧クライアント互換) が、その経路は 404 になりうる。
-        messages: z.array(ConversationMessageSchema).default([]),
+        messages: ConversationMessagesInputSchema.default([]),
         // 確定時に再抽出しない commit 経路 (#283 / ADR 0039 D1/D3)。
         // 「この内容で確定」は**表示中の preview の結果 (items + グルーピング) をそのまま
         // 永続化する** — 抽出は非決定的なので、確定時に再抽出すると画面で確認した内容と
         // 違うものが書かれうる (PR #240 の Codex 指摘で設計を修正)。draft があれば
         // ai-agent を呼ばずこれを確定する。optional なのは後方互換 (プレビューを経ない
         // 旧クライアント / preview 未対応ビルドは従来どおり抽出してから確定)。
-        draft: z.object({ items: z.array(ExtractedItemSchema) }).optional(),
+        //
+        // 上限を入れているのは、この配列が**そのまま Cosmos への書き込み**になるため
+        // (#313 C-1)。ai-agent を経由しない経路なので、抽出側の上限では守れない。
+        // 件数だけでなく 1 item の中身と合計文字数も締める (DraftInputSchema / PR #324)。
+        draft: DraftInputSchema.optional(),
       }),
     )
     .output(ExtractionReplySchema)
@@ -574,7 +690,7 @@ const consultationRouter = router({
   approve: publicProcedure
     .input(
       z.object({
-        approvalRequestId: z.string().min(1),
+        approvalRequestId: IdInputSchema,
         approved: z.boolean(),
       }),
     )
@@ -608,7 +724,7 @@ const problemRouter = router({
     }),
 
   get: publicProcedure
-    .input(z.object({ id: z.string().min(1) }))
+    .input(z.object({ id: IdInputSchema }))
     .output(ProblemSchema)
     .query(async ({ input, ctx }) => {
       return await requireProblem(ctx.problemRepo, input.id);
@@ -625,7 +741,7 @@ const problemRouter = router({
 
   // 既存 /plan を再利用して Problem にプランを付ける（派生物。status は変えない / ADR 0007）。
   createPlan: publicProcedure
-    .input(z.object({ problemId: z.string().min(1) }))
+    .input(z.object({ problemId: IdInputSchema }))
     .output(ProblemSchema)
     .mutation(async ({ input, ctx }) => {
       const problem = await requireProblem(ctx.problemRepo, input.problemId);

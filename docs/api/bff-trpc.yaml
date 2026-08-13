@@ -35,6 +35,7 @@ paths:
                 approvalRequestId:
                   type: string
                   minLength: 1
+                  maxLength: 200
                 approved:
                   type: boolean
               required:
@@ -208,6 +209,7 @@ paths:
                 sessionId:
                   type: string
                   minLength: 1
+                  maxLength: 200
                 messages:
                   type: array
                   items:
@@ -220,10 +222,12 @@ paths:
                           - assistant
                       text:
                         type: string
+                        maxLength: 8000
                     required:
                       - role
                       - text
                     additionalProperties: false
+                  maxItems: 200
                   default: []
                 draft:
                   type: object
@@ -238,22 +242,32 @@ paths:
                             properties:
                               id:
                                 type: string
+                                minLength: 1
+                                maxLength: 200
                               sessionId:
                                 type: string
+                                minLength: 1
+                                maxLength: 200
                               dumpId:
                                 type: string
+                                minLength: 1
+                                maxLength: 200
                                 nullable: true
                               createdAt:
                                 type: string
+                                maxLength: 64
                               statement:
                                 type: string
+                                maxLength: 2000
                               excerpt:
                                 type: string
+                                maxLength: 2000
                               affect:
                                 type: object
                                 properties:
                                   label:
                                     type: string
+                                    maxLength: 100
                                   valence:
                                     type: string
                                     enum:
@@ -284,8 +298,12 @@ paths:
                                 type: array
                                 items:
                                   type: string
+                                  maxLength: 100
+                                maxItems: 20
                               problemId:
                                 type: string
+                                minLength: 1
+                                maxLength: 200
                                 nullable: true
                               groupingConfidence:
                                 type: number
@@ -315,8 +333,11 @@ paths:
                                   - existing
                               problemId:
                                 type: string
+                                minLength: 1
+                                maxLength: 200
                               problemTitle:
                                 type: string
+                                maxLength: 200
                               problemTheme:
                                 type: string
                                 enum:
@@ -355,6 +376,7 @@ paths:
                           - mention
                           - grouping
                         additionalProperties: false
+                      maxItems: 200
                   required:
                     - items
                   additionalProperties: false
@@ -528,6 +550,7 @@ paths:
                 sessionId:
                   type: string
                   minLength: 1
+                  maxLength: 200
                 messages:
                   type: array
                   items:
@@ -540,10 +563,12 @@ paths:
                           - assistant
                       text:
                         type: string
+                        maxLength: 8000
                     required:
                       - role
                       - text
                     additionalProperties: false
+                  maxItems: 200
               required:
                 - sessionId
                 - messages
@@ -591,9 +616,11 @@ paths:
                 sessionId:
                   type: string
                   minLength: 1
+                  maxLength: 200
                 message:
                   type: string
                   minLength: 1
+                  maxLength: 8000
               required:
                 - sessionId
                 - message
@@ -660,6 +687,7 @@ paths:
               properties:
                 concern:
                   type: string
+                  maxLength: 8000
               required:
                 - concern
               additionalProperties: false
@@ -855,6 +883,7 @@ paths:
                 problemId:
                   type: string
                   minLength: 1
+                  maxLength: 200
               required:
                 - problemId
               additionalProperties: false
@@ -1030,6 +1059,7 @@ paths:
               id:
                 type: string
                 minLength: 1
+                maxLength: 200
             required:
               - id
             additionalProperties: false
@@ -1408,6 +1438,7 @@ paths:
                     problemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                   required:
                     - action
                     - problemId
@@ -1421,6 +1452,7 @@ paths:
                     problemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                   required:
                     - action
                     - problemId
@@ -1434,6 +1466,7 @@ paths:
                     problemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                   required:
                     - action
                     - problemId
@@ -1447,6 +1480,7 @@ paths:
                     problemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                   required:
                     - action
                     - problemId
@@ -1460,6 +1494,7 @@ paths:
                     problemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                     theme:
                       type: string
                       enum:
@@ -1485,9 +1520,11 @@ paths:
                     problemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                     title:
                       type: string
                       minLength: 1
+                      maxLength: 200
                   required:
                     - action
                     - problemId
@@ -1502,12 +1539,15 @@ paths:
                     mentionId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                     fromProblemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                     toProblemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                   required:
                     - action
                     - mentionId
@@ -1523,9 +1563,11 @@ paths:
                     sourceProblemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                     targetProblemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                   required:
                     - action
                     - sourceProblemId

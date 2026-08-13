@@ -12,6 +12,7 @@ import logging
 from agent_framework import BaseChatClient
 
 from .agents import complete
+from .observability import fingerprint
 from .schemas import PlanRequest, PlanResponse
 
 logger = logging.getLogger(__name__)
@@ -56,7 +57,8 @@ async def generate_plan(
             steps=data.get("steps", []),
         )
     except json.JSONDecodeError:
-        logger.warning("Plan JSON parse failed: %r", raw)
+        # raw は Problem の要約から生成された行動プラン = 機微。指紋だけ残す (Issue #313)
+        logger.warning("Plan JSON parse failed: %s", fingerprint(raw))
         return PlanResponse(
             title="アクションプラン",
             steps=["具体的なステップを考えてみましょう"],

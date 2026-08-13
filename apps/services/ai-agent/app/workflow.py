@@ -51,6 +51,7 @@ from pydantic import BaseModel
 from .agents import chat, chat_stream, complete, get_chat_client
 from .config import get_settings
 from .history import ChatHistory
+from .observability import exception_frames, exception_kind, fingerprint, new_ref
 from .prompts import CHAT_SYSTEM_PROMPT
 from .rag import retrieve
 from .repositories import ApprovalRepository, SessionRepository
@@ -61,7 +62,7 @@ from .schemas import (
     ChatStreamDone,
     Plan,
 )
-from .tools import execute_tool, is_side_effecting
+from .tools import ToolContext, execute_tool, is_side_effecting
 
 logger = logging.getLogger(__name__)
 
@@ -211,9 +212,13 @@ User message: "{message}"
 
 Available tools:
 - search_faq(query: str)           — read-only: search FAQ
-- get_inbox_stats(user_id: str)    — read-only: get inbox stats
+- get_inbox_stats()                — read-only: inbox stats for the current user
+                                     (no arguments — the server decides the user)
 - send_reply(to: str, body: str)   — SIDE-EFFECTING: send a reply
 - archive_message(message_id: str) — SIDE-EFFECTING: archive a message
+
+Never put a user, account, or session identifier in tool_args — the server supplies
+the acting user; identifier arguments are rejected.
 
 Respond with this exact JSON structure:
 {{
@@ -231,7 +236,11 @@ Respond with this exact JSON structure:
     try:
         return json.loads(llm_response)
     except json.JSONDecodeError:
-        logger.warning("Classification JSON parse failed: %r", llm_response)
+        # LLM の生出力にはユーザーの発話が写り込む。本文ではなく指紋だけ残す
+        # (同じ壊れ方の再発は指紋の一致で追える / Issue #313)
+        logger.warning(
+            "Classification JSON parse failed: %s", fingerprint(llm_response)
+        )
         return {
             "needs_retrieval": False,
             "needs_tool": False,
@@ -508,14 +517,30 @@ class ExecuteToolExecutor(Executor):
             )
             try:
                 tool_result = await execute_tool(
-                    invocation.tool_name, invocation.tool_args
+                    invocation.tool_name,
+                    invocation.tool_args,
+                    # 主体はモデル出力ではなく実行コンテキストから (Issue #313)
+                    ToolContext(session_id=invocation.session_id),
                 )
                 history.add_system_message(
                     f"Tool result ({invocation.tool_name}): {tool_result}"
                 )
             except Exception as exc:
-                logger.error("Tool execution failed: %s", exc)
-                history.add_system_message(f"Tool error: {exc}")
+                # 例外文は履歴に入れない — 履歴はそのまま LLM へ再送され、最終的に
+                # ユーザーの画面まで届きうる出口 (上流のエンドポイント名等が漏れる)。
+                # 詳細はサーバのログにだけ残し、ref で突き合わせる (Issue #313)。
+                ref = new_ref()
+                logger.error(
+                    "Tool execution failed ref=%s tool=%s kind=%s at=%s",
+                    ref,
+                    invocation.tool_name,
+                    exception_kind(exc),
+                    exception_frames(exc),
+                )
+                history.add_system_message(
+                    f"Tool error ({invocation.tool_name}): "
+                    f"実行に失敗しました (ref: {ref})"
+                )
             await self._session_repo.save(invocation.session_id, history)
         await ctx.send_message(
             RespondRequest(
