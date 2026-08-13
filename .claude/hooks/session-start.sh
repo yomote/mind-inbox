@@ -31,20 +31,11 @@ MAIN_WHEN="$(git log -1 --format='%cr' origin/main 2>/dev/null)"
 BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '不明')"
 BEHIND="$(git rev-list --count HEAD..origin/main 2>/dev/null || echo '?')"
 
-# ADR の採番は **origin/main 基準**で取る (ローカル最大値 +1 は 2 回衝突している)。
-# 退避済み (docs/adr/archive/) の番号はファイル名から落としてあるので、
-# ls だけでは「使用済み」と分からない。retired-numbers.txt を必ず合算する。
-ADR_MAX="$( {
-  git ls-tree -r origin/main --name-only docs/adr/ 2>/dev/null \
-    | grep -oE 'docs/adr/[0-9]{4}-' | grep -oE '[0-9]{4}'
-  git show origin/main:docs/adr/archive/retired-numbers.txt 2>/dev/null \
-    | grep -oE '^[0-9]{4}$'
-} | sort -n | tail -1)"
-if [ -n "$ADR_MAX" ]; then
-  ADR_NEXT="$(printf '%04d' $((10#$ADR_MAX + 1)))"
-else
-  ADR_NEXT="不明 (origin/main を取得できず)"
-fi
+# ADR の採番はここでは出さない。**ADR を書くときにしか要らない**情報を全セッションに
+# 毎回渡すのは、このフックが直したい問題 (見落とし) ではなく別の問題 (常時コスト) を作る。
+# 採番は `/adr` skill が書く瞬間に取る — そちらの方が正確でもある。ここで出す値は
+# セッション中に別 PR が ADR を着地させると腐るが、書く瞬間に取れば腐らない。
+# 衝突は CI (adr-number-guard) が退役番号の再利用も含めて赤にする。
 
 # 直近 24h に更新されたリモートブランチ = 並行作業の目安。
 # このリポジトリは squash merge なので**マージ済みが混じる** — 断定材料ではなく確認の合図。
@@ -63,7 +54,11 @@ WARN=""
 ⚠️ origin への fetch に失敗しました。下の情報は古い可能性があります。"
 if [ "$BEHIND" != "?" ] && [ "$BEHIND" -gt 0 ] 2>/dev/null; then
   WARN="${WARN}
-⚠️ このブランチは origin/main より **${BEHIND} コミット遅れ**ています。着手前に取り込むか、ブランチを切り直してください。"
+⚠️ このブランチは origin/main より **${BEHIND} コミット遅れ**ています。
+**これから作業を始めるなら**最新の main から切り直すこと。
+**既に作業中 / PR を出しているなら追随しない** — strict (Require branches to be up to date) は
+OFF なので遅れたままマージでき、反射的に main を取り込むと pm-accept が失効して再受け入れが要る。
+追随するのは**コンフリクトが実際に出たとき**だけ。"
 fi
 
 CONTEXT="## このセッションの役割 — 最初に自分で判定すること
@@ -88,9 +83,6 @@ ${WARN}
 
 **origin/main**: \`${MAIN_SHA}\` — ${MAIN_SUBJECT} (${MAIN_WHEN})
 **現在のブランチ**: \`${BRANCH}\` (main より ${BEHIND} コミット遅れ)
-
-**次に使える ADR 番号: ${ADR_NEXT}** — 採番は必ず origin/main 基準で取ること。
-\`ls docs/adr/\` のローカル最大値 +1 は過去 2 回衝突している (0015→0019 / 0026→0027)。
 
 **直近 24h に更新されたブランチ** (並行作業の目安。squash merge のためマージ済みも混じる):
 ${RECENT}
