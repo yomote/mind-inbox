@@ -34,7 +34,7 @@
 - **特記**: 今回の最大の収穫は経路そのものより**「送信 API の成功 ≠ 配送」を実測で切り分けたこと**。`fire_trigger` は 3 方向 (親→子 idle / 子→親 / 自己宛) すべてで成功を返しながら `last_fired_at` すら付かず、一方 `create_trigger` + `run_once_at` は発火 14:54:00 → 子の受信 14:54:16 → [Issue #353 への投稿 14:54:26](https://github.com/yomote/mind-inbox/issues/353#issuecomment-5268488790) と end-to-end で通った。**危うく「送れた」で報告するところだった** (CLAUDE.md「取れなかったものを異常なしと書かない」の典型例)。もう 1 件、`last_fired_at` の反映遅れで「14:53 予定が 14:56 時点で未発火」と誤読しかけた — **発火判定は trigger のフィールドではなく子の `updated_at` と GitHub 上の成果で行う**を Runbook に明記。承認プロンプトの原因も 2 段構えで、(1) 同一 MCP サーバが対話セッションでは `Claude_Code_Remote` / 子では UUID `bf7c680d-...` の**二重名**、(2) サーバ単位 allow では `delete_trigger` が止まりツール単位の明示が必要、と判明。**`settings.json` は実行中セッションに反映されない**ため、main に入るまで承認は飛び続ける
 - **持ち越し**: **Proposed ADR 4 本 (0041 / 0042 / 0045 / 0047) の裁定が次回に残っている。4 本とも実装は既に main に入っており、裁定は「追認か巻き戻しか」になる**。[#356](https://github.com/yomote/mind-inbox/issues/356) の開発体制 (design-gate 対象 / `SendMessage`・`ListAgents` によるチームメイト連携はこの環境で使えないため subagent + 子セッションの 2 層で組む)。[#353](https://github.com/yomote/mind-inbox/issues/353) の `fire_trigger` 未配送の原因究明 (即時化できれば往復が 1 分 → 秒)。**PR #324 のタイトルが「ADR 0046」だが実体は 0047** という採番衝突の痕跡
 
-## 2026-08-12 — debrief
+## 2026-08-12 — debrief (Proposed ADR 4 本の裁定)
 
 - **対象**: Proposed のまま溜まっていた ADR 4 本の裁定 — [0041](../adr/0041-ux-observations-on-git-data-branch.md) (UX 観測データを git データブランチへ) / [0042](../adr/0042-pm-accept-carryover-and-merge-queue.md) (pm-accept 引き継ぎ + Merge Queue) / [0045](../adr/0045-e2e-artifacts-are-secret-by-default.md) (E2E 成果物は既定で秘密扱い) / [0043 (PR #284)](https://github.com/yomote/mind-inbox/pull/284) (PM 自走モード — main 未着地)
 - **決定**:
