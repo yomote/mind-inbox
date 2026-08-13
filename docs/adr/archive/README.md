@@ -91,6 +91,12 @@
 ## ここに置いたものの扱い
 
 - **消していません。** 過去の判断がなぜそうなったかを追う必要が出たら読んでください
-- **`Status:` 行は更新しません。** 退避時点の状態のまま凍結しています
-  (`Proposed` のまま入ったものは `Proposed` のまま。裁定は現行ルール側で行う)
+- **`Status:` 行は更新しません。** 退避時点の状態のまま凍結しています。
+  **`Proposed` のまま入った 3 本は、ADR としては裁定されません** —
+  [`pm-accept-carryover-and-merge-queue.md`](operations/pm-accept-carryover-and-merge-queue.md) (旧 0042) /
+  [`security-posture-in-layers-free-tier-first.md`](operations/security-posture-in-layers-free-tier-first.md) (旧 0047) /
+  [`codex-derived-review-rubric-and-stand-in-judge.md`](operations/codex-derived-review-rubric-and-stand-in-judge.md) (旧 0052)。
+  **これらの中身のうち現に運用されているもの** (pm-accept の引き継ぎ / 代役 judge によるレビュー) は、
+  現行ルールとして [`/merge` skill](../../../.claude/skills/merge/SKILL.md) と
+  [`docs/team.md`](../../team.md) が持っています。**ここを裁定しに来ないでください**
 - **ここを直して運用を変えようとしないでください。** 現行ルールの置き場は `CLAUDE.md` です

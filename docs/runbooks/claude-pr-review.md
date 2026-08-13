@@ -6,7 +6,7 @@
 >
 > - 技術レビューの**担い手**: Codex (`@codex review`)。停止時 ([#345](https://github.com/yomote/mind-inbox/issues/345)) は代役 judge [`.claude/agents/code-reviewer.md`](../../.claude/agents/code-reviewer.md) を PM が呼ぶ ([ADR 0052](../adr/archive/operations/codex-derived-review-rubric-and-stand-in-judge.md))
 > - 審査**基準**: [`.github/claude/review-rubric.md`](../../.github/claude/review-rubric.md) は現役 (2026-08-12 に全面改訂 — 旧版の軸 A / B / C は残っていない)
-> - **強制力**: ブランチ保護の会話解決ゲートではなく、required check `review-gate` ([ADR 0036](../adr/archive/operations/merge-gate-as-required-check-and-pm-cadence.md) / [0051](../adr/0051-review-gate-verdict-on-workflow-run.md))
+> - **強制力**: ブランチ保護の会話解決ゲートではなく、required check `review-gate` ([ADR 0036](../adr/archive/operations/merge-gate-as-required-check-and-pm-cadence.md))。判定の実体は [`cicd/scripts/review-gate/check.py`](../../cicd/scripts/review-gate/check.py) が正典
 > - judge の運用手順: [`review-agents.md`](review-agents.md)
 > - 以下は当時の手順の記録として残す
 
