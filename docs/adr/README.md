@@ -115,11 +115,11 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0038](0038-security-checks-as-mechanized-triggers.md) — セキュリティ検査のトリガーを人の判断から機構へ移す (週次 sweep / PR 自動指名 / リリース judge)
 - [0039](0039-dialogue-live-preview-and-character.md) — 対話画面を「キャラと話すと右で困りごとが形になる」構成にする (読み取り専用プレビュー + 独自マスコット)
 - [0040](0040-project-continuity-three-layers.md) — プロジェクト継続性を 3 層 (機構化された完遂 / 当番 PM / 窓口 PM) で保証する
-- [0041](0041-ux-observations-on-git-data-branch.md) — UX 観測データの蓄積先を Issue コメントから git データブランチへ移す — **Proposed**
-- [0042](0042-pm-accept-carryover-and-merge-queue.md) — pm-accept は「実装差分が不変の main 追随」に引き継ぎ、直列化は Merge Queue に任せる (0036 の運用改訂) — **Proposed**
+- [0041](0041-ux-observations-on-git-data-branch.md) — UX 観測データの蓄積先を Issue コメントから git データブランチへ移す — **Accepted**
+- [0042](0042-pm-accept-carryover-and-merge-queue.md) — pm-accept は「実装差分が不変の main 追随」に引き継ぎ、追いつき自体を strict OFF で無くす (0036 の運用改訂 / D2 は 2026-08-12 に書き直し) — **Proposed**
 - [0043](0043-pm-self-driving-mode.md) — PM を自走モードにする (実物指標 / 週次目標 / 引く当番 / 日次ダイジェスト / 窓口台帳)
 - [0044](0044-stream-lanes-as-the-project-map.md) — プロジェクトの地図を固定レーン (stream ラベル) で持ち、Projects board を正式に畳む (ADR 0011 の描画面を改訂 / ADR 0043 を補完)
-- [0045](0045-e2e-artifacts-are-secret-by-default.md) — 実環境 E2E の成果物は既定で秘密扱いにし、trace は公開鍵で暗号化して残す (public リポジトリのため artifact のアクセス制限が使えない) — **Proposed**
+- [0045](0045-e2e-artifacts-are-secret-by-default.md) — 実環境 E2E の成果物は既定で秘密扱いにし、trace は公開鍵で暗号化して残す (public リポジトリのため artifact のアクセス制限が使えない) — **Accepted**
 - [0046](0046-environment-rebuildable-from-declaration.md) — 環境を「宣言から作り直せるもの」にする — ライフサイクル 3 層分断 / Entra の Graph Bicep 宣言 / 週次プロビジョンテスト (ADR 0013 の「常設」を追補)
 - [0047](0047-security-posture-in-layers-free-tier-first.md) — セキュリティ対策を「無料枠優先 + 責任分担が重ならない層」で段階導入する (public リポジトリの無料枠を先に使い切り、アプリ内側の穴は design-gate 経由で塞ぐ / ADR 0038 の続き) — **Proposed**
 - [0048](0048-child-sessions-are-usable-again-with-a-one-way-poke-channel.md) — 子セッションは再び起動できる — 会話は Routine 経由で片道 1 分なので、分配先は往復の少ない作業に限る (ADR 0033 D1 を置き換え)
