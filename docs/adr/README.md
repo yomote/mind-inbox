@@ -29,14 +29,20 @@
 
 ### 1. 番号を決める
 
-**`origin/main` の最大番号 +1** を使う (4 桁):
+**`origin/main` の最大番号 +1** を使う (4 桁)。**退役番号を必ず合算する**:
 
 ```bash
 git fetch origin main -q
-git ls-tree -r origin/main --name-only docs/adr/ | grep -oE '[0-9]{4}' | sort -n | tail -1
+{ git ls-tree -r origin/main --name-only docs/adr/ | grep -oE 'docs/adr/[0-9]{4}-' | grep -oE '[0-9]{4}'
+  git show origin/main:docs/adr/archive/retired-numbers.txt | grep -oE '^[0-9]{4}$'
+} | sort -n | tail -1
 ```
 
-⚠️ **`ls docs/adr/` のローカル最大値を使わないこと。** 並行セッションが同じ番号を取り、過去 2 回衝突している (0015→0019 / 0026→0027)。セッション開始時のフックが「次に使える番号」を自動提示し、CI (`adr-number-guard`) が衝突を赤にする ([起票パケットと SessionStart 事前提示](archive/operations/dispatch-packet-in-issue-and-session-start-preflight.md) D3 — 退避済み)。
+> **採番手順の正典はこの節。** [`/adr` skill](../../.claude/skills/adr/SKILL.md) の Step 2 は同じコマンドの写しなので、ここを変えたら**同じ PR で**揃える (食い違うと、採番だけ skill を通したセッションが違う番号を取る)。
+
+⚠️ **`docs/adr/` の実ファイルだけを数えないこと。** [`archive/`](archive/README.md) のファイルは名前から番号を落としてあるので、実ファイルの最大値では**退役番号が見えない** (合算しないと次番号が退役番号になる)。退役番号の一覧は [`archive/retired-numbers.txt`](archive/retired-numbers.txt)。
+
+⚠️ **`ls docs/adr/` のローカル最大値を使わないこと。** 並行セッションが同じ番号を取り、過去 2 回衝突している (0015→0019 / 0026→0027)。**採番は書く瞬間に上のコマンドで取る** (セッション開始時に取っておいた値は、その間に別 PR が ADR を着地させると腐る)。取り違えは CI (`adr-number-guard`) が退役番号の再利用も含めて赤にする。
 
 ⚠️ **欠番は埋めないこと。** 0008 / 0011 / 0014 / 0018〜0022 … が飛んでいるのは、運用系 29 本を
 [`archive/`](archive/README.md) へ退避したためです。番号は ID であって順序ではなく、振り直すと
