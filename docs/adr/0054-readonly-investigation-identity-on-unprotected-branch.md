@@ -120,4 +120,4 @@ Chosen option: **"Option B"**, because 用途 (調査のたびに直 push) と�
 - PR: <https://github.com/yomote/mind-inbox/pull/222>
 - Issue: <https://github.com/yomote/mind-inbox/issues/209> / 関連: <https://github.com/yomote/mind-inbox/issues/46>
 - Runbook: [azure-oidc-cd-setup.md](../runbooks/azure-oidc-cd-setup.md)
-- 関連 ADR: [0006](0006-azure-access-via-device-code.md) / [0031](0031-agent-reaches-outside-via-github-actions.md) / [0035](0035-role-split-across-agents-and-actions.md)
+- 関連 ADR: [0006](0006-azure-access-via-device-code.md) / [0031](archive/operations/agent-reaches-outside-via-github-actions.md) / [0035](archive/operations/role-split-across-agents-and-actions.md) (0031 / 0035 は #385 で `archive/operations/` へ退避済み — 現行ルールではない)
