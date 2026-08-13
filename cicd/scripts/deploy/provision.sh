@@ -54,13 +54,33 @@ need pnpm
 need zip
 need curl
 need swa
-# ロール割り当ての判定 (decide_role_assignment.py) に使う。GitHub runner には既定で入っている。
+# deploy-*.sh が bicep の outputs (JSON) を読むのに使う。GitHub runner には既定で入っている。
 need python3
 
 az account show >/dev/null
 
 echo "==> [1/5] Resource group: $RG ($LOCATION)"
-az group create -n "$RG" -l "$LOCATION" >/dev/null
+# CD の SP は **RG スコープ**の権限しか持たない (#46)。RG の作成はサブスクリプション
+# レベルの書き込みなので、常設 dev (ADR 0013) の日常経路では **呼ばない**。
+# 既存なら何もしない = CD がサブスクリプションスコープを要求しない、が要点。
+#
+# RG が無い場合だけ作成を試みる: device-code の人間セッション (Owner 相当) から
+# 初回構築するときはここで作れた方が早い。CD から実行された場合は権限が無いので
+# ここで落ちるが、それは「RG が消えている」という異常であって、黙って RG を
+# 作り直すべき状況ではない (原因を見ずに再構築すると別の事故を隠す)。
+if az group show -n "$RG" -o none 2>/dev/null; then
+  echo "    既存の RG を再利用 (作成は行わない)"
+else
+  echo "    RG が存在しないので作成を試みます"
+  az group create -n "$RG" -l "$LOCATION" >/dev/null || {
+    echo "ERROR: RG '$RG' が存在せず、作成もできませんでした。" >&2
+    echo "       CD の SP は RG スコープの権限しか持ちません (#46)。RG が消えている場合は" >&2
+    echo "       人間が device-code セッションで作り直してください:" >&2
+    echo "         RG=$RG ./cicd/scripts/cloud-env/setup-oidc.sh" >&2
+    echo "       (手順: docs/runbooks/azure-oidc-cd-setup.md)" >&2
+    exit 1
+  }
+fi
 # 最終デプロイ時刻を RG タグに記録する（「この環境はいつのものか」を後から追える）。
 # 夜間 teardown の最小生存時間ガードで使っていたが、ADR 0013 で自動 teardown 自体を廃止したため
 # 現在は記録用途のみ。失敗してもデプロイは続行する。
@@ -77,114 +97,19 @@ if [[ -n "$IMAGE_TAG" ]]; then
   BOOTSTRAP_EXTRA_ARGS+=(-p "containerImageTag=$IMAGE_TAG")
 fi
 
-# ai-agent MI → OpenAI User ロール割り当ての解決 (#262 / #277)
-#
-# ARM のロール割り当ての一意性は **名前ではなく principal+role+scope** で決まる。
-# deploy-ai-agent.sh 時代の `az role assignment create` は名前を指定せず
-# ランダム GUID 名で作っていたため、bicep (PR #261) が guid() 名で同じ三つ組を
-# 宣言すると ARM が RoleAssignmentExists でデプロイ全体を拒否する。
-# PR #278 が入れた対処は「既存名を実行時に解決して bicep へ渡す (養子縁組)」で、
-# 方向は正しい (run 31481914784 は実際に provision が成功した)。
-#
-# 効かなかった理由は判定ではなく **観測性**: 3 つの az 参照がすべて
-# `2>/dev/null || true` で潰されており、「既存が無い」と「参照に失敗した」が
-# 区別できなかった。参照が一度でも失敗すると黙って guid() 名に戻り、
-# 次の bicep 適用が RoleAssignmentExists で落ちる
-# (run 31500334037 / 31500900952。養子縁組の echo はログに 1 行も出ていない)。
-#
-# ここでは 3 つの参照を ok / absent / error に分類し、判定は純粋関数
-# (decide_role_assignment.py — テストあり) に任せる。取りうる結末は 3 つ:
-#   create-new … 既存が無い。bicep が guid() 名で作る (パラメータを渡さない)
-#   adopt      … 既存があった。その名前を渡して no-op 更新にする
-#   skip       … 分からなかった。**推測せず** この run では bicep に宣言させない。
-#                incremental デプロイなので既存の割り当ては消えず、[4/5] の
-#                deploy-ai-agent.sh の冪等な付与が実体を保証する = デプロイは止めない
-#
-# 削除→再作成で名前を揃える案は採らない: 削除に Owner 相当の権限が要る上、
-# 剥奪〜再付与の間 ai-agent が OpenAI を呼べない瞬断が出る。
-#
-# 名前の組み立ては bicep の命名規約 toLower('ca-{env}-{app から -_ を除去}-ai-agent') と同一。
-APP_CLEAN="$(printf '%s' "$APP_NAME" | tr -d '_-' | tr '[:upper:]' '[:lower:]')"
-AI_AGENT_CA_NAME="ca-${ENVIRONMENT}-${APP_CLEAN}-ai-agent"
-OPENAI_ACCOUNT_NAME="oai-${ENVIRONMENT}-${APP_CLEAN}"
-ROLE_OPENAI_USER="5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"
+# ロール割り当ての持ち主は bicep 1 本 (#297)。ここでは何も作らず・何も渡さない。
+# 以前は既存割り当ての「養子縁組」(既存名を実行時に解決して bicep へ渡す) をしていたが、
+# 「渡し続けないと再発する」恒久的な依存を生み、実際に渡し損ねて #262 が再発した。
+# 正しい形は「古い手動割り当てを 1 回削除し、bicep が自分の決定的な名前 (guid()) で作る」
+# = 以後は宣言と実体が常に一致し、パラメータの受け渡し自体が要らない。
+# 削除には Owner 相当の権限が要るため人手 (Issue #297) — それが済むまでは、下の
+# RoleAssignmentExists 検出が「何をすればいいか」を名指しで出す。
+echo "==> ロール割り当ては bicep が宣言する (シェルからは作らない / #297)"
 
-AZ_LOOKUP_ERR="$(mktemp)"
-trap 'rm -f "$AZ_LOOKUP_ERR"' EXIT
-
-# az の参照結果を "status<TAB>value" の 1 行で返す。status は ok / absent / error。
-# az は「リソースが無い」を exit code 3 で返すが、拡張によっては 1 + メッセージなので
-# stderr の文言でも拾う。**rc を捨てない**のがこの関数の存在理由。
-az_lookup() {
-  local out rc
-  set +e
-  out="$("$@" 2>"$AZ_LOOKUP_ERR")"
-  rc=$?
-  set -e
-  if [[ $rc -eq 0 ]]; then
-    if [[ -n "$out" ]]; then
-      printf 'ok\t%s\n' "$out"
-    else
-      # 成功して空 = 対象が無い (identity 未付与 / 割り当て 0 件)
-      printf 'absent\t\n'
-    fi
-    return 0
-  fi
-  if [[ $rc -eq 3 ]] || grep -qiE 'ResourceNotFound|was not found|could not be found|does not exist' "$AZ_LOOKUP_ERR"; then
-    printf 'absent\t\n'
-    return 0
-  fi
-  printf 'error\t%s\n' "$(tr '\n' ' ' <"$AZ_LOOKUP_ERR" | cut -c1-300)"
-}
-
-CA_LOOKUP="$(az_lookup az containerapp show -g "$RG" -n "$AI_AGENT_CA_NAME" \
-  --query 'identity.principalId' -o tsv)"
-CA_STATUS="${CA_LOOKUP%%$'\t'*}"
-CA_PRINCIPAL_ID="${CA_LOOKUP#*$'\t'}"
-
-OAI_LOOKUP="$(az_lookup az cognitiveservices account show -g "$RG" -n "$OPENAI_ACCOUNT_NAME" \
-  --query 'id' -o tsv)"
-OAI_STATUS="${OAI_LOOKUP%%$'\t'*}"
-OPENAI_SCOPE="${OAI_LOOKUP#*$'\t'}"
-
-ROLE_STATUS="absent"
-ROLE_NAME=""
-if [[ "$CA_STATUS" == "ok" && "$OAI_STATUS" == "ok" ]]; then
-  # --assignee / --role は使わない: --assignee は Microsoft Graph 参照を伴い
-  # (CD の principal に Graph 権限は無い)、scope の文字列一致は ARM が返す
-  # 大文字小文字に左右される。scope 直下の一覧を引いて自前で照合する。
-  RA_LOOKUP="$(az_lookup az role assignment list --scope "$OPENAI_SCOPE" \
-    --query '[].[name,principalId,roleDefinitionId]' -o tsv)"
-  ROLE_STATUS="${RA_LOOKUP%%$'\t'*}"
-  if [[ "$ROLE_STATUS" == "ok" ]]; then
-    ROLE_NAME="$(printf '%s\n' "${RA_LOOKUP#*$'\t'}" \
-      | tr '[:upper:]' '[:lower:]' \
-      | awk -v p="$(printf '%s' "$CA_PRINCIPAL_ID" | tr '[:upper:]' '[:lower:]')" \
-            -v r="$ROLE_OPENAI_USER" \
-            '$2 == p && index($3, r) { print $1; exit }')"
-  fi
-fi
-
-ROLE_DECISION="$(python3 "$ROOT_DIR/cicd/scripts/deploy/decide_role_assignment.py" \
-  "$CA_STATUS" "$OAI_STATUS" "$ROLE_STATUS" "$ROLE_NAME")"
-ROLE_ACTION="${ROLE_DECISION%%$'\t'*}"
-ROLE_DETAIL="${ROLE_DECISION#*$'\t'}"
-
-case "$ROLE_ACTION" in
-  adopt)
-    echo "==> ロール割り当て: 既存 $ROLE_DETAIL を養子縁組する (#262)"
-    BOOTSTRAP_EXTRA_ARGS+=(-p "aiAgentOpenAiRoleAssignmentName=$ROLE_DETAIL")
-    ;;
-  create-new)
-    echo "==> ロール割り当て: bicep が guid() 名で新規作成する ($ROLE_DETAIL)"
-    ;;
-  *)
-    # 「分からない」を「無い」に丸めない。丸めた結果が #277 の 8 連敗だった。
-    echo "::warning::ai-agent の OpenAI ロール割り当てを解決できませんでした ($ROLE_DETAIL)。この run では bicep に宣言させず、[4/5] deploy-ai-agent.sh の冪等な付与に委ねます (incremental デプロイなので既存の割り当ては消えません)。az の権限・一過性障害を確認してください。"
-    BOOTSTRAP_EXTRA_ARGS+=(-p "manageAiAgentOpenAiRoleAssignment=false")
-    ;;
-esac
-
+# bootstrap を流す。stderr も含めてログに残し、失敗の型を読めるようにする。
+BOOTSTRAP_LOG="$(mktemp)"
+trap 'rm -f "$BOOTSTRAP_LOG"' EXIT
+rc=0
 az deployment group create \
   -g "$RG" \
   -n "$DEPLOYMENT" \
@@ -192,7 +117,20 @@ az deployment group create \
   -p @"$IAC_DIR/main-bootstrap.parameters.json" \
   -p appName="$APP_NAME" environmentName="$ENVIRONMENT" voicevoxTier="$VOICEVOX_TIER" \
   ${BOOTSTRAP_EXTRA_ARGS[@]+"${BOOTSTRAP_EXTRA_ARGS[@]}"} \
-  -o none
+  -o none 2>&1 | tee "$BOOTSTRAP_LOG" || rc=$?
+
+if [[ "$rc" -ne 0 ]]; then
+  if grep -q "RoleAssignmentExists" "$BOOTSTRAP_LOG"; then
+    echo "::error::RoleAssignmentExists — bicep が宣言する割り当てと同じ (principal+role+scope) が別名で既に存在します。" >&2
+    echo "         スクリプト時代に作られた手動割り当ての残骸です。**1 回だけ手で削除**してください (Issue #297):" >&2
+    echo "           az role assignment delete --ids <上のエラーが示す割り当て ID>" >&2
+    echo "         削除後は bicep が guid() の決定的な名前で作り直し、以後この失敗は起きません。" >&2
+  else
+    echo "::error::bootstrap (main-bootstrap.bicep) が失敗しました。上の ARM エラーを参照してください。" >&2
+  fi
+  exit 1
+fi
+echo "==> bootstrap 完了 (main-bootstrap)"
 
 if [[ "$PRINT_ENTRA_AUTH_HINT" == "true" ]]; then
   echo "==> [hint] Entra 認証(main-config) は UAMI 事前準備が要る。手順は iac/README §3 を参照（ここでは有効化しない）"

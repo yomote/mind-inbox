@@ -35,6 +35,7 @@ paths:
                 approvalRequestId:
                   type: string
                   minLength: 1
+                  maxLength: 200
                 approved:
                   type: boolean
               required:
@@ -208,6 +209,7 @@ paths:
                 sessionId:
                   type: string
                   minLength: 1
+                  maxLength: 200
                 messages:
                   type: array
                   items:
@@ -220,13 +222,356 @@ paths:
                           - assistant
                       text:
                         type: string
+                        maxLength: 8000
                     required:
                       - role
                       - text
                     additionalProperties: false
+                  maxItems: 200
                   default: []
+                draft:
+                  type: object
+                  properties:
+                    items:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          mention:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                                minLength: 1
+                                maxLength: 200
+                              sessionId:
+                                type: string
+                                minLength: 1
+                                maxLength: 200
+                              dumpId:
+                                type: string
+                                minLength: 1
+                                maxLength: 200
+                                nullable: true
+                              createdAt:
+                                type: string
+                                maxLength: 64
+                              statement:
+                                type: string
+                                maxLength: 2000
+                              excerpt:
+                                type: string
+                                maxLength: 2000
+                              affect:
+                                type: object
+                                properties:
+                                  label:
+                                    type: string
+                                    maxLength: 100
+                                  valence:
+                                    type: string
+                                    enum:
+                                      - negative
+                                      - neutral
+                                      - positive
+                                  intensity:
+                                    type: number
+                                    minimum: 0
+                                    maximum: 1
+                                required:
+                                  - label
+                                  - valence
+                                  - intensity
+                                additionalProperties: false
+                              proposedTheme:
+                                type: string
+                                enum:
+                                  - 仕事・キャリア
+                                  - お金
+                                  - 心と体
+                                  - 家族・パートナー
+                                  - 人間関係
+                                  - 自己理解・生き方
+                                  - 日常・生活
+                                  - 未分類
+                              proposedTags:
+                                type: array
+                                items:
+                                  type: string
+                                  maxLength: 100
+                                maxItems: 20
+                              problemId:
+                                type: string
+                                minLength: 1
+                                maxLength: 200
+                                nullable: true
+                              groupingConfidence:
+                                type: number
+                                minimum: 0
+                                maximum: 1
+                                nullable: true
+                            required:
+                              - id
+                              - sessionId
+                              - dumpId
+                              - createdAt
+                              - statement
+                              - excerpt
+                              - affect
+                              - proposedTheme
+                              - proposedTags
+                              - problemId
+                              - groupingConfidence
+                            additionalProperties: false
+                          grouping:
+                            type: object
+                            properties:
+                              kind:
+                                type: string
+                                enum:
+                                  - new
+                                  - existing
+                              problemId:
+                                type: string
+                                minLength: 1
+                                maxLength: 200
+                              problemTitle:
+                                type: string
+                                maxLength: 200
+                              problemTheme:
+                                type: string
+                                enum:
+                                  - 仕事・キャリア
+                                  - お金
+                                  - 心と体
+                                  - 家族・パートナー
+                                  - 人間関係
+                                  - 自己理解・生き方
+                                  - 日常・生活
+                                  - 未分類
+                              isRecurrence:
+                                type: boolean
+                              mentionCount:
+                                type: integer
+                                exclusiveMinimum: true
+                                minimum: 0
+                              reignited:
+                                type: boolean
+                              groupingConfidence:
+                                type: number
+                                minimum: 0
+                                maximum: 1
+                                nullable: true
+                            required:
+                              - kind
+                              - problemId
+                              - problemTitle
+                              - problemTheme
+                              - isRecurrence
+                              - mentionCount
+                              - reignited
+                              - groupingConfidence
+                            additionalProperties: false
+                        required:
+                          - mention
+                          - grouping
+                        additionalProperties: false
+                      maxItems: 200
+                  required:
+                    - items
+                  additionalProperties: false
               required:
                 - sessionId
+              additionalProperties: false
+  /api/trpc/consultation.preview:
+    post:
+      operationId: consultation.preview
+      tags:
+        - consultation
+      summary: consultation.preview
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionId:
+                    type: string
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        mention:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            sessionId:
+                              type: string
+                            dumpId:
+                              type: string
+                              nullable: true
+                            createdAt:
+                              type: string
+                            statement:
+                              type: string
+                            excerpt:
+                              type: string
+                            affect:
+                              type: object
+                              properties:
+                                label:
+                                  type: string
+                                valence:
+                                  type: string
+                                  enum:
+                                    - negative
+                                    - neutral
+                                    - positive
+                                intensity:
+                                  type: number
+                                  minimum: 0
+                                  maximum: 1
+                              required:
+                                - label
+                                - valence
+                                - intensity
+                              additionalProperties: false
+                            proposedTheme:
+                              type: string
+                              enum:
+                                - 仕事・キャリア
+                                - お金
+                                - 心と体
+                                - 家族・パートナー
+                                - 人間関係
+                                - 自己理解・生き方
+                                - 日常・生活
+                                - 未分類
+                            proposedTags:
+                              type: array
+                              items:
+                                type: string
+                            problemId:
+                              type: string
+                              nullable: true
+                            groupingConfidence:
+                              type: number
+                              minimum: 0
+                              maximum: 1
+                              nullable: true
+                          required:
+                            - id
+                            - sessionId
+                            - dumpId
+                            - createdAt
+                            - statement
+                            - excerpt
+                            - affect
+                            - proposedTheme
+                            - proposedTags
+                            - problemId
+                            - groupingConfidence
+                          additionalProperties: false
+                        grouping:
+                          type: object
+                          properties:
+                            kind:
+                              type: string
+                              enum:
+                                - new
+                                - existing
+                            problemId:
+                              type: string
+                            problemTitle:
+                              type: string
+                            problemTheme:
+                              type: string
+                              enum:
+                                - 仕事・キャリア
+                                - お金
+                                - 心と体
+                                - 家族・パートナー
+                                - 人間関係
+                                - 自己理解・生き方
+                                - 日常・生活
+                                - 未分類
+                            isRecurrence:
+                              type: boolean
+                            mentionCount:
+                              type: integer
+                              exclusiveMinimum: true
+                              minimum: 0
+                            reignited:
+                              type: boolean
+                            groupingConfidence:
+                              type: number
+                              minimum: 0
+                              maximum: 1
+                              nullable: true
+                          required:
+                            - kind
+                            - problemId
+                            - problemTitle
+                            - problemTheme
+                            - isRecurrence
+                            - mentionCount
+                            - reignited
+                            - groupingConfidence
+                          additionalProperties: false
+                      required:
+                        - mention
+                        - grouping
+                      additionalProperties: false
+                  newProblemCount:
+                    type: integer
+                    minimum: 0
+                  updatedProblemCount:
+                    type: integer
+                    minimum: 0
+                  stubbed:
+                    type: boolean
+                required:
+                  - sessionId
+                  - items
+                  - newProblemCount
+                  - updatedProblemCount
+                additionalProperties: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sessionId:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                messages:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      role:
+                        type: string
+                        enum:
+                          - user
+                          - assistant
+                      text:
+                        type: string
+                        maxLength: 8000
+                    required:
+                      - role
+                      - text
+                    additionalProperties: false
+                  maxItems: 200
+              required:
+                - sessionId
+                - messages
               additionalProperties: false
   /api/trpc/consultation.sendMessage:
     post:
@@ -271,9 +616,11 @@ paths:
                 sessionId:
                   type: string
                   minLength: 1
+                  maxLength: 200
                 message:
                   type: string
                   minLength: 1
+                  maxLength: 8000
               required:
                 - sessionId
                 - message
@@ -340,6 +687,7 @@ paths:
               properties:
                 concern:
                   type: string
+                  maxLength: 8000
               required:
                 - concern
               additionalProperties: false
@@ -466,6 +814,8 @@ paths:
                           minimum: 0
                           maximum: 1
                           nullable: true
+                        reopenedProblem:
+                          type: boolean
                       required:
                         - id
                         - sessionId
@@ -533,6 +883,7 @@ paths:
                 problemId:
                   type: string
                   minLength: 1
+                  maxLength: 200
               required:
                 - problemId
               additionalProperties: false
@@ -638,6 +989,8 @@ paths:
                           minimum: 0
                           maximum: 1
                           nullable: true
+                        reopenedProblem:
+                          type: boolean
                       required:
                         - id
                         - sessionId
@@ -706,6 +1059,7 @@ paths:
               id:
                 type: string
                 minLength: 1
+                maxLength: 200
             required:
               - id
             additionalProperties: false
@@ -813,6 +1167,8 @@ paths:
                             minimum: 0
                             maximum: 1
                             nullable: true
+                          reopenedProblem:
+                            type: boolean
                         required:
                           - id
                           - sessionId
@@ -1005,6 +1361,8 @@ paths:
                                 minimum: 0
                                 maximum: 1
                                 nullable: true
+                              reopenedProblem:
+                                type: boolean
                             required:
                               - id
                               - sessionId
@@ -1080,6 +1438,7 @@ paths:
                     problemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                   required:
                     - action
                     - problemId
@@ -1093,6 +1452,7 @@ paths:
                     problemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                   required:
                     - action
                     - problemId
@@ -1106,6 +1466,7 @@ paths:
                     problemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                   required:
                     - action
                     - problemId
@@ -1119,6 +1480,7 @@ paths:
                     problemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                   required:
                     - action
                     - problemId
@@ -1132,6 +1494,7 @@ paths:
                     problemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                     theme:
                       type: string
                       enum:
@@ -1157,9 +1520,11 @@ paths:
                     problemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                     title:
                       type: string
                       minLength: 1
+                      maxLength: 200
                   required:
                     - action
                     - problemId
@@ -1174,12 +1539,15 @@ paths:
                     mentionId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                     fromProblemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                     toProblemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                   required:
                     - action
                     - mentionId
@@ -1195,9 +1563,11 @@ paths:
                     sourceProblemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                     targetProblemId:
                       type: string
                       minLength: 1
+                      maxLength: 200
                   required:
                     - action
                     - sourceProblemId

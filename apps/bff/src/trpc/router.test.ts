@@ -14,6 +14,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
+import fc from "fast-check";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ExtractError は router が instanceof で判定するので、実物を残したまま関数だけ差し替える
@@ -24,6 +25,9 @@ vi.mock("../clients/aiAgentClient", async (importOriginal) => ({
   extract: vi.fn(),
   createPlan: vi.fn(),
   approve: vi.fn(),
+  // stub モード判定は環境 (AI_AGENT_BASE_URL) を読むので、test では明示的に制御する
+  // (既定は「実 ai-agent が居る」= false)。
+  isStubMode: vi.fn(() => false),
 }));
 
 import {
@@ -31,9 +35,16 @@ import {
   approve as approveAiAgent,
   createPlan as createPlanAiAgent,
   extract as extractAiAgent,
+  isStubMode,
   sendChatMessage,
 } from "../clients/aiAgentClient";
-import type { ExtractionResult, Mention, Problem } from "./domain";
+import {
+  THEMES,
+  type ExtractedItem,
+  type ExtractionResult,
+  type Mention,
+  type Problem,
+} from "./domain";
 import { InMemoryProblemRepository } from "../repositories/problemRepository";
 import type { TrpcContext } from "./context";
 import { appRouter } from "./router";
@@ -118,6 +129,7 @@ function newExtraction(problemId = "prob-1"): ExtractionResult {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(isStubMode).mockReturnValue(false);
 });
 
 // ---- consultation.start ----------------------------------------------------
@@ -534,6 +546,642 @@ describe("[L2] consultation.extract", () => {
       TRPCError,
     );
     expect(extractAiAgent).not.toHaveBeenCalled();
+  });
+});
+
+// ---- consultation.preview (#283 / ADR 0039 D1) ------------------------------
+// 仕様: ADR 0039 D1「preview は Cosmos には一切書かない」「preview が書かないことは
+// L2 テストで固定する」。契約は mockApi.previewExtraction (ADR 0004) と同形。
+
+/** ExtractionReplySchema (output 検証) を満たすコンパクトな arbitrary 群。 */
+const arbAffect = fc.record({
+  label: fc.constantFrom("不安", "焦り", "安堵"),
+  valence: fc.constantFrom("negative", "neutral", "positive" as const),
+  intensity: fc.double({ min: 0, max: 1, noNaN: true }),
+});
+
+const arbDraftMention = fc.record({
+  id: fc.uuid(),
+  sessionId: fc.constant("s1"),
+  dumpId: fc.option(fc.uuid(), { nil: null }),
+  createdAt: fc
+    .date({ min: new Date("2020-01-01"), max: new Date("2030-01-01"), noInvalidDate: true })
+    .map((d) => d.toISOString()),
+  statement: fc.string({ maxLength: 40 }),
+  excerpt: fc.string({ maxLength: 40 }),
+  affect: arbAffect,
+  proposedTheme: fc.constantFrom(...THEMES),
+  proposedTags: fc.array(fc.string({ maxLength: 6 }), { maxLength: 3 }),
+  problemId: fc.option(fc.uuid(), { nil: null }),
+  groupingConfidence: fc.option(fc.double({ min: 0, max: 1, noNaN: true }), { nil: null }),
+});
+
+const arbGrouping = fc.record({
+  kind: fc.constantFrom("new", "existing" as const),
+  problemId: fc.uuid(),
+  problemTitle: fc.string({ minLength: 1, maxLength: 26 }),
+  problemTheme: fc.constantFrom(...THEMES),
+  isRecurrence: fc.boolean(),
+  mentionCount: fc.integer({ min: 1, max: 99 }),
+  reignited: fc.boolean(),
+  groupingConfidence: fc.option(fc.double({ min: 0, max: 1, noNaN: true }), { nil: null }),
+});
+
+/**
+ * ExtractedItem[]。**mention.id は一意・problemId は existing 側だけ重複しうる**形にする
+ * (これが ai-agent の実際の出力形。仕様は `apps/services/ai-agent/app/extractor.py`):
+ *
+ *   - Mention は 1 件ずつ新しい uuid を持つ (観測は常に別物)
+ *   - `existing` は**同じ Dump 内で同じ既存 Problem に複数の Mention が寄りうる**
+ *     (extractor.py が `running_count` で言及回数を累積させる正規の経路)。
+ *     だから problemId の重複を生成に混ぜないと「件数を item 数で数える」バグを踏めない
+ *   - `new` は item ごとに `uuid4()` を振るので problemId が衝突しない。ここでも一意に保つ
+ *     (同 id の new を混ぜると `materializeExtraction` の上書き合戦という別問題を踏む)
+ */
+const arbExtractedItems: fc.Arbitrary<ExtractedItem[]> = fc
+  .array(
+    fc.record({
+      mention: arbDraftMention,
+      grouping: arbGrouping,
+      // 既存 Problem は小さなプールから引く → 重複が自然に出る
+      existingSlot: fc.integer({ min: 0, max: 1 }),
+    }),
+    { maxLength: 4 },
+  )
+  .map((items) =>
+    items.map((item, i) => ({
+      mention: { ...item.mention, id: `men-${i}-${item.mention.id}` },
+      grouping: {
+        ...item.grouping,
+        problemId:
+          item.grouping.kind === "existing"
+            ? `prob-existing-${item.existingSlot}`
+            : `prob-new-${i}-${item.grouping.problemId}`,
+      },
+    })),
+  );
+
+/**
+ * 期待値は「実際に書かれた Problem の異なり数」— item 数ではない (#283 の Codex P2)。
+ *
+ * `knownIds` = 確定時点でリポジトリに実在する Problem。ここに無い id への「既存に追加」は
+ * 実際には新規作成になるので new 側で数える (materializeExtraction のフォールバック)。
+ * バッチ内で先に作られた Problem への追記も、その Problem は新規なので new のまま。
+ */
+function expectedCounts(
+  items: ExtractedItem[],
+  knownIds: Set<string>,
+): { newProblemCount: number; updatedProblemCount: number } {
+  const created = new Set<string>();
+  const updated = new Set<string>();
+  for (const { grouping } of items) {
+    const resolvesToExisting =
+      grouping.kind === "existing" &&
+      knownIds.has(grouping.problemId) &&
+      !created.has(grouping.problemId);
+    if (resolvesToExisting) updated.add(grouping.problemId);
+    else created.add(grouping.problemId);
+  }
+  return { newProblemCount: created.size, updatedProblemCount: updated.size };
+}
+
+/** ai-agent が返す体の ExtractionResult (preview は counts を素通しするだけ)。 */
+function extractionOf(items: ExtractedItem[]): ExtractionResult {
+  const ids = (kind: "new" | "existing") =>
+    new Set(items.filter((i) => i.grouping.kind === kind).map((i) => i.grouping.problemId)).size;
+  return {
+    sessionId: "s1",
+    items,
+    newProblemCount: ids("new"),
+    updatedProblemCount: ids("existing"),
+  };
+}
+
+describe("[単体] consultation.preview (#283 / ADR 0039 D1)", () => {
+  it("returns the extraction result and passes candidates + conversation to ai-agent", async () => {
+    // 無いと: preview が既存 Problem 候補や会話全文を ai-agent に渡さない退行が静かに通り、
+    //         下書きのグルーピング (🔁 既存に追加) が実環境でだけ壊れる (#183 と同型)
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem());
+    vi.mocked(extractAiAgent).mockResolvedValue(newExtraction("prob-2"));
+
+    const result = await caller.consultation.preview({
+      sessionId: "s1",
+      messages: [
+        { role: "assistant", text: "どうしましたか" },
+        { role: "user", text: "眠れない" },
+      ],
+    });
+
+    expect(result.newProblemCount).toBe(1);
+    expect(extractAiAgent).toHaveBeenCalledWith({
+      sessionId: "s1",
+      existingProblems: [
+        expect.objectContaining({ id: "prob-1", title: "転職の迷い", mentionCount: 1 }),
+      ],
+      messages: [
+        { role: "assistant", text: "どうしましたか" },
+        { role: "user", text: "眠れない" },
+      ],
+    });
+  });
+
+  it("never writes to the problem repository, whatever ai-agent extracts", async () => {
+    // 無いと: preview が Problem を書いてしまう退行が静かに通る。例外は出ず、
+    //         「確定していない下書き」が蓄積データを汚す (ADR 0039 の核が黙って死ぬ)。
+    //         ADR 0039「preview が書かないことは L2 テストで固定する」の固定先。
+    await fc.assert(
+      fc.asyncProperty(arbExtractedItems, async (items) => {
+        const { caller, problemRepo } = makeCallerWithRepos();
+        await problemRepo.upsert(makeProblem());
+        const before = await problemRepo.list();
+        vi.mocked(extractAiAgent).mockResolvedValue(extractionOf(items));
+
+        await caller.consultation.preview({
+          sessionId: "s1",
+          messages: [{ role: "user", text: "眠れない" }],
+        });
+
+        expect(await problemRepo.list()).toEqual(before);
+      }),
+    );
+  });
+
+  it("marks the preview as stubbed on the stub path and leaves the flag absent on the real path", async () => {
+    // 無いと: stub フォールバックの機械判別フラグ (#146 / ADR 0039 D6) が preview 経路で
+    //         落ち、「[stub] 困りごと」の下書きが本物のふりをして右ペインに並ぶ退行が静かに通る
+    const caller = makeCaller();
+    vi.mocked(extractAiAgent).mockResolvedValueOnce({
+      ...newExtraction("prob-stub-1"),
+      stubbed: true,
+    });
+    const stubResult = await caller.consultation.preview({ sessionId: "s1", messages: [] });
+    expect(stubResult.stubbed).toBe(true);
+
+    vi.mocked(extractAiAgent).mockResolvedValueOnce(newExtraction("prob-2"));
+    const realResult = await caller.consultation.preview({ sessionId: "s1", messages: [] });
+    expect(realResult.stubbed).toBeUndefined();
+  });
+
+  it.each([
+    ["session-missing", "NOT_FOUND"],
+    ["llm-parse-failed", "BAD_GATEWAY"],
+    ["upstream-failed", "INTERNAL_SERVER_ERROR"],
+  ])("%s は %s として種別つきでクライアントへ返す (#183 と同じ翻訳)", async (kind, code) => {
+    // 無いと: preview の失敗理由が潰れ、右ペインは「何が起きたか分からないエラー」しか
+    //         出せない。extract と翻訳がズレると復帰導線の出し分けも壊れる。
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(extractAiAgent).mockRejectedValue(new ExtractError(kind as never, "boom"));
+
+    await expect(
+      makeCaller().consultation.preview({ sessionId: "s1", messages: [] }),
+    ).rejects.toMatchObject({ code, message: kind });
+  });
+
+  it("rejects empty sessionId with zod validation", async () => {
+    await expect(
+      makeCaller().consultation.preview({ sessionId: "", messages: [] }),
+    ).rejects.toBeInstanceOf(TRPCError);
+    expect(extractAiAgent).not.toHaveBeenCalled();
+  });
+});
+
+// ---- consultation.extract — draft commit (#283 / ADR 0039 D1/D3) ------------
+
+describe("[単体] consultation.extract — draft commit (#283 / ADR 0039 D1/D3)", () => {
+  it("persists the given draft as-is without calling ai-agent (確定時に再抽出しない)", async () => {
+    // 無いと: 確定時に再抽出する実装に戻る退行が静かに通る。抽出は非決定的なので、
+    //         画面で確認した「この内容」と違う Problem が書かれうる (PR #240 Codex 指摘の再発)。
+    const caller = makeCaller();
+    const draft = newExtraction("prob-1");
+
+    const result = await caller.consultation.extract({
+      sessionId: "s1",
+      draft: { items: draft.items },
+    });
+
+    expect(extractAiAgent).not.toHaveBeenCalled();
+    expect(result.items).toEqual(draft.items);
+
+    const problem = await caller.problem.get({ id: "prob-1" });
+    expect(problem.title).toBe("転職の迷い");
+    expect(problem.mentions.map((m) => m.id)).toEqual(["men-1"]);
+  });
+
+  it("counts distinct problems (not items) and persists every draft mention", async () => {
+    // 無いと: (1) newProblemCount / updatedProblemCount をクライアント申告のまま返す
+    //         (2) **同じ既存 Problem に寄った複数 Mention を件数として重複カウントする**
+    //             — 1 件しか更新していないのに「既存に追加 2 件」と過大表示される (#283 Codex P2)。
+    //         (3) draft の一部 item を取りこぼして書く。いずれも例外なしに通る (静かに間違う)。
+    // 期待値の出どころ: ai-agent の `extractor.py` が `updated_problem_count=len(updated_ids)`
+    // と **problemId の集合**で数えている。BFF の確定側もその意味論に一致させる。
+    await fc.assert(
+      fc.asyncProperty(arbExtractedItems, async (items) => {
+        const { caller, problemRepo } = makeCallerWithRepos();
+        // draft が指す既存 Problem のうち片方だけ実在させる → 実在しない側は
+        // 新規作成にフォールバックするので、実績ベースでないと期待値が合わない
+        await problemRepo.upsert(makeProblem({ id: "prob-existing-0" }));
+        const knownIds = new Set((await problemRepo.list()).map((p) => p.id));
+
+        const result = await caller.consultation.extract({ sessionId: "s1", draft: { items } });
+
+        expect(extractAiAgent).not.toHaveBeenCalled();
+        expect({
+          newProblemCount: result.newProblemCount,
+          updatedProblemCount: result.updatedProblemCount,
+        }).toEqual(expectedCounts(items, knownIds));
+        // **件数と返却 item は常に同じ実績を指す** — 片方だけ実績ベースにすると、
+        // 「新規 1 件」と出しながらカードのバッジは「🔁 既存に追加」という食い違いが起きる。
+        const idsOf = (kind: "new" | "existing") =>
+          new Set(
+            result.items.filter((i) => i.grouping.kind === kind).map((i) => i.grouping.problemId),
+          ).size;
+        expect({
+          newProblemCount: idsOf("new"),
+          updatedProblemCount: idsOf("existing"),
+        }).toEqual(expectedCounts(items, knownIds));
+        // 件数は Problem 単位でも、**Mention は 1 件も落とさない** (寄せた分は追記される)
+        const storedMentionIds = (await problemRepo.list()).flatMap((p) =>
+          p.mentions.map((m) => m.id),
+        );
+        for (const item of items) {
+          expect(storedMentionIds).toContain(item.mention.id);
+        }
+      }),
+    );
+  });
+
+  it("counts one updated problem when several mentions land on the same existing problem", async () => {
+    // プロパティ側は「異なり数」を性質として固定するが、過大表示そのものは
+    // 具体例で 1 つ釘を刺しておく (回帰時にどう壊れたかがログで即読めるように)。
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem());
+
+    const sameProblemGrouping = {
+      kind: "existing" as const,
+      problemId: "prob-1",
+      problemTitle: "転職の迷い",
+      problemTheme: "仕事・キャリア" as const,
+      isRecurrence: true,
+      reignited: false,
+      groupingConfidence: 0.9,
+    };
+    const result = await caller.consultation.extract({
+      sessionId: "s2",
+      draft: {
+        items: [
+          {
+            mention: makeMention({ id: "men-a", createdAt: "2026-02-01T00:00:00.000Z" }),
+            grouping: { ...sameProblemGrouping, mentionCount: 2 },
+          },
+          {
+            mention: makeMention({ id: "men-b", createdAt: "2026-02-02T00:00:00.000Z" }),
+            grouping: { ...sameProblemGrouping, mentionCount: 3 },
+          },
+        ],
+      },
+    });
+
+    expect(result.updatedProblemCount).toBe(1); // 2 件の Mention が寄っても Problem は 1 件
+    expect(result.newProblemCount).toBe(0);
+    const problem = await caller.problem.get({ id: "prob-1" });
+    expect(problem.mentions.map((m) => m.id)).toEqual(["men-1", "men-a", "men-b"]);
+    expect(problem.mentionCount).toBe(3);
+  });
+
+  it("marks the committed draft as stubbed while the BFF is in stub mode (server-side判定)", async () => {
+    // 無いと: stub の preview を確定すると確定結果に stubbed が乗らず、フロントの
+    //         reportStubbedResponse(undefined) が実応答扱いにして**警告バナーを消す**。
+    //         永続化された「[stub] 困りごと」が本物の抽出結果のふりをする (#146 が潰した状態の復活)。
+    //         draft 経路は ai-agent を呼ばないので応答由来のフラグを持てない = ここでしか守れない。
+    const draft = { items: newExtraction("prob-1").items };
+
+    vi.mocked(isStubMode).mockReturnValue(true);
+    const stubbed = await makeCaller().consultation.extract({ sessionId: "s1", draft });
+    expect(stubbed.stubbed).toBe(true);
+
+    // 実 ai-agent が居る環境では立たない (正常時にバナーが出続けない)
+    vi.mocked(isStubMode).mockReturnValue(false);
+    const real = await makeCaller().consultation.extract({ sessionId: "s2", draft });
+    expect(real.stubbed).toBeUndefined();
+    // 判定は draft の中身に依存しない (クライアントに偽装させない)
+    expect(extractAiAgent).not.toHaveBeenCalled();
+  });
+
+  it("is idempotent — re-committing the same draft leaves stored data unchanged", async () => {
+    // 無いと: 確定応答が失われてユーザーが「この内容で確定」を押し直すと、同じ Mention が
+    //         二重に入り mentionCount まで増える。例外は出ず、詳細画面の言及回数と
+    //         タイムラインが静かに水増しされる (#283 Codex P2)。
+    //         Mention は不変・追記専用 (domain_model.md §2.1) なので同 ID の再投入は no-op が正。
+    await fc.assert(
+      fc.asyncProperty(arbExtractedItems, async (items) => {
+        const { caller, problemRepo } = makeCallerWithRepos();
+        await problemRepo.upsert(makeProblem({ id: "prob-existing-0" }));
+
+        await caller.consultation.extract({ sessionId: "s1", draft: { items } });
+        const afterFirst = await problemRepo.list();
+
+        await caller.consultation.extract({ sessionId: "s1", draft: { items } });
+        expect(await problemRepo.list()).toEqual(afterFirst);
+      }),
+    );
+  });
+
+  it("returns the same result when the vanished-target commit is re-sent (応答も冪等)", async () => {
+    // 無いと: 「消えた既存 → 新規作成」の確定応答が失われて再送すると、作成済みの Problem が
+    //         見つかるので応答だけ「既存に追加 1 件」に化ける (書き込みは冪等で何も起きない
+    //         のに、件数もカードのバッジも初回と食い違う)。同じ確定操作は同じ答えを返す
+    //         べきで、ズレると「2 回押したら 2 件目ができた」ように見える (#283 Codex P2)。
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem());
+    await caller.problem.triage({ action: "dismiss", problemId: "prob-1" });
+
+    const draft = {
+      items: [
+        {
+          mention: makeMention({ id: "men-a", createdAt: "2026-02-01T00:00:00.000Z" }),
+          grouping: {
+            kind: "existing" as const,
+            problemId: "prob-1",
+            problemTitle: "転職の迷い",
+            problemTheme: "仕事・キャリア" as const,
+            isRecurrence: true,
+            mentionCount: 2,
+            reignited: false,
+            groupingConfidence: 0.9,
+          },
+        },
+      ],
+    };
+
+    const first = await caller.consultation.extract({ sessionId: "s2", draft });
+    const second = await caller.consultation.extract({ sessionId: "s2", draft });
+
+    expect(second).toEqual(first);
+    expect(second.newProblemCount).toBe(1);
+    expect(second.updatedProblemCount).toBe(0);
+    expect(second.items[0].grouping.kind).toBe("new");
+    // 保存データも増えない
+    expect((await caller.problem.get({ id: "prob-1" })).mentionCount).toBe(1);
+  });
+
+  it("keeps the reignition flag when the reignition commit is re-sent (応答も冪等)", async () => {
+    // 無いと: 棚卸し済み Problem を再燃させた確定の応答が失われて再送すると、2 回目は
+    //         Mention が保存済み・Problem はもう open なので「再燃」を状態から判定できず、
+    //         同じ確定操作なのにレビュー画面の「🔥 再燃」バッジだけが静かに消える (#283 Codex P2)。
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(
+      makeProblem({ status: "resolved", resolvedAt: "2026-01-15T00:00:00.000Z" }),
+    );
+
+    const draft = {
+      items: [
+        {
+          mention: makeMention({ id: "men-r", createdAt: "2026-02-01T00:00:00.000Z" }),
+          grouping: {
+            kind: "existing" as const,
+            problemId: "prob-1",
+            problemTitle: "転職の迷い",
+            problemTheme: "仕事・キャリア" as const,
+            isRecurrence: true,
+            mentionCount: 2,
+            reignited: false, // 下書き時点の申告 (確定時の実績で上書きされる)
+            groupingConfidence: 0.9,
+          },
+        },
+      ],
+    };
+
+    const first = await caller.consultation.extract({ sessionId: "s2", draft });
+    const second = await caller.consultation.extract({ sessionId: "s2", draft });
+
+    expect(first.items[0].grouping.reignited).toBe(true);
+    expect(second).toEqual(first);
+    // 保存データも増えない (書き込みの冪等性は維持)
+    expect((await caller.problem.get({ id: "prob-1" })).mentionCount).toBe(2);
+  });
+
+  it("keeps every item 'new' when a multi-mention vanished-target commit is re-sent (応答も冪等)", async () => {
+    // 無いと: 消えた対象へ 2 件以上寄る draft の再送で、種の Mention だけが「この確定が
+    //         起こした」と判定され、2 件目以降が「既存に追加」に化ける。同じ problemId が
+    //         「新規 1 / 既存 1」と二重計上され、レビュー画面の件数が初回と食い違う
+    //         (書き込みは冪等なのに表示だけ変わる / #283 Codex P2)。
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem());
+    await caller.problem.triage({ action: "dismiss", problemId: "prob-1" });
+
+    const existingGrouping = {
+      kind: "existing" as const,
+      problemId: "prob-1",
+      problemTitle: "転職の迷い",
+      problemTheme: "仕事・キャリア" as const,
+      isRecurrence: true,
+      mentionCount: 2,
+      reignited: false,
+      groupingConfidence: 0.9,
+    };
+    const draft = {
+      items: [
+        {
+          mention: makeMention({ id: "men-p", createdAt: "2026-02-01T00:00:00.000Z" }),
+          grouping: existingGrouping,
+        },
+        {
+          mention: makeMention({ id: "men-q", createdAt: "2026-02-02T00:00:00.000Z" }),
+          grouping: existingGrouping,
+        },
+      ],
+    };
+
+    const first = await caller.consultation.extract({ sessionId: "s2", draft });
+    const second = await caller.consultation.extract({ sessionId: "s2", draft });
+
+    // 実績は「新規 1 件を起こしてそこに 2 件入った」= 新規 1 / 既存 0 (同じ Problem を
+    // 二重に数えない)。再送でも同じ答えになる
+    expect(first.newProblemCount).toBe(1);
+    expect(first.updatedProblemCount).toBe(0);
+    expect(first.items.map((i) => i.grouping.kind)).toEqual(["new", "new"]);
+    expect(second).toEqual(first);
+    expect((await caller.problem.get({ id: "prob-1" })).mentionCount).toBe(2);
+  });
+
+  it("keeps per-item mentionCount stable when a multi-mention commit is re-sent (応答も冪等)", async () => {
+    // 無いと: 同じ Problem に 2 件以上寄る draft で、初回は追記しながら 2, 3 と返るのに、
+    //         再送では全部が保存済みなので最終件数 (3) が全 item に返り、レビュー画面の
+    //         「🔁 N 回目」が初回と食い違う (書き込みは冪等なのに表示だけ変わる / #283 Codex P2)。
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem()); // mentions 1 件
+
+    const existingGrouping = {
+      kind: "existing" as const,
+      problemId: "prob-1",
+      problemTitle: "転職の迷い",
+      problemTheme: "仕事・キャリア" as const,
+      isRecurrence: true,
+      mentionCount: 2,
+      reignited: false,
+      groupingConfidence: 0.9,
+    };
+    const draft = {
+      items: [
+        {
+          mention: makeMention({ id: "men-x", createdAt: "2026-02-01T00:00:00.000Z" }),
+          grouping: existingGrouping,
+        },
+        {
+          mention: makeMention({ id: "men-y", createdAt: "2026-02-02T00:00:00.000Z" }),
+          grouping: existingGrouping,
+        },
+      ],
+    };
+
+    const first = await caller.consultation.extract({ sessionId: "s2", draft });
+    const second = await caller.consultation.extract({ sessionId: "s2", draft });
+
+    // 保存順の位置 = 「何回目の言及か」。既存 1 件 + 2 件なので 2 回目 / 3 回目
+    expect(first.items.map((i) => i.grouping.mentionCount)).toEqual([2, 3]);
+    expect(second).toEqual(first);
+    expect((await caller.problem.get({ id: "prob-1" })).mentionCount).toBe(3);
+  });
+
+  it("normalizes the returned grouping from the target's state at commit time", async () => {
+    // 無いと: preview 後・確定前に別タブで対象のタイトル/テーマを編集したり棚卸ししたりすると、
+    //         書き込みは最新の Problem に対して行うのに返却だけ下書き時点の値のままになる。
+    //         ExtractReviewScreen はこれを直接表示するので、確定したのに古いタイトルが出る /
+    //         実際は再オープンしたのに「再燃」バッジが出ない、という嘘を静かに表示する。
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem());
+
+    // 下書きを取ったあと、別経路でタイトル変更 + 棚卸し
+    await caller.problem.triage({
+      action: "editTitle",
+      problemId: "prob-1",
+      title: "新しい見出し",
+    });
+    await caller.problem.triage({ action: "editTheme", problemId: "prob-1", theme: "心と体" });
+    await caller.problem.triage({ action: "resolve", problemId: "prob-1" });
+
+    const result = await caller.consultation.extract({
+      sessionId: "s2",
+      draft: {
+        items: [
+          {
+            mention: makeMention({ id: "men-a", createdAt: "2026-02-01T00:00:00.000Z" }),
+            grouping: {
+              kind: "existing",
+              problemId: "prob-1",
+              problemTitle: "転職の迷い", // 下書き時点の (もう古い) 値
+              problemTheme: "仕事・キャリア",
+              isRecurrence: true,
+              mentionCount: 2,
+              reignited: false, // 下書き時点では open だった
+              groupingConfidence: 0.9,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(result.items[0].grouping).toMatchObject({
+      kind: "existing",
+      problemTitle: "新しい見出し", // 確定時点のタイトル
+      problemTheme: "心と体", // 確定時点のテーマ
+      mentionCount: 2,
+      isRecurrence: true,
+      reignited: true, // 棚卸し済みを実際に open へ戻した (UC-03)
+    });
+    // 実際に再オープンされている (返却値と保存状態が一致する)
+    expect((await caller.problem.get({ id: "prob-1" })).status).toBe("open");
+  });
+
+  it("counts a vanished 'existing' target as new (preview 後・確定前に消された場合)", async () => {
+    // 無いと: preview 時は既存だった Problem が確定前に dismiss / merge で消えていると、
+    //         materializeExtraction は新規作成にフォールバックするのに、counts は draft の
+    //         申告 (existing) をそのまま数え、レビュー画面が「新規 0 / 既存に追加 1」と
+    //         実際に起きたこと (新規作成) と逆の内容を出す (#283 Codex P2)。
+    //         例外は出ず数字だけが嘘になる = 単体テストの入場条件そのもの。
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem()); // prob-1 が居る状態で preview したとみなす
+
+    // 確定前に別経路で消える (別タブのトリアージ等)
+    await caller.problem.triage({ action: "dismiss", problemId: "prob-1" });
+
+    const result = await caller.consultation.extract({
+      sessionId: "s2",
+      draft: {
+        items: [
+          {
+            mention: makeMention({ id: "men-a", createdAt: "2026-02-01T00:00:00.000Z" }),
+            grouping: {
+              kind: "existing", // draft の申告は「既存に追加」
+              problemId: "prob-1",
+              problemTitle: "転職の迷い",
+              problemTheme: "仕事・キャリア",
+              isRecurrence: true,
+              mentionCount: 2,
+              reignited: false,
+              groupingConfidence: 0.9,
+            },
+          },
+        ],
+      },
+    });
+
+    // 実際に起きたのは新規作成 → counts もそう返す
+    expect(result.newProblemCount).toBe(1);
+    expect(result.updatedProblemCount).toBe(0);
+    // **返却 item の grouping も実績に正規化する** — 件数だけ直してもカードのバッジが
+    // 「🔁 既存に追加」のままだと、同じ画面の中で件数とバッジが食い違う。
+    // mockApi.commitPreview (ADR 0004 の真実) と同じ正規化に揃えている。
+    expect(result.items[0].grouping).toMatchObject({
+      kind: "new",
+      mentionCount: 1, // 申告の 2 ではなく実績 (作りたての Problem の言及は 1 回)
+      isRecurrence: false, // 「再出現」ではない (寄せ先が消えているので初出)
+    });
+    // Mention は取りこぼさない (フォールバックの本来の目的)
+    const problem = await caller.problem.get({ id: "prob-1" });
+    expect(problem.mentions.map((m) => m.id)).toEqual(["men-a"]);
+    expect(problem.mentionCount).toBe(1);
+  });
+
+  it("appends a draft 'existing' item to the stored problem (🔁 再出現の確定)", async () => {
+    // 無いと: draft 経由の確定だけ既存への追記 (mentionCount / lastMentionedAt 更新・
+    //         再燃 reopen) を通らず、再抽出経路と挙動が割れる退行が静かに通る
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(
+      makeProblem({ status: "resolved", resolvedAt: "2026-01-15T00:00:00.000Z" }),
+    );
+
+    await caller.consultation.extract({
+      sessionId: "s2",
+      draft: {
+        items: [
+          {
+            mention: makeMention({
+              id: "men-2",
+              sessionId: "s2",
+              createdAt: "2026-02-01T00:00:00.000Z",
+            }),
+            grouping: {
+              kind: "existing",
+              problemId: "prob-1",
+              problemTitle: "転職の迷い",
+              problemTheme: "仕事・キャリア",
+              isRecurrence: true,
+              mentionCount: 2,
+              reignited: true,
+              groupingConfidence: 0.9,
+            },
+          },
+        ],
+      },
+    });
+
+    const problem = await caller.problem.get({ id: "prob-1" });
+    expect(problem.mentions).toHaveLength(2);
+    expect(problem.mentionCount).toBe(2);
+    expect(problem.status).toBe("open"); // 再燃で open に戻る (UC-03)
+    expect(problem.lastMentionedAt).toBe("2026-02-01T00:00:00.000Z");
   });
 });
 

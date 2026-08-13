@@ -45,13 +45,13 @@ Option B / C は Driver 2・3 に反する — board の維持が web UI 手作�
 
 open Issue は**ちょうど 1 個**の stream ラベルを持つ。レーンは少数固定で、数週間単位でしか変えない:
 
-| ラベル | レーン | 含むもの |
-| --- | --- | --- |
-| `stream:product` | プロダクト本流 | v2 MAF 移行 (M1〜M3)、機能、ドメイン、**UX の機能改善** |
-| `stream:improve-loop` | 改善ループ (機械) | UX の観測・採点・自動改善パイプライン (#123 系 / [ADR 0022](0022-autonomous-ux-improvement-loop.md)) |
-| `stream:concept` | コンセプト・最上流設計 | コンセプト v2 (#266)、北極星の再定義 |
-| `stream:factory` | 工場 | CI、review-gate、PM 機構、テスト基盤、docs 基盤 |
-| `stream:infra` | 実行環境 | Azure、deploy、コスト、セキュリティ |
+| ラベル                | レーン                 | 含むもの                                                                                             |
+| --------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| `stream:product`      | プロダクト本流         | v2 MAF 移行 (M1〜M3)、機能、ドメイン、**UX の機能改善**                                              |
+| `stream:improve-loop` | 改善ループ (機械)      | UX の観測・採点・自動改善パイプライン (#123 系 / [ADR 0022](0022-autonomous-ux-improvement-loop.md)) |
+| `stream:concept`      | コンセプト・最上流設計 | コンセプト v2 (#266)、北極星の再定義                                                                 |
+| `stream:factory`      | 工場                   | CI、review-gate、PM 機構、テスト基盤、docs 基盤                                                      |
+| `stream:infra`        | 実行環境               | Azure、deploy、コスト、セキュリティ                                                                  |
 
 - **判定基準は「その Issue が閉じたとき、変わるのはプロダクトの挙動か、改善を回す機械か」**。迷ったら `product` に倒す
 - レーン名は当初 `ux-loop` としたが、design-gate の理解確認で **PO が UX 機能改善 (#242) を ux-loop に分類した** — 名前の重力で UX と名の付くものを吸い込むと product レーンが空洞化するため、`improve-loop` に改名した。分類規則で名前の重力に勝とうとしない

@@ -67,7 +67,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Azure を触る check だけ OIDC が要る。fetch-doc は不要。
       - name: Guard — OIDC 設定済みか
@@ -94,7 +94,7 @@ jobs:
 
       - name: Azure login (OIDC, no stored secret)
         if: steps.guard.outputs.needs_azure == 'true' && steps.guard.outputs.run == 'true'
-        uses: azure/login@v2
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}

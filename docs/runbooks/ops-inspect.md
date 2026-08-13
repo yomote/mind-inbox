@@ -4,12 +4,12 @@
 
 ## いつ使うか
 
-| 知りたいこと | `check` | 備考 |
-| --- | --- | --- |
-| Azure に今どのリソースがあるか | `azure-resources` | `inspect-env.sh` の詳細ダンプも併せて出る |
-| Cosmos DB の free tier がこのサブスクリプションで空いているか | `cosmos-free-tier` | [ADR 0030](../adr/0030-persistence-on-cosmos-db-single-store-behind-bff.md) D2 の判断材料 |
-| 当月いくら使っているか (予算 ¥3,000 に対して) | `cost-summary` | SP に課金データの参照権が無いと `(未検証)` になる |
-| egress の外にあるページの本文 | `fetch-doc` + `url` | `https://` のみ。HTML をテキスト化して 60,000 文字まで |
+| 知りたいこと                                                  | `check`             | 備考                                                                                      |
+| ------------------------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------- |
+| Azure に今どのリソースがあるか                                | `azure-resources`   | `inspect-env.sh` の詳細ダンプも併せて出る                                                 |
+| Cosmos DB の free tier がこのサブスクリプションで空いているか | `cosmos-free-tier`  | [ADR 0030](../adr/0030-persistence-on-cosmos-db-single-store-behind-bff.md) D2 の判断材料 |
+| 当月いくら使っているか (予算 ¥3,000 に対して)                 | `cost-summary`      | SP に課金データの参照権が無いと `(未検証)` になる                                         |
+| egress の外にあるページの本文                                 | `fetch-doc` + `url` | `https://` のみ。HTML をテキスト化して 60,000 文字まで                                    |
 
 ## エージェントからの使い方
 
@@ -34,7 +34,9 @@ GitHub の Actions タブ → `ops-inspect` → **Run workflow** → `check` を
 
 このワークフローを拡張するとき、**次の 2 つは絶対に破らないこと**。
 
-1. **自由入力のコマンドを受け取らない。** 操作は `type: choice` の固定値だけ。デプロイ用 SP は**サブスクリプション Contributor のまま**なので ([#46](https://github.com/yomote/mind-inbox/issues/46))、任意コマンドを受ける口を作ると、この便利屋がリポジトリで最も強い書き込み経路になる
+1. **自由入力のコマンドを受け取らない。** 操作は `type: choice` の固定値だけ。任意コマンドを受ける口を作ると、この便利屋がリポジトリで最も強い書き込み経路になる。
+   - #46 で SP の権限は **サブスクリプション Contributor → RG スコープ**に縮んだ ([azure-oidc-cd-setup.md](azure-oidc-cd-setup.md) の「権限モデル」)。被害半径は減ったが、**約束は変えない** — dev の RG ごと壊せる主体であることに変わりはない
+   - さらに、このワークフローは読むだけなので **読み取り専用 identity (`AZURE_READER_CLIENT_ID`) へ移すのが本筋**。移行手順は [azure-oidc-cd-setup.md](azure-oidc-cd-setup.md) の「読み取り専用 identity へ切り替える」
 2. **入力をシェルに展開しない。** `run:` の中に `${{ inputs.* }}` を直接書かず、必ず `env:` 経由で渡して `"$VAR"` として引用符付きで参照する (`${{ }}` は run の実行前にテキスト置換されるため、直接書くと注入口になる)
 
 調べたい項目が増えたら、**使い捨てワークフローを作らずにこのファイルへ `check` を足す** (ADR 0031 D4)。

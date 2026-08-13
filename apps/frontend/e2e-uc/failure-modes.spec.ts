@@ -65,15 +65,23 @@ test.describe("通信が失敗したときに UI が沈黙しない", () => {
     await expect(composer).toHaveValue("もう少し話したいことがある");
   });
 
-  test("[L3-real] 抽出できないときは通知が出て、抽出結果画面に飛ばない", async ({ page }) => {
+  test("[L3-real] 確定できないときは通知が出て、抽出結果画面に飛ばない", async ({ page }) => {
     await gotoHome(page);
     await startConsultationAndSay(page, "やることが多すぎて手が回らない");
 
-    await breakBff(page);
-    await page.getByRole("button", { name: "困りごとを抽出" }).click();
+    // 出口は「この内容で確定」= 表示中の下書きの保存 (#187 / ADR 0039 D3)。
+    // 先に下書きを作ってからでないと disabled で押せない (§5.8)。
+    const commit = page.getByRole("button", { name: "この内容で確定" });
+    await page.getByRole("button", { name: "今すぐ整理" }).click();
+    await expect(commit).toBeEnabled();
 
-    await expect(errorAlert(page)).toContainText("困りごとを抽出できませんでした");
+    await breakBff(page);
+    await commit.click();
+
+    // 下書きは消さずに残す (もう一度押せる) — 文言もそれを言う
+    await expect(errorAlert(page)).toContainText("下書きを確定できませんでした");
     await expect(page).toHaveURL(/\/consultations\/current$/);
+    await expect(commit).toBeEnabled();
   });
 
   test("[L3-real] 困りごと一覧を開けないときは通知が出る (押しても無反応にしない)", async ({

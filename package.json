@@ -19,7 +19,7 @@
     "test:python": "npm-run-all2 --parallel test:py:ai-agent test:py:voicevox",
     "test:py:ai-agent": "uv run --directory apps/services/ai-agent pytest --tb=short",
     "test:py:voicevox": "echo 'placeholder: tests not yet implemented (issue #2)' && exit 0",
-    "test:scripts": "uv run --directory apps/services/ai-agent pytest ../../../cicd/scripts/ux-probe ../../../cicd/scripts/ux-eval ../../../cicd/scripts/ux-data ../../../cicd/scripts/status-page ../../../cicd/scripts/report-failure ../../../cicd/scripts/review-gate ../../../cicd/scripts/viz-structure ../../../cicd/scripts/debt-check ../../../cicd/scripts/security-sweep ../../../cicd/scripts/deploy --tb=short",
+    "test:scripts": "uv run --directory apps/services/ai-agent pytest ../../../cicd/scripts/ux-probe ../../../cicd/scripts/ux-eval ../../../cicd/scripts/ux-data ../../../cicd/scripts/status-page ../../../cicd/scripts/report-failure ../../../cicd/scripts/review-gate ../../../cicd/scripts/viz-structure ../../../cicd/scripts/debt-check ../../../cicd/scripts/security-sweep ../../../cicd/scripts/github-settings ../../../cicd/scripts/deploy ../../../cicd/scripts/smoke-test --tb=short",
     "test:contract": "node --experimental-strip-types --no-warnings apps/bff/scripts/contract-check.mjs",
     "test:e2e": "pnpm --dir apps/frontend run test:e2e",
     "docs:openapi:bff": "npm --prefix apps/bff run docs:openapi"
@@ -27,7 +27,7 @@
   "devDependencies": {
     "husky": "^9.1.7",
     "lint-staged": "^15.5.1",
-    "markdownlint-cli2": "^0.18.1",
+    "markdownlint-cli2": "^0.23.2",
     "npm-run-all2": "^7.0.2",
     "prettier": "^3.4.2"
   },
