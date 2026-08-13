@@ -76,6 +76,7 @@ user の対話窓口。**常に 1 本**で、使い捨てローテーション�
 - **担わない** — user との対話 / PR の受け入れ判定とマージ (判断は窓口) / 窓口の退役操作
 - **出す理由は独立性ではなく、窓口の可用性** — 窓口が手を動かしている間 PO が待たされる。実装者とレビュアーの分離はレビュー側の judge が担う
 - **指示文は子と同じ起票パケット** (対象 Issue / 完遂条件 / ファイル境界 / CLAUDE.md 参照 / コミットと push まで完遂) を満たし、成果 PR の本文にも残す
+- **同一セッション内の subagent どうしは `SendMessage` で直接やり取りできる** (親を経由しなくてよい) — ただし **subagent は `ListAgents` を持たないので相手を発見できず、親が相手の名前を渡さないと宛先を書けない**。**セッションを跨いだピアは依然として見えない** (`No reachable agents`) ので、跨ぎの連絡は Issue コメント / Routine のまま (2026-08-13 実測)
 - **痕跡** — 自分で push したブランチ / PR (投稿が要る場合は親が代わりに残す)
 
 ## 5. judge (`.claude/agents/`)
@@ -95,7 +96,8 @@ user の対話窓口。**常に 1 本**で、使い捨てローテーション�
 - **共通の規律** — 審査基準は `.github/claude/*-rubric.md` (+ 共通規約 `_common.md`) が正典 (rubric-as-truth)。**judge はコードを変更せず、投稿もしない** (投稿は呼び出し元の責務)。`qa-reviewer` だけがテストコードに限って書ける
 - **機構で縛ってある** — judge に渡してあるのは**読み取り専用の GitHub MCP ツール**だけで、コメント投稿・resolve・merge・issue 更新は渡していない。`ToolSearch` も渡していない (後から書き込みツールを読み込めるため)。付与先は `code-reviewer` / `qa-reviewer` / `release-judge` の 3 体に限っている
 - **痕跡** — PR コメント (代役レビューは `<!-- standin-review -->` + 現 head SHA 付き) / release-gate のレポート / status ページの Routine 行
-- **今の状態: Codex が利用上限で停止しており、PR の技術レビューは代役の `code-reviewer` が担っている** ([#345](https://github.com/yomote/mind-inbox/issues/345))。**代役は Claude なので独立性は回復していない** — 実装もレビューも同じモデルで、同じ盲点を共有する。これは Codex が戻るまで目隠しを薄くする措置であって、代替ではない
+- **今の状態: Codex は 2026-08-13 に PR [#388](https://github.com/yomote/mind-inbox/pull/388) で 2 回動いた** — 03:58 UTC に `.claude/skills/dispatch/SKILL.md` へ P2 指摘を投稿し ([discussion_r3772284108](https://github.com/yomote/mind-inbox/pull/388#discussion_r3772284108))、13:00 UTC に `6d618d8` を再レビューして `Didn't find any major issues` を投稿した ([issuecomment-5280750928](https://github.com/yomote/mind-inbox/pull/388#issuecomment-5280750928)。後者は 12:58 の `@codex review` コメントで明示的に起こしたもの)。よって「Codex が利用上限で停止しているので代役の `code-reviewer` が技術レビューを担う」([#345](https://github.com/yomote/mind-inbox/issues/345)) は、**少なくとも 2026-08-13 時点では成り立たない**。ただし確認できたのは**この日に 2 回投稿できたという事実だけ**で、利用上限が恒久的に解けたかは **未検証** (残量は GitHub から読めない) — 下の「未定 / 未検証」を見ること
+- **代役 `code-reviewer` に回すときの前提は変わらない** — **代役は Claude なので独立性は回復しない**。実装もレビューも同じモデルで、同じ盲点を共有する。代役は Codex が沈黙している間だけ目隠しを薄くする措置であって、代替ではない
 - **今の状態: 代役 judge を自動起動する経路がまだ無い。** PR レビュー Routine は web UI での登録が必要で未登録のため、status ページのその行は**恒常 🔴 が正しい状態** (「登録されていない」という事実を出している)。それまで judge は PM が手で呼ぶ — **呼び忘れれば沈黙する**
 
 ## 6. GitHub Actions
@@ -153,5 +155,5 @@ user の対話窓口。**常に 1 本**で、使い捨てローテーション�
 - **`fire_trigger` による即時 poke が配送されない理由** — 未特定 ([#353](https://github.com/yomote/mind-inbox/issues/353))
 - **judge の frontmatter `tools:` が MCP ツール名を受け付けるか** — 未検証。次に judge を回したとき、GitHub の読み取りが実際に通ったかを確認する
 - **`REVIEW_GATE_REQUIRE_CODEX` の現在値** — 2026-08-12 時点の実測では `false` で、独立レビュー必須の条件が効いていない。`true` に戻すのは PO の web UI 操作。以後変わったかはリポジトリから読めない (**未確認**)
-- **Codex の復帰時期** — 未定。復帰したら指摘者を Codex に戻し、代役 Routine を退役させて watchers.json から 1 行消す
+- **Codex が継続して動くか (恒久復帰か)** — **未検証**。2026-08-13 に PR [#388](https://github.com/yomote/mind-inbox/pull/388) で 2 回投稿したのは実測 (5 章) だが、これは「その日は叩けた」という 1 日分の観測でしかなく、利用上限が恒久的に解けた証拠ではない。**「復帰した」と断定しない** — 判断材料は次の数本のコード PR で Codex が実際に指摘を出しているか。恒久的に動くと確認できたときに初めて、指摘者を Codex に戻し、代役 Routine を退役させて watchers.json から 1 行消す
 - **merge queue** — workflow 側は `merge_group` を報告する形になっているが、**queue の有効化自体は未完了** ([#269](https://github.com/yomote/mind-inbox/issues/269) の `needs-human`)
