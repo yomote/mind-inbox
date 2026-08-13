@@ -1,4 +1,14 @@
-# Claude PR Review (LLM-as-a-judge) のセットアップ
+# Claude PR Review (LLM-as-a-judge) のセットアップ — **退役 / 歴史的経緯**
+
+> ⚠️ **この Runbook は現役ではない**。ここで説明している **PR レビュー Routine は削除済み** (#225) で、判断記録の [ADR 0008](../adr/0008-pr-review-via-cloud-routine.md) も **Superseded by [0035](../adr/0035-role-split-across-agents-and-actions.md)** (技術レビューを Codex に、監視を Actions に移した)。**以下の手順を再現しないこと** — Routine は生死が見えないため ADR 0035 D1 で原則廃止されている。
+>
+> **移行先 (現時点)**:
+>
+> - 技術レビューの**担い手**: Codex (`@codex review`)。停止時 ([#345](https://github.com/yomote/mind-inbox/issues/345)) は代役 judge [`.claude/agents/code-reviewer.md`](../../.claude/agents/code-reviewer.md) を PM が呼ぶ ([ADR 0052](../adr/0052-codex-derived-review-rubric-and-stand-in-judge.md))
+> - 審査**基準**: [`.github/claude/review-rubric.md`](../../.github/claude/review-rubric.md) は現役 (2026-08-12 に全面改訂 — 旧版の軸 A / B / C は残っていない)
+> - **強制力**: ブランチ保護の会話解決ゲートではなく、required check `review-gate` ([ADR 0036](../adr/0036-merge-gate-as-required-check-and-pm-cadence.md) / [0051](../adr/0051-review-gate-verdict-on-workflow-run.md))
+> - judge の運用手順: [`review-agents.md`](review-agents.md)
+> - 以下は当時の手順の記録として残す
 
 開発セッションとは**別軸**の「審査役」を、Claude Code on the web の **Routine** として動かす。
 PR が来るたびにサブスク枠の Claude が別セッションで diff をレビューし、inline comment +

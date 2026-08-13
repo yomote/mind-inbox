@@ -29,8 +29,8 @@
 #     (GET の `az consumption usage list` は pretaxCost が "None" で返り実額が取れない
 #     — 2026-08-10 実測。cost-summary の中のコメント参照)。
 #     **例外はこの URI に閉じる。他の POST / PUT / PATCH / DELETE は書かない。**
-#     広げるときは ADR 0048 の受容条件 2 を先に改訂すること
-#     (docs/adr/0048-readonly-investigation-identity-on-unprotected-branch.md)。
+#     広げるときは ADR 0054 の受容条件 2 を先に改訂すること
+#     (docs/adr/0054-readonly-investigation-identity-on-unprotected-branch.md)。
 #   - **取得できなかったことを「異常なし」と書かない** (inspect-env.sh と同じ規律)。
 #     失敗は `(未検証: 理由)` として出す。
 
@@ -76,7 +76,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Azure を触る check だけ OIDC が要る。fetch-doc は不要。
       #
@@ -128,7 +128,7 @@ jobs:
 
       - name: Azure login (OIDC, no stored secret)
         if: steps.guard.outputs.needs_azure == 'true' && steps.guard.outputs.run == 'true'
-        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
         with:
           client-id: ${{ steps.guard.outputs.client_id }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}

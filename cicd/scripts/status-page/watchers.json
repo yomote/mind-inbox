@@ -1,5 +1,5 @@
 {
-  "_comment": "状況ページ (gh-pages /status/) が読む定義。ここが『何を見張るか』の唯一の真実で、状態そのものは持たない (状態は GitHub の実データから毎回生成する)。自動化を足したらここに 1 行足す。足せないなら作らない。 cd-watchdog は ADR 0035 D2 で廃止した — 落ちた workflow 自身が Issue を立てる (.github/actions/report-failure) ので、見張り役は不要になった。routines は ADR 0035 D1 / ADR 0037 で 0 本にした — ux-judge は ux-eval.yml (機械計測) + PM tick の LLM 採点 (traces 欄) に、maint-check は debt-check.yml に移し、PR レビューは Codex の GitHub 連携 + review-gate.yml (required check) が痕跡を持つ。claude.ai 側の Routine 実体の削除は needs-human。",
+  "_comment": "状況ページ (gh-pages /status/) が読む定義。ここが『何を見張るか』の唯一の真実で、状態そのものは持たない (状態は GitHub の実データから毎回生成する)。自動化を足したらここに 1 行足す。足せないなら作らない。 cd-watchdog は ADR 0035 D2 で廃止した — 落ちた workflow 自身が Issue を立てる (.github/actions/report-failure) ので、見張り役は不要になった。routines は ADR 0035 D1 / ADR 0037 で 0 本を目標にした — ux-judge は ux-eval.yml (機械計測) + PM tick の LLM 採点 (traces 欄) に、maint-check は debt-check.yml に移した。その後 ADR 0040 が「痕跡を毎回 Issue コメントに残し、欠落自体をここで監視する」条件付きで再導入を認め、現在 2 本ある (当番 PM tick / PR レビュー代役)。PR レビューは本来 Codex の GitHub 連携 + review-gate.yml (required check) が痕跡を持つが、Codex が利用上限で停止したため代役 judge の Routine が担っている (ADR 0052 D8 / #345) — **Codex 復帰時はこの Routine を退役させ、ここから 1 行消すこと**。claude.ai 側の Routine 実体の削除は needs-human。",
   "workflows": [
     {
       "id": "deploy.yml",
@@ -26,6 +26,12 @@
       "id": "ux-data-migrate.yml",
       "name": "UX 観測の過去データ移行 (one-shot)",
       "what": "旧蓄積 (#162/#127 のコメント) をデータブランチの JSONL に取り込む (ADR 0041 D7。初期移行の 1 回きり)",
+      "expect": "必要なときだけ (手動)"
+    },
+    {
+      "id": "github-settings.yml",
+      "name": "GitHub 設定の点検 / 適用 (宣言 → 現実)",
+      "what": "宣言 (cicd/github/settings.yml) と実際のリポジトリ設定を突き合わせ、事実をデータブランチ data/github-settings に記録する。ズレがあれば Issue に積み、apply で適用する (#344。device-code 認証なので PO 本人の承認が要る = 手動)",
       "expect": "必要なときだけ (手動)"
     },
     {
@@ -116,6 +122,17 @@
       },
       "expect_hours": 26,
       "note": "見ているのは「26 時間以上の継続停止」。**実際の発火は 18:00 JST の 1 日 1 回** (2026-08-12 に PO へ確認 — Issue #254 本文の指定は 08:00 / 13:00 / 18:00 だったが、設定されたのは 18:00 のみ)。通常の最大間隔が 24h なので +2h の余裕を取っている。**1 日 3 回前提の 16 では正常稼働でも毎日必ず赤になる** (誤検知) ため、この値は発火スケジュールとセットで直すこと。1 日 1 回なので「真ん中のスロットだけ欠落」は起きず、単発の欠落も検知できる — 欠落の翌朝 07:10 JST の定期生成で前回発火から 37h 経過して赤くなる (18:00 発火 → 翌朝は 13h でまだ緑 → 翌々朝に赤)。**ただしページは履歴を持たないので、赤が消えるのは「復旧後に最初にページが再生成された時点」** — Routine の Issue コメント投稿は再生成のトリガに入っていない (トリガは schedule 07:10 JST / main への push / deploy・golden-path-monitor・ux-eval・debt-check の workflow_run / 手動のみ) ので、18:00 に復旧しても赤はそのまま残り、通常は翌朝 07:10 の生成で緑に戻る (間に push 等があればその時点)。つまり見逃すのは「赤が出ている間に誰もページを見なかった」ときで、窓は復旧時刻で閉じない。継続停止なら赤は出続ける。単発欠落を取りこぼさず記録したいならスロット単位の判定が要る (#275 — 3 回運用に戻したときにも再燃する)。trace はレポート冒頭のマーカー「🙋 あなたの番」を含むコメントだけを数える。絞らないと人間のコメント 1 本で 🟢 に戻り、沈黙 = 未発火 の前提が壊れる。**Issue #254 は closed だが投稿先として現役** (2026-08-12 PO 裁定 — closed Issue にもコメントは付くので trace はそのまま機能する)。Routine の実体は claude.ai 側にありリポジトリから起動状態を読めないため、痕跡でのみ生死を判定する。"
+    },
+    {
+      "name": "PR レビュー (代役 judge / GitHub trigger)",
+      "what": "PR が open / 更新されたら claude.ai の Routine が新セッションで発火し、独立レビューが未着のコード PR を review-rubric.md で審査して PR に投稿し、巡回の痕跡を Issue #360 に残す (ADR 0052 D8)。Codex 停止中の代役 — 復帰したら退役させる",
+      "trace": {
+        "kind": "issue_comment",
+        "issue": 360,
+        "body_contains": "<!-- pr-review-routine-tick -->"
+      },
+      "expect_hours": 26,
+      "note": "**2026-08-12 時点で未登録 = 恒常 🔴 が正しい状態。** エージェントは Routine を作れない (create_trigger は リポジトリを渡せず、persistent_session_id も発火時に無視されて新品セッションが立つ — #352 で実測)。登録は web UI の手作業 ([Runbook](../../../docs/runbooks/review-agents.md) の「巡回 Routine の登録」)。**この赤は「登録されていない」という事実を出しているので消さないこと。** 登録後は GitHub trigger (pull_request opened/synchronize) 駆動になり発火間隔が不定になるため、しきい値は「1 日以上 PR 活動があるのに痕跡が無い」の近似として 26 時間を置く。PR が 1 本も動かない日は痕跡も出ないので、その日は赤が誤検知になり得る — その場合は Issue #360 のコメントと open PR の更新時刻を突き合わせて判断する。trace はマーカー `<!-- pr-review-routine-tick -->` 付きコメントだけを数える (人間のコメントで心拍が進むのを防ぐため)。"
     }
   ],
   "traces": [
