@@ -124,6 +124,7 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0017](0017-container-apps-access-via-auth-gate.md) — Container Apps の「第二の扉」は認証の門で閉じる (組み込み認証 + Managed Identity / voicevox は internal ingress)
 - [0025](0025-deploy-container-images-by-immutable-sha-tag.md) — コンテナ image のデプロイは :latest ではなく不変 sha タグの解決 + 稼働検証で行う (#107)
 - [0046](0046-environment-rebuildable-from-declaration.md) — 環境を「宣言から作り直せるもの」にする — ライフサイクル 3 層分断 / Entra の Graph Bicep 宣言 / 週次プロビジョンテスト (0013 の「常設」を追補)
+- [0054](0054-readonly-investigation-identity-on-unprotected-branch.md) — 調査用 read-only ID は保護のないブランチ (`ops/inspect`) に紐づけ、トレードオフを条件つきで受容する — **Proposed**
 - [0009](0009-on-demand-cd-via-github-actions-oidc.md) — デプロイは GitHub Actions のオンデマンド CD（手動 up/down + 夜間 teardown, OIDC）で行う — **Superseded by 0013**
 
 ## 退避された運用系 (ADR ではない)
