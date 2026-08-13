@@ -125,3 +125,4 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0048](0048-child-sessions-are-usable-again-with-a-one-way-poke-channel.md) — 子セッションは再び起動できる — 会話は Routine 経由で片道 1 分なので、分配先は往復の少ない作業に限る (ADR 0033 D1 を置き換え)
 - [0052](0052-codex-derived-review-rubric-and-stand-in-judge.md) — PR レビューの基準を Codex の実レビュー 215 件から導出し、Codex 不在の間は代役 judge が読む (独立性は回復しない埋め合わせ / Issue #345) — **Proposed**
 - [0053](0053-synthetic-user-exploration-poc.md) — 合成ユーザーによる探索テストは「採点が繋がってから」「週 1 手動 1 回」から始める — 発見件数ではなく再現性を成功条件にする (#304 の次段階 / Phase 0 は #354 の接続)
+- [0054](0054-agent-ops-mechanisms-for-stalls-and-false-impossibility.md) — 止まる・空回り・誤った不可能性を規約ではなく機構で塞ぐ (能力台帳 / needs-human の縮小 / product 枠 / 一級指標の機械化 / 在庫の純増ゼロ) — **Proposed**
