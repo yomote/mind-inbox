@@ -13,10 +13,11 @@
 name: adr-number-guard
 
 on:
+  # **paths フィルタは付けない。** 付けると ADR に触れない PR ではこの check が走らず、
+  # required にした瞬間その PR が永久 pending になる (cicd/github/settings.yml の警告)。
+  # ADR 変更が無い PR では「衝突なし」で即緑になるだけなので、常時走らせて門にする。
   pull_request:
     branches: [main]
-    paths:
-      - "docs/adr/**"
   # merge queue の一時 branch でも required check を報告する (ADR 0042)。
   # merge_group に paths フィルタは効かない (push / pull_request 限定) ため常に走る —
   # ADR 変更の無い merge group では「衝突なし」で緑になるだけ。副産物として、

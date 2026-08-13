@@ -54,7 +54,8 @@ security:
 # ⚠️ **required_status_checks.contexts に書けるのは「その base への PR で必ず走る
 #    check」だけ**。走らない check を required にすると PR が永久に pending になり
 #    マージ不能になる。実例:
-#      - iac-validate / adr-number-guard は paths フィルタ付き → required にしない
+#      - iac-validate は paths フィルタ付き → required にしない
+#        (adr-number-guard は 2026-08-13 に paths を外して required にした)
 #      - test.yml は `pull_request: branches: [main]` → **release への PR では走らない**
 #        (だから release の required_status_checks は null)
 #      - review-gate は base=main の PR だけを判定する (リリース PR は対象外 / ADR 0019)
@@ -80,6 +81,10 @@ branch_protection:
         # マージの門 (ADR 0036)。commit status であって check run ではないが、
         # required の指定方法は同じ
         - "review-gate"
+        # ADR 番号の衝突ガード。2026-08-13 に paths フィルタを外して常時走るようにした
+        # ため required にできる (ADR に触れない PR では「衝突なし」で即緑)。required に
+        # した理由: #222 で実際に番号が衝突し、guard は赤だったのにマージ可能だった
+        - "ADR 番号の衝突を検査"
     # PR を必須にする (= 直 push を塞ぐ)。**承認数は 0** — 実質 1 人 + エージェントの
     # 開発で、承認の質は review-gate (PM 受け入れ + スレッド解決 + Codex) が持つ。
     # ここを 1 にすると自分の PR を自分で承認できず、auto-merge の主経路が死ぬ
