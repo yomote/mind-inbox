@@ -94,7 +94,9 @@ def collect_used(repo_root: Path, cwd: str) -> tuple[set[int], str | None]:
 
     adr_dir = repo_root / "docs" / "adr"
     if adr_dir.is_dir():
-        used |= numbers_in_names([p.name for p in adr_dir.glob("*.md")])
+        # numbers_in_names は `docs/adr/NNNN-` の形で照合するので、
+        # ファイル名だけを渡すと**一致せず、作業ツリーの ADR が丸ごと漏れる**
+        used |= numbers_in_names([f"docs/adr/{p.name}" for p in adr_dir.glob("*.md")])
 
     retired_text: str | None = None
     local_retired = repo_root / RETIRED_FILE

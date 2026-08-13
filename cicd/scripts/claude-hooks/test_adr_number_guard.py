@@ -10,10 +10,13 @@
     - ADR 以外の Write (README / template / archive 配下) まで止める
 """
 
+import subprocess
 from pathlib import Path
 
 from adr_number_guard import (
+    RETIRED_FILE,
     adr_number_of,
+    collect_used,
     format_reason,
     handle,
     next_free,
@@ -99,6 +102,64 @@ def test_単体_理由に採番規約と次の番号が入る() -> None:
     assert "0008" in reason
     assert "0049" in reason
     assert "README.md" in reason
+
+
+def _make_repo(root: Path) -> None:
+    """origin/main ref を持つ本物の git リポジトリを組み立てる。
+
+    `collect_used` は 3 つの出所 (origin/main の実ファイル / 作業ツリー / 退役一覧) を
+    合算する。ここを stub で済ませると、**退役一覧を合算し忘れても全テストが緑になる**
+    (実際にミューテーション試験で生き残った穴)。
+    """
+    adr = root / "docs" / "adr"
+    archive = root / "docs" / "adr" / "archive"
+    adr.mkdir(parents=True)
+    archive.mkdir(parents=True)
+    (adr / "0001-a.md").write_text("# a", encoding="utf-8")
+    (adr / "0003-b.md").write_text("# b", encoding="utf-8")
+    (root / RETIRED_FILE).write_text("# 二度と使わない\n0002\n0007\n", encoding="utf-8")
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+
+    git("init", "-q")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    git("add", ".")
+    git("commit", "-qm", "init")
+    # remote を持たないので origin/main ref を直接作る (fetch はしない = hook と同条件)
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+
+
+def test_単体_使用済み番号は_origin_main_と作業ツリーと退役一覧の合算(tmp_path: Path) -> None:
+    _make_repo(tmp_path)
+    # commit 後に作業ツリーだけに置いた ADR (並行セッションが採った番号に相当)
+    (tmp_path / "docs" / "adr" / "0005-local.md").write_text("# c", encoding="utf-8")
+
+    used, failure = collect_used(tmp_path, str(tmp_path))
+    assert failure is None
+    assert 1 in used and 3 in used, "origin/main の実ファイルが漏れている"
+    assert 5 in used, "作業ツリーだけにある ADR が漏れている"
+    assert {2, 7} <= used, "退役番号が漏れている (再利用が素通りする)"
+    assert next_free(used) == 8
+
+
+def test_単体_退役番号を本物のリポジトリで拒否する(tmp_path: Path) -> None:
+    _make_repo(tmp_path)
+    result = handle(_write_event(tmp_path, "docs/adr/0007-retired.md"))
+    assert result is not None, "退役番号 0007 の再利用が素通りした"
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_単体_origin_main_が無いリポジトリでは衝突なしと答えない(tmp_path: Path) -> None:
+    _make_repo(tmp_path)
+    subprocess.run(
+        ["git", "update-ref", "-d", "refs/remotes/origin/main"],
+        cwd=tmp_path, check=True, capture_output=True,
+    )
+    used, failure = collect_used(tmp_path, str(tmp_path))
+    assert failure is not None, "origin/main を引けないのに成功として返している"
+    assert used == set()
 
 
 def _write_event(root: Path, relative: str) -> dict:
