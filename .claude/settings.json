@@ -54,7 +54,7 @@
       "Bash(git push origin main)",
       "Bash(git push -u origin main:*)",
       "Bash(git push --delete:*)",
-      "Bash(git push origin :*)"
+      "Bash(git push origin :main)"
     ]
   },
   "hooks": {
