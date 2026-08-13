@@ -1,0 +1,154 @@
+# このプロジェクトの体制 — 誰が何を担うか
+
+Mind Inbox は **1 人の PO (人間) と、複数種類のエージェント / 機械**で回している。この 1 枚が「今、誰が何を担っていて、どこに痕跡が残るか」の入口。
+
+- **判断の記録 (なぜ)** は [`docs/adr/`](adr/README.md)、**実行状態 (いつ・今どこ)** は GitHub Issues、**作業規約 (どう書くか)** は [`CLAUDE.md`](../CLAUDE.md)。このファイルは **役割 (誰が)** だけを持つ
+- ここに書くのは**今の姿**。過去にどう変わってきたかは [`docs/adr/archive/operations/`](adr/archive/operations/) が持っている
+
+## 全体図
+
+```mermaid
+flowchart TB
+  PO["PO (人間)<br/>裁定・承認・不可逆な判断"]
+  PM["窓口 PM セッション (1 本)<br/>対話・分配・受け入れ"]
+  DUTY["当番 PM (Routine)<br/>1 日 1 回の巡回・執行"]
+  SUB["subagent<br/>調査・実装 (worktree 隔離)"]
+  CHILD["子セッション<br/>言い切れる作業を PR まで"]
+  JUDGE["judge (.claude/agents/)<br/>新品の文脈で審査"]
+  GHA["GitHub Actions<br/>CI / review-gate / 定期監視"]
+  GH[("GitHub<br/>Issue / PR / status ページ")]
+
+  PO <--> PM
+  PM --> SUB
+  PM --> CHILD
+  PM --> JUDGE
+  DUTY --> GH
+  SUB --> PM
+  CHILD --> GH
+  JUDGE --> PM
+  GHA --> GH
+  GH --> PM
+  GH --> PO
+```
+
+矢印が示すとおり、**PO と直接話すのは窓口 PM だけ**で、それ以外の担い手の成果はすべて GitHub を経由して合流する。
+
+## 1. PO (user)
+
+- **担う** — 裁定と承認。design-gate での実装着手の承認 / ADR を `Proposed` → `Accepted` に動かすこと / 週次プロダクト目標の決定 / 優先順位リストの整理 / 「保留」の指示 / リリース PR の merge・deploy のボタン / `needs-human` の宿題 (web UI 設定・課金操作・外部サービス操作)
+- **担わない** — 問題を巡回して見つけること。PO は**返信するだけで、見に行かない**。実装・レビュー・起票も担わない
+- **どう聞かれるか** — 確認は散文に埋めず**選択肢形式** (クリック選択式) で出る。1 回の裁定は**最重要 3 件まで**で、「どのレーンが止まるか / 推奨 / 先送りの代償」がつく。残りは「寝かせ中 n 件」と件数だけ (全量はいつでも要求できる)
+- **痕跡** — ADR の Status 行 / `needs-human` Issue の close / Issue・PR へのコメント / [`docs/debrief/journal.md`](debrief/journal.md)
+- **PO が応答しない日は、ゲート対象だけが止まり、他は進む**のが仕様 (無応答は障害ではない)
+
+## 2. 窓口 PM セッション
+
+user の対話窓口。**常に 1 本**で、使い捨てローテーションする。
+
+- **担う** — GitHub のライブ状態 (open PR / `needs-human` / Proposed ADR / 自動起票 Issue) の復元と「🙋 あなたの番」付きの報告 / design-gate の実施 / 作業の分配と起票パケットの作成 / PR の受け入れレビュー (`[pm-accept]` + 現 head SHA + 判定理由) / PR 追従とマージ / `stream:*` レーンの整備 / 旧窓口の退役
+- **担わない** — 技術レビュー (judge が担う) / リリース PR の merge・deploy / design-gate 対象の設計判断を子や subagent へ分配すること / 不可逆な判断を無人で進めること
+- **名乗りと退役** — 自分に `[PM] Mind Inbox ハブ (YYYY-MM-DD〜)` を `set_session_title` で付け、旧窓口を `[PM-retired] <元タイトル>` にリネームして `archive_session` する。**これを行えるのは新しく開かれた対話セッションだけ** (当番 Routine・子・subagent は退役操作をしない)。実行中の窓口は退役させず、archive の前に in-flight を GitHub へ書き出す
+- **着工の排他** — 同じ仕事の二重着工は `refs/heads/claim/<Issue 番号>` への空コミット push (compare-and-swap) で機構的に決める。push 後に ref を fetch し直して自分のコミットが載っていることを確認してから着工する
+- **痕跡** — 対話そのもの / PR の `[pm-accept]` コメント / Issue / PM ハブ Issue の引き継ぎ宣言 / journal
+
+### 当番 PM (Routine)
+
+対話を持たない PM。claude.ai の Routine が**毎回新しいセッション**を起こし、**18:00 JST の 1 日 1 回**発火する。open PR の掃き出し・レビュー滞留の追従・`needs-human` の集計を回し、**異常ゼロでも必ず** Issue #254 に巡回レポート (冒頭「🙋 あなたの番」) を残す。当番がやらないこと: リリース PR の merge / deploy、`needs-human`・保留 PR への操作、design-gate 級の設計判断 (Issue に積んで窓口 PM へ回す)、窓口の退役。同時に走る実装ストリームの **WIP 上限は 2 本** (担い手を問わない総数)。
+
+## 3. 子セッション
+
+`create_session` で起こす独立コンテナのセッション。**起票パケットを渡されて動く**。
+
+- **担う** — 指示を一度で言い切れて、長時間かかり、成果が PR / Issue に残る作業。自分で PR を出し CI を追える
+- **担わない** — user への直接報告 / 短い往復を要する作業 / 窓口の退役操作
+- **起こし方** — `source_url` と `source_revision` は**必須** (環境は継承されるがリポジトリは継承されない)。起票パケットは 6 点: 対象 Issue / 完遂条件 / **触ってはいけないファイル境界** / CLAUDE.md 参照 / 詰まったら Issue にコメントして終了 / 報告先。使い終わったら `archive_session` する
+- **会話は片道 約 1 分** — `send_message` / `list_events` はこの環境に無く、メッセージは `create_trigger` + `run_once_at` を相手セッションに bind して届ける。**往復が 1 回増えるごとに 1 分待つ**ので、短い往復を繰り返す作業は子に出さず subagent にする
+- **止まったら** — `get_session` の `status_category` が `need_input` なら権限待ち。`needs_action` のツール名を `.claude/settings.json` の `allow` に足して**子を起こし直す** (起動済みの子には設定が効かない)。ただし `deny` のツールは足さず、commit + PR に切り替えさせる
+- **痕跡** — PR / 対象 Issue へのコメント (子 → 親の報告は Issue コメントが既定)
+
+## 4. subagent
+
+`Agent` ツールで起こす、親と同じセッション内の別コンテキスト (`isolation: "worktree"` で作業ファイルを隔離する)。
+
+- **担う** — 複数ファイルにまたがる実装 / 調査を伴う作業 / 途中で判断が要る作業 / 結果を読んで次を決める作業。judge もこの形で動く
+- **担わない** — user との対話 / PR の管理 (PR の面倒は親が引き受ける) / 窓口の退役操作
+- **出す理由は独立性ではなく、親のコンテキストの経済** — 実装者とレビュアーの分離はレビュー側の judge が担う
+- **指示文は子と同じ起票パケット** (対象 Issue / 完遂条件 / ファイル境界 / CLAUDE.md 参照) を満たし、成果 PR の本文にも残す
+- **痕跡** — 親が受け取って PR / Issue に残す (subagent 自身は投稿しない)
+
+## 5. judge (`.claude/agents/`)
+
+審査役。**新品コンテキストの subagent** として起動し、**実装セッションの会話・前提を一切引き継がない**。これが judge の存在理由そのもの — 決めた本人の前提こそが盲点になるため。
+
+| judge | いつ起動 | 担うもの |
+| --- | --- | --- |
+| `code-reviewer` | コード PR | diff の技術レビュー (`review-rubric.md` の C1〜C9) |
+| `security-reviewer` | PR / release-gate | スキャナ総動員 + 動的チェック + 攻撃面の追跡 |
+| `qa-reviewer` | release-gate / 大きめ PR | 受け入れマトリクスと異常系スモークの作成・実行 |
+| `biz-owner-reviewer` | release-gate | 初見ユーザーとして UI を実操作したウォークスルー |
+| `release-judge` | リリース PR | 4 レポート + CI の突合と Go/No-Go (既定は NO-GO) |
+| `ux-reviewer` | UX プローブ記録の採点 | 相談会話 JSON の rubric 採点 |
+| `debt-reviewer` | 定期の負債棚卸し | 指定範囲の悉皆調査 (機械検出器が見つけられないもの) |
+
+- **共通の規律** — 審査基準は `.github/claude/*-rubric.md` (+ 共通規約 `_common.md`) が正典 (rubric-as-truth)。**judge はコードを変更せず、投稿もしない** (投稿は呼び出し元の責務)。`qa-reviewer` だけがテストコードに限って書ける
+- **機構で縛ってある** — judge に渡してあるのは**読み取り専用の GitHub MCP ツール**だけで、コメント投稿・resolve・merge・issue 更新は渡していない。`ToolSearch` も渡していない (後から書き込みツールを読み込めるため)。付与先は `code-reviewer` / `qa-reviewer` / `release-judge` の 3 体に限っている
+- **痕跡** — PR コメント (代役レビューは `<!-- standin-review -->` + 現 head SHA 付き) / release-gate のレポート / status ページの Routine 行
+- **今の状態: Codex が利用上限で停止しており、PR の技術レビューは代役の `code-reviewer` が担っている** ([#345](https://github.com/yomote/mind-inbox/issues/345))。**代役は Claude なので独立性は回復していない** — 実装もレビューも同じモデルで、同じ盲点を共有する。これは Codex が戻るまで目隠しを薄くする措置であって、代替ではない
+- **今の状態: 代役 judge を自動起動する経路がまだ無い。** PR レビュー Routine は web UI での登録が必要で未登録のため、status ページのその行は**恒常 🔴 が正しい状態** (「登録されていない」という事実を出している)。それまで judge は PM が手で呼ぶ — **呼び忘れれば沈黙する**
+
+## 6. GitHub Actions
+
+**規律ではなく機構で守る層**。セッションの生死に依存せず、run 履歴が必ず残る。
+
+- **PR ごとの門** — `test` (4 層テスト + lint/build) / `codeql` / `iac-validate` / `adr-number-guard` (ADR 採番の衝突) / `auto-improve-guard` (自動改変の範囲)
+- **マージの門** — `review-gate` が commit status を貼る。緑になる条件は 3 つ: (1) `[pm-accept]` + 現 head SHA の受け入れコメント、(2) レビュースレッドが全解決、(3) コード PR なら**独立レビューが 1 本** (担い手は Codex でも代役 judge でもよい)。**push で受け入れは失効する** (実装差分が不変の main 追随だけは引き継ぐ)。さらに 30 分毎の sweep が advisory・マージ執行・ストール検知を回す
+- **配る** — `deploy` (main → dev) / `build-images` (ghcr へ事前ビルド)
+- **見張る** — `golden-path-monitor` (毎朝の実環境チェック) / `ux-eval` (UX 機械計測) / `debt-check` / `security-sweep` / `refresh-infra-diagram` / `status-page`
+- **手で叩く** — `ops-inspect` (外の事実を read-only で取る) / `github-settings` (宣言 → 現実の点検・適用) / `ux-data-migrate`
+- **見張り役を置かない** — 落ちた workflow **自身**が Issue を立てる (`.github/actions/report-failure`)。見張りが黙る問題が原理的に消える (黙っている = 落ちていない)
+- **担わない** — 「やってほしいことがそこにあるか」の判定 (意図を知る PM の仕事) / リリースの merge・deploy の最終ボタン (人間)
+- **痕跡** — run 履歴 + [status ページ](https://yomote.github.io/mind-inbox/status/)。**何を見張るかの唯一の真実は [`cicd/scripts/status-page/watchers.json`](../cicd/scripts/status-page/watchers.json)** — 自動化を足したらここに 1 行足す。足せないなら作らない
+
+## 規律は破られ、機構は守られる
+
+このリポジトリは一貫して「気をつける」で守ろうとしたものが破られ、**機械が判定するものだけが守られてきた**。だから守りたい不変条件は、文章ではなく **check の色 / ref / ラベル / 権限設定**に落とす。
+
+- マージ可否は明文の解釈ではなく **`review-gate` の色**で読む。受け入れは head SHA を含む規約により **push で機械的に失効する**
+- main のブランチ保護は **Bypass list を空**にする — エージェントも PO と同じアカウント (admin) で操作するため、admin バイパスを残すと門が門でなくなる。緊急時の脱出口は ruleset の一時 Disable
+- PR を経ずリポジトリを直接書き換える MCP ツール (`delete_file` / `push_files` / `create_or_update_file`) は `deny` に置く。**`ask` は使わない** — 人が張り付いていないセッション (当番 Routine / 子) では `ask` は永久に止まり、沈黙と正常の区別が壊れる
+- 二重着工は claim ref の compare-and-swap で決める。並行作業の衝突は起票パケットの**ファイル境界**で防ぐ
+- **腐敗は隠さず膨らませる** — `stream:*` の無い Issue は「未分類 n 件」として必ず数え、Routine の痕跡が欠けたら status ページが赤くなる。静かに腐る仕組みは作らない
+
+## 役割はセッションの起こされ方で決まる
+
+同じモデルが、**どう起こされたか**で別の役割になる。名乗りではなく起動条件で決まる。
+
+| 起こされ方 | 役割 |
+| --- | --- |
+| 起票パケット (対象 Issue / 完遂条件 / ファイル境界) を渡されて起きた | **子セッション** |
+| 何も渡されていない対話セッション (最初のメッセージが挨拶だけでも) | **窓口 PM** |
+| `Agent` ツールで呼ばれた | **subagent** (judge 名で呼ばれたら **judge**) |
+| Routine のプロンプトで発火した | **当番 PM** |
+
+窓口 PM は用件に入る前に、GitHub のライブ状態を復元して「🙋 あなたの番」付きの報告を出すところから始める。**起動プロンプトのコピペは不要** — 名乗りと旧窓口の退役は窓口自身が機械で行う。手順は [`dispatch` skill](../.claude/skills/dispatch/SKILL.md)。
+
+## 痕跡はどこに残るか
+
+| 場所 | 何が残るか |
+| --- | --- |
+| **PR** | 1 つの解の単位。実装 / 受け入れ (`[pm-accept]`) / レビュー指摘 / judge のレポート |
+| **Issue** | 解きたい問題と実行状態。`stream:*` の 5 レーンが地図、`needs-human` が人間の宿題キュー、当番の巡回レポート、子 → 親の報告 |
+| **[status ページ](https://yomote.github.io/mind-inbox/status/)** | 自動化の生死 (watchers.json の定義から毎回生成)。手書きの台帳は作らない |
+| **[journal](debrief/journal.md)** | セッション記録・design-gate / debrief の記録 |
+| **データブランチ** (`data/ux-observations`) | UX プローブ記録と採点 (JSONL) |
+
+**取れなかったものを「異常なし」と書かない** — 取得・検証に失敗したら、成功と区別できる形で出す (`未検証: 理由` / status を error にする / run を落とす)。これはこのリポジトリで最も繰り返している事故。
+
+## 未定 / 未検証 (推測で埋めないこと)
+
+- **子 → 親の Routine 経路** — 実測できているのは親 → 子の向きだけ。逆向きは未検証なので、子 → 親の報告は Issue コメントを既定にする
+- **`fire_trigger` による即時 poke が配送されない理由** — 未特定 ([#353](https://github.com/yomote/mind-inbox/issues/353))
+- **judge の frontmatter `tools:` が MCP ツール名を受け付けるか** — 未検証。次に judge を回したとき、GitHub の読み取りが実際に通ったかを確認する
+- **`REVIEW_GATE_REQUIRE_CODEX` の現在値** — 2026-08-12 時点の実測では `false` で、独立レビュー必須の条件が効いていない。`true` に戻すのは PO の web UI 操作。以後変わったかはリポジトリから読めない (**未確認**)
+- **Codex の復帰時期** — 未定。復帰したら指摘者を Codex に戻し、代役 Routine を退役させて watchers.json から 1 行消す
+- **merge queue** — workflow 側は `merge_group` を報告する形になっているが、**queue の有効化自体は未完了** ([#269](https://github.com/yomote/mind-inbox/issues/269) の `needs-human`)
