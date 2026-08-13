@@ -222,10 +222,13 @@ az keyvault key decrypt --vault-name <持続層の Vault> --name e2e-artifacts \
 az logout
 
 # 2. その identity の更新資格情報を無効化する (これが本体)
+#    アクション名は revokeSignInSessions。invalidateAllRefreshTokens は beta 専用の
+#    旧名で v1.0 に存在せず、叩くと 404 で落ちる (= 侵害時に「本体」だけが失敗し、
+#    露出が無期限に残る)。v1.0 のアクション名を使うこと
 az rest --method POST \
-  --url "https://graph.microsoft.com/v1.0/me/invalidateAllRefreshTokens"
+  --url "https://graph.microsoft.com/v1.0/me/revokeSignInSessions"
 #    他人の identity を止める場合は Entra 管理者が
-#    /users/{id}/invalidateAllRefreshTokens を叩く
+#    /users/{id}/revokeSignInSessions を叩く
 
 # 3. Key Vault のアクセスログで、想定外の decrypt が無いか確認する
 ```
