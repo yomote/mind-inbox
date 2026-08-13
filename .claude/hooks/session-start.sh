@@ -27,9 +27,15 @@ MAIN_WHEN="$(git log -1 --format='%cr' origin/main 2>/dev/null)"
 BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '不明')"
 BEHIND="$(git rev-list --count HEAD..origin/main 2>/dev/null || echo '?')"
 
-# ADR の採番は **origin/main 基準**で取る (ローカル最大値 +1 は 2 回衝突している)
-ADR_MAX="$(git ls-tree -r origin/main --name-only docs/adr/ 2>/dev/null \
-  | grep -oE '[0-9]{4}' | sort -n | tail -1)"
+# ADR の採番は **origin/main 基準**で取る (ローカル最大値 +1 は 2 回衝突している)。
+# 退避済み (docs/adr/archive/) の番号はファイル名から落としてあるので、
+# ls だけでは「使用済み」と分からない。retired-numbers.txt を必ず合算する。
+ADR_MAX="$( {
+  git ls-tree -r origin/main --name-only docs/adr/ 2>/dev/null \
+    | grep -oE 'docs/adr/[0-9]{4}-' | grep -oE '[0-9]{4}'
+  git show origin/main:docs/adr/archive/retired-numbers.txt 2>/dev/null \
+    | grep -oE '^[0-9]{4}$'
+} | sort -n | tail -1)"
 if [ -n "$ADR_MAX" ]; then
   ADR_NEXT="$(printf '%04d' $((10#$ADR_MAX + 1)))"
 else

@@ -1,6 +1,6 @@
 # 0011. GitHub Projects は実行状態のダッシュボードに徹し、設計の真実は docs に置く
 
-- Status: Accepted (debrief #1, 2026-08-06) — 一部改訂: 実行ダッシュボードの描画面を Projects board から status ページの戦況図へ移すことを決定 ([ADR 0044](0044-stream-lanes-as-the-project-map.md), 2026-08-11。**描画の実装は #289 待ちで、それまで戦況図を見る手段は `/status` skill のみ**)。「Issues が実行状態の真実 / board に設計を書かない」の核は維持
+- Status: Accepted (debrief #1, 2026-08-06) — 一部改訂: 実行ダッシュボードの描画面を Projects board から status ページの戦況図へ移すことを決定 ([ADR 0044](stream-lanes-as-the-project-map.md), 2026-08-11。**描画の実装は #289 待ちで、それまで戦況図を見る手段は `/status` skill のみ**)。「Issues が実行状態の真実 / board に設計を書かない」の核は維持
 - Date: 2026-07-19
 - Deciders: omoteforlab
 - Consulted: —
@@ -40,7 +40,7 @@ Chosen option: **"Option A"**。GitHub Projects (v2) を **実行状態のダッ
 
 Option B は既にドリフトしており Driver 2 に反する。Option C は Milestone が「期日付きの単一グルーピング」で、`Phase` フィールドと二重管理になり Driver 1/5 に反する (Phase フィールド一本に寄せる)。Option D は個人開発に対して過剰で、GitHub (Issue / PR / レビュー) の外に状態が漏れて Driver 1/5 に反する。
 
-具体的なフィールド定義・Built-in Workflow の設定手順は Runbook [`github-projects-setup.md`](../runbooks/github-projects-setup.md) に置く (board 自体の作成は Projects v2 の web UI 操作のため)。
+具体的なフィールド定義・Built-in Workflow の設定手順は Runbook [`github-projects-setup.md`](../../../runbooks/github-projects-setup.md) に置く (board 自体の作成は Projects v2 の web UI 操作のため)。
 
 ### Positive Consequences
 
@@ -93,7 +93,7 @@ Epic Issue 本文に `- [ ]` を並べ、手で更新する。
 
 ## Links
 
-- Runbook: [`docs/runbooks/github-projects-setup.md`](../runbooks/github-projects-setup.md)
-- ロードマップ: [`docs/design/archive/implementation_plan_v1.md`](../design/archive/implementation_plan_v1.md) (archive — v1 完了済み)
-- 関連 ADR: [0008](0008-pr-review-via-cloud-routine.md) (PR レビュー Routine — 同じくプロセス系の判断)
+- Runbook: [`docs/runbooks/github-projects-setup.md`](../../../runbooks/github-projects-setup.md)
+- ロードマップ: [`docs/design/archive/implementation_plan_v1.md`](../../../design/archive/implementation_plan_v1.md) (archive — v1 完了済み)
+- 関連 ADR: [0008](pr-review-via-cloud-routine.md) (PR レビュー Routine — 同じくプロセス系の判断)
 - GitHub Projects: <https://docs.github.com/en/issues/planning-and-tracking-with-projects>

@@ -1,10 +1,10 @@
 # 0036. マージの門を required check で機構化し、PM の運転リズムを定める
 
 - Status: Accepted (design-gate 2026-08-10 で PO 承認)
-- 運用改訂: [ADR 0042](0042-pm-accept-carryover-and-merge-queue.md) (2026-08-11 PO 裁定) — D1 の pm-accept 失効規則を「実装差分が不変の main 追随には引き継ぐ」に狭め、Considered Options D (merge queue) を実測 (追いつき競争 — PR #243 が 1 日 4 周) で採用に転じた
+- 運用改訂: [ADR 0042](pm-accept-carryover-and-merge-queue.md) (2026-08-11 PO 裁定) — D1 の pm-accept 失効規則を「実装差分が不変の main 追随には引き継ぐ」に狭め、Considered Options D (merge queue) を実測 (追いつき競争 — PR #243 が 1 日 4 周) で採用に転じた
 - Date: 2026-08-10
 - Deciders: yomote (PO) / PM セッション
-- Related: [ADR 0035](0035-role-split-across-agents-and-actions.md) (役割分担 — 本 ADR はその未決事項「レビューを待つ仕組み」の解) / [ADR 0021](0021-parent-session-as-pm-orchestrator.md) (hub-and-spoke — 条項追加であり supersede しない) / [ADR 0019](0019-independent-judge-agents-security-qa-release.md) / [ADR 0020](0020-hitl-choice-format-and-needs-human-queue.md)
+- Related: [ADR 0035](role-split-across-agents-and-actions.md) (役割分担 — 本 ADR はその未決事項「レビューを待つ仕組み」の解) / [ADR 0021](parent-session-as-pm-orchestrator.md) (hub-and-spoke — 条項追加であり supersede しない) / [ADR 0019](independent-judge-agents-security-qa-release.md) / [ADR 0020](hitl-choice-format-and-needs-human-queue.md)
 
 Technical Story: 2026-08-10 のループエンジニアリング体制相談。ADR 0035 が「レビューを待つ仕組みが無い — ここを決めないと Codex を入れても結果が変わらない」を未決として残した。
 

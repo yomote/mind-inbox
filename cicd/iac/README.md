@@ -333,7 +333,7 @@ grep -rhoE 'vars\.[A-Z_]+' .github/workflows/*.yml | sort -u
 
 ### 8-2. GitHub Actions Secrets
 
-**自前で登録した秘密はゼロ**です。使っているのは GitHub が自動発行する `GITHUB_TOKEN` のみ（[ADR 0009](../../docs/adr/0009-on-demand-cd-via-github-actions-oidc.md) の "no stored secret" / [ADR 0031](../../docs/adr/0031-agent-reaches-outside-via-github-actions.md)）。
+**自前で登録した秘密はゼロ**です。使っているのは GitHub が自動発行する `GITHUB_TOKEN` のみ（[ADR 0009](../../docs/adr/0009-on-demand-cd-via-github-actions-oidc.md) の "no stored secret" / [ADR 0031](../../docs/adr/archive/operations/agent-reaches-outside-via-github-actions.md)）。
 
 ```bash
 gh secret list -R yomote/mind-inbox   # GITHUB_TOKEN は表示されない（自動発行のため）

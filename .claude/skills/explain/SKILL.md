@@ -67,6 +67,6 @@ user の追撃 (「もっと詳しく」「この部分は?」) にはコード�
 
 ## 関連
 
-- ADR 0014 (この仕組みの設計判断): `docs/adr/0014-design-comprehension-gate-and-debrief.md`
+- ADR 0014 (この仕組みの設計判断): `docs/adr/archive/operations/design-comprehension-gate-and-debrief.md`
 - ドキュメント戦略 (真実の所在): `docs/documentation/strategy.md`
 - 対: `status` skill (進捗) / `debrief` skill (まとめて解説) / `design-gate` skill (事前ゲート)

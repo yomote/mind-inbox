@@ -1,12 +1,12 @@
 # 0033. 子セッションを起動できない環境では、親が subagent で実装を回す (ADR 0021 条項の改訂)
 
-- Status: Accepted (2026-08-10 / 対話にて PO 承認。**2026-08-10 に実態へ合わせて D1 を改訂**) — **一部 Superseded by [0048](0048-child-sessions-are-usable-again-with-a-one-way-poke-channel.md)**
+- Status: Accepted (2026-08-10 / 対話にて PO 承認。**2026-08-10 に実態へ合わせて D1 を改訂**) — **一部 Superseded by [0048](child-sessions-are-usable-again-with-a-one-way-poke-channel.md)**
 - Date: 2026-08-09
 - Deciders: omoteforlab (方向は 2026-08-09 の対話で選択肢形式により選択。Accept は debrief で)
 - Consulted: —
 - Informed: —
 
-> **⚠️ 前提が崩れている (2026-08-12)**: 本 ADR の土台である「この実行環境では `create_session` が承認ゲートで弾かれる」は**もう成り立たない**。子セッションは起動でき、D3 が自ら定めた復帰条件が満たされた。**D1 の分配表は [ADR 0048](0048-child-sessions-are-usable-again-with-a-one-way-poke-channel.md) D1 が置き換えている** (判断軸は「作業の大きさ」から「往復の回数」へ)。以下は当時の判断記録として残す — 現在の規約として読まないこと。
+> **⚠️ 前提が崩れている (2026-08-12)**: 本 ADR の土台である「この実行環境では `create_session` が承認ゲートで弾かれる」は**もう成り立たない**。子セッションは起動でき、D3 が自ら定めた復帰条件が満たされた。**D1 の分配表は [ADR 0048](child-sessions-are-usable-again-with-a-one-way-poke-channel.md) D1 が置き換えている** (判断軸は「作業の大きさ」から「往復の回数」へ)。以下は当時の判断記録として残す — 現在の規約として読まないこと。
 
 Technical Story: 2026-08-09、PM セッションが「あなたの番」を 3 件出したところ、PO から **「そんなの自動で自分でできんじゃないの? 私は面倒くさいんです」** という指摘を受けた。
 
@@ -14,9 +14,9 @@ Technical Story: 2026-08-09、PM セッションが「あなたの番」を 3 �
 
 ## Context and Problem Statement
 
-[ADR 0021](0021-parent-session-as-pm-orchestrator.md) は hub-and-spoke を定め、その帰結として **「親は開発しない — プロダクトコード・テスト・IaC の変更は必ず子へ分配する」** を規約にした。狙いは親のコンテキストを集約品質のために守ることで、これ自体は正しい。
+[ADR 0021](parent-session-as-pm-orchestrator.md) は hub-and-spoke を定め、その帰結として **「親は開発しない — プロダクトコード・テスト・IaC の変更は必ず子へ分配する」** を規約にした。狙いは親のコンテキストを集約品質のために守ることで、これ自体は正しい。
 
-しかし [ADR 0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) が実証したとおり、**この実行環境では親が子セッションを起動できない** — `claude-code-remote` MCP が丸ごと承認ゲートの内側にあり、`create_session` は `-32003 requires approval` で弾かれる (2026-08-09 に `set_session_title` / `create_session` の両方で再実測)。ADR 0028 D1 は「押すボタンが親の API 呼び出しか user の 1 クリックかは実装詳細」として user のクリックに寄せた。
+しかし [ADR 0028](dispatch-packet-in-issue-and-session-start-preflight.md) が実証したとおり、**この実行環境では親が子セッションを起動できない** — `claude-code-remote` MCP が丸ごと承認ゲートの内側にあり、`create_session` は `-32003 requires approval` で弾かれる (2026-08-09 に `set_session_title` / `create_session` の両方で再実測)。ADR 0028 D1 は「押すボタンが親の API 呼び出しか user の 1 クリックかは実装詳細」として user のクリックに寄せた。
 
 その結果、**「親は開発しない」という規約が、作業 1 件ごとに user のクリックを生む装置になっている**。ADR 0021 は親のコンテキストを守るために書かれたのに、実際には user の手間を増やす方向に効いてしまった。PO の「面倒くさい」はこの構造への正当な指摘である。
 
@@ -36,7 +36,7 @@ Technical Story: 2026-08-09、PM セッションが「あなたの番」を 3 �
 
 ## Decision Outcome
 
-Chosen option: **"Option B + C のハイブリッド"** (当初は Option B 単独。2026-08-10 の改訂で C を小さい作業に限って併用 — 基準は D1 の表)。user のクリックは 0 のまま、実装者の独立性はレビュー側 ([ADR 0035](0035-role-split-across-agents-and-actions.md) D4 の Codex) で担保する。
+Chosen option: **"Option B + C のハイブリッド"** (当初は Option B 単独。2026-08-10 の改訂で C を小さい作業に限って併用 — 基準は D1 の表)。user のクリックは 0 のまま、実装者の独立性はレビュー側 ([ADR 0035](role-split-across-agents-and-actions.md) D4 の Codex) で担保する。
 
 **ADR 0021 は supersede せず、条項の一部だけを置き換える** (ADR 0028 D1 が条項 2 のみ置き換えたのと同じ形)。窓口一元化 (条項 1) / GitHub をライブの真実とする (条項 3・4) / 使い捨てローテーション (条項 7) は維持する。
 
@@ -51,7 +51,7 @@ Chosen option: **"Option B + C のハイブリッド"** (当初は Option B 単�
 
   親が直接書くときも、**レビューは必ず別系統 (Codex / ADR 0035 D4) を通す**。
   独立性はレビュー側で担保する — 実装者を分けることでは担保しない
-- **D2 起票パケットは維持する** ([ADR 0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) D1)。**subagent への指示文がそのままパケットになる**形にし、成果 **PR の本文にも残す** — 別のセッションや将来の自分が拾えるようにするため ([ADR 0035](0035-role-split-across-agents-and-actions.md) D7 により置き場所は Issue から PR へ移った。Issue = 問題 / PR = 解の単位)。「対象 Issue / 完遂条件 / **触ってはいけないファイル境界** / CLAUDE.md 参照」を必ず含める
+- **D2 起票パケットは維持する** ([ADR 0028](dispatch-packet-in-issue-and-session-start-preflight.md) D1)。**subagent への指示文がそのままパケットになる**形にし、成果 **PR の本文にも残す** — 別のセッションや将来の自分が拾えるようにするため ([ADR 0035](role-split-across-agents-and-actions.md) D7 により置き場所は Issue から PR へ移った。Issue = 問題 / PR = 解の単位)。「対象 Issue / 完遂条件 / **触ってはいけないファイル境界** / CLAUDE.md 参照」を必ず含める
 - **D3 子セッションを起動できる環境では、従来どおり子に出してよい。** 判定は「`create_session` が通るか」であり、通るなら子の方が優れる (新品コンテキスト・自分の PR・真の並行)
 - **D4 セッション名の規約は親の `[PM]` 接頭辞のみ維持し、子の命名規約は削除する。** 親は user が一覧で窓口を見つけるために要るが、子の命名は subagent 方式では意味を持たない
 - **D5 親のローテーション閾値を下げる。** subagent は別コンテキストだが、その**報告と PR レビューは親に積もる**。ADR 0021 条項 7 の「節目 or コンテキスト劣化」に加え、**実装を数件回したら交代を検討する**
@@ -70,7 +70,7 @@ Chosen option: **"Option B + C のハイブリッド"** (当初は Option B 単�
 | 当初の狙い | 2026-08-10 に何が起きたか |
 | --- | --- |
 | user のクリックを 0 にする | ✅ 達成。ただし **親が直接書いても 0** だった。subagent は必要条件ではない |
-| 実装者とレビュアーを分ける | **[ADR 0035](0035-role-split-across-agents-and-actions.md) D4 が引き取った。** Codex が初回レビューで P1 を 2 件検出 (`success = 復旧` の誤り / cancelled とタイムアウトの混同)。どちらも私は見落としていた |
+| 実装者とレビュアーを分ける | **[ADR 0035](role-split-across-agents-and-actions.md) D4 が引き取った。** Codex が初回レビューで P1 を 2 件検出 (`success = 復旧` の誤り / cancelled とタイムアウトの混同)。どちらも私は見落としていた |
 | 親のコンテキストを守る | ❌ **達成できていない。** この日、親のコンテキストは 2 回圧縮された。これが subagent に出す唯一かつ実測された理由 |
 
 つまり **subagent に出す理由は「独立性」ではなく「コンテキストの経済」だけ**になった。
@@ -119,7 +119,7 @@ Chosen option: **"Option B + C のハイブリッド"** (当初は Option B 単�
 ### Option D: GitHub Actions + `claude-code-action`
 
 - Good, because 親のコンテキストを一切消費しない
-- Bad, because **`ANTHROPIC_API_KEY` によるメーター課金が原理的に避けられない**。[ADR 0008](0008-pr-review-via-cloud-routine.md) が同じ理由で撤去した判断を崩す
+- Bad, because **`ANTHROPIC_API_KEY` によるメーター課金が原理的に避けられない**。[ADR 0008](pr-review-via-cloud-routine.md) が同じ理由で撤去した判断を崩す
 - Bad, because 対話的な軌道修正ができない
 
 ## 動作検証
@@ -132,5 +132,5 @@ Chosen option: **"Option B + C のハイブリッド"** (当初は Option B 単�
 
 - 発端: 2026-08-09 の PO 指摘「そんなの自動で自分でできんじゃないの? 私は面倒くさいんです」
 - 初回適用: [#165](https://github.com/yomote/mind-inbox/issues/165) (永続化)
-- 関連 ADR: [0021](0021-parent-session-as-pm-orchestrator.md) (条項 2 と「親は開発しない」を本 ADR が置き換え / 条項 6 の子の命名を削除) / [0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) (起票パケット — D2 で維持) / [0008](0008-pr-review-via-cloud-routine.md) (Option D を却下する根拠) / [0031](0031-agent-reaches-outside-via-github-actions.md) (同じ「ゲートの穴を仕組みで埋める」系譜)
+- 関連 ADR: [0021](parent-session-as-pm-orchestrator.md) (条項 2 と「親は開発しない」を本 ADR が置き換え / 条項 6 の子の命名を削除) / [0028](dispatch-packet-in-issue-and-session-start-preflight.md) (起票パケット — D2 で維持) / [0008](pr-review-via-cloud-routine.md) (Option D を却下する根拠) / [0031](agent-reaches-outside-via-github-actions.md) (同じ「ゲートの穴を仕組みで埋める」系譜)
 - 採番の穴: [#175](https://github.com/yomote/mind-inbox/issues/175)

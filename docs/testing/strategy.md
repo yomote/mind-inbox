@@ -6,7 +6,7 @@
 > **2026-08-10 の報告会 #7 で PO が決定したテスト戦略の立て直し**に基づき、本 doc は
 > 旧 L0〜L4 の 5+1 階層から **4 層 (契約 / 単体 / スモーク / E2E)** へ全面改訂した。
 > 旧階層で書かれた既存テスト・テスト名との対応と移行手順は **§6** にある。
-> 判断の背景: [ADR 0035](../adr/0035-role-split-across-agents-and-actions.md) /
+> 判断の背景: [ADR 0035](../adr/archive/operations/role-split-across-agents-and-actions.md) /
 > [journal 2026-08-10 (briefing #7)](../debrief/journal.md)
 
 ---
@@ -141,7 +141,7 @@ Mind Inbox は **コーディングエージェント駆動の高速開発** を
 | **偽物**           | **ai-agent ダブルだけ** (故障を決定的に注入するため)。フロントの api 層 → tRPC → BFF router → Problem リポジトリはすべて本物                                                |
 | **非ゴール**       | 正常系ユースケースの受け入れ判定 (偽 AI に対する受け入れは受け入れの意味を持たない — E2E へ / §6.4)。実 LLM の精度 / 実 VOICEVOX の音声 / Entra の実ログイン                |
 | **実行コマンド**   | `pnpm --dir apps/frontend test:e2e:uc`                                                                                                                                      |
-| **所有**           | 異常系の追加は**故障モードを増やした実装者**。受け入れ観点の創出は qa-reviewer ([ADR 0019](../adr/0019-independent-judge-agents-security-qa-release.md))                    |
+| **所有**           | 異常系の追加は**故障モードを増やした実装者**。受け入れ観点の創出は qa-reviewer ([ADR 0019](../adr/archive/operations/independent-judge-agents-security-qa-release.md))      |
 
 > **注意 (名前の衝突)**: 旧階層の「L4 smoke」(`cicd/scripts/smoke-test/smoke-test.sh` = 実環境疎通) は
 > この層では**ない**。あれは実環境検証なので新 4 層では **E2E テスト側** (§2.4 の前段) に属する。
@@ -150,14 +150,14 @@ Mind Inbox は **コーディングエージェント駆動の高速開発** を
 
 ### 2.4 E2E テスト
 
-| 項目               | 内容                                                                                                                                                                                                                                        |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **目的**           | **実環境 (dev) で実 AI・実ストレージ・実認証を通す**。「mock は緑なのに実環境で動かない」を構造的に潰す最終防衛線であり、UC 受け入れの引き継ぎ先 ([ADR 0032](../adr/0032-use-case-acceptance-tests-against-real-wiring.md) の見直し / §6.4) |
-| **対象**           | ゴールデンパス (相談 → 抽出 → 一覧) + 認可・疎通 + 永続化。**本数を増やさない**                                                                                                                                                             |
-| **実体**           | `cicd/scripts/smoke-test/smoke-test.sh` (認可と疎通) → `golden-path.sh` (API 通し・実 AI) → UI 込みシナリオ (デプロイ済み実 SWA を Playwright で操作) → `persistence-probe.sh`                                                              |
-| **実行タイミング** | deploy 後 (`.github/workflows/deploy.yml`) + 毎朝の定期実行 (`golden-path-monitor.yml` / 記録は Issue #162、評価は ux-eval)                                                                                                                 |
-| **非ゴール**       | 画面単位の網羅 (UI 仕様は MDX が真実 / [ADR 0005](../adr/0005-mdx-ui-spec-as-truth.md))。1 実行に実費と時間がかかる層なので、例の列挙は下の層に置く                                                                                         |
-| **書き方の指針**   | 「設定したか」ではなく**振る舞い**を実測する ([ADR 0018](../adr/0018-runtime-verification-in-the-loop.md))。落ちたら Issue が立つ (沈黙と正常を区別する / watchers.json)                                                                    |
+| 項目               | 内容                                                                                                                                                                                                                                                      |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **目的**           | **実環境 (dev) で実 AI・実ストレージ・実認証を通す**。「mock は緑なのに実環境で動かない」を構造的に潰す最終防衛線であり、UC 受け入れの引き継ぎ先 ([ADR 0032](../adr/archive/operations/use-case-acceptance-tests-against-real-wiring.md) の見直し / §6.4) |
+| **対象**           | ゴールデンパス (相談 → 抽出 → 一覧) + 認可・疎通 + 永続化。**本数を増やさない**                                                                                                                                                                           |
+| **実体**           | `cicd/scripts/smoke-test/smoke-test.sh` (認可と疎通) → `golden-path.sh` (API 通し・実 AI) → UI 込みシナリオ (デプロイ済み実 SWA を Playwright で操作) → `persistence-probe.sh`                                                                            |
+| **実行タイミング** | deploy 後 (`.github/workflows/deploy.yml`) + 毎朝の定期実行 (`golden-path-monitor.yml` / 記録は Issue #162、評価は ux-eval)                                                                                                                               |
+| **非ゴール**       | 画面単位の網羅 (UI 仕様は MDX が真実 / [ADR 0005](../adr/0005-mdx-ui-spec-as-truth.md))。1 実行に実費と時間がかかる層なので、例の列挙は下の層に置く                                                                                                       |
+| **書き方の指針**   | 「設定したか」ではなく**振る舞い**を実測する ([ADR 0018](../adr/archive/operations/runtime-verification-in-the-loop.md))。落ちたら Issue が立つ (沈黙と正常を区別する / watchers.json)                                                                    |
 
 **未決 (PO 裁定待ち)**: UC-02〜05 をどこまで E2E に載せるか。「UC ごとに 1 本」なのか「代表 1 本 + 残りは仕様レビュー」なのかは決めていない。ここが決まるまで旧 L3-real の UC spec は消さない (§6.4)。
 
@@ -309,12 +309,12 @@ Python が `hypothesis` (未着手)。
 3. spec 削除と同時に `test.yml` から `npm run test:e2e` step と関連 npm scripts を落とす (§5 の移行中注意も消す)
 4. 完了後に旧プレフィックス一括リネーム Issue (§6.2) へ進む
 
-### 6.4 スモークテストの範囲 — 旧 L3-real ([ADR 0032](../adr/0032-use-case-acceptance-tests-against-real-wiring.md)) との整合
+### 6.4 スモークテストの範囲 — 旧 L3-real ([ADR 0032](../adr/archive/operations/use-case-acceptance-tests-against-real-wiring.md)) との整合
 
 これは改称ではなく **L3-real の役割の縮小**である。ADR 0032 (Accepted) は L3-real を「UC-01〜05 の受け入れ層」と定義したが、偽 ai-agent に対する受け入れ判定は受け入れの意味を持たない (2026-08-10 の `/extract` 500 をこの層は原理的に踏めなかった)。新しいスモークテストは**異常系のみ**を持ち、**UC 受け入れは E2E テスト (実環境) が引き継ぐ**。
 
 - **未決が 2 つ残っている**: (1) UC-02〜05 をどこまで E2E に載せるか (§2.4)、(2) ADR 0032 の Status 遷移 (ADR 0035 Accept の場で `Superseded` にするか範囲を狭める追補にするか)
-- **この 2 つが決まるまで、`e2e-uc/` の UC spec (28 本) は消さない** — 縮小の順序を間違えると受け入れが素で消える ([ADR 0035](../adr/0035-role-split-across-agents-and-actions.md) の表でも既決)
+- **この 2 つが決まるまで、`e2e-uc/` の UC spec (28 本) は消さない** — 縮小の順序を間違えると受け入れが素で消える ([ADR 0035](../adr/archive/operations/role-split-across-agents-and-actions.md) の表でも既決)
 - 所有の分界 (「doc の写経 = 実装者 / 基準の創出 = qa-reviewer」/ 報告会 #5 裁定) は縮小後も変えない
 
 ### 6.5 残作業 (この節を消すための Issue リスト)

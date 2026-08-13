@@ -56,8 +56,8 @@ Option A は今の設計を維持できるが、egress をワイルドカード�
 
 ## Links
 
-- 運用手順: [runbooks/ux-probe-judge.md](../runbooks/ux-probe-judge.md)
-- 前提としていた設計: [ADR 0027](0027-ux-improvement-loop-ab-protocol-and-mutation-boundary.md) D1 (無人採点ループ) / 実装 #154
+- 運用手順: [runbooks/ux-probe-judge.md](../../../runbooks/ux-probe-judge.md)
+- 前提としていた設計: [ADR 0027](ux-improvement-loop-ab-protocol-and-mutation-boundary.md) D1 (無人採点ループ) / 実装 #154
 - 制約の調査と選択肢: [#160](https://github.com/yomote/mind-inbox/issues/160)
 - 蓄積先: 素材 [#162](https://github.com/yomote/mind-inbox/issues/162) / 採点結果 [#127](https://github.com/yomote/mind-inbox/issues/127)
-- 独立 judge の原則: [ADR 0019](0019-independent-judge-agents-security-qa-release.md) / 動作検証: [ADR 0018](0018-runtime-verification-in-the-loop.md)
+- 独立 judge の原則: [ADR 0019](independent-judge-agents-security-qa-release.md) / 動作検証: [ADR 0018](runtime-verification-in-the-loop.md)

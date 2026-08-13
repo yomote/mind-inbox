@@ -5,7 +5,7 @@ description: リリース PR (main → release) などの節目で、独立 judg
 
 # release-gate
 
-deploy 前に「実装した側」とは別コンテキストの審査役でリリース可否を判定する。実装セッションが自分の変更を GO と言っても意味がない ([ADR 0019](../../../docs/adr/0019-independent-judge-agents-security-qa-release.md)) — 判定は必ず subagent (新品コンテキスト) に出させ、このセッションは**範囲確定と集約だけ**をやる。
+deploy 前に「実装した側」とは別コンテキストの審査役でリリース可否を判定する。実装セッションが自分の変更を GO と言っても意味がない ([ADR 0019](../../../docs/adr/archive/operations/independent-judge-agents-security-qa-release.md)) — 判定は必ず subagent (新品コンテキスト) に出させ、このセッションは**範囲確定と集約だけ**をやる。
 
 ## いつ起動するか — リリースイベント = リリース PR (`main → release`)
 

@@ -1,6 +1,6 @@
 # 0022. UX 品質は自律改善ループで維持する — 観測・評価・改善 (PR まで) を自動化し、人間は基準定義と例外裁定に徹する
 
-- Status: Accepted (briefing #1, 2026-08-08) / 一部 Superseded by [0035](0035-role-split-across-agents-and-actions.md) (2026-08-10 — 起動経路のみ。ループの目的と 3 段構成は生きている)
+- Status: Accepted (briefing #1, 2026-08-08) / 一部 Superseded by [0035](role-split-across-agents-and-actions.md) (2026-08-10 — 起動経路のみ。ループの目的と 3 段構成は生きている)
 - Date: 2026-08-08
 - Deciders: omoteforlab (方向性は 2026-08-08 の PM セッションで選択済み — 「PR 作成まで自動 / 会話品質から」)
 - Consulted: —
@@ -73,5 +73,5 @@ Chosen option: **"Option A" (PR 作成まで自動)**。PO が 2026-08-08 に選
 ## Links
 
 - 発端: #119 (応答が浅い) / #120 (即時性) / #121 (音声) / #122 (体験品質がループに伝わらない)
-- 関連 ADR: [0018 動作検証をループに組み込む](0018-runtime-verification-in-the-loop.md) (機能の検証 — 本 ADR は体験の検証と改善) / [0019 独立 judge](0019-independent-judge-agents-security-qa-release.md) (rubric-as-truth と新品コンテキストの流用元) / [0008 Routine](0008-pr-review-via-cloud-routine.md) / [0021 hub-and-spoke](0021-parent-session-as-pm-orchestrator.md) / [0014 ゲート](0014-design-comprehension-gate-and-debrief.md)
+- 関連 ADR: [0018 動作検証をループに組み込む](runtime-verification-in-the-loop.md) (機能の検証 — 本 ADR は体験の検証と改善) / [0019 独立 judge](independent-judge-agents-security-qa-release.md) (rubric-as-truth と新品コンテキストの流用元) / [0008 Routine](pr-review-via-cloud-routine.md) / [0021 hub-and-spoke](parent-session-as-pm-orchestrator.md) / [0014 ゲート](design-comprehension-gate-and-debrief.md)
 - 実装計画: [epic #123](https://github.com/yomote/mind-inbox/issues/123) (M0 プローブ / M1 rubric+judge / M2 改善 Routine / M3 運用固め)

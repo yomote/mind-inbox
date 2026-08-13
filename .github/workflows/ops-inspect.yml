@@ -1,5 +1,5 @@
 # サンドボックスの外にある「事実」をエージェントが自力で取るための read-only ワークフロー。
-# 判断の根拠: ADR 0031 (docs/adr/0031-agent-reaches-outside-via-github-actions.md)
+# 判断の根拠: ADR 0031 (docs/adr/archive/operations/agent-reaches-outside-via-github-actions.md)
 #
 # なぜ必要か:
 #   エージェントのセッションは (1) egress ポリシーで一部ドメインに届かず

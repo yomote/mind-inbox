@@ -6,7 +6,7 @@
 - Consulted: —
 - Informed: —
 
-Technical Story: [Issue #123](https://github.com/yomote/mind-inbox/issues/123) M2。[ADR 0022](0022-autonomous-ux-improvement-loop.md) が「M2 は着手前に詳細設計 (トリガー条件 / A/B の判定プロトコル / 改変対象の境界) を design-gate に掛ける」と定めていたため、その 3 点を決める。
+Technical Story: [Issue #123](https://github.com/yomote/mind-inbox/issues/123) M2。[ADR 0022](autonomous-ux-improvement-loop.md) が「M2 は着手前に詳細設計 (トリガー条件 / A/B の判定プロトコル / 改変対象の境界) を design-gate に掛ける」と定めていたため、その 3 点を決める。
 
 ## Context and Problem Statement
 
@@ -26,19 +26,19 @@ ADR 0022 の段 2 は「評価 (自動)」と書かれているが、実装さ�
 
 ### 発見 2: 改変対象が v2 移行の対象ファイルと同一
 
-改善ループが書き換える対象は `apps/services/ai-agent/app/workflow.py` の `CHAT_SYSTEM_PROMPT` (11 行) である。しかし同ファイルは [ADR 0016](0016-ai-agent-orchestration-on-maf.md) の M1-3 で MAF Workflow へ丸ごと置換される予定で、ファイル冒頭にもその旨が明記されている。**毎朝の自動 PR と人手の移行作業が同じファイルで衝突する**。
+改善ループが書き換える対象は `apps/services/ai-agent/app/workflow.py` の `CHAT_SYSTEM_PROMPT` (11 行) である。しかし同ファイルは [ADR 0016](../../0016-ai-agent-orchestration-on-maf.md) の M1-3 で MAF Workflow へ丸ごと置換される予定で、ファイル冒頭にもその旨が明記されている。**毎朝の自動 PR と人手の移行作業が同じファイルで衝突する**。
 
 ### 発見 3: A/B の実行場所が実環境に向く (設計中に判明)
 
 新プロンプトを採点するには新プロンプトが動いている必要がある。素直に組むと「実環境のプロンプトを一時差し替えて比較する」形になり、2 つの害が出る:
 
 - A/B の最中にアプリを使った PO が実験台になる
-- ai-agent に「プロンプトを外部から上書きする口」が生まれる。ai-agent は Azure OpenAI の資格情報を持つため、**守るべき資源への扉が 1 枚増える** ([ADR 0017](0017-container-apps-access-via-auth-gate.md) / #86 と同型の失敗)
+- ai-agent に「プロンプトを外部から上書きする口」が生まれる。ai-agent は Azure OpenAI の資格情報を持つため、**守るべき資源への扉が 1 枚増える** ([ADR 0017](../../0017-container-apps-access-via-auth-gate.md) / #86 と同型の失敗)
 
 ## Decision Drivers
 
 - **トリガーが読む先が実在すること** — 自動ループの起点が人手だと自動化が成立しない
-- **改変の境界が仕組みで縛られていること** — 約束 (起票文の指示) だけに依存しない ([ADR 0021](0021-parent-session-as-pm-orchestrator.md) の境界宣言は必要だが十分ではない)
+- **改変の境界が仕組みで縛られていること** — 約束 (起票文の指示) だけに依存しない ([ADR 0021](parent-session-as-pm-orchestrator.md) の境界宣言は必要だが十分ではない)
 - **守るべき資源への到達経路を増やさない** — 課金 (Azure OpenAI) / リポジトリ write / 実環境
 - **判定が揺らぎに耐えること** — LLM の応答揺らぎと改案の効果を区別できること
 - **コストは通常日で数十円/日を維持** (ADR 0022 の制約)
@@ -49,7 +49,7 @@ ADR 0022 の段 2 は「評価 (自動)」と書かれているが、実装さ�
 
 ### D1. M1.5 (採点の無人化 + 機械可読な蓄積) を M2 の前に独立ステップとして切る
 
-毎朝の採点を Routine 化する ([ADR 0008](0008-pr-review-via-cloud-routine.md) の PR レビュー Routine と同型): golden-path-monitor の完了後、Routine が artifact を取得 → `ux-reviewer` を**新品コンテキストの subagent** として起動 ([ADR 0019](0019-independent-judge-agents-security-qa-release.md)) → `ux-judge-score` JSON ブロックを #127 へコメント投稿する。
+毎朝の採点を Routine 化する ([ADR 0008](pr-review-via-cloud-routine.md) の PR レビュー Routine と同型): golden-path-monitor の完了後、Routine が artifact を取得 → `ux-reviewer` を**新品コンテキストの subagent** として起動 ([ADR 0019](independent-judge-agents-security-qa-release.md)) → `ux-judge-score` JSON ブロックを #127 へコメント投稿する。
 
 - 採点の書式・蓄積先・トレンド抽出 (jq) は**すでに rubric と runbook で定義済み**なので、新規に決めるものはない。人手の 3 ステップを Routine に置き換えるだけ
 - **M2 が未完成でも単体で価値が出る** — 「劣化のトレンドが毎朝勝手に見える」状態が先に手に入る
@@ -90,7 +90,7 @@ A/B の比較対象は**会話文のみ**であり、rubric の U1〜U5 は記�
 
 ## 動作検証 (実装後に何を叩けば「効いている」と言えるか)
 
-「設定した」ではなく振る舞いで書く ([ADR 0018](0018-runtime-verification-in-the-loop.md))。
+「設定した」ではなく振る舞いで書く ([ADR 0018](runtime-verification-in-the-loop.md))。
 
 - **M1.5**: Routine を手動発火させた翌朝、#127 に `ux-judge-score` の JSON ブロックを含むコメントが**人手を介さず 1 件増えている**。runbook の jq がそのコメントを 1 行として抽出できる
 - **D2 (境界)**: `ux-auto-improve` ラベルを付けた検証用 PR で、許可パス外のファイルを 1 行変更すると **CI が赤になる**。許可パスのみの変更なら緑になる
@@ -122,7 +122,7 @@ A/B の比較対象は**会話文のみ**であり、rubric の U1〜U5 は記�
 
 ## Links
 
-- 親: [ADR 0022](0022-autonomous-ux-improvement-loop.md) (自律改善ループの方針 — 本 ADR は段 3 の詳細)
-- 関連: [0019](0019-independent-judge-agents-security-qa-release.md) (独立 judge) / [0008](0008-pr-review-via-cloud-routine.md) (Routine) / [0021](0021-parent-session-as-pm-orchestrator.md) (子セッションへの境界宣言) / [0017](0017-container-apps-access-via-auth-gate.md) (到達経路を数える) / [0018](0018-runtime-verification-in-the-loop.md) (動作検証) / [0016](0016-ai-agent-orchestration-on-maf.md) (M1-3 で workflow.py を置換)
+- 親: [ADR 0022](autonomous-ux-improvement-loop.md) (自律改善ループの方針 — 本 ADR は段 3 の詳細)
+- 関連: [0019](independent-judge-agents-security-qa-release.md) (独立 judge) / [0008](pr-review-via-cloud-routine.md) (Routine) / [0021](parent-session-as-pm-orchestrator.md) (子セッションへの境界宣言) / [0017](../../0017-container-apps-access-via-auth-gate.md) (到達経路を数える) / [0018](runtime-verification-in-the-loop.md) (動作検証) / [0016](../../0016-ai-agent-orchestration-on-maf.md) (M1-3 で workflow.py を置換)
 - Issue: [#123](https://github.com/yomote/mind-inbox/issues/123) (epic) / [#127](https://github.com/yomote/mind-inbox/issues/127) (スコアボード) / [#119](https://github.com/yomote/mind-inbox/issues/119) (最初の改善対象)
 - rubric (真実): `.github/claude/ux-rubric.md` / runbook: `docs/runbooks/ux-probe-judge.md`

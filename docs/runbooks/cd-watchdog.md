@@ -1,6 +1,6 @@
 # CD watchdog Routine — 赤くなった CD の無人診断・修正
 
-> 判断の背景: [ADR 0026](../adr/0026-cd-watchdog-routine.md)。
+> 判断の背景: [ADR 0026](../adr/archive/operations/cd-watchdog-routine.md)。
 > deploy / golden-path-monitor / build-images が赤のとき、PO が気付く前に診断と fix PR を進める毎時の Routine。
 
 ## 何が動いているか

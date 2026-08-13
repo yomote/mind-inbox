@@ -3,7 +3,7 @@
 - Status: Accepted (2026-08-10 / 報告会 #5)
 - Date: 2026-08-09
 - Deciders: yomote (PO) / 実装セッション
-- Related: [ADR 0004](0004-mockapi-as-frontend-truth.md) (mockApi = フロントの真実) / [ADR 0018](0018-runtime-verification-in-the-loop.md) (動作検証をループに組み込む) / [ADR 0007](0007-problem-centric-two-layer-domain-model.md) (Problem 中心 2層) / #165 (永続化)
+- Related: [ADR 0004](../../0004-mockapi-as-frontend-truth.md) (mockApi = フロントの真実) / [ADR 0018](runtime-verification-in-the-loop.md) (動作検証をループに組み込む) / [ADR 0007](../../0007-problem-centric-two-layer-domain-model.md) (Problem 中心 2層) / #165 (永続化)
 
 ## Context
 
@@ -74,7 +74,7 @@ UC-03 / UC-04 が原理的に踏めないため。
 
 ### 誰がこの層のシナリオを書くか (2026-08-10 裁定済み: **実装者が書く**)
 
-[ADR 0019](0019-independent-judge-agents-security-qa-release.md) と `docs/testing/strategy.md` は
+[ADR 0019](independent-judge-agents-security-qa-release.md) と `docs/testing/strategy.md` は
 **L3 (mock) を qa-reviewer の所有**とし、「実装者は L3 を増やさない」と定めている。
 L3-real は UC の受け入れを見る点で L3 と同種なのに、**初版 25 本は実装者が単独で書いた**。
 
@@ -100,12 +100,12 @@ L3-real は UC の受け入れを見る点で L3 と同種なのに、**初版 2
 ADR 0007 の方針 (自動で寄せて気づきを返し、違えば事後トリアージで直す) を状態にも適用し、
 `resolved` / `shelved` に再言及があったら `open` に戻す。誤検知なら詳細から「解決した」で戻せる。
 
-**これは [ADR 0007](0007-problem-centric-two-layer-domain-model.md) の「状態遷移は user の
+**これは [ADR 0007](../../0007-problem-centric-two-layer-domain-model.md) の「状態遷移は user の
 編集権 (トリアージ) に残す」という境界を、自動化の側へ動かす変更である。** 根拠は
 「ADR 0007 が _グルーピング_ について選んだ論理 (自動で寄せる方が、承認の摩擦で蓄積体験が
 続かなくなるより良い) は、_status_ にもそのまま効く」という一点に尽きる。
 
-**そしてこの判断は一度否定されている。** [debrief #1 (2026-08-06)](../debrief/journal.md) で
+**そしてこの判断は一度否定されている。** [debrief #1 (2026-08-06)](../../../debrief/journal.md) で
 PO は「再出現したら status も自動で open に戻る」という直感を述べ、エージェント側が
 「自動化したのはグルーピングのみ。状態遷移は user の編集権に残す (ADR 0007)」と説明して
 **PO の理解を訂正した**経緯がある。今回はその訂正を撤回して PO の当初の直感を採る形になる。
@@ -134,7 +134,7 @@ user の編集権に残す」という境界は、再言及による再点火に
 - **永続化は検証できない** (#165)。この層は `COSMOS_ENDPOINT` を渡さずに走らせるため
   リポジトリは in-memory の singleton に落ちる。「Functions がリサイクルしても困りごとが
   残るか」は別途 L4 で見る必要がある。なお永続化の実装自体は
-  [ADR 0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md) として着地済み (#182)
+  [ADR 0030](../../0030-persistence-on-cosmos-db-single-store-behind-bff.md) として着地済み (#182)
   なので、**この層の in-memory 前提 (spec の直列実行・題材トピック分割) は
   Cosmos を差した構成で回せるかを含めて見直す余地がある**
 - Problem リポジトリがプロセス共有のため spec は直列実行 + 題材トピックを spec ごとに分ける

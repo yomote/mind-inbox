@@ -1,6 +1,6 @@
 # GitHub Projects (実行ダッシュボード) セットアップ — **退役 / 歴史的経緯**
 
-> ⚠️ **この Runbook は現役ではない**。2026-08-11 の [ADR 0044](../adr/0044-stream-lanes-as-the-project-map.md) D5 で、実行ダッシュボードの**描画面を Projects board から status ページの戦況図へ移すことが決まった** (board の維持が web UI 手作業で、実測で open Issue 42 件のフィールド値が 0 件 = 静かに死んでいたため)。
+> ⚠️ **この Runbook は現役ではない**。2026-08-11 の [ADR 0044](../adr/archive/operations/stream-lanes-as-the-project-map.md) D5 で、実行ダッシュボードの**描画面を Projects board から status ページの戦況図へ移すことが決まった** (board の維持が web UI 手作業で、実測で open Issue 42 件のフィールド値が 0 件 = 静かに死んでいたため)。
 >
 > **移行先 (現時点)**:
 >
@@ -11,7 +11,7 @@
 
 ## Trigger
 
-Mind Inbox の実行状態 (今どこまで進み・次に何をやり・どのセッションが何を触るか) を GitHub Projects (v2) の board で見えるようにするとき。初回セットアップ、およびフィールド / Workflow を変更するときに使う。方針の背景は [ADR 0011](../adr/0011-github-projects-as-execution-dashboard.md)。
+Mind Inbox の実行状態 (今どこまで進み・次に何をやり・どのセッションが何を触るか) を GitHub Projects (v2) の board で見えるようにするとき。初回セットアップ、およびフィールド / Workflow を変更するときに使う。方針の背景は [ADR 0011](../adr/archive/operations/github-projects-as-execution-dashboard.md)。
 
 > **原則**: board は「doc へのポインタ + 状態」だけを持つ。**設計内容は書かない** (それは ADR / design doc の領域)。フィールドは下記の最小構成から増やさない。
 
@@ -117,6 +117,6 @@ board と同じ Issue データから GitHub が自動でチャートを起こ�
 
 ## Related
 
-- ADR: [0011 GitHub Projects は実行状態のダッシュボードに徹する](../adr/0011-github-projects-as-execution-dashboard.md)
+- ADR: [0011 GitHub Projects は実行状態のダッシュボードに徹する](../adr/archive/operations/github-projects-as-execution-dashboard.md)
 - ロードマップ: [`docs/design/archive/implementation_plan_v1.md`](../design/archive/implementation_plan_v1.md) (archive — v1 完了済み)
 - 関連 Runbook: [`claude-pr-review.md`](./claude-pr-review.md) (PR レビュー Routine)

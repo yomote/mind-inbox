@@ -3,7 +3,7 @@
 エージェントが動く実行環境 (claude.ai/code の cloud environment) の設定手順。
 **この設定は web UI にしかなく、エージェントからは変更できない** — user が 1 回だけ操作する。
 
-判断の背景: [ADR 0035](../adr/0035-role-split-across-agents-and-actions.md) / 2026-08-10 の実測。
+判断の背景: [ADR 0035](../adr/archive/operations/role-split-across-agents-and-actions.md) / 2026-08-10 の実測。
 
 ## なぜ設定するのか
 
@@ -70,4 +70,4 @@ codex login status             # ログインできたか確認
   (image / 依存 / ログイン) はどれも「動き続けるプロセス」ではなく「ディスクの状態」が
   欲しかっただけで、スナップショットで足りる
 - **Azure の資格情報を環境変数に置く** — [ADR 0006](../adr/0006-azure-access-via-device-code.md)。
-  外の事実は GitHub Actions 経由で取る ([ADR 0031](../adr/0031-agent-reaches-outside-via-github-actions.md))
+  外の事実は GitHub Actions 経由で取る ([ADR 0031](../adr/archive/operations/agent-reaches-outside-via-github-actions.md))

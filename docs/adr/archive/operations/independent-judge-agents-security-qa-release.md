@@ -10,7 +10,7 @@ Technical Story: `claude/security-review-agent-9avoqw` ブランチ。「実装�
 
 ## Context and Problem Statement
 
-現在のループは「実装セッション → pr-readiness (自己チェック) → PR レビュー Routine ([ADR 0008](0008-pr-review-via-cloud-routine.md)) → CI → 人間 merge」で回っている。しかし **セキュリティ深掘り・QA (受け入れ/シナリオ視点)・リリース Go/No-Go 判定** は、単一 judge の rubric の一部 (軸 B の 1 行) か、実装者自身の自己申告に混ざっている。
+現在のループは「実装セッション → pr-readiness (自己チェック) → PR レビュー Routine ([ADR 0008](pr-review-via-cloud-routine.md)) → CI → 人間 merge」で回っている。しかし **セキュリティ深掘り・QA (受け入れ/シナリオ視点)・リリース Go/No-Go 判定** は、単一 judge の rubric の一部 (軸 B の 1 行) か、実装者自身の自己申告に混ざっている。
 
 問題は **incentive の混在**: 実装者 (とそのコンテキストを引き継いだエージェント) は「出荷する」方向にバイアスがかかる。同一コンテキストで「自分の変更を疑え」と言っても、実装時の前提・正当化をそのまま引き継ぐため、監査として機能しにくい。人間の組織で QA / セキュリティ / リリース判定が開発と別ロールなのと同じ分離を、エージェントループにも入れる必要がある。
 
@@ -99,7 +99,7 @@ Chosen option: **"Option B"**。役割ごとに (1) 審査基準 rubric (`.githu
 
 ## Links
 
-- 審査基準: [`security-rubric.md`](../../.github/claude/security-rubric.md) / [`qa-rubric.md`](../../.github/claude/qa-rubric.md) / [`biz-owner-rubric.md`](../../.github/claude/biz-owner-rubric.md) / [`release-rubric.md`](../../.github/claude/release-rubric.md)
-- Runbook: [`docs/runbooks/review-agents.md`](../runbooks/review-agents.md)
-- 関連 ADR: [0008 PR レビュー Routine](0008-pr-review-via-cloud-routine.md) / [0014 理解ゲート+デブリーフ](0014-design-comprehension-gate-and-debrief.md)
+- 審査基準: [`security-rubric.md`](../../../../.github/claude/security-rubric.md) / [`qa-rubric.md`](../../../../.github/claude/qa-rubric.md) / [`biz-owner-rubric.md`](../../../../.github/claude/biz-owner-rubric.md) / [`release-rubric.md`](../../../../.github/claude/release-rubric.md)
+- Runbook: [`docs/runbooks/review-agents.md`](../../../runbooks/review-agents.md)
+- 関連 ADR: [0008 PR レビュー Routine](pr-review-via-cloud-routine.md) / [0014 理解ゲート+デブリーフ](design-comprehension-gate-and-debrief.md)
 - Subagents: <https://code.claude.com/docs/en/sub-agents>

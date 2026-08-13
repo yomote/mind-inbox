@@ -78,5 +78,5 @@ Chosen option: **"Option A"**。既定の対話形態を次の規約で定める
 
 ## Links
 
-- 関連 ADR: [0011 Projects=実行ダッシュボード](0011-github-projects-as-execution-dashboard.md) / [0014 理解ゲート+デブリーフ](0014-design-comprehension-gate-and-debrief.md) / [0019 独立 judge](0019-independent-judge-agents-security-qa-release.md) / [0020 HITL 選択肢形式+needs-human](0020-hitl-choice-format-and-needs-human-queue.md)
+- 関連 ADR: [0011 Projects=実行ダッシュボード](github-projects-as-execution-dashboard.md) / [0014 理解ゲート+デブリーフ](design-comprehension-gate-and-debrief.md) / [0019 独立 judge](independent-judge-agents-security-qa-release.md) / [0020 HITL 選択肢形式+needs-human](hitl-choice-format-and-needs-human-queue.md)
 - 発端の実例: 親セッション (2026-08-08 status) → 子 2 セッション分配 (#107 / PR #113 + #112)

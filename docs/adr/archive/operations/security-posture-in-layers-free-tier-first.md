@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-08-12
 - Deciders: yomote (PO) — **未承認**。エージェント起案 (CLAUDE.md: エージェント起案の ADR は Proposed で入れ、Accept は user のみ)
-- Related: [ADR 0019](0019-independent-judge-agents-security-qa-release.md) (独立 judge) / [ADR 0038](0038-security-checks-as-mechanized-triggers.md) (検査トリガーの機構化 — 本 ADR はその続き) / [ADR 0013](0013-standing-low-cost-dev-env-with-auto-deploy.md) (低コスト常設 dev) / [ADR 0018](0018-runtime-verification-in-the-loop.md) (動作検証) / [ADR 0025](0025-deploy-container-images-by-immutable-sha-tag.md) (不変 sha) / [ADR 0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md) (Cosmos) / [ADR 0036](0036-merge-gate-as-required-check-and-pm-cadence.md) (review-gate)
+- Related: [ADR 0019](independent-judge-agents-security-qa-release.md) (独立 judge) / [ADR 0038](security-checks-as-mechanized-triggers.md) (検査トリガーの機構化 — 本 ADR はその続き) / [ADR 0013](../../0013-standing-low-cost-dev-env-with-auto-deploy.md) (低コスト常設 dev) / [ADR 0018](runtime-verification-in-the-loop.md) (動作検証) / [ADR 0025](../../0025-deploy-container-images-by-immutable-sha-tag.md) (不変 sha) / [ADR 0030](../../0030-persistence-on-cosmos-db-single-store-behind-bff.md) (Cosmos) / [ADR 0036](merge-gate-as-required-check-and-pm-cadence.md) (review-gate)
 
 Technical Story: [Issue #313](https://github.com/yomote/mind-inbox/issues/313) — セキュリティ現状調査と段階的導入計画。2026-08-12 の PM セッションで 4 領域 (アプリ層 / AI 固有 / IaC・CI / ツール調査) を並行調査した結果に基づく。
 
@@ -11,9 +11,9 @@ Technical Story: [Issue #313](https://github.com/yomote/mind-inbox/issues/313) �
 
 「セキュリティ対策がほぼできていない」という見立てから調査を始めたが、**実測の結論は違った**。
 
-**基準は既にある。** [`security-rubric.md`](../../.github/claude/security-rubric.md) は S1〜S7 で、このプロダクト固有のリスク (メンタルヘルスに近い機微データ / public リポジトリ / LLM へのユーザー入力直結) を正しく名指ししている。public リポジトリの典型事故もほぼ塞げていた — `pull_request_target` はゼロ、fork PR の head を checkout する経路なし、全 workflow が `permissions:` を明示宣言、保存 secret は `GITHUB_TOKEN` のみ (Azure は OIDC)、Cosmos / Speech は `disableLocalAuth: true`、deploy のたびに `smoke-test.sh` が「Functions が 401 を返すか」を実測している。
+**基準は既にある。** [`security-rubric.md`](../../../../.github/claude/security-rubric.md) は S1〜S7 で、このプロダクト固有のリスク (メンタルヘルスに近い機微データ / public リポジトリ / LLM へのユーザー入力直結) を正しく名指ししている。public リポジトリの典型事故もほぼ塞げていた — `pull_request_target` はゼロ、fork PR の head を checkout する経路なし、全 workflow が `permissions:` を明示宣言、保存 secret は `GITHUB_TOKEN` のみ (Azure は OIDC)、Cosmos / Speech は `disableLocalAuth: true`、deploy のたびに `smoke-test.sh` が「Functions が 401 を返すか」を実測している。
 
-**欠けているのは、基準を人が思い出さなくても機械が照合する経路の方**であり、しかもそれは [ADR 0038](0038-security-checks-as-mechanized-triggers.md) が既に一度立てた問いだった。本 ADR はその続きとして、0038 が扱わなかった 3 つのことを扱う。
+**欠けているのは、基準を人が思い出さなくても機械が照合する経路の方**であり、しかもそれは [ADR 0038](security-checks-as-mechanized-triggers.md) が既に一度立てた問いだった。本 ADR はその続きとして、0038 が扱わなかった 3 つのことを扱う。
 
 ### 実測 1 — 機構を作っても、動かなければ同じ
 
@@ -37,24 +37,24 @@ Technical Story: [Issue #313](https://github.com/yomote/mind-inbox/issues/313) �
 
 外周 (CI / クラウド設定) より、アプリの内側の方が薄かった:
 
-- **会話層に所有者チェックが無い** — Problem 層は `userId` でパーティション分離済み ([ADR 0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md) D5) なのに、`sessions` の partition key は `/id` = session_id で **userId フィールドすら無い**。BFF も ai-agent も session_id の所有権を検証しない。結果、**最も機微な「生の吐き出し全文」だけが全ユーザー共通の名前空間**にあり、session_id は事実上 read/write 両用の bearer token になっている
+- **会話層に所有者チェックが無い** — Problem 層は `userId` でパーティション分離済み ([ADR 0030](../../0030-persistence-on-cosmos-db-single-store-behind-bff.md) D5) なのに、`sessions` の partition key は `/id` = session_id で **userId フィールドすら無い**。BFF も ai-agent も session_id の所有権を検証しない。結果、**最も機微な「生の吐き出し全文」だけが全ユーザー共通の名前空間**にあり、session_id は事実上 read/write 両用の bearer token になっている
 - **量の上限が 1 つも無い** — BFF の zod に `.max(` が 0 件、履歴の切り詰めも無く毎ターン全量再送、LLM 呼び出しにもサービス間呼び出しにもタイムアウト無し、レートリミット無し
-- **その安全網も存在しなかった** — [ADR 0013](0013-standing-low-cost-dev-env-with-auto-deploy.md) が二重防御と呼ぶ予算アラートは `!empty(budgetContactEmails)` 条件付きで、その値がリポジトリのどこにも無いため**リソースが一度も作られていない** ([Issue #317](https://github.com/yomote/mind-inbox/issues/317))
+- **その安全網も存在しなかった** — [ADR 0013](../../0013-standing-low-cost-dev-env-with-auto-deploy.md) が二重防御と呼ぶ予算アラートは `!empty(budgetContactEmails)` 条件付きで、その値がリポジトリのどこにも無いため**リソースが一度も作られていない** ([Issue #317](https://github.com/yomote/mind-inbox/issues/317))
 - **指示とユーザー入力の境界が無い** — ツール結果と RAG コンテキストが **system ロール**で履歴に入る。間接プロンプトインジェクションの経路そのもの
 - **HITL が形骸化** — 承認要求の文面はツール名のみ (引数を見せない)、承認 UI が未実装、`get_inbox_stats(user_id)` は **user_id をモデル出力から受け取る**設計で承認不要
 
 ### 実測 4 — public リポジトリであることが最大の予算的資産
 
-追加課金ゼロという制約 ([ADR 0008](0008-pr-review-via-cloud-routine.md) / [0031](0031-agent-reaches-outside-via-github-actions.md) から継承) の下で、**public リポジトリなら CodeQL (SAST) / secret scanning + push protection / Dependabot が全て無料**。ADR 0038 は選択肢 B としてこれを検討し「リポジトリ設定のクリックが絡み、コードだけで完結しない」ため見送っていたが、**その判断は「今日動かすことを優先する」文脈でのものであり、PO に確認できる場では前提が変わる**。
+追加課金ゼロという制約 ([ADR 0008](pr-review-via-cloud-routine.md) / [0031](agent-reaches-outside-via-github-actions.md) から継承) の下で、**public リポジトリなら CodeQL (SAST) / secret scanning + push protection / Dependabot が全て無料**。ADR 0038 は選択肢 B としてこれを検討し「リポジトリ設定のクリックが絡み、コードだけで完結しない」ため見送っていたが、**その判断は「今日動かすことを優先する」文脈でのものであり、PO に確認できる場では前提が変わる**。
 
 ## Decision Drivers
 
 - **追加課金ゼロ** — 個人プロジェクト。有料 SaaS も Azure の有料プランも入れない
-- **門を重くしない** ([ADR 0036](0036-merge-gate-as-required-check-and-pm-cadence.md) の driver を継承) — 検査を増やしてリードタイムを悪化させない
+- **門を重くしない** ([ADR 0036](merge-gate-as-required-check-and-pm-cadence.md) の driver を継承) — 検査を増やしてリードタイムを悪化させない
 - **誤検知でアラートが読まれなくなったら、その検査は動いていないのと同じ** — ADR 0038 の「実績ゼロ」と同型の失敗。**入れる検査の数より、読まれ続ける検査の数**を最大化する
 - **層の責任範囲が重ならないこと** (Issue #313 の方針) — 同じものを 2 つのツールが吠えると両方読まれなくなる
 - **重大な問題は人の注意力に依存せず自動で止める** (Issue #313 の方針)
-- **不可逆な判断・課金が発生する判断は PO に返す** ([ADR 0020](0020-hitl-choice-format-and-needs-human-queue.md))
+- **不可逆な判断・課金が発生する判断は PO に返す** ([ADR 0020](hitl-choice-format-and-needs-human-queue.md))
 
 ## Decision Outcome
 
@@ -62,16 +62,16 @@ Technical Story: [Issue #313](https://github.com/yomote/mind-inbox/issues/313) �
 
 ### 層の責任分担 (何がどこを持つか)
 
-| 層                   | 検査                                       | 持ち場                                        | トリガー                                                                       | コスト |
-| -------------------- | ------------------------------------------ | --------------------------------------------- | ------------------------------------------------------------------------------ | ------ |
-| **push 時 (事前)**   | secret scanning + **push protection**      | 秘密の混入を**未然に止める**                  | GitHub 側 (常時)                                                               | ¥0     |
-| **PR 時 (必須)**     | CI (test / lint) + review-gate             | 既存                                          | PR                                                                             | ¥0     |
-| **PR 時 (advisory)** | CodeQL (SAST) / dependency-review / zizmor | コードの脆弱パターン・新規依存・workflow 権限 | PR                                                                             | ¥0     |
-| **PR 時 (条件付き)** | `@codex security review` 自動指名          | 敏感パス (ADR 0038)                           | 敏感パス変更時                                                                 | ¥0     |
-| **週次**             | security-sweep (SCA + secrets)             | 既知 CVE の照合                               | cron (ADR 0038)                                                                | ¥0     |
-| **週次**             | Dependabot                                 | **修正 PR の自動生成**                        | GitHub 側                                                                      | ¥0     |
-| **リリース**         | 独立 judge (security-reviewer)             | 到達可能性と実害の判定                        | リリース PR ([ADR 0019](0019-independent-judge-agents-security-qa-release.md)) | ¥0     |
-| **常時 (実行時)**    | smoke-test の認可実測 + 予算アラート       | 設定が外れたことの検知                        | deploy 毎 / Azure                                                              | ¥0     |
+| 層                   | 検査                                       | 持ち場                                        | トリガー                                                                  | コスト |
+| -------------------- | ------------------------------------------ | --------------------------------------------- | ------------------------------------------------------------------------- | ------ |
+| **push 時 (事前)**   | secret scanning + **push protection**      | 秘密の混入を**未然に止める**                  | GitHub 側 (常時)                                                          | ¥0     |
+| **PR 時 (必須)**     | CI (test / lint) + review-gate             | 既存                                          | PR                                                                        | ¥0     |
+| **PR 時 (advisory)** | CodeQL (SAST) / dependency-review / zizmor | コードの脆弱パターン・新規依存・workflow 権限 | PR                                                                        | ¥0     |
+| **PR 時 (条件付き)** | `@codex security review` 自動指名          | 敏感パス (ADR 0038)                           | 敏感パス変更時                                                            | ¥0     |
+| **週次**             | security-sweep (SCA + secrets)             | 既知 CVE の照合                               | cron (ADR 0038)                                                           | ¥0     |
+| **週次**             | Dependabot                                 | **修正 PR の自動生成**                        | GitHub 側                                                                 | ¥0     |
+| **リリース**         | 独立 judge (security-reviewer)             | 到達可能性と実害の判定                        | リリース PR ([ADR 0019](independent-judge-agents-security-qa-release.md)) | ¥0     |
+| **常時 (実行時)**    | smoke-test の認可実測 + 予算アラート       | 設定が外れたことの検知                        | deploy 毎 / Azure                                                         | ¥0     |
 
 **重複の排除**: SCA は security-sweep と Dependabot の 2 つが見るが、**役割が違う** — sweep は「棚卸しと痕跡」、Dependabot は「修正 PR の生成」。sweep 側は将来 Dependabot が回り始めたら**件数の追跡に軽量化する**余地がある (ADR 0038 の「将来オプション」がここで回収される)。SAST は CodeQL のみ (semgrep / bandit は入れない)。secrets は push protection (事前) / gitleaks (週次・履歴) で、**事前と事後**という別の役割に分ける。
 
@@ -106,7 +106,7 @@ Technical Story: [Issue #313](https://github.com/yomote/mind-inbox/issues/313) �
 1. **会話セッションに所有者を持たせる** ([Issue #319](https://github.com/yomote/mind-inbox/issues/319)) — `sessions` に userId 次元が無い問題。**マルチユーザー化の必須ブロッカー**であり、データが増えるほど移行コストが上がるので早い方が安い。partition key を変えるなら **Cosmos のコンテナ再作成が要る = 不可逆**。design-gate 必須
 2. **指示とユーザー入力の境界を作る** — ツール結果 / RAG コンテキストを system ロールに入れない。間接インジェクションの主経路。**どこで境界を引くかが設計判断**なので design-gate 対象
 3. **HITL を実体化する** — 承認文面に**ツール引数を出す** (現状はツール名のみ)、承認 UI の実装、`/approve` の所有者チェックと監査記録。**ツールが実体を持つ前に**やる
-4. **`x-ms-client-principal` の前提を実測する** — 「EasyAuth が inbound の同名ヘッダを上書きするから安全」というコメントの前提を確かめるテストもスモークも無い。しかも欠損時は fail-open で `"local"` に落ちる。**偽造ヘッダを実環境に投げて弾かれることを smoke-test に足す** ([ADR 0018](0018-runtime-verification-in-the-loop.md))。実測経路の設計が要る (このセッションの egress では届かないため Actions 側から)
+4. **`x-ms-client-principal` の前提を実測する** — 「EasyAuth が inbound の同名ヘッダを上書きするから安全」というコメントの前提を確かめるテストもスモークも無い。しかも欠損時は fail-open で `"local"` に落ちる。**偽造ヘッダを実環境に投げて弾かれることを smoke-test に足す** ([ADR 0018](runtime-verification-in-the-loop.md))。実測経路の設計が要る (このセッションの egress では届かないため Actions 側から)
 5. **監査ログ** — Phase 3 と併せて。機微データを扱う以上、事故時に「何が読まれたか」を答えられる必要がある
 
 **Phase 0 に降格したもの (設計判断が不要だと判明したため)**: 機密の出口 (ログ・例外文字列)、外向き呼び出しのタイムアウト、`get_inbox_stats(user_id)` が **user_id をモデル出力から受け取る**問題、および **AI ツール権限の不変条件テスト**。最後のものは「副作用のあるツールに承認フラグが付いているか」を **LLM 不要・決定的**に検査するもので、Issue #313 の「AI 固有の攻撃パターンをテストとして蓄積する」の最初の一歩にあたる。設計を決める必要が無く、かつ**将来ツールを足した人の付け忘れを機械が止める**ため、先に入れる価値が高い。
@@ -177,7 +177,7 @@ CIEM を先に入れても、返ってくる最大の指摘は **「CD の ident
 - **Trivy** (コンテナ / ベースイメージ CVE) — 現状 SCA はアプリの依存しか見ておらず、ベースイメージは完全に未カバー
 - **本格的な DAST (ZAP baseline 等)** — smoke-test の実測で当面代替する
 
-**実装上の制約 (実測済み)**: エージェントのセッションは egress ポリシーにより Azure エンドポイントへ到達できない (CONNECT に 403)。**動的検査は必ず Actions 側から回す** ([ADR 0031](0031-agent-reaches-outside-via-github-actions.md) の原則がそのまま効く)。
+**実装上の制約 (実測済み)**: エージェントのセッションは egress ポリシーにより Azure エンドポイントへ到達できない (CONNECT に 403)。**動的検査は必ず Actions 側から回す** ([ADR 0031](agent-reaches-outside-via-github-actions.md) の原則がそのまま効く)。
 
 ### 明示的に「やらない」もの (課金・複雑さが制約と衝突)
 
@@ -248,4 +248,4 @@ CIEM を先に入れても、返ってくる最大の指摘は **「CD の ident
 ## Links
 
 - [Issue #313](https://github.com/yomote/mind-inbox/issues/313) (調査と計画) / [#316](https://github.com/yomote/mind-inbox/issues/316) (初回 sweep 102 件) / [#317](https://github.com/yomote/mind-inbox/issues/317) (予算アラート不在) / [#311](https://github.com/yomote/mind-inbox/issues/311) (action の SHA 固定) / [#309](https://github.com/yomote/mind-inbox/issues/309) (E2E 暗号鍵の指紋)
-- 審査基準: [security-rubric.md](../../.github/claude/security-rubric.md) (S1〜S7 — 本 ADR は基準ではなく**その照合機構**を扱う)
+- 審査基準: [security-rubric.md](../../../../.github/claude/security-rubric.md) (S1〜S7 — 本 ADR は基準ではなく**その照合機構**を扱う)

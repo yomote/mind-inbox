@@ -1,8 +1,8 @@
 # PR レビュー rubric (code-reviewer judge)
 
 > **2026-08-12 に、Codex (`chatgpt-codex-connector[bot]`) の実レビュー 215 件 (46 PR / 45 時間 / P1 58・P2 155・P3 2) を全件読んで導出し、全面改訂した。** 各項目には**そのルールが存在する理由になった実際の Codex 指摘**を原文で添えてある。抽象カテゴリから演繹した項目は 1 つも無い。
-> **旧版 ([ADR 0008](../../docs/adr/0008-pr-review-via-cloud-routine.md) 由来の軸 A / B / C) はこの改訂で置き換えた** — 実データが軸 C (PR 本文の評価) と軸 B の「簡素化 / 過剰抽象 / 再実装」を **0 件**で否定し、最大勢力の「宣言と参照面の乖離」(28%) がどの軸にも無かったため (下記「落とした観点」)。
-> 一次資料: [`docs/reviews/codex-review-analysis-2026-08-12.md`](../../docs/reviews/codex-review-analysis-2026-08-12.md) / 判断記録: [ADR 0052](../../docs/adr/0052-codex-derived-review-rubric-and-stand-in-judge.md)
+> **旧版 ([ADR 0008](../../docs/adr/archive/operations/pr-review-via-cloud-routine.md) 由来の軸 A / B / C) はこの改訂で置き換えた** — 実データが軸 C (PR 本文の評価) と軸 B の「簡素化 / 過剰抽象 / 再実装」を **0 件**で否定し、最大勢力の「宣言と参照面の乖離」(28%) がどの軸にも無かったため (下記「落とした観点」)。
+> 一次資料: [`docs/reviews/codex-review-analysis-2026-08-12.md`](../../docs/reviews/codex-review-analysis-2026-08-12.md) / 判断記録: [ADR 0052](../../docs/adr/archive/operations/codex-derived-review-rubric-and-stand-in-judge.md)
 > **共通規約: [`_common.md`](_common.md) を必ず併せて読む** (共通 Severity / 共通の出力ルール)。矛盾したら `_common.md` が正。
 > subagent 定義: [`.claude/agents/code-reviewer.md`](../../.claude/agents/code-reviewer.md)
 
@@ -261,7 +261,7 @@ PR 本文は**根拠として引用してよい**が、本文の書き方その�
 
 原文 (PR #256 / Accepted ADR との衝突):
 
-> この案を Accepted にすると、ここで導入する定期 Routine と、Accepted 済みの `docs/adr/0035-role-split-across-agents-and-actions.md:53` にある「Routine をゼロにする」という決定が同時に有効になります。末尾で 0035 を関連 ADR として挙げるだけではどちらを優先するか確定できないため…
+> この案を Accepted にすると、ここで導入する定期 Routine と、Accepted 済みの `docs/adr/archive/operations/role-split-across-agents-and-actions.md:53` にある「Routine をゼロにする」という決定が同時に有効になります。末尾で 0035 を関連 ADR として挙げるだけではどちらを優先するか確定できないため…
 
 ### C9. 静かに間違うデータ (~15 件)
 
@@ -376,7 +376,7 @@ Codex は同じクラス (`|| true` の握り潰し / `--paginate` 欠落 / 参�
 ```markdown
 <!-- standin-review -->
 
-**代役レビュー (`<head SHA の先頭 7 桁>`)** — Codex 不在の埋め合わせであり、独立性は回復していません ([ADR 0052](../../docs/adr/0052-codex-derived-review-rubric-and-stand-in-judge.md))
+**代役レビュー (`<head SHA の先頭 7 桁>`)** — Codex 不在の埋め合わせであり、独立性は回復していません ([ADR 0052](../../docs/adr/archive/operations/codex-derived-review-rubric-and-stand-in-judge.md))
 ```
 
 - **SHA は必ず現 head のもの**を書く。`review-gate` はマーカーと SHA の**両方**を要求し、**push があれば失効する** (pm-accept と同じ強度 / `check.py` の `has_standin_review`)。レビュー後に新しいコミットが積まれたら、**貼り直す = もう一度レビューする**

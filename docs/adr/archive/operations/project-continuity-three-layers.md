@@ -41,9 +41,9 @@ PO の要求: 「プロジェクトが止まっているのを私が見に行っ
 ### D2 — 当番 PM は Routine (毎回新セッション・1 日 3 回)
 
 - claude.ai の Routine が **JST 08:00 / 13:00 / 18:00 に毎回新しいセッションを起こす** (`create_new_session_on_fire`)。どのセッションの生死にも依存しない
-- **本項は [ADR 0035](0035-role-split-across-agents-and-actions.md) D1 の「Routine をゼロにする」を一部 supersede する** — LLM 判断を要する定期実務 (当番 PM) に限り Routine を再導入する。0035 が Routine を却下した理由は「生死がリポジトリから見えない (沈黙と正常が区別できない)」だった。本 ADR では当番レポートを Issue コメントとして**毎回** (異常ゼロでも) 残し、その**欠落自体を watchers.json の監視対象にする**ことでこの却下理由を解消する。機械計測を Actions に置く 0035 D1 の本体は維持する
+- **本項は [ADR 0035](role-split-across-agents-and-actions.md) D1 の「Routine をゼロにする」を一部 supersede する** — LLM 判断を要する定期実務 (当番 PM) に限り Routine を再導入する。0035 が Routine を却下した理由は「生死がリポジトリから見えない (沈黙と正常が区別できない)」だった。本 ADR では当番レポートを Issue コメントとして**毎回** (異常ゼロでも) 残し、その**欠落自体を watchers.json の監視対象にする**ことでこの却下理由を解消する。機械計測を Actions に置く 0035 D1 の本体は維持する
 - 当番セッションは CLAUDE.md の規約 (常設承認 / resolve ルール / hub-and-spoke) に従って**実務を回す**: 滞留 PR のマージ、レビュー指摘への対応、自動起票 Issue の診断、needs-human / Proposed ADR の集計
-- **実装の分配基準は窓口 PM と同一** (2026-08-12 に [ADR 0048](0048-child-sessions-are-usable-again-with-a-one-way-poke-channel.md) D1 へ差し替え。それ以前は [ADR 0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) D1 を指していたが、同 ADR の前提「`create_session` が弾かれる」が崩れたため): レビュー指摘への対応・1〜2 ファイルの修正は当番が直接 push してよく、短い往復を繰り返す作業は subagent (`isolation: "worktree"`)、言い切れて長時間かかる作業は子セッションに出す。これは [ADR 0021](0021-parent-session-as-pm-orchestrator.md) D8 の新たな supersede ではなく、0048 が定めた運用を当番セッションにも適用するもの
+- **実装の分配基準は窓口 PM と同一** (2026-08-12 に [ADR 0048](child-sessions-are-usable-again-with-a-one-way-poke-channel.md) D1 へ差し替え。それ以前は [ADR 0033](parent-implements-via-subagent-when-child-sessions-are-gated.md) D1 を指していたが、同 ADR の前提「`create_session` が弾かれる」が崩れたため): レビュー指摘への対応・1〜2 ファイルの修正は当番が直接 push してよく、短い往復を繰り返す作業は subagent (`isolation: "worktree"`)、言い切れて長時間かかる作業は子セッションに出す。これは [ADR 0021](parent-session-as-pm-orchestrator.md) D8 の新たな supersede ではなく、0048 が定めた運用を当番セッションにも適用するもの
 - **引き継ぎは GitHub に書いて消える**: 巡回レポートを常設 Issue にコメントで残す (冒頭に「🙋 あなたの番」)。異常ゼロでも必ず書く (沈黙と正常を区別する)。Routine の完了 push 通知を PO のスマホに飛ばす
 - 当番がやらないこと: リリース PR の merge / deploy、needs-human・保留 PR への操作、design-gate 級の設計判断 (Issue に積んで窓口 PM に回す)
 - **作成は PO の 1 回の操作が必要** (承認ゲートの実測により)。web UI から作成し、以後はサーバー側で永続
@@ -80,4 +80,4 @@ PO の要求: 「プロジェクトが止まっているのを私が見に行っ
 - 発端の実害: #230 / 2026-08-11 の滞留 4 本
 - auto-merge 不発の原因調査: #253
 - Routine 作成の人間宿題: #254
-- 関連 ADR: [0021](0021-parent-session-as-pm-orchestrator.md) (hub-and-spoke — D8 は [0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) の改訂を当番にも適用、本 ADR での追加変更なし) / [0031](0031-agent-reaches-outside-via-github-actions.md) (外部到達は Actions 経由) / [0035](0035-role-split-across-agents-and-actions.md) (**D1「Routine ゼロ」を本 ADR D2 が一部 supersede** — Accept 時に 0035 の Status 行へ注記する) / [0036](0036-merge-gate-as-required-check-and-pm-cadence.md) (マージの門と PM リズム)
+- 関連 ADR: [0021](parent-session-as-pm-orchestrator.md) (hub-and-spoke — D8 は [0033](parent-implements-via-subagent-when-child-sessions-are-gated.md) の改訂を当番にも適用、本 ADR での追加変更なし) / [0031](agent-reaches-outside-via-github-actions.md) (外部到達は Actions 経由) / [0035](role-split-across-agents-and-actions.md) (**D1「Routine ゼロ」を本 ADR D2 が一部 supersede** — Accept 時に 0035 の Status 行へ注記する) / [0036](merge-gate-as-required-check-and-pm-cadence.md) (マージの門と PM リズム)

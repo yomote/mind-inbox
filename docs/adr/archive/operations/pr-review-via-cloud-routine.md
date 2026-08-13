@@ -1,6 +1,6 @@
 # 0008. PR レビューは Claude Code on the web の Routine で行う (API キー Actions / 管理版 Code Review を採らない)
 
-- Status: Superseded by [0035](0035-role-split-across-agents-and-actions.md) (2026-08-10)
+- Status: Superseded by [0035](role-split-across-agents-and-actions.md) (2026-08-10)
 - Date: 2026-06-27
 - Deciders: omoteforlab
 - Consulted: —
@@ -88,7 +88,7 @@ public リポジトリ無料枠で incremental review + 解決まで行う専用
 
 ## Links
 
-- Runbook: [`docs/runbooks/claude-pr-review.md`](../runbooks/claude-pr-review.md)
-- 審査基準: [`.github/claude/review-rubric.md`](../../.github/claude/review-rubric.md)
+- Runbook: [`docs/runbooks/claude-pr-review.md`](../../../runbooks/claude-pr-review.md)
+- 審査基準: [`.github/claude/review-rubric.md`](../../../../.github/claude/review-rubric.md)
 - Routines: <https://code.claude.com/docs/en/routines>
 - Code Review (管理版): <https://code.claude.com/docs/en/code-review>

@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-08-11
 - Deciders: yomote (PO) / PM セッション (PO 裁定 2026-08-11 を受けた実装側 ADR)
-- Related: [ADR 0036](0036-merge-gate-as-required-check-and-pm-cadence.md) (マージの門 — 本 ADR はその運用改訂。D1 の pm-accept 失効規則を狭め、Considered Options D の merge queue を採用に転じる) / [ADR 0040](0040-project-continuity-three-layers.md) D1 (マージ**執行**とストール検知 — 本 ADR は**受け入れ判定**側で、分担は D4 参照) / [ADR 0035](0035-role-split-across-agents-and-actions.md) (役割分担)
+- Related: [ADR 0036](merge-gate-as-required-check-and-pm-cadence.md) (マージの門 — 本 ADR はその運用改訂。D1 の pm-accept 失効規則を狭め、Considered Options D の merge queue を採用に転じる) / [ADR 0040](project-continuity-three-layers.md) D1 (マージ**執行**とストール検知 — 本 ADR は**受け入れ判定**側で、分担は D4 参照) / [ADR 0035](role-split-across-agents-and-actions.md) (役割分担)
 
 Technical Story: 2026-08-11 の実害 — PR #243 が「追いつき競争」で 4 周 (base 追随 → pm-accept 失効 → 再受け入れ → 別 PR がマージされてまた out-of-date)。#260 / #261 / #263 が同時周回して互いの pm-accept を無効化し合った。queue 有効化の設定作業は needs-human Issue #269。
 
@@ -139,6 +139,6 @@ PR #258 (ADR 0040 D1) は「review-gate 自身が受け入れ済み・auto-merge
 
 ## Links
 
-- 関連 ADR: [0036](0036-merge-gate-as-required-check-and-pm-cadence.md) / [0040](0040-project-continuity-three-layers.md) / [0035](0035-role-split-across-agents-and-actions.md) / [0031](0031-agent-reaches-outside-via-github-actions.md)
-- Runbook: [merge-queue.md](../runbooks/merge-queue.md)
+- 関連 ADR: [0036](merge-gate-as-required-check-and-pm-cadence.md) / [0040](project-continuity-three-layers.md) / [0035](role-split-across-agents-and-actions.md) / [0031](agent-reaches-outside-via-github-actions.md)
+- Runbook: [merge-queue.md](../../../runbooks/merge-queue.md)
 - needs-human: Issue #269 (queue 有効化)

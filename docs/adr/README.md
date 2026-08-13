@@ -21,6 +21,9 @@
 - 実装詳細 (関数名、ファイル分割の仕方)
 - 一時的な対処 / バグ修正
 - 運用手順 (Runbook の領域)
+- **開発の運用・プロセスの決め事** — エージェントの回し方 / レビュー体制 / PM 機構 / セッション分配 / CI の運転ルール。
+  これらは**数日で改訂される**ため不変記録の棚に合わない。置き場は [`CLAUDE.md`](../../CLAUDE.md)。
+  過去に ADR として書かれた 29 本は [`archive/`](archive/README.md) へ退避済み
 
 ## 書き方
 
@@ -33,7 +36,12 @@ git fetch origin main -q
 git ls-tree -r origin/main --name-only docs/adr/ | grep -oE '[0-9]{4}' | sort -n | tail -1
 ```
 
-⚠️ **`ls docs/adr/` のローカル最大値を使わないこと。** 並行セッションが同じ番号を取り、過去 2 回衝突している (0015→0019 / 0026→0027)。セッション開始時のフックが「次に使える番号」を自動提示し、CI (`adr-number-guard`) が衝突を赤にする ([ADR 0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) D3)。
+⚠️ **`ls docs/adr/` のローカル最大値を使わないこと。** 並行セッションが同じ番号を取り、過去 2 回衝突している (0015→0019 / 0026→0027)。セッション開始時のフックが「次に使える番号」を自動提示し、CI (`adr-number-guard`) が衝突を赤にする ([起票パケットと SessionStart 事前提示](archive/operations/dispatch-packet-in-issue-and-session-start-preflight.md) D3 — 退避済み)。
+
+⚠️ **欠番は埋めないこと。** 0008 / 0011 / 0014 / 0018〜0022 … が飛んでいるのは、運用系 29 本を
+[`archive/`](archive/README.md) へ退避したためです。番号は ID であって順序ではなく、振り直すと
+Issue / PR 本文の「ADR 0030 を見て」がすべてリンク切れになります (リポジトリ外なので機械置換が届かない)。
+**常に main の最大番号 +1 で続けてください。**
 
 ### 2. ファイルを作る
 
@@ -71,57 +79,48 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 
 エージェントが過去判断を覆さないよう、CLAUDE.md からこのディレクトリにリンクする (#13 で実施)。
 
-## 既存 ADR
+## 既存 ADR (21 本)
 
-無印 = Accepted。それ以外は末尾に Status を明記する (一覧から Superseded / Proposed が読めるように)。
+無印 = Accepted。それ以外は末尾に Status を明記する。
+**番号順ではなくテーマ順**に並べている (番号は ID であって順序ではない — 欠番の理由は [`archive/`](archive/README.md))。
 
-- [0001](0001-bff-as-trpc-not-rest.md) — BFF を REST ではなく tRPC で書く
-- [0002](0002-container-apps-not-aks.md) — サービス基盤に AKS ではなく Container Apps (scale-to-zero) を選ぶ
-- [0003](0003-two-phase-bicep.md) — IaC を bootstrap → config の 2-phase Bicep に分ける
-- [0004](0004-mockapi-as-frontend-truth.md) — `mockApi.ts` を Frontend モックの唯一の真実とする
-- [0005](0005-mdx-ui-spec-as-truth.md) — UI 仕様は MDX が真実、実装が乖離したら実装を直す
-- [0006](0006-azure-access-via-device-code.md) — 開発・運用での Azure アクセスは device-code を主とする
+### ドメイン / プロダクト
+
 - [0007](0007-problem-centric-two-layer-domain-model.md) — 困りごとを Problem 集約とする 2層ドメインモデル (Mention → Problem)
-- [0008](0008-pr-review-via-cloud-routine.md) — PR レビューを Claude Code on the web の Routine で行う — **Superseded by 0035**
-- [0009](0009-on-demand-cd-via-github-actions-oidc.md) — デプロイは GitHub Actions のオンデマンド CD（手動 up/down + 夜間 teardown, OIDC）で行う — **Superseded by 0013**
-- [0010](0010-voicevox-cpu-gpu-deploy-tier.md) — VOICEVOX を `voicevoxTier`(cpu/gpu) 単一スイッチで切替（既定 cpu）で up を高速・安価に
-- [0011](0011-github-projects-as-execution-dashboard.md) — GitHub Projects は実行状態のダッシュボードに徹し、設計の真実は docs に置く
 - [0012](0012-grouping-in-ai-agent-with-bff-supplied-candidates.md) — Mention のグルーピングは AI Agent が担い、BFF が既存 Problem 候補を渡す
-- [0013](0013-standing-low-cost-dev-env-with-auto-deploy.md) — dev 環境は「常設・待機最小コスト + main マージ自動デプロイ」にする（0009 のオンデマンド teardown を置き換える）
-- [0014](0014-design-comprehension-gate-and-debrief.md) — 設計理解ゲートとゼミ型デブリーフで、user の意思決定・学習をループに組み込む
 - [0015](0015-proactive-agentic-workflow.md) — システムの能動化 — ガードレール付きプロアクティブ・エージェントワークフローを解禁する (思想転換)
 - [0016](0016-ai-agent-orchestration-on-maf.md) — AI Agent のオーケストレーション基盤を Semantic Kernel から Microsoft Agent Framework へ移行する
-- [0017](0017-container-apps-access-via-auth-gate.md) — Container Apps の「第二の扉」は認証の門で閉じる (組み込み認証 + Managed Identity / voicevox は internal ingress)
-- [0018](0018-runtime-verification-in-the-loop.md) — 動作検証をループに組み込む（実態の読み取り・PR への証跡・ローカルブラウザ検証）
-- [0019](0019-independent-judge-agents-security-qa-release.md) — セキュリティ / QA / リリース判定を実装コンテキストから分離した独立 judge エージェントにする
-- [0020](0020-hitl-choice-format-and-needs-human-queue.md) — 人間の確認は選択肢形式で出し、人間宿題は needs-human キューに一元化する
-- [0021](0021-parent-session-as-pm-orchestrator.md) — 親セッションを PM ハブにして、並行作業は子セッションへ分配する (hub-and-spoke)
-- [0022](0022-autonomous-ux-improvement-loop.md) — UX 品質は自律改善ループで維持する (観測・評価・改善を自動化、人間は基準定義と例外裁定) — 一部 Superseded by 0035 (起動経路のみ)
-- [0023](0023-server-stt-azure-speech-f0.md) — 音声入力のサーバー STT に Azure Speech (F0・MI 認証) を採用し、Web Speech をフォールバックに残す
-- [0024](0024-chat-streaming-via-sse-side-channel.md) — チャット応答の逐次表示は SSE サイドチャネル (`/api/chat/stream`) で通す
-- [0025](0025-deploy-container-images-by-immutable-sha-tag.md) — コンテナ image のデプロイは :latest ではなく不変 sha タグの解決 + 稼働検証で行う (#107)
-- [0026](0026-cd-watchdog-routine.md) — CD の赤は毎時の watchdog Routine が検知し、診断と fix PR まで無人で進める — **Superseded by 0035**
-- [0027](0027-ux-improvement-loop-ab-protocol-and-mutation-boundary.md) — UX 自律改善ループ M2: 採点の無人化を先行させ、A/B は実環境の外で回し、改変対象はパスで縛る
-- [0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) — 分配は「起票パケットを Issue 本文に残す」形にし、並行の衝突は SessionStart の事前提示と CI で防ぐ — 一部 Superseded by 0035 (パケットの置き場所のみ Issue → PR)
-- [0029](0029-probe-record-transport-via-issue-comment.md) — UX プローブ記録は artifact ではなく Issue コメントで採点セッションへ運ぶ
-- [0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md) — 永続化は Cosmos DB 1 本に寄せ、BFF の内側だけに置く (Redis は廃止予定のため不採用)
-- [0031](0031-agent-reaches-outside-via-github-actions.md) — サンドボックスの外にある事実は GitHub Actions 経由で取る (その場しのぎの回避策を作らない)
-- [0032](0032-use-case-acceptance-tests-against-real-wiring.md) — ユースケース受け入れテストを「mock を通らない実配線」で持つ (L3-real)
-- [0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) — 子セッションを起動できない環境では、親が subagent で実装を回す (ADR 0021 条項の改訂) — 一部 Superseded by 0048 (前提「`create_session` が弾かれる」は 2026-08-12 に解消。D1 の分配表を 0048 が置き換え)
 - [0034](0034-remove-legacy-session-centric-flow.md) — UC に無い会話中心モデルの残骸 (整理結果 / 行動プラン / 履歴) を撤去する
-- [0035](0035-role-split-across-agents-and-actions.md) — 開発ループの役割を分け、それぞれを「生死が見える場所」に置く (実装 Claude / レビュー Codex / 監視 Actions) — 一部 Superseded by 0040 (D1 の「Routine ゼロ」のみ)
-- [0036](0036-merge-gate-as-required-check-and-pm-cadence.md) — マージの門を required check (review-gate) で機構化し、PM の運転リズムを定める
-- [0037](0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md) — 定期評価を「機械計測 = Actions」と「LLM 採点 = PM tick」に分ける (ADR 0035 D1 の残作業)
-- [0038](0038-security-checks-as-mechanized-triggers.md) — セキュリティ検査のトリガーを人の判断から機構へ移す (週次 sweep / PR 自動指名 / リリース judge)
+
+### フロントエンド
+
+- [0004](0004-mockapi-as-frontend-truth.md) — `mockApi.ts` を Frontend モックの唯一の真実とする
+- [0005](0005-mdx-ui-spec-as-truth.md) — UI 仕様は MDX が真実、実装が乖離したら実装を直す
 - [0039](0039-dialogue-live-preview-and-character.md) — 対話画面を「キャラと話すと右で困りごとが形になる」構成にする (読み取り専用プレビュー + 独自マスコット)
-- [0040](0040-project-continuity-three-layers.md) — プロジェクト継続性を 3 層 (機構化された完遂 / 当番 PM / 窓口 PM) で保証する
-- [0041](0041-ux-observations-on-git-data-branch.md) — UX 観測データの蓄積先を Issue コメントから git データブランチへ移す — **Proposed**
-- [0042](0042-pm-accept-carryover-and-merge-queue.md) — pm-accept は「実装差分が不変の main 追随」に引き継ぎ、直列化は Merge Queue に任せる (0036 の運用改訂) — **Proposed**
-- [0043](0043-pm-self-driving-mode.md) — PM を自走モードにする (実物指標 / 週次目標 / 引く当番 / 日次ダイジェスト / 窓口台帳)
-- [0044](0044-stream-lanes-as-the-project-map.md) — プロジェクトの地図を固定レーン (stream ラベル) で持ち、Projects board を正式に畳む (ADR 0011 の描画面を改訂 / ADR 0043 を補完)
-- [0045](0045-e2e-artifacts-are-secret-by-default.md) — 実環境 E2E の成果物は既定で秘密扱いにし、trace は公開鍵で暗号化して残す (public リポジトリのため artifact のアクセス制限が使えない) — **Proposed**
-- [0046](0046-environment-rebuildable-from-declaration.md) — 環境を「宣言から作り直せるもの」にする — ライフサイクル 3 層分断 / Entra の Graph Bicep 宣言 / 週次プロビジョンテスト (ADR 0013 の「常設」を追補)
-- [0047](0047-security-posture-in-layers-free-tier-first.md) — セキュリティ対策を「無料枠優先 + 責任分担が重ならない層」で段階導入する (public リポジトリの無料枠を先に使い切り、アプリ内側の穴は design-gate 経由で塞ぐ / ADR 0038 の続き) — **Proposed**
-- [0048](0048-child-sessions-are-usable-again-with-a-one-way-poke-channel.md) — 子セッションは再び起動できる — 会話は Routine 経由で片道 1 分なので、分配先は往復の少ない作業に限る (ADR 0033 D1 を置き換え)
-- [0052](0052-codex-derived-review-rubric-and-stand-in-judge.md) — PR レビューの基準を Codex の実レビュー 215 件から導出し、Codex 不在の間は代役 judge が読む (独立性は回復しない埋め合わせ / Issue #345) — **Proposed**
-- [0053](0053-synthetic-user-exploration-poc.md) — 合成ユーザーによる探索テストは「採点が繋がってから」「週 1 手動 1 回」から始める — 発見件数ではなく再現性を成功条件にする (#304 の次段階 / Phase 0 は #354 の接続)
+
+### BFF / API / 永続化
+
+- [0001](0001-bff-as-trpc-not-rest.md) — BFF を REST ではなく tRPC で書く
+- [0024](0024-chat-streaming-via-sse-side-channel.md) — チャット応答の逐次表示は SSE サイドチャネル (`/api/chat/stream`) で通す
+- [0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md) — 永続化は Cosmos DB 1 本に寄せ、BFF の内側だけに置く (Redis は廃止予定のため不採用)
+
+### 音声
+
+- [0010](0010-voicevox-cpu-gpu-deploy-tier.md) — VOICEVOX を `voicevoxTier`(cpu/gpu) 単一スイッチで切替（既定 cpu）で up を高速・安価に
+- [0023](0023-server-stt-azure-speech-f0.md) — 音声入力のサーバー STT に Azure Speech (F0・MI 認証) を採用し、Web Speech をフォールバックに残す
+
+### インフラ / デプロイ
+
+- [0002](0002-container-apps-not-aks.md) — サービス基盤に AKS ではなく Container Apps (scale-to-zero) を選ぶ
+- [0003](0003-two-phase-bicep.md) — IaC を bootstrap → config の 2-phase Bicep に分ける
+- [0006](0006-azure-access-via-device-code.md) — 開発・運用での Azure アクセスは device-code を主とする
+- [0013](0013-standing-low-cost-dev-env-with-auto-deploy.md) — dev 環境は「常設・待機最小コスト + main マージ自動デプロイ」にする
+- [0017](0017-container-apps-access-via-auth-gate.md) — Container Apps の「第二の扉」は認証の門で閉じる (組み込み認証 + Managed Identity / voicevox は internal ingress)
+- [0025](0025-deploy-container-images-by-immutable-sha-tag.md) — コンテナ image のデプロイは :latest ではなく不変 sha タグの解決 + 稼働検証で行う (#107)
+- [0046](0046-environment-rebuildable-from-declaration.md) — 環境を「宣言から作り直せるもの」にする — ライフサイクル 3 層分断 / Entra の Graph Bicep 宣言 / 週次プロビジョンテスト (0013 の「常設」を追補)
+- [0009](0009-on-demand-cd-via-github-actions-oidc.md) — デプロイは GitHub Actions のオンデマンド CD（手動 up/down + 夜間 teardown, OIDC）で行う — **Superseded by 0013**
+
+## 退避された運用系 (ADR ではない)
+
+開発の運用・プロセスの決め事として書かれていた 29 本は [`archive/`](archive/README.md) にある。
+**現行ルールではない** — 今どう動かすかは [`CLAUDE.md`](../../CLAUDE.md) を見ること。

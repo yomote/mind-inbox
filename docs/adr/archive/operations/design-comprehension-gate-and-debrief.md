@@ -33,17 +33,17 @@ Chosen option: **"Option A"**。理解・承認・学習を 4 つの部品に分
 
 | 部品 | タイミング | 同期性 | 実装 |
 | --- | --- | --- | --- |
-| **設計理解ゲート** — 設計を可視化して提示し、user の理解確認と承認を取ってから実装に入る | 設計 → 実装の境界 (必須) | 同期 | skill [`design-gate`](../../.claude/skills/design-gate/SKILL.md) |
-| **ゼミ型デブリーフ** — 前回以降のマージ PR / Proposed ADR をまとめて解説し、理解度を対話で確認し、ADR を Accept/Reject する | マージが溜まったら随時 | 非同期 (まとめて) | skill [`debrief`](../../.claude/skills/debrief/SKILL.md) |
-| **即席可視化** — 「あれなんだっけ?」に真実ソースから図解で即答する | いつでも | オンデマンド | skill [`explain`](../../.claude/skills/explain/SKILL.md) |
-| **HTML ステータスレポート** — 開発状況を 1 枚の HTML レポートに可視化する | いつでも | オンデマンド | skill [`status`](../../.claude/skills/status/SKILL.md) の HTML モード |
+| **設計理解ゲート** — 設計を可視化して提示し、user の理解確認と承認を取ってから実装に入る | 設計 → 実装の境界 (必須) | 同期 | skill [`design-gate`](../../../../.claude/skills/design-gate/SKILL.md) |
+| **ゼミ型デブリーフ** — 前回以降のマージ PR / Proposed ADR をまとめて解説し、理解度を対話で確認し、ADR を Accept/Reject する | マージが溜まったら随時 | 非同期 (まとめて) | skill [`debrief`](../../../../.claude/skills/debrief/SKILL.md) |
+| **即席可視化** — 「あれなんだっけ?」に真実ソースから図解で即答する | いつでも | オンデマンド | skill [`explain`](../../../../.claude/skills/explain/SKILL.md) |
+| **HTML ステータスレポート** — 開発状況を 1 枚の HTML レポートに可視化する | いつでも | オンデマンド | skill [`status`](../../../../.claude/skills/status/SKILL.md) の HTML モード |
 
 支える規律は 2 つ:
 
 1. **エージェント起案の ADR は必ず `Status: Proposed` で入れる**。Accepted へ遷移させるのは user のみ (design-gate または debrief の場で)。ループは Proposed の判断を前提に実装を進めてよい (コードは可逆)。これにより「判断の記録」と「判断の承認」が分離され、未承認の判断は Proposed キューとして見え続ける
 2. **無人セッション (Routine 等、user が応答できない場) では**、不可逆な判断 (one-way door: DB スキーマ破壊的変更 / 外部サービス・課金追加 / 公開 API の形 / データ削除) はゲートを通せないため実装に入らず質問を Issue に積む。可逆な判断 (two-way door) は Proposed ADR を書いて進み、次の debrief で追認を受ける
 
-セッション記録と「前回以降」の起点マーカーは [`docs/debrief/journal.md`](../debrief/journal.md) に置く (決定と学びの累積ログ = docs の領分)。
+セッション記録と「前回以降」の起点マーカーは [`docs/debrief/journal.md`](../../../debrief/journal.md) に置く (決定と学びの累積ログ = docs の領分)。
 
 Option B は今まさに起きている問題 (ループが止まる) で Driver 3 に反する。Option C は Driver 1/2 に反する — docs は読まれなければ承認でも学習でもない。Option D は学習が実物から乖離し Driver 2/5 に反する。
 
@@ -96,6 +96,6 @@ Option B は今まさに起きている問題 (ループが止まる) で Driver
 
 ## Links
 
-- 関連 ADR: [0008](0008-pr-review-via-cloud-routine.md) (レビューの別軸分離 — 同型の発想) / [0011](0011-github-projects-as-execution-dashboard.md) (真実の所在の分担)
-- 記録: [`docs/debrief/journal.md`](../debrief/journal.md)
-- skills: [`design-gate`](../../.claude/skills/design-gate/SKILL.md) / [`debrief`](../../.claude/skills/debrief/SKILL.md) / [`explain`](../../.claude/skills/explain/SKILL.md) / [`status`](../../.claude/skills/status/SKILL.md)
+- 関連 ADR: [0008](pr-review-via-cloud-routine.md) (レビューの別軸分離 — 同型の発想) / [0011](github-projects-as-execution-dashboard.md) (真実の所在の分担)
+- 記録: [`docs/debrief/journal.md`](../../../debrief/journal.md)
+- skills: [`design-gate`](../../../../.claude/skills/design-gate/SKILL.md) / [`debrief`](../../../../.claude/skills/debrief/SKILL.md) / [`explain`](../../../../.claude/skills/explain/SKILL.md) / [`status`](../../../../.claude/skills/status/SKILL.md)

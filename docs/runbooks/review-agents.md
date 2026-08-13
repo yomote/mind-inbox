@@ -1,8 +1,8 @@
 # 独立 judge エージェント (code / security / QA / release) の運用
 
 実装セッションとは**別コンテキスト・別役割**の審査役を、ループのどこで・どう走らせるかの手順。
-判断記録: [ADR 0019](../adr/0019-independent-judge-agents-security-qa-release.md) (security / QA / biz-owner / release) / [ADR 0052](../adr/0052-codex-derived-review-rubric-and-stand-in-judge.md) (code-reviewer)。
-旧・PR レビュー Routine ([ADR 0008](../adr/0008-pr-review-via-cloud-routine.md) / [Runbook](claude-pr-review.md)) は**退役済み**で、技術レビューの担い手は Codex、その停止時 ([#345](https://github.com/yomote/mind-inbox/issues/345)) は `code-reviewer` subagent。
+判断記録: [ADR 0019](../adr/archive/operations/independent-judge-agents-security-qa-release.md) (security / QA / biz-owner / release) / [ADR 0052](../adr/archive/operations/codex-derived-review-rubric-and-stand-in-judge.md) (code-reviewer)。
+旧・PR レビュー Routine ([ADR 0008](../adr/archive/operations/pr-review-via-cloud-routine.md) / [Runbook](claude-pr-review.md)) は**退役済み**で、技術レビューの担い手は Codex、その停止時 ([#345](https://github.com/yomote/mind-inbox/issues/345)) は `code-reviewer` subagent。
 
 ## Trigger
 
@@ -23,7 +23,7 @@ PR 作成 → 技術レビュー: Codex (@codex review) / 停止時は code-revi
 
 main への機能 PR / dev の日常 auto-deploy には差し込まない。
 
-- **judge は必ず subagent (新品コンテキスト) で起動する** — 実装セッション自身に審査させない ([ADR 0019](../adr/0019-independent-judge-agents-security-qa-release.md))
+- **judge は必ず subagent (新品コンテキスト) で起動する** — 実装セッション自身に審査させない ([ADR 0019](../adr/archive/operations/independent-judge-agents-security-qa-release.md))
 - **各 judge の観点は rubric が正典** — 下の表から辿る。スキャナ一覧も [`security-rubric.md`](../../.github/claude/security-rubric.md) が正典
 
 ## 構成ファイル (rubric-as-truth)
@@ -85,7 +85,7 @@ Routine を作らない場合も、リリース PR を開いた後に手元セ�
 
 ### PR の技術レビューを回す (Codex 停止時の代役)
 
-Codex が応答できない間 ([#345](https://github.com/yomote/mind-inbox/issues/345))、`code-reviewer` subagent が技術レビューを埋める ([ADR 0052](../adr/0052-codex-derived-review-rubric-and-stand-in-judge.md))。**起動は 2 経路**: 巡回 Routine (自動 / 下記) と、PM がその場で呼ぶ手動。
+Codex が応答できない間 ([#345](https://github.com/yomote/mind-inbox/issues/345))、`code-reviewer` subagent が技術レビューを埋める ([ADR 0052](../adr/archive/operations/codex-derived-review-rubric-and-stand-in-judge.md))。**起動は 2 経路**: 巡回 Routine (自動 / 下記) と、PM がその場で呼ぶ手動。
 
 共通の規律:
 
@@ -97,7 +97,7 @@ Codex が応答できない間 ([#345](https://github.com/yomote/mind-inbox/issu
 
 #### 巡回手順 (このリポジトリの正典 — Routine もこれを読んで従う)
 
-**ここが手順の唯一の真実。** 巡回 Routine のプロンプトは「この節を読んで従え」しか書いていない ([ADR 0052](../adr/0052-codex-derived-review-rubric-and-stand-in-judge.md) D8)。手順を変えたいときは**この節を直す** — Routine 側は触らない (`subagent 定義は薄いラッパ` と同じ理由: claude.ai 側の本文は git に無く、diff に出ないので、そこに手順を持たせると壊れても気づけない)。
+**ここが手順の唯一の真実。** 巡回 Routine のプロンプトは「この節を読んで従え」しか書いていない ([ADR 0052](../adr/archive/operations/codex-derived-review-rubric-and-stand-in-judge.md) D8)。手順を変えたいときは**この節を直す** — Routine 側は触らない (`subagent 定義は薄いラッパ` と同じ理由: claude.ai 側の本文は git に無く、diff に出ないので、そこに手順を持たせると壊れても気づけない)。
 
 1. **対象を選ぶ** — open PR のうち、(a) base が `main`、(b) draft でない、(c) コード PR (`apps/` か `cicd/` に触れる)、(d) **現 head SHA に対する独立レビューがまだ無い**もの。(d) は「Codex (`chatgpt-codex-connector[bot]`) のレビューがある」か「`<!-- standin-review -->` + 現 head SHA 先頭 7 桁を含む権限保持者のコメントがある」のどちらでもない、で判定する。**古い SHA の代役レビューは無効** (push で失効する)
    - 複数あるときは**更新が古い順に最大 3 本**。残りは痕跡に「未着手 n 本」と書く (全部やろうとして途中で力尽きるより、3 本を rubric どおり書き切る)
@@ -218,11 +218,11 @@ yomote/mind-inbox の PR レビュー巡回 (代役 judge) を実行して。
 
 ### 実装セッションが「自分でチェックしたから GO」と言う
 
-- それが [ADR 0019](../adr/0019-independent-judge-agents-security-qa-release.md) で禁止した状況そのもの。`/release-gate` を通し直す。
+- それが [ADR 0019](../adr/archive/operations/independent-judge-agents-security-qa-release.md) で禁止した状況そのもの。`/release-gate` を通し直す。
 
 ## Related
 
-- 判断記録: [ADR 0019](../adr/0019-independent-judge-agents-security-qa-release.md)
-- PR レビュー judge: [ADR 0052](../adr/0052-codex-derived-review-rubric-and-stand-in-judge.md) / [`review-rubric.md`](../../.github/claude/review-rubric.md) / 導出元の実測 [`docs/reviews/`](../reviews/README.md) — 旧経路 (**退役**): [ADR 0008](../adr/0008-pr-review-via-cloud-routine.md) / [Runbook](claude-pr-review.md)
+- 判断記録: [ADR 0019](../adr/archive/operations/independent-judge-agents-security-qa-release.md)
+- PR レビュー judge: [ADR 0052](../adr/archive/operations/codex-derived-review-rubric-and-stand-in-judge.md) / [`review-rubric.md`](../../.github/claude/review-rubric.md) / 導出元の実測 [`docs/reviews/`](../reviews/README.md) — 旧経路 (**退役**): [ADR 0008](../adr/archive/operations/pr-review-via-cloud-routine.md) / [Runbook](claude-pr-review.md)
 - テスト戦略 (4 層 [契約 / 単体 / スモーク / E2E] と QA の分担): [`docs/testing/strategy.md`](../testing/strategy.md)
 - Subagents: <https://code.claude.com/docs/en/sub-agents>

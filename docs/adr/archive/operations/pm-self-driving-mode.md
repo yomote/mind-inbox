@@ -3,13 +3,13 @@
 - Status: Accepted (2026-08-12, debrief にて PO 承認)
 - Date: 2026-08-11
 - Deciders: yomote (PO — 方向は 2026-08-11 の対話で合意。2026-08-12 の debrief で Accept) / PM セッション
-- Related: [ADR 0040](0040-project-continuity-three-layers.md) (継続性 3 層 — 本 ADR は D2/D3 の拡張) / [ADR 0021](0021-parent-session-as-pm-orchestrator.md) (hub-and-spoke — 条項の機構化) / [ADR 0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) (分配基準) / [ADR 0036](0036-merge-gate-as-required-check-and-pm-cadence.md) (マージの門と PM リズム) / [ADR 0014](0014-design-comprehension-gate-and-debrief.md) (理解ゲート — 規律は不変)
+- Related: [ADR 0040](project-continuity-three-layers.md) (継続性 3 層 — 本 ADR は D2/D3 の拡張) / [ADR 0021](parent-session-as-pm-orchestrator.md) (hub-and-spoke — 条項の機構化) / [ADR 0033](parent-implements-via-subagent-when-child-sessions-are-gated.md) (分配基準) / [ADR 0036](merge-gate-as-required-check-and-pm-cadence.md) (マージの門と PM リズム) / [ADR 0014](design-comprehension-gate-and-debrief.md) (理解ゲート — 規律は不変)
 
 Technical Story: 当番 Routine (ADR 0040 D2) 初発火後の 2026-08-11 PO レビュー対話。宿題二重起票 [#270](https://github.com/yomote/mind-inbox/issues/270) / status ページ「プロダクトの現在地」PR #281。
 
 ## Context and Problem Statement
 
-当番 Routine ([ADR 0040](0040-project-continuity-three-layers.md) D2) の初発火で「巡回だけでなく執行までやる」ことは実証された。しかし PO から構造的な問題が 3 点指摘された:
+当番 Routine ([ADR 0040](project-continuity-three-layers.md) D2) の初発火で「巡回だけでなく執行までやる」ことは実証された。しかし PO から構造的な問題が 3 点指摘された:
 
 1. **PM が受け身** — 滞留の解消・レビュー対応は回るようになったが、報告会の開催すら PO が依頼している。「次に何をやるか」を提案し、進捗を PO の前に運ぶ側の駆動が無い
 2. **進捗が見えない** — 「進んでるようで物ができてない」。実測: 2026-08-11 のマージ 14 本のうちプロダクト (apps/ を触るもの) は 3 本、しかも deploy 7 連敗 ([#262](https://github.com/yomote/mind-inbox/issues/262)) で dev には 1 本も届いていない。マージ数・Issue 処理数という工場の指標が、プロダクトが止まっている事実を覆い隠す
@@ -120,12 +120,12 @@ Chosen option: **"Option C"**。LLM を無人経路に増やさず (B の却下�
 
 ## 関係 ADR への影響
 
-- **[ADR 0040](0040-project-continuity-three-layers.md)**: supersede しない。D2 (当番の職務) と D3 の運用に「週次目標へ向けて引く / 閉じる / WIP 上限 / ダイジェスト集約」を**拡張として追加**する。3 層構造と責務分界は不変
-- **[ADR 0021](0021-parent-session-as-pm-orchestrator.md)**: 条項 6/7 (窓口 1 本・使い捨てローテーション) を D5 の台帳で**機構化**する。supersede ではなく実現手段の具体化 (タイトル規約が推奨どまりになった 2026-08-11 の CLAUDE.md 改訂と整合)
-- **[ADR 0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md)**: 分配基準 (作業の大きさ) は不変。当番が D3 で引いた仕事にも同じ基準を適用する
-- **[ADR 0036](0036-merge-gate-as-required-check-and-pm-cadence.md)**: マージの門は不変。D4 (PM の運転リズム) の日次 tick が当番 tick + ダイジェストに具体化され、D5 (WIP 上限 2) は本 ADR D3 が着工判断側から補強する
-- **[ADR 0011](0011-github-projects-as-execution-dashboard.md)**: 実行状態の真実は GitHub のまま。**見せ方**を status ページ (「プロダクトの現在地」+ D1 の実物指標) に寄せる
-- **[ADR 0014](0014-design-comprehension-gate-and-debrief.md)**: design-gate / debrief の規律は不変。D4 の「返信しない日はゲート対象だけ止まる」はゲートの尊重であり緩和ではない
+- **[ADR 0040](project-continuity-three-layers.md)**: supersede しない。D2 (当番の職務) と D3 の運用に「週次目標へ向けて引く / 閉じる / WIP 上限 / ダイジェスト集約」を**拡張として追加**する。3 層構造と責務分界は不変
+- **[ADR 0021](parent-session-as-pm-orchestrator.md)**: 条項 6/7 (窓口 1 本・使い捨てローテーション) を D5 の台帳で**機構化**する。supersede ではなく実現手段の具体化 (タイトル規約が推奨どまりになった 2026-08-11 の CLAUDE.md 改訂と整合)
+- **[ADR 0033](parent-implements-via-subagent-when-child-sessions-are-gated.md)**: 分配基準 (作業の大きさ) は不変。当番が D3 で引いた仕事にも同じ基準を適用する
+- **[ADR 0036](merge-gate-as-required-check-and-pm-cadence.md)**: マージの門は不変。D4 (PM の運転リズム) の日次 tick が当番 tick + ダイジェストに具体化され、D5 (WIP 上限 2) は本 ADR D3 が着工判断側から補強する
+- **[ADR 0011](github-projects-as-execution-dashboard.md)**: 実行状態の真実は GitHub のまま。**見せ方**を status ページ (「プロダクトの現在地」+ D1 の実物指標) に寄せる
+- **[ADR 0014](design-comprehension-gate-and-debrief.md)**: design-gate / debrief の規律は不変。D4 の「返信しない日はゲート対象だけ止まる」はゲートの尊重であり緩和ではない
 
 ## 動作検証 (この ADR が実装されたと言える条件)
 
@@ -140,4 +140,4 @@ Chosen option: **"Option C"**。LLM を無人経路に増やさず (B の却下�
 - 発端: 2026-08-11 PO レビュー対話 (当番 Routine 初発火後) / 実測: マージ 14 本中プロダクト 3 本・deploy 7 連敗 [#262](https://github.com/yomote/mind-inbox/issues/262)
 - 実害の実例: 宿題二重起票 [#270](https://github.com/yomote/mind-inbox/issues/270) / 窓口 2 本化
 - 試作: status ページ「プロダクトの現在地」PR #281 / 初回週次目標 [#187](https://github.com/yomote/mind-inbox/issues/187)
-- 関連 ADR: [0040](0040-project-continuity-three-layers.md) / [0021](0021-parent-session-as-pm-orchestrator.md) / [0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) / [0036](0036-merge-gate-as-required-check-and-pm-cadence.md) / [0011](0011-github-projects-as-execution-dashboard.md) / [0014](0014-design-comprehension-gate-and-debrief.md) / [0020](0020-hitl-choice-format-and-needs-human-queue.md) / [0037](0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md) (Option B 却下の根拠) / [0031](0031-agent-reaches-outside-via-github-actions.md) (同上)
+- 関連 ADR: [0040](project-continuity-three-layers.md) / [0021](parent-session-as-pm-orchestrator.md) / [0033](parent-implements-via-subagent-when-child-sessions-are-gated.md) / [0036](merge-gate-as-required-check-and-pm-cadence.md) / [0011](github-projects-as-execution-dashboard.md) / [0014](design-comprehension-gate-and-debrief.md) / [0020](hitl-choice-format-and-needs-human-queue.md) / [0037](scheduled-evals-split-mechanical-actions-llm-pm-tick.md) (Option B 却下の根拠) / [0031](agent-reaches-outside-via-github-actions.md) (同上)

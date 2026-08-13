@@ -6,9 +6,9 @@
 - Consulted: —
 - Informed: —
 
-Technical Story: [debrief #2](../debrief/journal.md)（epic #70 の振り返り）/ 関連 issue: [#4](../../../issues/4)（L3 Playwright）/ [#86](../../../issues/86)（コンテナ露出）
+Technical Story: [debrief #2](../../../debrief/journal.md)（epic #70 の振り返り）/ 関連 issue: [#4](../../../../../issues/4)（L3 Playwright）/ [#86](../../../../../issues/86)（コンテナ露出）
 
-関連: [ADR 0014](0014-design-comprehension-gate-and-debrief.md)（理解ゲート + デブリーフ。本 ADR はその続きで「実装 → 検証」の境界を扱う）/ [ADR 0017](0017-container-apps-access-via-auth-gate.md)（#86 の恒久対策。本 ADR の「到達経路を全部数える」が生まれた元の事象）/ [ADR 0013](0013-standing-low-cost-dev-env-with-auto-deploy.md)（常設 dev 環境）/ [testing/strategy.md](../testing/strategy.md)
+関連: [ADR 0014](design-comprehension-gate-and-debrief.md)（理解ゲート + デブリーフ。本 ADR はその続きで「実装 → 検証」の境界を扱う）/ [ADR 0017](../../0017-container-apps-access-via-auth-gate.md)（#86 の恒久対策。本 ADR の「到達経路を全部数える」が生まれた元の事象）/ [ADR 0013](../../0013-standing-low-cost-dev-env-with-auto-deploy.md)（常設 dev 環境）/ [testing/strategy.md](../../../testing/strategy.md)
 
 ## Context and Problem Statement
 
@@ -68,15 +68,15 @@ Chosen option: **Option A**。
 
 **認証の往復は自動化しない**が、**UI の修正はローカルで確認できる**。このリポには既に材料が揃っている:
 
-- `VITE_USE_MOCK=true` — BFF も認証も無い自己完結モード（[ADR 0004](0004-mockapi-as-frontend-truth.md)）
+- `VITE_USE_MOCK=true` — BFF も認証も無い自己完結モード（[ADR 0004](../../0004-mockapi-as-frontend-truth.md)）
 - `VITE_ENTRA_*` 未設定なら認証は自動的に無効（#69 の設計）
 - `test:e2e` は #4 待ちの placeholder のまま
 
-ここに Playwright を入れ、**主要画面の遷移とスクリーンショット**をローカルで取れるようにする。placeholder を実体に変えることで [testing/strategy.md](../testing/strategy.md) の L3 も埋まる。
+ここに Playwright を入れ、**主要画面の遷移とスクリーンショット**をローカルで取れるようにする。placeholder を実体に変えることで [testing/strategy.md](../../../testing/strategy.md) の L3 も埋まる。
 
 ### 4. design-gate の観点に「到達経路を全部数える」を追加
 
-[ADR 0014](0014-design-comprehension-gate-and-debrief.md) の design-gate で、構成図に矢印を 1 本描いたら **「守るべき資源に、他に届くものは無いか」を必ず問う**。#86 の露出（OpenAI の鍵を握る ai-agent が別の扉を持っていた）はこれで防げた。
+[ADR 0014](design-comprehension-gate-and-debrief.md) の design-gate で、構成図に矢印を 1 本描いたら **「守るべき資源に、他に届くものは無いか」を必ず問う**。#86 の露出（OpenAI の鍵を握る ai-agent が別の扉を持っていた）はこれで防げた。
 
 ### Positive Consequences
 
@@ -111,15 +111,15 @@ Chosen option: **Option A**。
 ### Option C: 認証込みで全部自動化
 
 - Good, because 最も網羅的
-- Bad, because MSAL の実ログインを CI で回すにはテスト用 ID・シークレット運用が要り、[ADR 0006](0006-azure-access-via-device-code.md)「静的シークレット0」と衝突する
+- Bad, because MSAL の実ログインを CI で回すにはテスト用 ID・シークレット運用が要り、[ADR 0006](../../0006-azure-access-via-device-code.md)「静的シークレット0」と衝突する
 - Bad, because 個人開発の規模に対して投資が過大
 
 ## Links
 
-- [ADR 0014](0014-design-comprehension-gate-and-debrief.md) — 理解ゲート + デブリーフ（本 ADR はその「実装 → 検証」側）
-- [ADR 0017](0017-container-apps-access-via-auth-gate.md) — #86 の恒久対策（「2 本目の扉」の実例）
-- [ADR 0004](0004-mockapi-as-frontend-truth.md) — mockApi がフロントの真実（ローカル Playwright の土台）
-- [ADR 0006](0006-azure-access-via-device-code.md) — 静的シークレット0（Option C を却下した根拠）
-- [docs/testing/strategy.md](../testing/strategy.md) — L0〜L4 のテスト階層
-- issue [#4](../../../issues/4)（L3 Playwright）/ [#62](../../../issues/62)（placeholder の嘘）/ [#86](../../../issues/86)（コンテナ露出）
-- 実例の記録: [docs/debrief/journal.md](../debrief/journal.md) の 2026-08-07 エントリ
+- [ADR 0014](design-comprehension-gate-and-debrief.md) — 理解ゲート + デブリーフ（本 ADR はその「実装 → 検証」側）
+- [ADR 0017](../../0017-container-apps-access-via-auth-gate.md) — #86 の恒久対策（「2 本目の扉」の実例）
+- [ADR 0004](../../0004-mockapi-as-frontend-truth.md) — mockApi がフロントの真実（ローカル Playwright の土台）
+- [ADR 0006](../../0006-azure-access-via-device-code.md) — 静的シークレット0（Option C を却下した根拠）
+- [docs/testing/strategy.md](../../../testing/strategy.md) — L0〜L4 のテスト階層
+- issue [#4](../../../../../issues/4)（L3 Playwright）/ [#62](../../../../../issues/62)（placeholder の嘘）/ [#86](../../../../../issues/86)（コンテナ露出）
+- 実例の記録: [docs/debrief/journal.md](../../../debrief/journal.md) の 2026-08-07 エントリ

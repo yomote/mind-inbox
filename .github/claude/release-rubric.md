@@ -1,6 +1,6 @@
 # Release Gate Rubric (release-judge)
 
-> **リリース判定役の審査基準** (rubric-as-truth, [ADR 0019](../../docs/adr/0019-independent-judge-agents-security-qa-release.md))。
+> **リリース判定役の審査基準** (rubric-as-truth, [ADR 0019](../../docs/adr/archive/operations/independent-judge-agents-security-qa-release.md))。
 > subagent `.claude/agents/release-judge.md` / `/release-gate` skill から参照される。
 > 判定基準を変えたい時はここを直す。
 > **共通規約: [`_common.md`](_common.md) を必ず併せて読む**。この rubric だけは findings の Severity ではなく verdict で結論を出す。

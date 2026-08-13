@@ -1,12 +1,12 @@
 # 0028. 分配は「起票パケットを Issue 本文に残す」形にし、並行の衝突は SessionStart の事前提示と CI で防ぐ
 
-- Status: Accepted (design-gate #4, 2026-08-09) / 一部 Superseded by [0035](0035-role-split-across-agents-and-actions.md) (2026-08-10 — 起票パケットの置き場所のみ Issue → PR。必須項目は不変)
+- Status: Accepted (design-gate #4, 2026-08-09) / 一部 Superseded by [0035](role-split-across-agents-and-actions.md) (2026-08-10 — 起票パケットの置き場所のみ Issue → PR。必須項目は不変)
 - Date: 2026-08-09
 - Deciders: omoteforlab
 - Consulted: —
 - Informed: —
 
-Technical Story: [Issue #159](https://github.com/yomote/mind-inbox/issues/159) — hub-and-spoke ([ADR 0021](0021-parent-session-as-pm-orchestrator.md)) の前提が実行環境で成立していないことが 2026-08-09 に実測された。本 ADR は 0021 を **supersede しない** — 窓口一元化の規約は維持したまま、条項 2 (分配の手段) を置き換え、欠けていた衝突防止を足す。
+Technical Story: [Issue #159](https://github.com/yomote/mind-inbox/issues/159) — hub-and-spoke ([ADR 0021](parent-session-as-pm-orchestrator.md)) の前提が実行環境で成立していないことが 2026-08-09 に実測された。本 ADR は 0021 を **supersede しない** — 窓口一元化の規約は維持したまま、条項 2 (分配の手段) を置き換え、欠けていた衝突防止を足す。
 
 ## Context and Problem Statement
 
@@ -67,10 +67,10 @@ claude-code-remote MCP サーバーのツールは、書き込み系だけでな
 
 ## Decision Drivers
 
-- **規律に依存しない** ([ADR 0014](0014-design-comprehension-gate-and-debrief.md) の Driver) — 「気をつける」で防げないことは実証済み
+- **規律に依存しない** ([ADR 0014](design-comprehension-gate-and-debrief.md) の Driver) — 「気をつける」で防げないことは実証済み
 - **環境の可否に設計を依存させない** — ゲートが開いても閉じても同じ運用が成立すること
 - **窓口の一元化を壊さない** — ADR 0021 の条項 1・3 (user の窓口は親 1 本 / 子は直接報告しない) は今日も有効に機能していた
-- **既存機構の再利用** — needs-human キュー ([ADR 0020](0020-hitl-choice-format-and-needs-human-queue.md)) / Issues = 実行状態 ([ADR 0011](0011-github-projects-as-execution-dashboard.md)) / CI ゲート
+- **既存機構の再利用** — needs-human キュー ([ADR 0020](hitl-choice-format-and-needs-human-queue.md)) / Issues = 実行状態 ([ADR 0011](github-projects-as-execution-dashboard.md)) / CI ゲート
 
 ## Considered Options
 
@@ -153,6 +153,6 @@ ADR 0021 条項 2 の「親が子セッションを起動する」を、**「親
 ## Links
 
 - 発端: [Issue #159](https://github.com/yomote/mind-inbox/issues/159) (実測記録)
-- 補足対象: [ADR 0021](0021-parent-session-as-pm-orchestrator.md) (条項 1・3・4 は維持、条項 2 を置き換え)
-- 関連: [0020](0020-hitl-choice-format-and-needs-human-queue.md) (needs-human = 人間の 1 クリック) / [0014](0014-design-comprehension-gate-and-debrief.md) (規律に依存しない) / [0011](0011-github-projects-as-execution-dashboard.md) (Issues = 実行状態) / [0018](0018-runtime-verification-in-the-loop.md) (振る舞いで書く)
+- 補足対象: [ADR 0021](parent-session-as-pm-orchestrator.md) (条項 1・3・4 は維持、条項 2 を置き換え)
+- 関連: [0020](hitl-choice-format-and-needs-human-queue.md) (needs-human = 人間の 1 クリック) / [0014](design-comprehension-gate-and-debrief.md) (規律に依存しない) / [0011](github-projects-as-execution-dashboard.md) (Issues = 実行状態) / [0018](runtime-verification-in-the-loop.md) (振る舞いで書く)
 - 実践例: [#154](https://github.com/yomote/mind-inbox/issues/154) / [#155](https://github.com/yomote/mind-inbox/issues/155) の Issue 本文 (起票パケットの初例)

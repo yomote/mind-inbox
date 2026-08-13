@@ -3,7 +3,7 @@
 - Status: Accepted (design-gate, 2026-08-11)
 - Date: 2026-08-11
 - Deciders: PO (yomote) / PM セッション
-- Related: ADR 0043 (PM 自走モード — **本 ADR は 0043 の「運転」に対する「地図」。競合せず補完する**。0043 は PR #284 で審議中で、マージまで `docs/adr/` に存在しない。**本 ADR は 0043 に依存せず単独で成立する** — 0043 の D2/D4 への言及は責務の分界を示すためのもので、地図の仕組み自体は 0043 が Reject されても機能する) / [ADR 0011](0011-github-projects-as-execution-dashboard.md) (実行ダッシュボード — 描画面を改訂) / [ADR 0020](0020-hitl-choice-format-and-needs-human-queue.md) (選択肢形式 — needs-human の可視面から board を退役) / [ADR 0040](0040-project-continuity-three-layers.md) (継続性 3 層)
+- Related: ADR 0043 (PM 自走モード — **本 ADR は 0043 の「運転」に対する「地図」。競合せず補完する**。0043 は PR #284 で審議中で、マージまで `docs/adr/` に存在しない。**本 ADR は 0043 に依存せず単独で成立する** — 0043 の D2/D4 への言及は責務の分界を示すためのもので、地図の仕組み自体は 0043 が Reject されても機能する) / [ADR 0011](github-projects-as-execution-dashboard.md) (実行ダッシュボード — 描画面を改訂) / [ADR 0020](hitl-choice-format-and-needs-human-queue.md) (選択肢形式 — needs-human の可視面から board を退役) / [ADR 0040](project-continuity-three-layers.md) (継続性 3 層)
 
 Technical Story: 2026-08-11 の PO 申告「何が進行していて、何が進行していないのか、ボトルネックは何かが把握できない。大きく線があるはずで、戦況的なものがない」(`claude/project-management-visibility-3hunn2` セッションの design-gate)。
 
@@ -16,7 +16,7 @@ Technical Story: 2026-08-11 の PO 申告「何が進行していて、何が進
 0043 は**今週やる 1 つ**と**今日変わった 1 つ**を鮮明にするが、**残り全体 (open Issue 42 件) がどういう構造で存在しているのか**を答えない。実測した構造要因は 3 つ:
 
 1. **地図が無い** — 42 件は v2 本流 / 改善ループ / CI 修理 / コンセプト再定義が混在した山で、束ねる固定構造が無い。`/status` skill は archive 済み v1 の Phase (D→A→B→C) にアンカーしたままで、基準線が消えている。週次目標 (0043 D2) は「今どこを攻めるか」を決めるが、**攻めていない戦線がどうなっているか**は依然として見えない
-2. **[ADR 0011](0011-github-projects-as-execution-dashboard.md) の Projects board は静かに死んでいる** — 2026-08-11 実測で、open Issue 42 件のうち Projects のフィールド値を持つものが **0 件**。原因は board の維持が web UI の手作業であること。「手書きの台帳は腐る」というこのリポジトリの経験則の再演で、規律では直らない
+2. **[ADR 0011](github-projects-as-execution-dashboard.md) の Projects board は静かに死んでいる** — 2026-08-11 実測で、open Issue 42 件のうち Projects のフィールド値を持つものが **0 件**。原因は board の維持が web UI の手作業であること。「手書きの台帳は腐る」というこのリポジトリの経験則の再演で、規律では直らない
 3. **報告が毎回構造ごと再生成され、PO の認知負荷を上げている** — 人間の認知は「固定された枠組み + 差分」は安く、「毎回新しい構造」は高くつく。/status も debrief も当番レポートも毎回ライブ状態から束ね直すため、PO は読むたびに地図を頭の中で作り直している。結果「見えないから決められない → 裁定が滞留 → さらに濁る」のループになる
 
 制約理論で言えば制約工程は PO の意思決定帯域であり、**エージェント側の供給 (起票・実装・報告) がスケールする一方で裁定がスケールしない**。可視化を増やすだけでは制約は緩まず、むしろ読む量が増えて悪化する。
@@ -24,7 +24,7 @@ Technical Story: 2026-08-11 の PO 申告「何が進行していて、何が進
 ## Decision Drivers
 
 - PO が地図を **1 回覚えれば、以後は差分だけ**読めばよい状態にする (認知負荷を一定に保つ)
-- 手作業の台帳を作らない — GitHub の実データから毎回生成 ([ADR 0011](0011-github-projects-as-execution-dashboard.md) の教訓、status ページの設計原則)
+- 手作業の台帳を作らない — GitHub の実データから毎回生成 ([ADR 0011](github-projects-as-execution-dashboard.md) の教訓、status ページの設計原則)
 - 崩れたときに**隠れて腐るのではなく、膨らんで見える**設計にする
 - ADR 0043 と二重管理にしない (0043 = 運転 / 本 ADR = 地図)
 
@@ -45,13 +45,13 @@ Option B / C は Driver 2・3 に反する — board の維持が web UI 手作�
 
 open Issue は**ちょうど 1 個**の stream ラベルを持つ。レーンは少数固定で、数週間単位でしか変えない:
 
-| ラベル                | レーン                 | 含むもの                                                                                             |
-| --------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------- |
-| `stream:product`      | プロダクト本流         | v2 MAF 移行 (M1〜M3)、機能、ドメイン、**UX の機能改善**                                              |
-| `stream:improve-loop` | 改善ループ (機械)      | UX の観測・採点・自動改善パイプライン (#123 系 / [ADR 0022](0022-autonomous-ux-improvement-loop.md)) |
-| `stream:concept`      | コンセプト・最上流設計 | コンセプト v2 (#266)、北極星の再定義                                                                 |
-| `stream:factory`      | 工場                   | CI、review-gate、PM 機構、テスト基盤、docs 基盤                                                      |
-| `stream:infra`        | 実行環境               | Azure、deploy、コスト、セキュリティ                                                                  |
+| ラベル                | レーン                 | 含むもの                                                                                        |
+| --------------------- | ---------------------- | ----------------------------------------------------------------------------------------------- |
+| `stream:product`      | プロダクト本流         | v2 MAF 移行 (M1〜M3)、機能、ドメイン、**UX の機能改善**                                         |
+| `stream:improve-loop` | 改善ループ (機械)      | UX の観測・採点・自動改善パイプライン (#123 系 / [ADR 0022](autonomous-ux-improvement-loop.md)) |
+| `stream:concept`      | コンセプト・最上流設計 | コンセプト v2 (#266)、北極星の再定義                                                            |
+| `stream:factory`      | 工場                   | CI、review-gate、PM 機構、テスト基盤、docs 基盤                                                 |
+| `stream:infra`        | 実行環境               | Azure、deploy、コスト、セキュリティ                                                             |
 
 - **判定基準は「その Issue が閉じたとき、変わるのはプロダクトの挙動か、改善を回す機械か」**。迷ったら `product` に倒す
 - レーン名は当初 `ux-loop` としたが、design-gate の理解確認で **PO が UX 機能改善 (#242) を ux-loop に分類した** — 名前の重力で UX と名の付くものを吸い込むと product レーンが空洞化するため、`improve-loop` に改名した。分類規則で名前の重力に勝とうとしない
@@ -77,14 +77,14 @@ open Issue は**ちょうど 1 個**の stream ラベルを持つ。レーンは
 
 ADR 0043 D2 が「メタ作業はプロダクトを止めている時だけ着工可」という**着工時の門**を定めたのに対し、本項は「**この工場はいつ完成とみなすか**」という出口を定める。終了条件の無い改善活動は膨張する — 2026-08-11 実測で open PR 10 本中プロダクト (apps/) を触るものは 2 本であり、既に発生している。
 
-### D5 — [ADR 0011](0011-github-projects-as-execution-dashboard.md) の一部改訂: 実行ダッシュボードの描画面を Projects から status ページへ移す
+### D5 — [ADR 0011](github-projects-as-execution-dashboard.md) の一部改訂: 実行ダッシュボードの描画面を Projects から status ページへ移す
 
 ADR 0011 の核 (**実行状態の真実は GitHub Issues** / board に設計を書かない / docs が why・what) は維持する。改訂は描画面のみ:
 
 - 「Projects v2 board を実行ダッシュボードにする」→「**status ページの戦況図セクション (実データから自動生成) を実行ダッシュボードにする**」
 - Projects board の再建は行わない。既存 board は Close (Delete しない — 0011 の Rollback 方針どおり履歴を残す)
 - Runbook `github-projects-setup.md` は「歴史的経緯」として残し、冒頭に本 ADR への参照を置く
-- **board を現役として指している他の Accepted ADR にも注記する** — [ADR 0020](0020-hitl-choice-format-and-needs-human-queue.md) の Positive Consequences は needs-human が「`/status` と board の両方から見える」と規定している。ADR 本文は不変とし、Status 行に「board 側は 0044 で退役 (現行の可視面は `/status`。status ページへの描画は #289 待ち)」と注記する。**0020 だけを読んだ運用者に board が現役に見える経路を塞ぐ**
+- **board を現役として指している他の Accepted ADR にも注記する** — [ADR 0020](hitl-choice-format-and-needs-human-queue.md) の Positive Consequences は needs-human が「`/status` と board の両方から見える」と規定している。ADR 本文は不変とし、Status 行に「board 側は 0044 で退役 (現行の可視面は `/status`。status ページへの描画は #289 待ち)」と注記する。**0020 だけを読んだ運用者に board が現役に見える経路を塞ぐ**
 - **描画が入るまでの過渡期を明示する** — 戦況図セクションの実装 (#289) が入るまで、status ページには 5 レーンが描かれない。それまでは各所の記述を「予定」と明記し、**board 退役後にリンクを開いた PO が従来の自動化監視ページしか得られない**状態を「そう書いてある」状態にする (黙って断定しない)
 
 ## Consequences
@@ -105,7 +105,7 @@ ADR 0011 の核 (**実行状態の真実は GitHub Issues** / board に設計を
 
 ## Links
 
-- 発端: 2026-08-11 PO 申告 (プロジェクト管理の可視性) / design-gate 記録は [`docs/debrief/journal.md`](../debrief/journal.md)
+- 発端: 2026-08-11 PO 申告 (プロジェクト管理の可視性) / design-gate 記録は [`docs/debrief/journal.md`](../../../debrief/journal.md)
 - 補完関係: ADR 0043 (運転) ↔ 本 ADR (地図)
-- 改訂対象: [ADR 0011](0011-github-projects-as-execution-dashboard.md) (描画面 / Status 行に注記済み) / [ADR 0020](0020-hitl-choice-format-and-needs-human-queue.md) (needs-human の可視面から board を外す / Status 行に注記済み)
+- 改訂対象: [ADR 0011](github-projects-as-execution-dashboard.md) (描画面 / Status 行に注記済み) / [ADR 0020](hitl-choice-format-and-needs-human-queue.md) (needs-human の可視面から board を外す / Status 行に注記済み)
 - 実装: `cicd/scripts/status-page/streams.json` + ラベル付与 (本 PR、全 open Issue に適用済み) / **戦況図セクションの描画は #289** (PR #281「プロダクトの現在地」と同じ `build.py` を触るため、そのマージ後)。**#289 が入るまで status ページに 5 レーンは出ない** — 各所の記述はその間「予定」と明記する

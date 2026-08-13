@@ -7,10 +7,10 @@
 
 ## このリポジトリの 2 つの顔
 
-| 側面                    | 何をやっているか                                                                                                                                                                                                                                                                                                                                                           |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **AI ネイティブアプリ** | Azure OpenAI + VOICEVOX を使った音声対話アプリ。会話から困りごとを抽出・分類・追跡する ([ADR 0007](docs/adr/0007-problem-centric-two-layer-domain-model.md))                                                                                                                                                                                                               |
-| **AI 駆動開発の実験場** | 実装のほぼ全量をコーディングエージェントが書き、人間は PO として判断だけを担う。理解ゲート・独立 judge・UX 自律改善ループなど、その運用そのものを設計対象にしている ([ADR 0014](docs/adr/0014-design-comprehension-gate-and-debrief.md) / [0019](docs/adr/0019-independent-judge-agents-security-qa-release.md) / [0022](docs/adr/0022-autonomous-ux-improvement-loop.md)) |
+| 側面                    | 何をやっているか                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **AI ネイティブアプリ** | Azure OpenAI + VOICEVOX を使った音声対話アプリ。会話から困りごとを抽出・分類・追跡する ([ADR 0007](docs/adr/0007-problem-centric-two-layer-domain-model.md))                                                                                                                                                                                                                                                         |
+| **AI 駆動開発の実験場** | 実装のほぼ全量をコーディングエージェントが書き、人間は PO として判断だけを担う。理解ゲート・独立 judge・UX 自律改善ループなど、その運用そのものを設計対象にしている ([ADR 0014](docs/adr/archive/operations/design-comprehension-gate-and-debrief.md) / [0019](docs/adr/archive/operations/independent-judge-agents-security-qa-release.md) / [0022](docs/adr/archive/operations/autonomous-ux-improvement-loop.md)) |
 
 ## 現在の完成範囲
 
@@ -68,7 +68,7 @@ npm run lint
 - [UI 仕様 (MDX が真実)](docs/frontend/ui_specs/) / [BFF API (OpenAPI は生成物)](docs/api/README.md)
 - [テスト戦略](docs/testing/strategy.md) / [ドキュメント戦略](docs/documentation/strategy.md)
 - [セッション記録 (何をなぜ決めたかの時系列)](docs/debrief/journal.md)
-- 計画・進捗の現在地は **GitHub Issues** が真実 ([ADR 0011](docs/adr/0011-github-projects-as-execution-dashboard.md))
+- 計画・進捗の現在地は **GitHub Issues** が真実 ([ADR 0011](docs/adr/archive/operations/github-projects-as-execution-dashboard.md))
 
 ## 開発に参加する / エージェントを走らせる
 

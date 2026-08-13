@@ -1,6 +1,6 @@
 # 0026. CD の赤は毎時の watchdog Routine が検知し、診断と fix PR まで無人で進める
 
-- Status: Superseded by [0035](0035-role-split-across-agents-and-actions.md) (2026-08-10)
+- Status: Superseded by [0035](role-split-across-agents-and-actions.md) (2026-08-10)
 - Date: 2026-08-08
 - Deciders: omoteforlab (方向は 2026-08-08 の対話で承認。2026-08-09 の報告会 #4 で Accept)
 - Consulted: —
@@ -50,8 +50,8 @@ Option C (event-driven) が反応速度では理想だが、現行の Routine �
 
 ## Links
 
-- 運用手順 (Routine の中身・停止・再作成): [runbooks/cd-watchdog.md](../runbooks/cd-watchdog.md)
-- 検知層: [ADR 0018](0018-runtime-verification-in-the-loop.md) / deploy.yml の smoke → golden-path → UI E2E (#111)
-- 自動化の基盤選定: [ADR 0008](0008-pr-review-via-cloud-routine.md) (Routine / サブスク枠 / merge は人間)
-- 人間の確認・宿題の形式: [ADR 0020](0020-hitl-choice-format-and-needs-human-queue.md)
+- 運用手順 (Routine の中身・停止・再作成): [runbooks/cd-watchdog.md](../../../runbooks/cd-watchdog.md)
+- 検知層: [ADR 0018](runtime-verification-in-the-loop.md) / deploy.yml の smoke → golden-path → UI E2E (#111)
+- 自動化の基盤選定: [ADR 0008](pr-review-via-cloud-routine.md) (Routine / サブスク枠 / merge は人間)
+- 人間の確認・宿題の形式: [ADR 0020](hitl-choice-format-and-needs-human-queue.md)
 - 発端のインシデント: #131 初回デプロイの赤 (稼働 revision 検証の引数バグ) と TTS 断線の体感発覚

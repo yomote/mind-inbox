@@ -48,13 +48,31 @@ jobs:
               | grep -oE '[0-9]{4}' | sort
           }
 
+          retired_of() {
+            # $1 = git ref。docs/adr/archive/ へ退避した番号 (ファイル名から番号を落として
+            # あるため nums_of では拾えない)。この一覧が無いと **退役番号が再利用される**。
+            # 一覧そのものが消えたら「退役ゼロ」に見えて静かに壊れるので、
+            # ファイルが読めなかった場合は下で明示的に落とす。
+            git show "$1:docs/adr/archive/retired-numbers.txt" 2>/dev/null \
+              | grep -oE '^[0-9]{4}$' | sort
+          }
+
           git fetch --no-tags --depth=1 origin "$BASE_SHA" 2>/dev/null \
             || git fetch --no-tags origin "$BASE_SHA"
 
           PR_NUMS="$(nums_of HEAD)"
           BASE_NUMS="$(nums_of "$BASE_SHA")"
+          PR_RETIRED="$(retired_of HEAD)"
+          BASE_RETIRED="$(retired_of "$BASE_SHA")"
 
           FAILED=0
+
+          # 0. 退役番号の一覧そのものが消えていないか。
+          #    これが空になると「退役ゼロ」に見え、以降すべての判定が静かに素通りする。
+          if [ -n "$BASE_RETIRED" ] && [ -z "$PR_RETIRED" ]; then
+            FAILED=1
+            echo "::error title=退役番号の一覧が読めない::docs/adr/archive/retired-numbers.txt が PR 側で空か欠落しています。この一覧が無いと退役済みの番号が再利用されます"
+          fi
 
           # 1. PR 内での重複 (同じ番号のファイルが 2 つある)
           DUP_IN_PR="$(echo "$PR_NUMS" | uniq -d)"
@@ -89,10 +107,21 @@ jobs:
             fi
           done
 
+          # 3. PR が退役番号 (docs/adr/archive/ へ退避済み) を再利用していないか。
+          #    退避時にファイル名から番号を落としているため、nums_of では検出できない。
+          for n in $(echo "$PR_NUMS" | uniq); do
+            if echo "$PR_RETIRED" | grep -qx "$n"; then
+              FAILED=1
+              pr_file="$(git ls-tree -r HEAD --name-only docs/adr/ | grep "/$n-" | head -1)"
+              echo "::error file=${pr_file},title=退役した ADR 番号の再利用::番号 $n は docs/adr/archive/ へ退避済みです (retired-numbers.txt)"
+              echo "    PR: $pr_file"
+            fi
+          done
+
           {
-            echo "## adr-number-guard (ADR 0028 D3)"
+            echo "## adr-number-guard"
             echo
-            NEXT="$(echo "$BASE_NUMS" | tail -1)"
+            NEXT="$(printf '%s\n%s\n' "$BASE_NUMS" "$BASE_RETIRED" | grep -E '^[0-9]{4}$' | sort -n | tail -1)"
             if [ -n "$NEXT" ]; then
               printf -- "- base (origin/main) の最大番号: \`%s\` → 次に使えるのは \`%04d\`\n" \
                 "$NEXT" "$((10#$NEXT + 1))"

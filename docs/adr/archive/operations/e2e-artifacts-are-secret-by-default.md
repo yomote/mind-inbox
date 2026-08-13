@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-08-12
 - Deciders: PO (yomote) / 窓口 PM セッション
-- Related: [ADR 0018](0018-runtime-verification-in-the-loop.md) (動作検証をループに組み込む — 証拠が残らないと検証が成立しない) / [ADR 0031](0031-agent-reaches-outside-via-github-actions.md) (外の事実は Actions 経由) / [ADR 0017](0017-container-apps-access-via-auth-gate.md) (実環境は認証の門で閉じる — 門が本物だから実トークンが要る)
+- Related: [ADR 0018](runtime-verification-in-the-loop.md) (動作検証をループに組み込む — 証拠が残らないと検証が成立しない) / [ADR 0031](agent-reaches-outside-via-github-actions.md) (外の事実は Actions 経由) / [ADR 0017](../../0017-container-apps-access-via-auth-gate.md) (実環境は認証の門で閉じる — 門が本物だから実トークンが要る)
 
 Technical Story: 2026-08-12、[#293](https://github.com/yomote/mind-inbox/issues/293) の調査が丸一日「実環境の SSE がハングする」という**誤った仮説のまま**動けなかった。原因は `deploy.yml` が `upload-artifact` を 1 つも持たず、Playwright の失敗証拠が runner ごと消えていたこと。PR #299 でスクリーンショットと `error-context.md` を残せるようにしたところ、**その初回の artifact で原因が判明した** (入力欄が空・送信ボタンが disabled で、SSE は呼ばれてすらいなかった)。同時に「では trace も上げたい」が自然な要求として出たが、trace には実アクセストークンが入る。
 
@@ -11,7 +11,7 @@ Technical Story: 2026-08-12、[#293](https://github.com/yomote/mind-inbox/issues
 
 実環境 E2E (`e2e-live`) の成果物は、**診断に不可欠であると同時に、秘密を含む**。この 2 つは同じ理由から来ている。
 
-- **実トークンが要るのは、門が本物だから** — BFF は EasyAuth で閉じており ([ADR 0017](0017-container-apps-access-via-auth-gate.md))、ブラウザが送る Bearer トークンを Azure が実際に検証する。`e2e-live/entra-login.ts` は `authorize` / `token` エンドポイントを `page.route` で偽装するが、**`access_token` だけは本物でなければ全 API が 401 になる**。偽装できるのは `id_token` まで (msal はクライアントで署名検証しないため)
+- **実トークンが要るのは、門が本物だから** — BFF は EasyAuth で閉じており ([ADR 0017](../../0017-container-apps-access-via-auth-gate.md))、ブラウザが送る Bearer トークンを Azure が実際に検証する。`e2e-live/entra-login.ts` は `authorize` / `token` エンドポイントを `page.route` で偽装するが、**`access_token` だけは本物でなければ全 API が 401 になる**。偽装できるのは `id_token` まで (msal はクライアントで署名検証しないため)
 - **trace はネットワークを丸ごと記録する** — `playwright.live.config.ts` の `trace: "retain-on-failure"` により、失敗時の trace には応答本文と `Authorization` ヘッダが入る。E2E ステップの `::add-mask::` は **Actions のログにしか効かず、artifact の中身は伏せられない**
 - **このリポジトリは public** — GitHub Actions の artifact は、public リポジトリでは**サインイン済みの GitHub ユーザーなら誰でも**ダウンロードできる。つまり業界で最もよく挙がる対策「artifact のアクセスを制限する」が**私たちには使えない**
 
@@ -30,10 +30,10 @@ Technical Story: 2026-08-12、[#293](https://github.com/yomote/mind-inbox/issues
 
 ## Decision Drivers
 
-- **証拠が残らないと動作検証が成立しない** ([ADR 0018](0018-runtime-verification-in-the-loop.md))。今回それが実害として出た (1 日の空転)
+- **証拠が残らないと動作検証が成立しない** ([ADR 0018](runtime-verification-in-the-loop.md))。今回それが実害として出た (1 日の空転)
 - **失敗が閉じ側に倒れること** — スクラブ方式は「秘密の見た目を全部列挙できている」前提に立ち、想定外の符号化ですり抜けると**静かに公開される**
 - **エージェントがボトルネックなく調査できること** — 人間が毎回復号して貼り直す運用は、改善ループの速度を PO の可用性に縛る。**ただし本 ADR ではこの driver を満たせていない** (下記「エージェント復号を保留する理由」)。安全性を優先した
-- **CI に秘密を増やさない** — 長期クレデンシャルを置かない ([ADR 0031](0031-agent-reaches-outside-via-github-actions.md) の driver を継承)
+- **CI に秘密を増やさない** — 長期クレデンシャルを置かない ([ADR 0031](agent-reaches-outside-via-github-actions.md) の driver を継承)
 - 判断を 1 回で固定し、成果物が増えるたびに再検討しない
 
 ## Considered Options
@@ -56,8 +56,8 @@ Chosen option: **"Option D"**。
 - **D4 公開鍵はリポジトリに commit する** (`cicd/keys/e2e-artifacts.pub.asc`) — 公開鍵は公開してよい。**CI に秘密を 1 つも増やさない**。CI が乗っ取られても過去の artifact は復号できない (暗号化しかできない)
 - **D5 秘密鍵は管理系 RG の Azure Key Vault に置き、復号は PO の管理環境でのみ行う** — **サンドボックスにも GitHub Secrets にも置かない**。**エージェントによる復号は当面おこなわない** (理由は下の「エージェント復号を保留する理由」)。
   - **GitHub Secrets を選ばない理由**: workflow が復号できても、**public リポジトリでは Actions のログが公開**なので復号結果の出力先が無い
-  - **環境変数を選ばない理由**: [ADR 0031](0031-agent-reaches-outside-via-github-actions.md) の「サンドボックスに長期クレデンシャルを置かない」に反する。加えて Claude Code の公式ドキュメントが「**cloud environments have no dedicated secrets store, so don't add API keys or other credentials**」と明示している ([Configure cloud environments](https://code.claude.com/docs/en/cloud-environments))
-  - **取得経路**: PO の管理環境で [ADR 0006](0006-azure-access-via-device-code.md) の device-code ログイン (`az login --use-device-code` → `az keyvault secret show`)。**リポジトリの Runbook にエージェント向けの import 手順は置かない**
+  - **環境変数を選ばない理由**: [ADR 0031](agent-reaches-outside-via-github-actions.md) の「サンドボックスに長期クレデンシャルを置かない」に反する。加えて Claude Code の公式ドキュメントが「**cloud environments have no dedicated secrets store, so don't add API keys or other credentials**」と明示している ([Configure cloud environments](https://code.claude.com/docs/en/cloud-environments))
+  - **取得経路**: PO の管理環境で [ADR 0006](../../0006-azure-access-via-device-code.md) の device-code ログイン (`az login --use-device-code` → `az keyvault secret show`)。**リポジトリの Runbook にエージェント向けの import 手順は置かない**
   - **置き場所は管理系 RG** — 環境 (`rg-{env}-mind-inbox`) の中に置くと `cleanup-env.sh` が RG 削除に加えて **Key Vault の soft-delete を purge** するため、撤収のたびに鍵が救済不能に消える ([#302](https://github.com/yomote/mind-inbox/issues/302))
   - **#302 が完了するまでの暫定**: 管理系 RG がまだ無いため、それまでは秘密鍵を PO の手元に置く。**公開鍵は既に commit 済みなので暗号化 artifact はこの時点から残る** — 変わるのは復号できる人だけで、暫定期間中は PO のみ (頻度は低い — 2026-08-12 の [#293](https://github.com/yomote/mind-inbox/issues/293) はスクリーンショットだけで原因が特定できた)
 - **D6 公開鍵が無い間は trace を残さず、warning を出して続行する** — 鍵の準備前に平文で上がる事故を構造的に防ぐ (fail closed)。「鍵が無いから黙って何もしない」ではなく**必ず 1 行喋る**
@@ -70,7 +70,7 @@ GitHub の ubuntu ランナーに**最初から入っている** (`age` は導�
 
 ## ADR 0031 との関係 — 衝突は解消した
 
-初版の D5 は「秘密鍵を Claude Code 実行環境の環境変数に置く」としており、**Accepted の [ADR 0031](0031-agent-reaches-outside-via-github-actions.md) と正面から衝突していた** (2026-08-12 の Codex レビュー P1 指摘)。0031 は Decision Drivers に「サンドボックスに長期クレデンシャルを置かない」を掲げ、Option D (SP 秘密を環境変数に置く) を「ADR 0009 の『保存する秘密を作らない』を正面から崩す」として棄却している。
+初版の D5 は「秘密鍵を Claude Code 実行環境の環境変数に置く」としており、**Accepted の [ADR 0031](agent-reaches-outside-via-github-actions.md) と正面から衝突していた** (2026-08-12 の Codex レビュー P1 指摘)。0031 は Decision Drivers に「サンドボックスに長期クレデンシャルを置かない」を掲げ、Option D (SP 秘密を環境変数に置く) を「ADR 0009 の『保存する秘密を作らない』を正面から崩す」として棄却している。
 
 **さらに、Claude Code の公式ドキュメントも同じことを言っていた**:
 
@@ -78,7 +78,7 @@ GitHub の ubuntu ランナーに**最初から入っている** (`age` は導�
 
 独立した 2 つの情報源が同じ結論だったため、**D5 を書き換えて衝突を解消した**。現在の D5 は:
 
-- **保存された秘密を増やさない** — 鍵は Key Vault にあり、取得は PO の管理環境で device-code の短命トークン ([ADR 0006](0006-azure-access-via-device-code.md))
+- **保存された秘密を増やさない** — 鍵は Key Vault にあり、取得は PO の管理環境で device-code の短命トークン ([ADR 0006](../../0006-azure-access-via-device-code.md))
 - **サンドボックスに長期クレデンシャルを置かない** — 環境変数にも GitHub Secrets にも置かず、**鍵に触る操作 (生成・ローテーション・復号) をエージェント環境で行わない**
 
 つまり 0031 を supersede する必要はなく、**0006 (device-code) と 0009 (no stored secret) の延長線上に収まった**。

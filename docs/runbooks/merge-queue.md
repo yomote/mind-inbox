@@ -74,6 +74,6 @@
 
 ## Related
 
-- ADR: [0042 pm-accept 引き継ぎ + Merge Queue](../adr/0042-pm-accept-carryover-and-merge-queue.md) / [0036 マージの門](../adr/0036-merge-gate-as-required-check-and-pm-cadence.md)
+- ADR: [0042 pm-accept 引き継ぎ + Merge Queue](../adr/archive/operations/pm-accept-carryover-and-merge-queue.md) / [0036 マージの門](../adr/archive/operations/merge-gate-as-required-check-and-pm-cadence.md)
 - スクリプト: `cicd/scripts/review-gate/`
 - needs-human: Issue #269 (queue 有効化)

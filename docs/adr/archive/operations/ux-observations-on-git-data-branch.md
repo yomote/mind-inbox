@@ -10,7 +10,7 @@ Technical Story: [#197](https://github.com/yomote/mind-inbox/issues/197) (蓄積
 
 ## Context and Problem Statement
 
-UX 観測のデータは現在 3 種類とも Issue コメントに蓄積している ([ADR 0029](0029-probe-record-transport-via-issue-comment.md) / [ADR 0037](0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md)):
+UX 観測のデータは現在 3 種類とも Issue コメントに蓄積している ([ADR 0029](probe-record-transport-via-issue-comment.md) / [ADR 0037](scheduled-evals-split-mechanical-actions-llm-pm-tick.md)):
 
 - プローブ記録 `ux-probe-record` → [#162](https://github.com/yomote/mind-inbox/issues/162) (golden-path-monitor が毎朝投稿)
 - 機械計測 `ux-eval-mech` → [#127](https://github.com/yomote/mind-inbox/issues/127) (ux-eval.yml が毎朝投稿)
@@ -53,7 +53,7 @@ Chosen option: **"Option C"**。2026-08-11 に PO が選択肢形式で裁定 ([
 - **D4 LLM 採点も同じデータブランチへ** — PM tick は `post-judge-score.sh` (検証 → 追記に改修) を使う。git push は agent セッションから動くため、gh が使えない環境でも人間と同じスクリプトで投稿できる (従来の「agent は MCP で代替」の分岐が消える)
 - **D5 読み出し (ux_eval.py の鮮度・評価済み判定) はデータブランチの JSONL から行う** — コメント本文の正規表現切り出しを廃止する
 - **D6 ステータスページに UX トレンド節を足す** — データブランチを取得して send→表示 avg/max の時系列 (直近 2 週間)・警告数・LLM 採点を描く。あわせて watchers.json の trace を kind 別のデータブランチ参照に変え、**「機械計測だけ動いて LLM 採点が止まった」を検出できない穴 (ADR 0037 Negative Consequences) を塞ぐ**
-- **D7 過去データは one-shot の移行スクリプトで #162 / #127 のコメントから JSONL に取り込む** (`workflow_dispatch` で実行)。移行完了後、#162 / #127 は蓄積先としての役目を終えてクローズする (手順は [Runbook](../runbooks/ux-probe-judge.md))
+- **D7 過去データは one-shot の移行スクリプトで #162 / #127 のコメントから JSONL に取り込む** (`workflow_dispatch` で実行)。移行完了後、#162 / #127 は蓄積先としての役目を終えてクローズする (手順は [Runbook](../../../runbooks/ux-probe-judge.md))
 - **D8 monitor / ux-eval に `contents: write` を付与する** — ADR 0029 時点の却下理由のうち権限面は「`issues: write` を渡したのと重さとして大差ない」(#197) と再評価した
 
 ### Positive Consequences
@@ -112,5 +112,5 @@ Chosen option: **"Option C"**。2026-08-11 に PO が選択肢形式で裁定 ([
 ## Links
 
 - Issue: [#197](https://github.com/yomote/mind-inbox/issues/197) (裁定) / [#162](https://github.com/yomote/mind-inbox/issues/162) / [#127](https://github.com/yomote/mind-inbox/issues/127) / [#123](https://github.com/yomote/mind-inbox/issues/123) (epic)
-- 関連 ADR: [0029](0029-probe-record-transport-via-issue-comment.md) (現行の運搬・蓄積 — 本 ADR の Accept 時に蓄積先の部分を Supersede する) / [0037](0037-scheduled-evals-split-mechanical-actions-llm-pm-tick.md) (機械計測と LLM 採点の分担 — 分担自体は不変、置き場だけ変わる) / [0031](0031-agent-reaches-outside-via-github-actions.md) (外界到達は Actions 経由) / [0035](0035-role-split-across-agents-and-actions.md) (生死が見える場所に置く)
-- Runbook: [ux-probe-judge](../runbooks/ux-probe-judge.md) / [status-page](../runbooks/status-page.md)
+- 関連 ADR: [0029](probe-record-transport-via-issue-comment.md) (現行の運搬・蓄積 — 本 ADR の Accept 時に蓄積先の部分を Supersede する) / [0037](scheduled-evals-split-mechanical-actions-llm-pm-tick.md) (機械計測と LLM 採点の分担 — 分担自体は不変、置き場だけ変わる) / [0031](agent-reaches-outside-via-github-actions.md) (外界到達は Actions 経由) / [0035](role-split-across-agents-and-actions.md) (生死が見える場所に置く)
+- Runbook: [ux-probe-judge](../../../runbooks/ux-probe-judge.md) / [status-page](../../../runbooks/status-page.md)

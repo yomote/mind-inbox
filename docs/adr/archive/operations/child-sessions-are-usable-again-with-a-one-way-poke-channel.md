@@ -6,11 +6,11 @@
 - Consulted: —
 - Informed: —
 
-Technical Story: 2026-08-12、PO から「Claude のルーティン一覧は見えるか / コセッションは作れるか」と問われ、実測したところ [ADR 0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) の前提が崩れていた。
+Technical Story: 2026-08-12、PO から「Claude のルーティン一覧は見えるか / コセッションは作れるか」と問われ、実測したところ [ADR 0033](parent-implements-via-subagent-when-child-sessions-are-gated.md) の前提が崩れていた。
 
 ## Context and Problem Statement
 
-[ADR 0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) は **「この実行環境では `create_session` が承認ゲートで弾かれる」** という実測を前提に、分配先を子セッションから subagent へ切り替えた。同 ADR の D3 は「`create_session` が通る環境では従来どおり子に出してよい。通るなら子の方が優れる」と、復帰条件まで書いてある。
+[ADR 0033](parent-implements-via-subagent-when-child-sessions-are-gated.md) は **「この実行環境では `create_session` が承認ゲートで弾かれる」** という実測を前提に、分配先を子セッションから subagent へ切り替えた。同 ADR の D3 は「`create_session` が通る環境では従来どおり子に出してよい。通るなら子の方が優れる」と、復帰条件まで書いてある。
 
 2026-08-12 に実測したところ、**`create_session` は通る**。`create_trigger` / `fire_trigger` / `delete_trigger` も通る。つまり D3 の復帰条件は満たされた。
 
@@ -23,20 +23,20 @@ Technical Story: 2026-08-12、PO から「Claude のルーティン一覧は見�
 
 ## Decision Drivers
 
-- **user のクリックを減らす** — [ADR 0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) の原点。承認ゲートの穴埋めを user にさせない
+- **user のクリックを減らす** — [ADR 0033](parent-implements-via-subagent-when-child-sessions-are-gated.md) の原点。承認ゲートの穴埋めを user にさせない
 - **親のコンテキストの経済** — subagent に出す唯一かつ実測された理由 (ADR 0033 改訂の記録)
 - **投げた作業が迷子にならないこと** — 往復できない相手に「途中で判断が要る作業」を渡すと、黙って止まる
 - **沈黙と正常を区別する** — 子が黙ったとき、成功なのか死んだのか判別できること (CLAUDE.md の最頻事故)
 
 ## Considered Options
 
-- Option A: [ADR 0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) 以前に戻す (原則すべて子セッションへ分配)
+- Option A: [ADR 0033](parent-implements-via-subagent-when-child-sessions-are-gated.md) 以前に戻す (原則すべて子セッションへ分配)
 - Option B: **子セッションを復帰させるが、「投げ切れる作業」に限る。往復が要るものは subagent のまま**
 - Option C: ADR 0033 のまま据え置く (子セッションは使わない)
 
 ## Decision Outcome
 
-Chosen option: **"Option B"**。`create_session` が通るようになった以上 [ADR 0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) D3 は発動する。会話も (D6 の経路で) できる。ただし**片道が約 1 分**なので、細かく指示を出し直しながら進める作業は依然として subagent の方が速い。ADR 0033 の「作業の大きさで決める」表は捨てず、そこに「往復の回数」の軸を足す。
+Chosen option: **"Option B"**。`create_session` が通るようになった以上 [ADR 0033](parent-implements-via-subagent-when-child-sessions-are-gated.md) D3 は発動する。会話も (D6 の経路で) できる。ただし**片道が約 1 分**なので、細かく指示を出し直しながら進める作業は依然として subagent の方が速い。ADR 0033 の「作業の大きさで決める」表は捨てず、そこに「往復の回数」の軸を足す。
 
 ### 決定の内訳
 
@@ -50,7 +50,7 @@ Chosen option: **"Option B"**。`create_session` が通るようになった以�
 
   判断軸は**往復の回数**であって独立性ではない。**往復が 1 回増えるごとに 1 分待つ**ので、10 往復する作業を子に出すと subagent より遅くなる
 
-- **D2 子セッションへ出すときは、起票パケットを一度で完結させる。** [ADR 0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) D1 / [ADR 0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) D2 の 4 点 (対象 Issue / 完遂条件 / **触ってはいけないファイル境界** / CLAUDE.md 参照) に加え、**「詰まったら Issue にコメントを残して終了する」** と **D7 の返信先** を必ず書く。追加指示は送れるが 1 分かかるので、最初に言い切れるものは言い切る
+- **D2 子セッションへ出すときは、起票パケットを一度で完結させる。** [ADR 0028](dispatch-packet-in-issue-and-session-start-preflight.md) D1 / [ADR 0033](parent-implements-via-subagent-when-child-sessions-are-gated.md) D2 の 4 点 (対象 Issue / 完遂条件 / **触ってはいけないファイル境界** / CLAUDE.md 参照) に加え、**「詰まったら Issue にコメントを残して終了する」** と **D7 の返信先** を必ず書く。追加指示は送れるが 1 分かかるので、最初に言い切れるものは言い切る
 
 - **D3 `create_session` には `source_url` と `source_revision` を必ず渡す。** 環境は継承されるが **リポジトリは継承されない** — 省略すると子は空の作業ディレクトリで起動し、「repo が無い」と言って止まる (2026-08-12 実測)
 
@@ -73,7 +73,7 @@ Chosen option: **"Option B"**。`create_session` が通るようになった以�
 
   **`fire_trigger` による即時 poke は使わない** — API は成功を返すが配送されない。2026-08-12 に親 → 子 (idle) / 子 → 親 / 自己宛の 3 方向で試し、いずれも `last_fired_at` すら付かなかった。**「送信 API が成功した」を「届いた」と読み替えないこと**
 
-- **D7 子 → 親の報告は GitHub (Issue コメント) を既定にする。** 子は `mcp__github__*` を承認プロンプト無しで使え、記録も残る ([ADR 0021](0021-parent-session-as-pm-orchestrator.md) 条項 3・4 と同じ形)。
+- **D7 子 → 親の報告は GitHub (Issue コメント) を既定にする。** 子は `mcp__github__*` を承認プロンプト無しで使え、記録も残る ([ADR 0021](parent-session-as-pm-orchestrator.md) 条項 3・4 と同じ形)。
 
   **D6 の Routine 経路を子 → 親に使うのは未検証**。仕組みは同じはずだが、2026-08-12 に実測したのは**親 → 子の向きだけ**で、逆向きで成功を確認していない。当てにすると親が返信待ちのまま沈黙する。使う前に実測し、通ったらこの ADR を更新すること (「通ったはず」で規約に書かない)
 
@@ -87,7 +87,7 @@ Chosen option: **"Option B"**。`create_session` が通るようになった以�
 ### Positive Consequences
 
 - **真の並行が戻る。** subagent は親の同時実行数に縛られるが、子セッションは独立したコンテナで動く
-- **親のコンテキストが守られる** — [ADR 0021](0021-parent-session-as-pm-orchestrator.md) の元の狙いに近づく。子は自分で PR を出し、CI を追える
+- **親のコンテキストが守られる** — [ADR 0021](parent-session-as-pm-orchestrator.md) の元の狙いに近づく。子は自分で PR を出し、CI を追える
 - **承認プロンプトが止まる** (D4)。PO の「毎回承認が飛んでくる」への直接の対処
 - ADR 0033 は捨てずに済む — D3 が想定した復帰がそのまま起きただけで、思想の転換ではない
 
@@ -103,7 +103,7 @@ Chosen option: **"Option B"**。`create_session` が通るようになった以�
 
 ### Option A: ADR 0033 以前に戻す (原則すべて子セッションへ分配)
 
-- Good, because [ADR 0021](0021-parent-session-as-pm-orchestrator.md) の hub-and-spoke がそのまま復活し、規約が 1 本になる
+- Good, because [ADR 0021](parent-session-as-pm-orchestrator.md) の hub-and-spoke がそのまま復活し、規約が 1 本になる
 - Good, because 親のコンテキストが最大限守られる
 - Bad, because **子と会話できないので、途中で判断が要る作業が黙って止まる**。ADR 0033 が subagent で得ていた「結果を読んで次を指示する」ループが失われる
 - Bad, because 起票パケットを書き切れなかったぶんが、そのまま手戻りになる
@@ -147,4 +147,4 @@ Chosen option: **"Option B"**。`create_session` が通るようになった以�
 ## Links
 
 - 発端: 2026-08-12 の PO 質問「Claude のルーティン一覧って見れますか。またコセッションって作れますか」
-- 関連 ADR: [0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) (D3 の復帰条件が満たされた — D1 の表を本 ADR D1 が置き換え) / [0021](0021-parent-session-as-pm-orchestrator.md) (hub-and-spoke — 子の成果を GitHub に残す条項は維持) / [0028](0028-dispatch-packet-in-issue-and-session-start-preflight.md) (起票パケット — D2 で強化) / [0040](0040-project-continuity-three-layers.md) (Routine による継続性)
+- 関連 ADR: [0033](parent-implements-via-subagent-when-child-sessions-are-gated.md) (D3 の復帰条件が満たされた — D1 の表を本 ADR D1 が置き換え) / [0021](parent-session-as-pm-orchestrator.md) (hub-and-spoke — 子の成果を GitHub に残す条項は維持) / [0028](dispatch-packet-in-issue-and-session-start-preflight.md) (起票パケット — D2 で強化) / [0040](project-continuity-three-layers.md) (Routine による継続性)
