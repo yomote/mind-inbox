@@ -267,7 +267,7 @@ Python が `hypothesis` (未着手)。
 | **deploy 後 (dev)**        | E2E (smoke-test → golden-path → UI シナリオ)                | Issue が立つ / 自動 down |
 | **毎朝 (定期)**            | E2E (golden-path-monitor → ux-eval)                         | Issue / status page      |
 
-- エージェントは **最後に `npm run test:fast` を 1 回叩いてから PR を出す** (CLAUDE.md の要求)
+- エージェントは **最後に `npm run test:fast` を 1 回叩いてから PR を出す** (`dev` skill の要求)
 - pre-commit は**重くしない** (単体の一部 or 無し)。重いチェックは CI に任せる
 - CI (`.github/workflows/test.yml`) は各層を `continue-on-error` で流して最後に集計し、レイヤ別 pass/fail を Step Summary と PR の sticky comment に出す (「契約が落ちたから単体の状況が見えない」を防ぐ)
 - **移行中の注意**: test.yml にはまだ旧 L3 mock E2E (`npm run test:e2e`) が残っている。廃止 Issue (§6.3) が完了するまでは**existing のまま走らせ、緑を維持する** (消す順序を間違えると検知の穴が先に開く)

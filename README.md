@@ -72,7 +72,7 @@ npm run lint
 
 ## 開発に参加する / エージェントを走らせる
 
-エージェント向けの規約・コマンド・運用ループは [`CLAUDE.md`](CLAUDE.md) にまとめてある。人間が読む必要はないが、このリポジトリの開発がどう回っているかを知りたい場合はそこが実体。
+エージェント向けの入口は [`CLAUDE.md`](CLAUDE.md)。ただしそこは**索引**で、実体は別にある — 領域ごとの不変条件は領域別 `CLAUDE.md` ([`apps/frontend`](apps/frontend/CLAUDE.md) / [`apps/bff`](apps/bff/CLAUDE.md) / [`cicd`](cicd/CLAUDE.md))、起動やテストなどの手順は [`.claude/skills/`](.claude/skills/)、誰が何を担うかは [`docs/team.md`](docs/team.md)。人間が読む必要はないが、このリポジトリの開発がどう回っているかを知りたい場合はこの 3 つ。
 
 ## ライセンス
 

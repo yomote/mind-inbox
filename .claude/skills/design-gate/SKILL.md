@@ -26,7 +26,7 @@ description: 設計が固まって実装を始める前に必ず通す「理解�
 
 ### Step 1 — 対象設計の真実ソースを集める
 
-対象となる設計の根拠を読む: 該当する `docs/adr/`・`docs/design/`・`docs/frontend/ui_specs/`・関連 Issue。この設計に対応する ADR がまだ無ければ、**先に ADR を `Status: Proposed` で書く** (CLAUDE.md のルールどおり)。
+対象となる設計の根拠を読む: 該当する `docs/adr/`・`docs/design/`・`docs/frontend/ui_specs/`・関連 Issue。この設計に対応する ADR がまだ無ければ、**先に ADR を `Status: Proposed` で書く** (`adr` skill のルールどおり)。
 
 ### Step 2 — 可視化して提示する
 

@@ -171,7 +171,7 @@ docs/
 
 ### 7.1 docs 更新を誰が要求するか
 
-**§5 更新タイミング**が正典。PR 本文はマージ判断の案内板なので、更新した docs を網羅列挙させない (更新しなかった理由の列挙も不要) — 実 diff との整合は PR レビュー judge (C1 = 宣言と参照面の乖離 / [`review-rubric.md`](../../.github/claude/review-rubric.md)) と `pr-readiness` skill が見る。CLAUDE.md からは本戦略・ADR ディレクトリ・「OpenAPI を手書きしない」方針を参照している。
+**§5 更新タイミング**が正典。PR 本文はマージ判断の案内板なので、更新した docs を網羅列挙させない (更新しなかった理由の列挙も不要) — 実 diff との整合は PR レビュー judge (C1 = 宣言と参照面の乖離 / [`review-rubric.md`](../../.github/claude/review-rubric.md)) と `pr-readiness` skill が見る。root の CLAUDE.md からは索引として本戦略と ADR ディレクトリを参照し、「OpenAPI を手書きしない」方針は [`apps/bff/CLAUDE.md`](../../apps/bff/CLAUDE.md) が持つ。
 
 ### 7.2 エージェントが間違えやすい点
 

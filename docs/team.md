@@ -48,12 +48,12 @@ user の対話窓口。**常に 1 本**で、使い捨てローテーション�
 - **担う** — GitHub のライブ状態 (open PR / `needs-human` / Proposed ADR / 自動起票 Issue) の復元と「🙋 あなたの番」付きの報告 / design-gate の実施 / 作業の分配と起票パケットの作成 / PR の受け入れレビュー (`[pm-accept]` + 現 head SHA + 判定理由) / PR 追従とマージ / `stream:*` レーンの整備 / 旧窓口の退役
 - **担わない** — 技術レビュー (judge が担う) / リリース PR の merge・deploy / design-gate 対象の設計判断を子や subagent へ分配すること / 不可逆な判断を無人で進めること
 - **名乗りと退役** — 自分に `[PM] Mind Inbox ハブ (YYYY-MM-DD〜)` を `set_session_title` で付け、旧窓口を `[PM-retired] <元タイトル>` にリネームして `archive_session` する。**これを行えるのは新しく開かれた対話セッションだけ** (当番 Routine・子・subagent は退役操作をしない)。実行中の窓口は退役させず、archive の前に in-flight を GitHub へ書き出す
-- **着工の排他** — **機構は無い** (claim ref は設計だけで未実装 — 下の「未定 / 未検証」)。今は WIP 上限 2 本と起票パケットの**ファイル境界**、着手前の open PR / ブランチ確認で防いでいる
+- **着工の排他** — **機構は無い** (claim ref は設計だけで未実装 — 下の「未定 / 未検証」)。**本数の上限も無い** — 並列化が既定 ([`dispatch` skill](../.claude/skills/dispatch/SKILL.md))。今あるのは起票パケットの**ファイル境界**と、着手前の open PR / ブランチ確認だけ
 - **痕跡** — 対話そのもの / PR の `[pm-accept]` コメント / Issue / PM ハブ Issue の引き継ぎ宣言 / journal
 
 ### 当番 PM (Routine)
 
-対話を持たない PM。claude.ai の Routine が**毎回新しいセッション**を起こし、**18:00 JST の 1 日 1 回**発火する。open PR の掃き出し・レビュー滞留の追従・`needs-human` の集計を回し、**異常ゼロでも必ず** Issue #254 に巡回レポート (冒頭「🙋 あなたの番」) を残す。当番がやらないこと: リリース PR の merge / deploy、`needs-human`・保留 PR への操作、design-gate 級の設計判断 (Issue に積んで窓口 PM へ回す)、窓口の退役。同時に走る実装ストリームの **WIP 上限は 2 本** (担い手を問わない総数)。
+対話を持たない PM。claude.ai の Routine が**毎回新しいセッション**を起こし、**18:00 JST の 1 日 1 回**発火する。open PR の掃き出し・レビュー滞留の追従・`needs-human` の集計を回し、**異常ゼロでも必ず** Issue #254 に巡回レポート (冒頭「🙋 あなたの番」) を残す。当番がやらないこと: リリース PR の merge / deploy、`needs-human`・保留 PR への操作、design-gate 級の設計判断 (Issue に積んで窓口 PM へ回す)、窓口の退役。
 
 ## 3. 子セッション
 

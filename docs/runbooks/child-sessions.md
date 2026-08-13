@@ -3,7 +3,7 @@
 親 (PM) セッションから子セッションを起こし、追加指示を届け、成果を回収するまでの手順。
 
 判断の背景: [ADR 0048](../adr/archive/operations/child-sessions-are-usable-again-with-a-one-way-poke-channel.md) / 2026-08-12 の実測。
-分配してよい作業の種類は [CLAUDE.md](../../CLAUDE.md) の「分配の基準」を見ること
+分配してよい作業の種類は [`dispatch` skill](../../.claude/skills/dispatch/SKILL.md) の Step 2 (実行者を決める) を見ること
 (**往復が多い作業は子ではなく subagent**)。
 
 ## 前提
@@ -20,8 +20,8 @@ UUID 名 `bf7c680d-...` として見える**。片方しか書いていないと
 `create_session` / `archive_session` / `set_session_title` / `interrupt_session` / `delete_trigger` /
 `update_trigger` は両方の名前でツール単位に列挙する。
 
-`set_session_title` は **2026-08-12 に PO が常設許可**にした (窓口の識別と退役をエージェントが機械で行う /
-[ADR 0043](../adr/archive/operations/pm-self-driving-mode.md) D5・CLAUDE.md)。これが無いと、窓口が自分に `[PM]` を付ける /
+`set_session_title` は **PO が常設許可**にしてある (窓口の識別と退役はエージェントが機械で行う —
+手順は [`dispatch` skill](../../.claude/skills/dispatch/SKILL.md) の Step 1)。これが無いと、窓口が自分に `[PM]` を付ける /
 旧窓口を `[PM-retired]` にリネームする動作のたびに承認プロンプトが出て、**無人セッションでは止まる**。
 
 **`permissions.deny` も要る。** `mcp__github` をサーバ単位で許可すると、PR を経由せずリポジトリを
