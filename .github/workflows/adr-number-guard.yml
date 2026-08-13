@@ -73,11 +73,14 @@ jobs:
 
           FAILED=0
 
-          # 0. 退役番号の一覧そのものが消えていないか。
-          #    これが空になると「退役ゼロ」に見え、以降すべての判定が静かに素通りする。
-          if [ -n "$BASE_RETIRED" ] && [ -z "$PR_RETIRED" ]; then
+          # 0. 退役番号の一覧から**行が消えていないか** (全消しだけでなく 1 行の削除も)。
+          #    「空かどうか」だけを見ていると、1 行だけ消して同じ PR でその番号を足す経路が
+          #    素通りする (2026-08-13 のレビューで指摘)。base 側の一覧を基準に差分を取る。
+          norm() { printf '%s\n' "${1:-}" | grep -E '^[0-9]{4}$' | sort -u || true; }
+          REMOVED="$(comm -23 <(norm "$BASE_RETIRED") <(norm "$PR_RETIRED") || true)"
+          if [ -n "$REMOVED" ]; then
             FAILED=1
-            echo "::error title=退役番号の一覧が読めない::docs/adr/archive/retired-numbers.txt が PR 側で空か欠落しています。この一覧が無いと退役済みの番号が再利用されます"
+            echo "::error title=退役番号が一覧から消えている::$(echo $REMOVED) が docs/adr/archive/retired-numbers.txt から削除されています。退役番号は再利用しません — 消す理由があるなら PO 裁定を取ってください"
           fi
 
           # 1. PR 内での重複 (同じ番号のファイルが 2 つある)
@@ -115,8 +118,14 @@ jobs:
 
           # 3. PR が退役番号 (docs/adr/archive/ へ退避済み) を再利用していないか。
           #    退避時にファイル名から番号を落としているため、nums_of では検出できない。
+          #
+          #    照合には base と PR の**和集合**を使う。PR 側だけを見ると「一覧から 1 行消して
+          #    その番号を足す」で門が開き、base 側だけを見ると一覧を導入する PR 自身で
+          #    検査が効かない。削除そのものは上の検査 0 が base 基準で赤にするので、
+          #    和集合にしても「消して足す」は塞がったまま。
+          RETIRED_ALL="$(printf '%s\n%s\n' "$BASE_RETIRED" "$PR_RETIRED" | grep -E '^[0-9]{4}$' | sort -u || true)"
           for n in $(echo "$PR_NUMS" | uniq); do
-            if echo "$PR_RETIRED" | grep -qx "$n"; then
+            if echo "$RETIRED_ALL" | grep -qx "$n"; then
               FAILED=1
               pr_file="$(git ls-tree -r HEAD --name-only docs/adr/ | grep "/$n-" | head -1)"
               echo "::error file=${pr_file},title=退役した ADR 番号の再利用::番号 $n は docs/adr/archive/ へ退避済みです (retired-numbers.txt)"
