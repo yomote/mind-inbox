@@ -31,7 +31,7 @@
 - **判定の 1 行を壊してテストが落ちることを確認してから「テスト済み」と言う** — データの文字列を assert しているだけのテストは、ロジックが壊れても気づけない
 - **「無いと何が静かに通るか?」を 1 文で書けないテストは書かない** — 仕様を指せないテストも書かない。「仕様がない」と言う
 - **実行状態 (計画・進捗) の真実は GitHub Issues** — docs は「なぜ/何を」、Issues は「いつ/誰が/今どこ」。**open Issue にはちょうど 1 個の `stream:*` ラベル**を付ける (`product` / `improve-loop` / `concept` / `factory` / `infra`。迷ったら `product`)
-- **自動化の生死は <https://yomote.github.io/mind-inbox/status/>** で見る (GitHub の実データから毎回生成。手書きの台帳は作らない)。**自動化を足したら [`watchers.json`](cicd/scripts/status-page/watchers.json) に 1 行足す。足せないなら作らない**
+- **自動化の生死は <https://yomote.github.io/mind-inbox/status/>** で見る (GitHub の実データから毎回生成。手書きの台帳は作らない)。**自動化を足したら [`watchers.json`](cicd/scripts/status-page/watchers.json) に 1 行足す。足せないなら作らない** — 唯一の例外が [`cicd/scripts/claude-hooks/`](cicd/scripts/claude-hooks/) (GitHub 側に run を残さないので載せると偽の緑になる)。生死は CI の配線テストが見る。**例外を増やすときは同じ強さの検出点を用意してから**
 
 ## 索引
 

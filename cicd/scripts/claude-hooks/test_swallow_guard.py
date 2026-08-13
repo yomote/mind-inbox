@@ -7,6 +7,8 @@
       失敗が黙って握り潰されるコードが入る (このリポジトリで最も繰り返している事故)
     - 「コメントを書けば通る」という逃げ道が壊れ、規約どおり理由を書いた
       コードまでブロックされる
+    - **理由コメントだけを削除する編集**が素通しする — 追加行が 1 行も無いので
+      「追加行だけ見る」検査は何も見つけず、理由の無い握り潰しが無警告で出来上がる
     - `structuredPatch` を解釈できなかったときに **何も出さずに素通しし**、
       「検査して問題なし」と「検査していない」が区別できなくなる
 """
@@ -19,6 +21,7 @@ from swallow_guard import (
     handle,
     has_nearby_comment,
     is_checked_path,
+    rescan_line_numbers,
 )
 
 
@@ -45,6 +48,21 @@ def test_単体_差分を解釈できないときは空集合ではなく_None()
     # 解釈失敗が「問題なし」に化ける
     assert added_line_numbers({"unexpected": 1}, {}) is None
     assert added_line_numbers({"structuredPatch": []}, {}) == set()
+
+
+def test_単体_削除を含む_hunk_は残った行も再検査の対象にする() -> None:
+    # 理由コメントだけを消した編集 (追加行ゼロ)。残る `npm test || true` を拾えないと
+    # 「理由の書かれていない握り潰し」が無警告で出来上がる
+    patch = _patch(4, ["-# 見えなくなるもの: npm の非ゼロ終了", " npm test || true"])
+    assert added_line_numbers({"structuredPatch": patch}, {}) == set()
+    assert rescan_line_numbers({"structuredPatch": patch}) == {4}
+
+
+def test_単体_削除の無い_hunk_は再検査しない() -> None:
+    # 追加だけの編集で既存行まで咎めると、無関係な 1 行の追加でブロックが出る
+    patch = _patch(4, [" 既存", "+新規"])
+    assert rescan_line_numbers({"structuredPatch": patch}) == set()
+    assert rescan_line_numbers({"何か想定外": True}) == set()
 
 
 # --- 対象ファイルの絞り込み -----------------------------------------------
@@ -114,6 +132,12 @@ def test_単体_空の_except_を検出する() -> None:
     assert len(find_swallows(lines, {3, 4})) == 1
 
 
+def test_単体_全出力を捨てるリダイレクトも検出する() -> None:
+    # `>/dev/null 2>&1` はシェルで最も多い形。ここを外すと標準エラーの握り潰しが素通りする
+    assert len(find_swallows(["curl example.com >/dev/null 2>&1"], {1})) == 1
+    assert len(find_swallows(["curl example.com &>/dev/null"], {1})) == 1
+
+
 def test_単体_continue_on_error_を検出する() -> None:
     assert len(find_swallows(["    continue-on-error: true"], {1})) == 1
 
@@ -143,6 +167,22 @@ def test_単体_違反があるとブロックし理由に行番号が入る(tmp
     assert result is not None
     assert result["decision"] == "block"
     assert "L2" in result["reason"]
+
+
+def test_単体_理由コメントを消しただけの編集もブロックする(tmp_path: Path) -> None:
+    target = tmp_path / "run.sh"
+    target.write_text("set -e\nnpm test || true\n", encoding="utf-8")
+    event = {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(target)},
+        "tool_response": {
+            "structuredPatch": _patch(2, ["-# 見えなくなるもの: npm の非ゼロ終了", " npm test || true"])
+        },
+    }
+    result = handle(event)
+    assert result is not None, "追加行ゼロの編集で握り潰しが素通りしている"
+    assert result["decision"] == "block"
+    assert "残置" in result["reason"], "追加と残置を区別せず報告している"
 
 
 def test_単体_違反が無ければ何も返さない(tmp_path: Path) -> None:

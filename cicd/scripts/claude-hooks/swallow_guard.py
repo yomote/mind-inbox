@@ -11,7 +11,8 @@
     この検査が無いと通す門がどこにも無い。
 
 設計 (Issue #392 の要件をそのまま):
-    - **新規追加行だけ**見る。既存コードは対象外 (`structuredPatch` の `+` 行のみ)
+    - **この編集が触った行だけ**見る。既存コードは対象外
+      (`structuredPatch` の `+` 行 + 削除を含む hunk の残存行)
     - **近傍にコメントを書けば通る**。「握り潰すな」ではなく
       「何が見えなくなるかを書け」が規約なので、書いてあれば違反ではない
     - `PostToolUse` は**書き込みを取り消せない** (2026-08-13 実測)。これは
@@ -19,6 +20,20 @@
 
 対象拡張子を絞っているのは誤検知を減らすため。`.md` を外しているのは、
 規約そのものを説明する文書 (この規約の解説を含む) が自分自身に引っかかるため。
+
+**この hook の生死は `watchers.json` (status ページ) では見ていない。**
+status ページは GitHub の実データ (workflow run / Issue / PR) から生死を出すが、
+hook は Claude Code セッションの中だけで動き、**GitHub 側に run を 1 つも残さない**。
+行を足しても「動いた形跡が無い」と「動いていない」が区別できず、**取れていないものが
+緑で表示される** — CLAUDE.md 最優先の禁止事項 (取れなかったものを異常なしと書かない) に
+正面から反する。代わりに `test_hook_wiring.py` が配線を検査し、これは
+`npm run test:scripts` → `npm run test:fast` → CI job `test (L0 / L1+L2 / L3 / L3-real)`
+(required status check) で走る。**配線が壊れるとマージが止まる。**
+
+**塞いでいない抜け道**: 検査は 1 回の編集の差分しか見ないので、握り潰しを 2 回の編集に
+分けて書けば (1 回目に `catch (e) {`、2 回目に `}`) すり抜ける。塞ぐには編集のたびに
+ファイル全体を検査することになり、既存コードの握り潰しで無関係な編集がブロックされる
+(誤検知は hook が外される最大の原因)。**意図的に開けてある。CI 側にもこの検査は無い。**
 """
 
 from __future__ import annotations
@@ -59,6 +74,9 @@ _SINGLE_LINE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     # 直後にコメントが無ければ「何のエラーを捨てたか」が永久に分からなくなる形
     (re.compile(r"2>\s*/dev/null"), "2>/dev/null (標準エラーを捨てている)"),
     (re.compile(r"2>&1\s*(?:\||>)\s*/dev/null"), "2>&1 >/dev/null (出力を全部捨てている)"),
+    # `cmd >/dev/null 2>&1` — 上の 2 つはこの語順を拾わない (シェルで最も多い形)
+    (re.compile(r">\s*/dev/null\s+2>&1"), ">/dev/null 2>&1 (標準出力も標準エラーも捨てている)"),
+    (re.compile(r"&>\s*/dev/null"), "&>/dev/null (出力を全部捨てている)"),
     (re.compile(r"\|\|\s*true(?![\w-])"), "|| true (失敗を成功に化けさせている)"),
     (re.compile(r"\|\|\s*:\s*(?:$|;|&)"), "|| : (失敗を成功に化けさせている)"),
     (re.compile(r"\bcatch\s*(?:\([^)]*\))?\s*\{\s*\}"), "空の catch (例外を捨てている)"),
@@ -79,6 +97,7 @@ class Finding(NamedTuple):
     line_no: int
     label: str
     text: str
+    source: str = "追加"  # "追加" = この編集で足した行 / "残置" = 削除の巻き添えで残った行
 
 
 def is_checked_path(file_path: str) -> bool:
@@ -132,6 +151,43 @@ def added_line_numbers(tool_response: Any, tool_input: Any) -> set[int] | None:
     return added
 
 
+def rescan_line_numbers(tool_response: Any) -> set[int]:
+    """削除を含む hunk の、新しいファイル側に残っている行 (1 始まり)。
+
+    無いと何が静かに通るか:
+        `npm test || true` の直前にあった**理由コメントだけを削除する編集**は
+        追加行が 1 行も無いので、追加行だけを見る検査では素通しする。結果、
+        「理由の書かれていない握り潰し」が無警告で出来上がる。**理由を消すのは
+        握り潰しを新しく書くのと同じ**なので、削除を含む hunk は残存行も見る。
+
+    追加行を含まない hunk では何も足さない (無関係な削除で既存コードを咎めないため)。
+    """
+    if not isinstance(tool_response, dict):
+        return set()
+    patch = tool_response.get("structuredPatch")
+    if not isinstance(patch, list):
+        return set()
+
+    touched: set[int] = set()
+    for hunk in patch:
+        if not isinstance(hunk, dict):
+            continue
+        cursor = hunk.get("newStart")
+        lines = hunk.get("lines")
+        if not isinstance(cursor, int) or not isinstance(lines, list):
+            continue
+        if not any(isinstance(line, str) and line.startswith("-") for line in lines):
+            continue
+        for line in lines:
+            if not isinstance(line, str):
+                break
+            if line.startswith("-"):
+                continue
+            touched.add(cursor)
+            cursor += 1
+    return touched
+
+
 def _strip_urls(text: str) -> str:
     return _URL_SCHEME.sub("scheme-", text)
 
@@ -176,10 +232,16 @@ def _next_meaningful(lines: list[str], idx: int) -> tuple[int, str] | None:
     return cursor, lines[cursor]
 
 
-def find_swallows(lines: list[str], added: set[int]) -> list[Finding]:
-    """新規追加行のうち、近傍にコメントの無い握り潰しを返す。"""
+def find_swallows(
+    lines: list[str], added: set[int], rescan: set[int] | frozenset[int] = frozenset()
+) -> list[Finding]:
+    """この編集が触った行のうち、近傍にコメントの無い握り潰しを返す。
+
+    `added` = この編集で足した行。`rescan` = 削除を含む hunk に残った行
+    (理由コメントだけを消した編集を拾うため)。どちらで見つけたかは Finding に残す。
+    """
     findings: list[Finding] = []
-    for line_no in sorted(added):
+    for line_no in sorted(set(added) | set(rescan)):
         idx = line_no - 1
         if idx < 0 or idx >= len(lines):
             continue
@@ -189,7 +251,8 @@ def find_swallows(lines: list[str], added: set[int]) -> list[Finding]:
             continue
         if has_nearby_comment(lines, line_no):
             continue
-        findings.append(Finding(line_no, label, text.strip()))
+        source = "追加" if line_no in added else "残置"
+        findings.append(Finding(line_no, label, text.strip(), source))
     return findings
 
 
@@ -212,12 +275,19 @@ def _match_label(lines: list[str], idx: int, text: str) -> str | None:
 
 
 def format_reason(file_path: str, findings: list[Finding]) -> str:
+    sources = {f.source for f in findings}
+    if sources == {"残置"}:
+        what = "この編集で理由コメントが消え、理由の書かれていない握り潰しだけが残りました"
+    elif "残置" in sources:
+        what = "理由の書かれていない握り潰しを追加、または理由コメントを消して残置しました"
+    else:
+        what = "理由の書かれていない握り潰しを新しく追加しました"
     head = (
-        f"{file_path} に、理由の書かれていない握り潰しを新しく追加しました "
+        f"{file_path} に、{what} "
         f"({len(findings)} 件)。CLAUDE.md / AGENTS.md が「このリポジトリで最も繰り返している"
         "事故」と名指ししている形です。"
     )
-    body = "\n".join(f"  L{f.line_no}: {f.label}\n    {f.text}" for f in findings)
+    body = "\n".join(f"  L{f.line_no}: [{f.source}] {f.label}\n    {f.text}" for f in findings)
     tail = (
         "この編集は既に適用済みで、hook では取り消せません。次のどちらかにしてください:\n"
         "  - 握り潰しをやめる (失敗が見える形にする)\n"
@@ -241,7 +311,8 @@ def handle(event: dict[str, Any]) -> dict[str, Any] | None:
         return hook_io.passthrough(
             f"{file_path} の差分 (structuredPatch) を解釈できず、握り潰しの検査をしていない"
         )
-    if not added:
+    rescan = rescan_line_numbers(event.get("tool_response"))
+    if not added and not rescan:
         return None
 
     try:
@@ -251,7 +322,7 @@ def handle(event: dict[str, Any]) -> dict[str, Any] | None:
             f"{file_path} を読めず、握り潰しの検査をしていない ({exc.strerror})"
         )
 
-    findings = find_swallows(lines, added)
+    findings = find_swallows(lines, added, rescan)
     if not findings:
         return None
     return hook_io.block(format_reason(file_path, findings))

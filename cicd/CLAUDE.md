@@ -40,3 +40,4 @@ cicd/scripts/smoke-test/smoke-test.sh          # デプロイ後の疎通確認
 - **判定ロジックをシェルや workflow の中に埋めない** — 純粋関数に切り出して pytest で押さえる。`if` が YAML の中にあるとテストできない。
 - **握り潰しを足すときは、それで何が見えなくなるかをコメントに書く** (`2>/dev/null` / `|| true` / 空の `catch`)。取得や検証に失敗したものを「異常なし」として出さない — 成功と区別できる形 (`未検証: 理由` / status を error / run を落とす) にする。
 - **自動化を足したら [`cicd/scripts/status-page/watchers.json`](scripts/status-page/watchers.json) に 1 行足す。** 足せない自動化は作らない。新設の必須条件は「動いたら痕跡がリポジトリに残ること」— 異常時だけ喋る設計にすると、沈黙と正常が区別できなくなる ([Runbook](../docs/runbooks/status-page.md))。
+- **例外は [`scripts/claude-hooks/`](scripts/claude-hooks/) だけ** (PO 裁定 2026-08-13 / Issue #392)。hook は Claude Code セッションの中でしか動かず GitHub 側に run を残さないので、watchers.json に載せると「動いた形跡が無い」と「動いていない」が区別できず**偽の緑**になる。生死は [`test_hook_wiring.py`](scripts/claude-hooks/test_hook_wiring.py) が見る — `npm run test:scripts` → `npm run test:fast` → CI job `test (L0 / L1+L2 / L3 / L3-real)` (required status check) なので、**配線が壊れるとマージが止まる**。hook を増やしたら `EXPECTED` に 1 行足す。

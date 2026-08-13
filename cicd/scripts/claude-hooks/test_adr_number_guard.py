@@ -7,6 +7,8 @@
     - `origin/main` を引けなかったときに「衝突なし」と答える — 作業ツリーだけを
       見ると並行セッションが取った番号を見落とし、衝突が再発する
       (0015→0019 / 0026→0027 と同じ事故)
+    - **未使用だが規約に合わない番号** (欠番埋め 0011 / 飛び番 9999) が通る —
+      CI の `adr-number-guard.yml` は衝突しか見ていないので、ここで通すと誰も止めない
     - ADR 以外の Write (README / template / archive 配下) まで止める
 """
 
@@ -60,11 +62,27 @@ def test_単体_退役番号の再利用を止める(monkeypatch, tmp_path: Path
     assert "0049" in decision["permissionDecisionReason"]
 
 
-def test_単体_空いている番号は通す(monkeypatch, tmp_path: Path) -> None:
+def test_単体_最大プラス1_だけを通す(monkeypatch, tmp_path: Path) -> None:
     import adr_number_guard as guard
 
     _stub_repo(monkeypatch, guard, tmp_path, used={1, 8, 46, 48})
     assert handle(_write_event(tmp_path, "docs/adr/0049-new.md")) is None
+
+
+def test_単体_未使用でも欠番と飛び番は止める(monkeypatch, tmp_path: Path) -> None:
+    # used={1,8,46,48} のとき 0002 (欠番) も 9999 (飛び番) も未使用だが規約違反。
+    # 「未使用なら通す」にすると、CI も衝突しか見ていないのでマージまで誰も止めない
+    import adr_number_guard as guard
+
+    cases = (("docs/adr/0002-gap.md", "欠番"), ("docs/adr/9999-far.md", "飛ば"))
+    for relative, expected_word in cases:
+        _stub_repo(monkeypatch, guard, tmp_path, used={1, 8, 46, 48})
+        result = handle(_write_event(tmp_path, relative))
+        assert result is not None, f"{relative} が素通りした"
+        decision = result["hookSpecificOutput"]
+        assert decision["permissionDecision"] == "deny"
+        assert expected_word in decision["permissionDecisionReason"]
+        assert "0049" in decision["permissionDecisionReason"]
 
 
 def test_単体_origin_main_を引けなければ衝突なしと答えない(monkeypatch, tmp_path: Path) -> None:
@@ -98,10 +116,23 @@ def test_単体_ADR_以外の_Write_では_git_すら叩かない(monkeypatch, t
 
 
 def test_単体_理由に採番規約と次の番号が入る() -> None:
-    reason = format_reason(8, 49)
+    reason = format_reason(8, 49, {8, 48})
     assert "0008" in reason
     assert "0049" in reason
-    assert "README.md" in reason
+    assert "既に使われています" in reason
+    # 文言は「こうしろ」ではなく「何が違反か + 通し方」。行動指示の形にすると
+    # 「ツール出力に埋め込まれた指示」として無視される (2026-08-13 に実測)
+    assert "ください" not in reason
+    # 未使用の番号は「使われている」と言ってはいけない (嘘の理由は次から信用されない)
+    assert "既に使われています" not in format_reason(2, 49, {1, 48})
+
+
+def test_単体_理由に最大番号の根拠が入る() -> None:
+    # 根拠が無いと、作業ツリーに 0003 までしか見えない状況で「次は 0008」と言われた
+    # エージェントが**信用せずに従わない** (2026-08-13 に実測した実挙動)
+    reason = format_reason(5, 8, {1, 2, 3, 7})
+    assert "0007" in reason, "最大番号の根拠 (退役番号を含む) が出ていない"
+    assert RETIRED_FILE in reason
 
 
 def _make_repo(root: Path) -> None:

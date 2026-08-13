@@ -12,9 +12,22 @@
 Codex も Actions も PO の直接編集も通らない。`.github/workflows/adr-number-guard.yml`
 が門で、こちらは前倒しの警告にすぎない (Issue #392 の決定済み前提)。
 
+判定は「未使用か」ではなく「**規約どおりの番号か**」で見る。規約は
+「`origin/main` の最大番号 +1、欠番は埋めない」なので、未使用でも欠番 (0011) や
+飛び番 (9999) は違反。CI の `adr-number-guard.yml` は**衝突しか見ていない**ため、
+欠番・飛び番はそこも通り抜ける — つまりこの検査を緩めると誰も止めない。
+
 費用: `docs/adr/NNNN-*.md` の**新規作成のときだけ** git を叩く。それ以外は即 return。
 ネットワークは使わない (ローカルの `origin/main` ref を見るだけで fetch しない) ため、
 ref が古ければ古いまま判定する — その限界は CI 側が塞ぐ。
+
+**この hook の生死は `watchers.json` (status ページ) では見ていない。**
+hook は Claude Code セッションの中だけで動き、GitHub 側に run を 1 つも残さないので、
+status ページに行を足しても「動いた形跡が無い」と「動いていない」が区別できず、
+**取れていないものが緑で表示される** (CLAUDE.md 最優先の禁止事項に反する)。代わりに
+`test_hook_wiring.py` が配線を検査し、`npm run test:scripts` → `npm run test:fast` →
+CI job `test (L0 / L1+L2 / L3 / L3-real)` (required status check) で走る。
+**配線が壊れるとマージが止まる。**
 """
 
 from __future__ import annotations
@@ -111,14 +124,34 @@ def collect_used(repo_root: Path, cwd: str) -> tuple[set[int], str | None]:
     return used, None
 
 
-def format_reason(number: int, free: int) -> str:
+def format_reason(number: int, free: int, used: set[int] | None = None) -> str:
+    if used is not None and number not in used:
+        head = (
+            f"ADR 番号 {number:04d} は未使用ですが、採番規約に合いません "
+            f"({'欠番を埋めようとしています' if number < free else '番号を飛ばしています'})。\n"
+        )
+    else:
+        head = (
+            f"ADR 番号 {number:04d} は既に使われています "
+            f"(origin/main の実ファイル / 作業ツリー / {RETIRED_FILE} のいずれか)。\n"
+        )
+    # 根拠 (最大番号がどこから来たか) を必ず出す。2026-08-13 の実測で、根拠の無い
+    # 「次は 0008」を **エージェントが信用せず従わなかった** (作業ツリーには 0003 までしか
+    # 見えないため。退役番号を合算していることが伝わらない)。
+    if used:
+        basis = (
+            f"使用済みの最大番号は {max(used):04d} です "
+            f"(origin/main の実ファイル + 作業ツリー + {RETIRED_FILE} の退役番号を合算。"
+            "退役番号はファイル名から消えているので `ls docs/adr` では見えません)。"
+        )
+    else:
+        basis = "使用済みの番号は 1 つも見つかりませんでした。"
     return (
-        f"ADR 番号 {number:04d} は既に使われています "
-        f"(origin/main の実ファイル / 作業ツリー / {RETIRED_FILE} のいずれか)。\n"
-        f"採番規約は「origin/main の最大番号 +1、欠番は埋めない」なので、"
-        f"次の番号は **{free:04d}** です。\n"
-        "退役番号は二度と使いません。ファイル名・本文の Status 行・"
-        f"docs/adr/README.md の索引を {free:04d} で揃えてから書き始めてください。"
+        f"{head}"
+        f"採番規約は「origin/main の最大番号 +1、欠番は埋めない」。{basis}"
+        f"よって次の番号は **{free:04d}** です。\n"
+        f"この Write は実行しておらず、ファイルは作られていません。"
+        f"ファイル名が {free:04d} であればこの検査は通ります。"
     )
 
 
@@ -156,9 +189,12 @@ def handle(event: dict[str, Any]) -> dict[str, Any] | None:
     if collect_failure is not None:
         return hook_io.passthrough(f"{collect_failure} ため、ADR 採番を照合していない")
 
-    if number not in used:
+    free = next_free(used)
+    if number == free:
         return None
-    return hook_io.deny_pre_tool_use(format_reason(number, next_free(used)))
+    # 未使用でも「最大 +1」でなければ規約違反 (欠番埋め / 飛び番)。CI は衝突しか
+    # 見ていないので、ここを「未使用なら通す」に緩めると誰も止めなくなる。
+    return hook_io.deny_pre_tool_use(format_reason(number, free, used))
 
 
 if __name__ == "__main__":
