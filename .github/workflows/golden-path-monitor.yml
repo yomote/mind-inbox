@@ -27,9 +27,16 @@ env:
 jobs:
   golden-path:
     runs-on: ubuntu-latest
-    # curl 版 (コールドスタート込み最大 ~11 分) + UI E2E (playwright install + 最大 210s 待ち)
-    # + UX プローブ (相談 4 往復・実 AI, 最大 ~15 分 — #123 M0) の積み上げに耐える余裕
-    timeout-minutes: 45
+    # 待受予算の積み上げ (playwright.live.config.ts は workers: 1 = 直列。全部を足す):
+    #   curl 版 (コールドスタート込み最大 ~11 分) + 永続化プローブ ~1 分
+    #   + pnpm install / playwright install ~4 分
+    #   + e2e-live: ux-probe 1,700s (ux-probe.spec.ts の setTimeout)
+    #     + 他 3 本 × 240s (config の既定) = 計 2,420s ≒ 40.5 分
+    #   + 失敗証拠 / trace 暗号化 / データブランチ追記の後段 ~3 分
+    #   = 最悪 ~60 分。**45 分では途中で job ごと打ち切られ、report-failure にも
+    #   artifact のアップロードにも到達できない** (= 落ちたのに通報が残らない / PR #399 レビュー指摘)。
+    # 余裕を 15 分積んで 75 分。プローブの予算を動かしたらこの数字も動かすこと。
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
