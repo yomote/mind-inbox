@@ -4,8 +4,15 @@
     "applicationInsights": {
       "samplingSettings": {
         "isEnabled": true,
-        "excludedTypes": "Request"
+        "maxTelemetryItemsPerSecond": 5,
+        "excludedTypes": "Request;Exception"
+      },
+      "httpAutoCollectionOptions": {
+        "enableHttpTriggerExtendedInfoCollection": false
       }
+    },
+    "logLevel": {
+      "default": "Information"
     }
   },
   "extensionBundle": {

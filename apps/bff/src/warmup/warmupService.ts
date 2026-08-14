@@ -12,6 +12,7 @@
 
 import { config } from "../config";
 import { serviceHeaders } from "../clients/serviceToken";
+import { describeError, logErrorEvent } from "../observability/telemetry";
 
 export type WarmupTargetResult = {
   /** ok = 応答あり / stub = URL 未設定 (ローカル等) / error = 失敗 or タイムアウト */
@@ -51,7 +52,11 @@ async function pingHealth(
       httpStatus: res.status,
     };
   } catch (err) {
-    console.warn(`[warmup] ping ${baseUrl}/health failed: ${(err as Error).message}`);
+    logErrorEvent("warmup.ping-failed", {
+      url: `${baseUrl}/health`,
+      ms: Date.now() - started,
+      ...describeError(err),
+    });
     return { status: "error", ms: Date.now() - started, httpStatus: null };
   }
 }

@@ -46,6 +46,7 @@ import {
   type Problem,
 } from "./domain";
 import { InMemoryProblemRepository } from "../repositories/problemRepository";
+import { runWithLogger } from "../observability/telemetry";
 import type { TrpcContext } from "./context";
 import { appRouter } from "./router";
 
@@ -1488,5 +1489,47 @@ describe("[L2] consultation.extract — 失敗の伝え方 (#183)", () => {
     const caller = makeCaller();
 
     await expect(caller.consultation.extract({ sessionId: "s1" })).rejects.toThrow("想定外");
+  });
+});
+
+/**
+ * [単体] tRPC の `procedure` ログに sessionId を生のまま載せないことを固定する。
+ *
+ * Codex (#413) が名指しした 3 手続き (sendMessage / preview / extract) を、caller から
+ * 実際に叩いて確かめる。`IdInputSchema` は長さしか見ていないので、クライアントは
+ * 相談の本文をそのまま sessionId に入れられる。
+ */
+describe("[単体] consultation の procedure ログ — sessionId を生のまま記録しない", () => {
+  /** クライアントが sessionId に詰め込んだ相談の本文。行に現れたら事故。 */
+  const SECRET = "会社を辞めたいと誰にも言えていない";
+
+  it.each(["sendMessage", "preview", "extract"] as const)("consultation.%s", async (procedure) => {
+    // 無いと何が静かに通るか: 出口のハッシュ化を戻すと、手続きを 1 回呼ぶたびに
+    // `sessionId=<本文>` が AppTraces に 30 日残る。画面は何も変わらないので気づけない。
+    vi.mocked(sendChatMessage).mockResolvedValue({
+      reply: "ふむ",
+      requiresApproval: false,
+      approvalRequestId: null,
+      citations: [],
+    });
+    vi.mocked(extractAiAgent).mockResolvedValue(newExtraction());
+    const lines: string[] = [];
+    const log = { log: (m: string) => lines.push(m), error: (m: string) => lines.push(m) };
+    const caller = makeCaller();
+
+    await runWithLogger(log, async () => {
+      if (procedure === "sendMessage") {
+        await caller.consultation.sendMessage({ sessionId: SECRET, message: "つらい" });
+      } else if (procedure === "preview") {
+        await caller.consultation.preview({ sessionId: SECRET, messages: [] });
+      } else {
+        await caller.consultation.extract({ sessionId: SECRET });
+      }
+    });
+
+    const procedureLine = lines.find((l) => l.includes("event=procedure"));
+    expect(procedureLine).toBeDefined();
+    expect(procedureLine).toContain("sessionHash=");
+    for (const line of lines) expect(line).not.toContain(SECRET);
   });
 });

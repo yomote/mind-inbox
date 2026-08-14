@@ -154,6 +154,9 @@ param lawRetentionInDays int = 30
 @description('Log Analytics の日次取り込み上限 (GB/日)。小数を扱うため文字列。既定 0.15 = 31 日で約 4.65 GB < 無料枠 5 GB/月。暴走時のブレーカーであり日常の調整弁ではない。')
 param lawDailyQuotaGb string = '0.15'
 
+@description('BFF (Function App) のテレメトリ送信先として workspace-based Application Insights を作り、接続文字列を appSettings で配る (#307)。判断とコストの根拠は modules/bootstrap-core.bicep の同名パラメータが正典。')
+param enableAppInsights bool = true
+
 @description('Set to true if a soft-deleted Key Vault with the same name already exists.')
 param recoverSqlAdminKeyVault bool = false
 
@@ -210,6 +213,7 @@ module infra '../modules/bootstrap-core.bicep' = {
     enableCosmosDataPlaneAudit: enableCosmosDataPlaneAudit
     lawRetentionInDays: lawRetentionInDays
     lawDailyQuotaGb: lawDailyQuotaGb
+    enableAppInsights: enableAppInsights
   }
 }
 
@@ -259,3 +263,11 @@ output cosmosDataPlaneAuditEnabled bool = infra.outputs.cosmosDataPlaneAuditEnab
 output logAnalyticsWorkspaceName string = infra.outputs.logAnalyticsWorkspaceName
 output logAnalyticsRetentionInDays int = infra.outputs.logAnalyticsRetentionInDays
 output logAnalyticsDailyQuotaGb string = infra.outputs.logAnalyticsDailyQuotaGb
+// #307: この 2 つを re-export していなかったので、smoke test の Log Analytics チェックは
+// 一度も実行されたことがなかった (`WARN- Missing output: logAnalyticsCustomerId` → skip)。
+// customerId はワークスペースの GUID で、これが無いと `az monitor log-analytics query` が
+// 打てない = **テレメトリが流れているかを機械が確かめられない**。
+output logAnalyticsWorkspaceId string = infra.outputs.logAnalyticsWorkspaceId
+output logAnalyticsCustomerId string = infra.outputs.logAnalyticsCustomerId
+output appInsightsEnabled bool = infra.outputs.appInsightsEnabled
+output appInsightsName string = infra.outputs.appInsightsName
