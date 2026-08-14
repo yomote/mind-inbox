@@ -88,7 +88,7 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 
 エージェントが過去判断を覆さないよう、CLAUDE.md からこのディレクトリにリンクする (#13 で実施)。
 
-## 既存 ADR (20 本)
+## 既存 ADR (21 本)
 
 無印 = Accepted。それ以外は末尾に Status を明記する。
 **番号順ではなくテーマ順**に並べている (番号は ID であって順序ではない — 欠番の理由は [`archive/`](archive/README.md))。
