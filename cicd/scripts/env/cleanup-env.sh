@@ -60,6 +60,10 @@ target RG still holds persistent resources, or when either the RG's existence or
 its contents could not be determined (ADR 0046 D1 / #302). "Could not check" is
 treated as "do not delete" -- not as "nothing to protect".
 
+Soft-deleted resources do NOT show up in "az resource list", so when a purge flag
+is on, "list-deleted" for that type is fed to the guard as well. Purging a
+persistent soft-deleted twin destroys the only recovery path, so it is refused.
+
 A resource counts as persistent when (1) it carries the layer tag
 mindInboxLayer=persistent stamped by main-shared.bicep, (2) its name is listed in
 PERSISTENT_RESOURCE_NAMES, or (3) its type has no disposable twin in the
@@ -157,7 +161,7 @@ GUARD_SAW_RG_ABSENT=false
 run_persistent_layer_guard() {
   local guard="${SCRIPT_DIR}/persistent_layer_guard.py"
   local -a guard_args=(--target-rg "$RG" --persistent-rg "$PERSISTENT_RG")
-  local inventory err_file rg_state name rc=0
+  local inventory deleted err_file rg_state name rc=0
 
   if [[ "$ALLOW_PERSISTENT_DELETE" == "true" ]]; then
     guard_args+=(--allow-persistent)
@@ -167,6 +171,38 @@ run_persistent_layer_guard() {
   for name in $PERSISTENT_RESOURCE_NAMES; do
     guard_args+=(--persistent-name "$name")
   done
+
+  # soft-delete 済みの持続層は `az resource list` に出ない。**purge は soft-delete
+  # という唯一の復旧手段を恒久的に消す**ので、purge を有効にした種類だけ list-deleted
+  # も判定材料に渡す (有効にしていない種類は触らないので渡さない = 無関係な soft-delete
+  # で撤収が止まらない)。
+  if [[ "$PURGE_DELETED_KEYVAULTS" == "true" ]]; then
+    err_file="$(mktemp)"
+    if deleted="$(az keyvault list-deleted \
+      --query "[?contains(properties.vaultId, '/resourceGroups/${RG}/')].{type:'Microsoft.KeyVault/vaults',name:name,tags:properties.tags}" \
+      -o json 2>"$err_file")"; then
+      guard_args+=(--deleted-inventory "$deleted")
+    else
+      echo "WARN: could not list soft-deleted Key Vaults for ${RG}. az said:" >&2
+      cat "$err_file" >&2
+      guard_args+=(--deleted-inventory-unavailable)
+    fi
+    rm -f "$err_file"
+  fi
+
+  if [[ "$PURGE_DELETED_COGNITIVE_SERVICES" == "true" ]]; then
+    err_file="$(mktemp)"
+    if deleted="$(az cognitiveservices account list-deleted \
+      --query "[?contains(id, '/resourceGroups/${RG}/deletedAccounts/')].{type:'Microsoft.CognitiveServices/accounts',name:name,tags:tags}" \
+      -o json 2>"$err_file")"; then
+      guard_args+=(--deleted-inventory "$deleted")
+    else
+      echo "WARN: could not list soft-deleted Cognitive Services accounts for ${RG}. az said:" >&2
+      cat "$err_file" >&2
+      guard_args+=(--deleted-inventory-unavailable)
+    fi
+    rm -f "$err_file"
+  fi
 
   rg_state="$(rg_exists_state)"
   if [[ "$rg_state" == "unknown" ]]; then
@@ -586,6 +622,13 @@ if [[ "$needs_purge_wait" == "true" ]]; then
     echo "Skipping post-RG purge because RG deletion did not complete in time." >&2
     exit 1
   fi
+fi
+
+# purge は「soft-delete という唯一の復旧手段を恒久的に消す」処理なので、ここでも
+# 直前に判定を取り直す。この時点では RG は既に消えている (rg-absent) が、ガードは
+# **soft-delete 済みの持続層を RG の存在とは独立に**見るので素通りしない。
+if [[ "$PURGE_DELETED_KEYVAULTS" == "true" || "$PURGE_DELETED_COGNITIVE_SERVICES" == "true" ]]; then
+  assert_safe_to_destroy "the soft-deleted resource purge"
 fi
 
 if [[ "$PURGE_DELETED_KEYVAULTS" == "true" ]]; then

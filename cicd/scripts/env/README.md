@@ -25,6 +25,10 @@ RG=<your-rg> ./scripts/env/cleanup-env.sh
 | `RG` の中身を**確かめられなかった** (未ログイン / 権限不足で `az resource list` が失敗) | 拒否 (「持続層は無い」と読み替えない)     | `ALLOW_PERSISTENT_DELETE=true`                         |
 | `RG` が存在しない (確認は成功した)                                                      | 許可 (消すものが無い / 冪等)              | —                                                      |
 | `RG` は不在だったのに、**破壊系の直前で再出現した** (別の provision が作った)           | 拒否 (中身を検証していない RG は消さない) | **無い** (最初からやり直す)                            |
+| **soft-delete 済みの持続層**を purge しようとしている (`PURGE_DELETED_*=true` のとき)   | 拒否 (purge は復旧手段を恒久的に消す)     | `ALLOW_PERSISTENT_DELETE=true`                         |
+| soft-delete 一覧 (`list-deleted`) を**確かめられなかった**                              | 拒否 (「持続層は無い」と読み替えない)     | `ALLOW_PERSISTENT_DELETE=true`                         |
+
+> **soft-delete 済みの持続層は `az resource list` に出ません。** live だけを見ていると判定は `ok` になり、`PURGE_DELETED_COGNITIVE_SERVICES=true` などを立てた実行が **Cosmos の復元元や OpenAI の復旧手段を恒久的に消します**。そこで **purge を有効にした種類だけ** `list-deleted` も判定材料に渡します (有効にしていない種類は触らないので渡さない = 無関係な soft-delete で撤収が止まらない)。この判定は **RG の存在とは独立**に効きます — purge は RG を消した後に走るので、`RG が存在しない` の下に置くと素通りするためです。
 
 #### 何を持続層と見なすか (判定は 3 段)
 

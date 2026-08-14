@@ -208,6 +208,7 @@ def decide(
     persistent_rg: str = DEFAULT_PERSISTENT_RG,
     rg_exists: bool | None = True,
     resources: list[Any] | None = None,
+    deleted_resources: list[Any] | None = None,
     persistent_names: list[str] | None = None,
     allow_persistent: bool = False,
 ) -> Decision:
@@ -220,15 +221,20 @@ def decide(
                         を渡すこと (False と区別する — False は「調べたら無かった」)。
       resources:        target_rg の中身 (str か {type,name,tags})。**取得に失敗した
                         ときは None** を渡すこと (空リストと区別する)。
+      deleted_resources: **soft-delete 済み**のリソース。purge (= 唯一の復旧手段を
+                        恒久的に消す処理) を有効にしたときだけ渡す。取得に失敗した
+                        ときは None。
       persistent_names: 層タグの無い持続層リソースの名指し。
       allow_persistent: 運用者が明示的に許可したか。
 
     判定の順序に意味がある。上から順に:
       1. 持続層 RG 自体   → **常に拒否**。override でも通さない (これが分断の実体)
-      2. 存在を確かめられない → 拒否。「確かめられなかった」を「無い」に読み替えない
-      3. RG が無い        → 消すものが無いので許可 (cleanup-env.sh の冪等性を壊さない)
-      4. 中身が取れない   → 拒否。「確かめられなかった」を「持続層なし」に読み替えない
-      5. 持続層が居る     → 拒否 (override 可)
+      2. soft-delete 済みの持続層 → 拒否 (override 可)。**RG の存在とは独立**に見る —
+         purge は RG が消えたあとに走るので、ここを後ろに置くと 4 で素通りする
+      3. 存在を確かめられない → 拒否。「確かめられなかった」を「無い」に読み替えない
+      4. RG が無い        → 消すものが無いので許可 (cleanup-env.sh の冪等性を壊さない)
+      5. 中身が取れない   → 拒否。「確かめられなかった」を「持続層なし」に読み替えない
+      6. 持続層が居る     → 拒否 (override 可)
     """
     if normalize_rg(target_rg) == normalize_rg(persistent_rg):
         return Decision(
@@ -239,6 +245,35 @@ def decide(
                 "持続層はどのフラグでも削除できません (ADR 0046 D1)。"
             ),
         )
+
+    # soft-delete 済みの持続層。**`az resource list` には出ない**ので、live の判定
+    # だけでは purge を止められない。RG の存在確認より前に見るのは、purge が
+    # 「RG を消したあと」に走る処理だから — 後ろに置くと rg-absent で素通りする。
+    if deleted_resources is not None:
+        deleted_findings, _ = find_persistent(deleted_resources, persistent_names)
+        if deleted_findings:
+            if allow_persistent:
+                return Decision(
+                    allowed=True,
+                    code="persistent-soft-deleted-overridden",
+                    reason=(
+                        "soft-delete 済みの持続層を purge しようとしていますが、"
+                        "運用者が明示的に許可したため続行します。"
+                        "**purge した soft-delete は二度と戻りません。**"
+                    ),
+                    findings=tuple(deleted_findings),
+                )
+            return Decision(
+                allowed=False,
+                code="persistent-soft-deleted-present",
+                reason=(
+                    "purge の対象に持続層の soft-delete が含まれています。"
+                    "**purge は唯一の復旧手段を恒久的に消す**ので拒否します。"
+                    "衝突していない種類の purge フラグを外すか、本当に捨てるなら "
+                    "ALLOW_PERSISTENT_DELETE=true を明示してください。"
+                ),
+                findings=tuple(deleted_findings),
+            )
 
     # 存在確認そのものが失敗したとき。**ここを「不在」に潰すと、中身 (inventory) を
     # 一度も検証しないままガードを通過し、後段の再確認が成功すれば削除に進んでしまう。**
@@ -363,6 +398,17 @@ def main(argv: list[str] | None = None) -> int:
         help="中身の取得に失敗した (空とは区別する)",
     )
     parser.add_argument(
+        "--deleted-inventory",
+        action="append",
+        default=[],
+        help="soft-delete 済みリソースの一覧 (JSON 配列 / 繰り返し可)。purge を有効にしたときだけ渡す",
+    )
+    parser.add_argument(
+        "--deleted-inventory-unavailable",
+        action="store_true",
+        help="soft-delete 済み一覧の取得に失敗した (空とは区別する)",
+    )
+    parser.add_argument(
         "--persistent-name",
         action="append",
         default=[],
@@ -410,11 +456,44 @@ def main(argv: list[str] | None = None) -> int:
             )
             resources = None
 
+    # soft-delete 済み。**取得に失敗したら空ではなく「持続層かもしれない」側に倒す** —
+    # 取れなかったものを「持続層は無い」と読み替えると、purge が黙って通る。
+    deleted_resources: list[Any] | None
+    if args.deleted_inventory_unavailable:
+        deleted_resources = [
+            ResourceRecord(
+                type="(unknown)",
+                name="soft-delete 一覧を取得できませんでした",
+                tags={LAYER_TAG_KEY: LAYER_TAG_PERSISTENT_VALUE},
+            )
+        ]
+    elif args.deleted_inventory:
+        deleted_resources = []
+        for raw in args.deleted_inventory:
+            try:
+                deleted_resources.extend(_parse_inventory(raw))
+            except (json.JSONDecodeError, ValueError) as exc:
+                print(
+                    f"[persistent-layer-guard] deleted-inventory を読めませんでした: {exc}",
+                    file=sys.stderr,
+                )
+                deleted_resources.append(
+                    ResourceRecord(
+                        type="(unparseable)",
+                        name="soft-delete 一覧を読めませんでした",
+                        tags={LAYER_TAG_KEY: LAYER_TAG_PERSISTENT_VALUE},
+                    )
+                )
+    else:
+        # purge を有効にしていない = soft-delete には触らないので見る必要が無い。
+        deleted_resources = None
+
     decision = decide(
         target_rg=args.target_rg,
         persistent_rg=args.persistent_rg,
         rg_exists=rg_exists,
         resources=resources,
+        deleted_resources=deleted_resources,
         persistent_names=args.persistent_name,
         allow_persistent=args.allow_persistent,
     )

@@ -8,7 +8,15 @@
 
 ## Prerequisites
 
-- サブスクリプションに対する Contributor 以上 (RG の作成とロール割り当てのため)
+- **必要なロールは `keyVaultCryptoUserPrincipalIds` を指定するかで変わります。**
+
+  | `keyVaultCryptoUserPrincipalIds` | 必要なロール                                                                                       | なぜ                                                                                                                                     |
+  | -------------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+  | 空 (既定)                        | **Contributor**                                                                                    | リソースを作るだけ                                                                                                                       |
+  | 1 つ以上を指定                   | **Owner** / **User Access Administrator** / **Role Based Access Control Administrator** のいずれか | `Microsoft.Authorization/roleAssignments` を作るため。**組み込みの Contributor にはロール割り当ての作成権限が無く、手順 5 が失敗します** |
+
+  空のまま適用して**あとから Crypto User を付ける**運用も可能です (その付与だけを権限のある人がやる)。
+
 - `az` (Azure CLI) と Bicep CLI。サンドボックスからは device-code で入る → [`claude-web-azure-access.md`](claude-web-azure-access.md)
 - 宣言と値: [`cicd/iac/main-shared.bicep`](../../cicd/iac/main-shared.bicep) / [`cicd/iac/main-shared.parameters.json`](../../cicd/iac/main-shared.parameters.json)
 - **`enable*` の既定値を確認してから流す** — 既定で作るのは「まだどこにも無いもの」だけ。理由は [`cicd/iac/README.md`](../../cicd/iac/README.md#1-5-持続層rg-shared-mindbox--一度きり)
@@ -96,6 +104,11 @@ cd cicd && RG=rg-shared-mindbox ./scripts/env/cleanup-env.sh; echo "exit=$?"
 
 - 原因: 同名の Key Vault が soft-delete で残っている
 - 対処: `main-shared.parameters.json` で `recoverKeyVault=true` にして流し直す
+
+### `AuthorizationFailed` / `does not have authorization to perform action 'Microsoft.Authorization/roleAssignments/write'`
+
+- 原因: `keyVaultCryptoUserPrincipalIds` を指定しているが、実行者が Contributor しか持っていない (Contributor はロール割り当てを作れない)
+- 対処: Owner / User Access Administrator / RBAC Administrator のいずれかで流し直すか、`keyVaultCryptoUserPrincipalIds` を空にして適用し、Crypto User の付与だけを権限のある人に依頼する
 
 ### Cosmos の無料枠 / Speech F0 でデプロイが落ちる
 

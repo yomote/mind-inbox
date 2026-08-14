@@ -282,6 +282,144 @@ def test_persistent_name_is_case_insensitive() -> None:
     assert d.code == "persistent-resources-present"
 
 
+# ---- soft-delete 済み (purge = 唯一の復旧手段を恒久的に消す) ----
+
+DELETED_PERSISTENT_KV = {
+    "type": "Microsoft.KeyVault/vaults",
+    "name": "kv-dev-mindbox",
+    "tags": PERSISTENT_TAGS,
+}
+DELETED_ENV_KV = {
+    "type": "Microsoft.KeyVault/vaults",
+    "name": "kv-dev-mindbox-sql2",
+    "tags": {},
+}
+DELETED_OPENAI = {
+    "type": "Microsoft.CognitiveServices/accounts",
+    "name": "oai-dev-mindbox",
+    "tags": {},
+}
+
+
+def test_refuses_persistent_soft_deleted_even_when_live_inventory_is_clean() -> None:
+    """soft-delete 済みの持続層を purge しようとしたら止める。
+
+    無いと: `az resource list` は live しか返さないので判定は ok になり、
+    PURGE_DELETED_* を立てた実行が復旧手段を恒久的に消す。
+    """
+    d = decide(
+        target_rg="rg-dev-mind-inbox",
+        resources=APP_LAYER_TYPES,
+        deleted_resources=[DELETED_OPENAI],
+    )
+    assert not d.allowed
+    assert d.code == "persistent-soft-deleted-present"
+    assert any("oai-dev-mindbox" in f for f in d.findings)
+
+
+def test_soft_deleted_check_survives_rg_absent() -> None:
+    """RG が消えたあとでも soft-delete の判定は効く。
+
+    無いと: purge は RG 削除の**後**に走るので、rg-absent で許可されて素通りする
+    (この順序が今回の穴そのもの)。
+    """
+    d = decide(
+        target_rg="rg-dev-mind-inbox",
+        rg_exists=False,
+        resources=None,
+        deleted_resources=[DELETED_PERSISTENT_KV],
+    )
+    assert not d.allowed
+    assert d.code == "persistent-soft-deleted-present"
+
+
+def test_env_layer_soft_deleted_does_not_block_purge() -> None:
+    """環境層の soft-delete (SQL 管理者用 vault) は purge を止めない。
+
+    無いと: 名前衝突の手当てとしての purge が常に拒否され、逃げ道が常用になる。
+    """
+    d = decide(
+        target_rg="rg-dev-mind-inbox",
+        resources=APP_LAYER_TYPES,
+        deleted_resources=[DELETED_ENV_KV],
+    )
+    assert d.allowed
+    assert d.code == "ok"
+
+
+def test_soft_deleted_persistent_is_overridable() -> None:
+    d = decide(
+        target_rg="rg-dev-mind-inbox",
+        resources=APP_LAYER_TYPES,
+        deleted_resources=[DELETED_OPENAI],
+        allow_persistent=True,
+    )
+    assert d.allowed
+    assert d.code == "persistent-soft-deleted-overridden"
+    assert d.findings
+
+
+def test_persistent_rg_wins_over_soft_deleted() -> None:
+    d = decide(
+        target_rg=DEFAULT_PERSISTENT_RG,
+        resources=[],
+        deleted_resources=[DELETED_OPENAI],
+        allow_persistent=True,
+    )
+    assert not d.allowed
+    assert d.code == "target-is-persistent-rg"
+
+
+def test_no_deleted_inventory_means_purge_is_off() -> None:
+    """purge を有効にしていなければ soft-delete は見ない (触らないので)。"""
+    d = decide(target_rg="rg-dev-mind-inbox", resources=APP_LAYER_TYPES)
+    assert d.allowed
+    assert d.code == "ok"
+
+
+def test_cli_deleted_inventory_refuses_persistent() -> None:
+    inventory = '["Microsoft.Web/sites"]'
+    env_only = (
+        '[{"type": "Microsoft.KeyVault/vaults", '
+        '"name": "kv-dev-mindbox-sql2", "tags": null}]'
+    )
+    persistent = (
+        '[{"type": "Microsoft.CognitiveServices/accounts", '
+        '"name": "oai-dev-mindbox", "tags": null}]'
+    )
+    base = ["--target-rg", "rg-dev-mind-inbox", "--inventory", inventory]
+    assert main([*base, "--deleted-inventory", env_only]) == 0
+    assert main([*base, "--deleted-inventory", persistent]) == 3
+
+
+def test_cli_deleted_inventory_unavailable_is_refused() -> None:
+    """soft-delete 一覧を取れなかったのを「持続層は無い」に読み替えない。"""
+    code = main(
+        [
+            "--target-rg",
+            "rg-dev-mind-inbox",
+            "--inventory",
+            '["Microsoft.Web/sites"]',
+            "--deleted-inventory-unavailable",
+        ]
+    )
+    assert code == 3
+
+
+def test_cli_broken_deleted_inventory_is_refused() -> None:
+    code = main(
+        [
+            "--target-rg",
+            "rg-dev-mind-inbox",
+            "--inventory",
+            '["Microsoft.Web/sites"]',
+            "--deleted-inventory",
+            "not-json",
+        ]
+    )
+    assert code == 3
+
+
 # ---- 取得失敗 / override ----
 
 
