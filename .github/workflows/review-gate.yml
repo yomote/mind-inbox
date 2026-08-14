@@ -1,7 +1,11 @@
 # マージの門 (ADR 0036) — PR に required check `review-gate` (commit status) を貼る。
 #
-# 条件: PM 受け入れコメント ([pm-accept] + head SHA) / レビュースレッド全解決 /
-#       (コード PR かつ vars.REVIEW_GATE_REQUIRE_CODEX=true なら) Codex レビュー。
+# 条件: PM 受け入れコメント (行頭の `[pm-accept] <head SHA>` 行 — 構文一致 / #380) /
+#       レビュースレッド全解決 / (コード PR なら) 独立レビュー 1 本。
+#       独立レビューは**常時要求** (#400 D1 — 旧 vars.REVIEW_GATE_REQUIRE_CODEX は
+#       廃止。check.py が読まないので env でも渡さない)。担い手は Codex か
+#       代役 judge (code-reviewer subagent / ADR 0052 D7) のどちらでもよい —
+#       外部サービスの枠切れでは門は「開かなくなる」のではなく担い手が替わる。
 # workflow run の緑 = 「評価できたこと」。判定の 🟢/🔴 は commit status 側に出る。
 # 強制力はブランチ保護 (required status check) が持つ — 設定は needs-human Issue 参照。
 #
@@ -121,7 +125,6 @@ jobs:
       - name: 判定して commit status を貼る
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REVIEW_GATE_REQUIRE_CODEX: ${{ vars.REVIEW_GATE_REQUIRE_CODEX }}
           # Codex 再トリガー依頼の猶予 (分)。未設定なら既定 10 (ADR 0038)
           CODEX_RETRIGGER_MINUTES: ${{ vars.CODEX_RETRIGGER_MINUTES }}
           # PR 側コードで走る run にマージ権限は無い — 執行も試みない (Codex P1)
@@ -161,7 +164,6 @@ jobs:
       - name: 判定して commit status を貼る (+ 揃っていればマージ執行)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REVIEW_GATE_REQUIRE_CODEX: ${{ vars.REVIEW_GATE_REQUIRE_CODEX }}
           CODEX_RETRIGGER_MINUTES: ${{ vars.CODEX_RETRIGGER_MINUTES }}
           # マージ後の deploy dispatch は push 経路と同じ解禁ゲートを見る (#253)
           AUTO_DEPLOY_ENABLED: ${{ vars.AUTO_DEPLOY_ENABLED }}
@@ -189,7 +191,6 @@ jobs:
       - name: 判定して commit status を貼る (merge_group)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REVIEW_GATE_REQUIRE_CODEX: ${{ vars.REVIEW_GATE_REQUIRE_CODEX }}
           MERGE_GROUP_HEAD_REF: ${{ github.event.merge_group.head_ref }}
           MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
         run: python3 cicd/scripts/review-gate/check.py --merge-group
@@ -218,7 +219,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CODEX_RETRIGGER_MINUTES: ${{ vars.CODEX_RETRIGGER_MINUTES }}
           AUTO_DEPLOY_ENABLED: ${{ vars.AUTO_DEPLOY_ENABLED }}
-          # マージ直前のフル再評価 (Codex P1 / #258) をイベント経路と同じ条件で
-          # 行うため sweep にも渡す — 無いと sweep の再評価だけ Codex 条件が緩む
-          REVIEW_GATE_REQUIRE_CODEX: ${{ vars.REVIEW_GATE_REQUIRE_CODEX }}
         run: python3 cicd/scripts/review-gate/check.py --advisory-sweep

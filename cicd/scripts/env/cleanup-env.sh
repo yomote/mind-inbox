@@ -13,6 +13,15 @@ PURGE_DELETED_KEYVAULTS="${PURGE_DELETED_KEYVAULTS:-false}"
 PURGE_DELETED_COGNITIVE_SERVICES="${PURGE_DELETED_COGNITIVE_SERVICES:-false}"
 FORCE_DELETE_LOG_ANALYTICS="${FORCE_DELETE_LOG_ANALYTICS:-false}"
 PURGE_WAIT_SECONDS="${PURGE_WAIT_SECONDS:-1800}"
+# 持続層 RG (ADR 0046 D1 / #302)。撤収の対象は環境層だけで、ここは**削除できない**。
+# 判定は persistent_layer_guard.py が持つ (このスクリプトは材料を集めるだけ)。
+PERSISTENT_RG="${PERSISTENT_RG:-rg-shared-mindbox}"
+ALLOW_PERSISTENT_DELETE="${ALLOW_PERSISTENT_DELETE:-false}"
+# 層タグ (mindInboxLayer=persistent) の付いていない持続層リソースを名指しで守る。
+# 空白区切り。移行前の (shared bicep をまだ流していない) Storage / Log Analytics 用。
+PERSISTENT_RESOURCE_NAMES="${PERSISTENT_RESOURCE_NAMES:-}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 declare -a KEYVAULT_TARGETS=()
 declare -a COGNITIVE_TARGETS=()
@@ -42,6 +51,25 @@ Environment variables:
   PURGE_DELETED_KEYVAULTS         true|false. Purge soft-deleted Key Vaults after RG deletion (default: false)
   PURGE_DELETED_COGNITIVE_SERVICES true|false. Purge soft-deleted CS / OpenAI accounts after RG deletion (default: false)
   PURGE_WAIT_SECONDS              Max seconds to wait for RG deletion / soft-deleted state (default: 1800)
+  PERSISTENT_RG                   Persistent-layer RG that must never be torn down (default: rg-shared-mindbox)
+  PERSISTENT_RESOURCE_NAMES       Space-separated resource names to treat as persistent even without the layer tag (default: empty)
+  ALLOW_PERSISTENT_DELETE         true|false. Proceed even though persistent resources are in the target RG (default: false)
+
+This script refuses to run when the target RG is the persistent layer, when the
+target RG still holds persistent resources, or when either the RG's existence or
+its contents could not be determined (ADR 0046 D1 / #302). "Could not check" is
+treated as "do not delete" -- not as "nothing to protect".
+
+Soft-deleted resources do NOT show up in "az resource list", so when a purge flag
+is on, "list-deleted" for that type is fed to the guard as well. Purging a
+persistent soft-deleted twin destroys the only recovery path, so it is refused.
+
+A resource counts as persistent when (1) it carries the layer tag
+mindInboxLayer=persistent stamped by main-shared.bicep, (2) its name is listed in
+PERSISTENT_RESOURCE_NAMES, or (3) its type has no disposable twin in the
+environment layer (Cosmos DB / Cognitive Services). Key Vault, Storage and Log
+Analytics exist in BOTH layers, so type alone does not make them persistent --
+they need the tag or the name. Untagged ones are reported before deletion.
 
 Destructive options default to OFF (ADR 0046 D5/D6). Purging soft-deleted resources
 removes the only recovery path, so it must be asked for explicitly. Turn it on when
@@ -74,10 +102,171 @@ if ! command -v az >/dev/null 2>&1; then
   exit 1
 fi
 
+# 持続層ガードの判定は python の純粋関数が持つ (pytest で押さえてある)。
+# 無いと判定できない = 削除に進めない、なので存在チェックは必須扱いにする。
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "ERROR: python3 command not found (needed by persistent_layer_guard.py)" >&2
+  exit 1
+fi
+
 az account show >/dev/null
 
+# RG の存在を 3 値で返す: true / false / unknown。
+# **unknown を false (不在) に潰さない** — 「確かめられなかった」を「消すものが無い」と
+# 読み替えると、持続層ガードが inventory を一度も検証しないまま通過し、後段の再確認が
+# 成功したときに az group delete まで進む経路ができる。az の stderr は握り潰さず出す。
+rg_exists_state() {
+  local out err_file rc=0
+
+  err_file="$(mktemp)"
+  if ! out="$(az group exists -n "$RG" -o tsv 2>"$err_file")"; then
+    rc=1
+  fi
+
+  if (( rc != 0 )); then
+    echo "WARN: could not check whether ${RG} exists. az said:" >&2
+    cat "$err_file" >&2
+    rm -f "$err_file"
+    echo "unknown"
+    return 0
+  fi
+  rm -f "$err_file"
+
+  case "$(printf '%s' "$out" | tr -d '[:space:]')" in
+    true) echo "true" ;;
+    false) echo "false" ;;
+    *)
+      # 想定外の出力 (az のフォーマット変更 / 空応答) も「不在」にしない。
+      echo "WARN: unexpected 'az group exists' output for ${RG}: '${out}'" >&2
+      echo "unknown"
+      ;;
+  esac
+}
+
+# 破壊系より後ろの分岐で使う簡易版。unknown は false 側 (= 触らない) に倒れるので、
+# 「消すのをやめる」方向にしか働かない。**ガードの判定には使わない** (そちらは 3 値)。
 rg_exists() {
-  [[ "$(az group exists -n "$RG" -o tsv)" == "true" ]]
+  [[ "$(rg_exists_state)" == "true" ]]
+}
+
+# 直近のガード判定コード (rg-absent / ok / … )。許可か拒否かの 2 値では足りない —
+# 「不在だから通した」のか「中身を見て通した」のかで、その後の扱いが変わる。
+GUARD_DECISION_CODE=""
+# これまでに出た判定コードを古い順に溜める。**ここで比較はしない** — 溜めて guard に
+# 渡すだけ。「一度不在で通した RG が現れた」の判定は persistent_layer_guard.py 側
+# (decide) が持つ (シェルの if に判定を置くと、壊してもテストが落ちない)。
+declare -a GUARD_PREVIOUS_CODES=()
+
+# 撤収してよい RG かを判定する。判定そのものは持たず、材料 (RG の中身) を集めて
+# persistent_layer_guard.py に渡すだけ。**呼ぶたびに材料を取り直す** (使い回さない)。
+run_persistent_layer_guard() {
+  local guard="${SCRIPT_DIR}/persistent_layer_guard.py"
+  local -a guard_args=(--target-rg "$RG" --persistent-rg "$PERSISTENT_RG")
+  local inventory deleted err_file rg_state name code rc=0
+
+  if [[ "$ALLOW_PERSISTENT_DELETE" == "true" ]]; then
+    guard_args+=(--allow-persistent)
+  fi
+
+  # これまでの判定を材料として渡す (状態遷移の判定は guard 側)。
+  if [[ ${#GUARD_PREVIOUS_CODES[@]} -gt 0 ]]; then
+    for code in "${GUARD_PREVIOUS_CODES[@]}"; do
+      guard_args+=(--previous-code "$code")
+    done
+  fi
+
+  # 層タグの無い持続層リソースの名指し (移行前の Storage / Log Analytics 向け)。
+  for name in $PERSISTENT_RESOURCE_NAMES; do
+    guard_args+=(--persistent-name "$name")
+  done
+
+  # soft-delete 済みの持続層は `az resource list` に出ない。**purge は soft-delete
+  # という唯一の復旧手段を恒久的に消す**ので、purge を有効にした種類だけ list-deleted
+  # も判定材料に渡す (有効にしていない種類は触らないので渡さない = 無関係な soft-delete
+  # で撤収が止まらない)。
+  if [[ "$PURGE_DELETED_KEYVAULTS" == "true" ]]; then
+    err_file="$(mktemp)"
+    if deleted="$(az keyvault list-deleted \
+      --query "[?contains(properties.vaultId, '/resourceGroups/${RG}/')].{type:'Microsoft.KeyVault/vaults',name:name,tags:properties.tags}" \
+      -o json 2>"$err_file")"; then
+      guard_args+=(--deleted-inventory "$deleted")
+    else
+      echo "WARN: could not list soft-deleted Key Vaults for ${RG}. az said:" >&2
+      cat "$err_file" >&2
+      guard_args+=(--deleted-inventory-unavailable)
+    fi
+    rm -f "$err_file"
+  fi
+
+  if [[ "$PURGE_DELETED_COGNITIVE_SERVICES" == "true" ]]; then
+    err_file="$(mktemp)"
+    if deleted="$(az cognitiveservices account list-deleted \
+      --query "[?contains(id, '/resourceGroups/${RG}/deletedAccounts/')].{type:'Microsoft.CognitiveServices/accounts',name:name,tags:tags}" \
+      -o json 2>"$err_file")"; then
+      guard_args+=(--deleted-inventory "$deleted")
+    else
+      echo "WARN: could not list soft-deleted Cognitive Services accounts for ${RG}. az said:" >&2
+      cat "$err_file" >&2
+      guard_args+=(--deleted-inventory-unavailable)
+    fi
+    rm -f "$err_file"
+  fi
+
+  rg_state="$(rg_exists_state)"
+  if [[ "$rg_state" == "unknown" ]]; then
+    # 存在を確かめられなかった。**不在扱いにしない** — guard 側が拒否する。
+    guard_args+=(--rg-unknown)
+  elif [[ "$rg_state" == "false" ]]; then
+    guard_args+=(--rg-missing)
+  else
+    err_file="$(mktemp)"
+    # az の失敗を握り潰さない: 失敗したら「持続層は無い」ではなく
+    # 「確かめられなかった」として渡す (guard 側が拒否する)。
+    # stderr は捨てずに下で表示する — 権限不足かログイン切れかを見えるようにするため。
+    # type だけでなく name / tags も渡す: 型だけでは環境層の Key Vault / Storage /
+    # Log Analytics と持続層のそれを区別できない (判定は guard 側の 3 段)。
+    if inventory="$(az resource list -g "$RG" --query "[].{type:type,name:name,tags:tags}" -o json 2>"$err_file")"; then
+      guard_args+=(--inventory "$inventory")
+    else
+      echo "WARN: could not list resources in ${RG}. az said:" >&2
+      cat "$err_file" >&2
+      guard_args+=(--inventory-unavailable)
+    fi
+    rm -f "$err_file"
+  fi
+
+  # 判定コードは stdout、人間向けの本文は stderr (そのまま流す)。
+  if ! GUARD_DECISION_CODE="$(python3 "$guard" "${guard_args[@]}")"; then
+    rc=3
+  fi
+
+  # 判定コードは中身を見ずにそのまま積む (どれが特別かを知っているのは guard 側)。
+  if [[ -n "$GUARD_DECISION_CODE" ]]; then
+    GUARD_PREVIOUS_CODES+=("$GUARD_DECISION_CODE")
+  fi
+
+  return "$rc"
+}
+
+# **破壊系の 1 つ手前で必ず呼ぶ。** 最初の判定から時間が経つ間に RG が作り直されて
+# いる可能性があるため (TOCTOU)、材料はそのつど取り直す。
+assert_safe_to_destroy() {
+  local phase="$1"
+
+  # 「不在だから通した」あとに RG が現れた場合も、この判定 (rg-reappeared-after-absent)
+  # として guard 側から返る。**このシェルは比較しない** — 判定は 1 か所に置く。
+  if ! run_persistent_layer_guard; then
+    echo "" >&2
+    echo "Nothing was deleted (refused before ${phase}). See the guard line above:" >&2
+    echo "  - persistent resources still in the RG -> move them to ${PERSISTENT_RG} first (Issue #302)" >&2
+    echo "  - could not check (existence or contents) -> fix az login / permissions and re-run" >&2
+    echo "  - target IS the persistent RG -> there is no flag for this, on purpose" >&2
+    echo "  - the RG was absent earlier in this run but is not now -> a concurrent provision" >&2
+    echo "    re-created it; nothing was deleted. Re-run from the start if you still want it gone" >&2
+    echo "ALLOW_PERSISTENT_DELETE=true overrides the first two only, and what it destroys" >&2
+    echo "does not come back." >&2
+    exit 3
+  fi
 }
 
 get_output_value() {
@@ -240,18 +429,27 @@ force_delete_log_analytics_workspaces() {
 }
 
 wait_for_resource_group_deletion() {
-  local deadline
+  local deadline state
   deadline=$((SECONDS + PURGE_WAIT_SECONDS))
 
-  while rg_exists; do
+  while true; do
+    state="$(rg_exists_state)"
+    # unknown を「消えた」と読み替えない — 読み替えると、RG が生きている可能性を
+    # 残したまま purge (soft-delete の唯一の復旧手段を消す処理) に進む。
+    if [[ "$state" == "false" ]]; then
+      return 0
+    fi
+
     if (( SECONDS >= deadline )); then
-      echo "Timed out waiting for resource group deletion: $RG" >&2
+      if [[ "$state" == "unknown" ]]; then
+        echo "Could not determine whether ${RG} was deleted (az check kept failing)." >&2
+      else
+        echo "Timed out waiting for resource group deletion: $RG" >&2
+      fi
       return 1
     fi
     sleep 10
   done
-
-  return 0
 }
 
 wait_until_keyvault_is_deleted() {
@@ -343,7 +541,13 @@ purge_deleted_cognitive_services() {
 
 # ---- main flow ----
 
+# **破壊系より前**に置く。ここを通らないと 1 つも消えない。
+# 以降、破壊系の 1 つ手前でそのつど取り直す (TOCTOU — 判定と削除の間に RG の中身が
+# 変わりうる。特に「不在だから通した」あとに provision が RG を作り直す経路)。
+assert_safe_to_destroy "any destructive step"
+
 if [[ "$DELETE_ENTRA_APP" == "true" ]]; then
+  assert_safe_to_destroy "the Entra app deletion"
   delete_auto_created_entra_app
 else
   echo "Keeping the Entra app registration (DELETE_ENTRA_APP=false)."
@@ -363,6 +567,7 @@ else
 fi
 
 if [[ "$FORCE_DELETE_LOG_ANALYTICS" == "true" ]]; then
+  assert_safe_to_destroy "the Log Analytics force-delete"
   force_delete_log_analytics_workspaces
 else
   echo "Keeping Log Analytics workspace(s) recoverable (FORCE_DELETE_LOG_ANALYTICS=false)."
@@ -388,7 +593,14 @@ if [[ "$PURGE_DELETED_KEYVAULTS" != "true" || "$PURGE_DELETED_COGNITIVE_SERVICES
   echo ""
 fi
 
-if rg_exists; then
+# 削除の直前にもう一度。**削除するかどうかもこのガードの判定から取る** —
+# `rg_exists` を別に呼ぶと、その返答と「中身を検証した瞬間」がまたズレる。
+assert_safe_to_destroy "the resource group deletion"
+
+# ここは「消してよいか」の判定ではなく、**済んだ判定から動作を選ぶだけ** (不在なら
+# 消すものが無いので呼ばない)。取り違えても `az group delete` が存在しない RG に対して
+# 落ちるだけで、無検証の削除にはならない (削除してよいかの判定は guard が済ませている)。
+if [[ "$GUARD_DECISION_CODE" != "rg-absent" ]]; then
   delete_args=(group delete -n "$RG" --yes)
   if [[ "$NO_WAIT" == "true" ]]; then
     delete_args+=(--no-wait)
@@ -414,6 +626,13 @@ if [[ "$needs_purge_wait" == "true" ]]; then
     echo "Skipping post-RG purge because RG deletion did not complete in time." >&2
     exit 1
   fi
+fi
+
+# purge は「soft-delete という唯一の復旧手段を恒久的に消す」処理なので、ここでも
+# 直前に判定を取り直す。この時点では RG は既に消えている (rg-absent) が、ガードは
+# **soft-delete 済みの持続層を RG の存在とは独立に**見るので素通りしない。
+if [[ "$PURGE_DELETED_KEYVAULTS" == "true" || "$PURGE_DELETED_COGNITIVE_SERVICES" == "true" ]]; then
+  assert_safe_to_destroy "the soft-deleted resource purge"
 fi
 
 if [[ "$PURGE_DELETED_KEYVAULTS" == "true" ]]; then

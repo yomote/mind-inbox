@@ -90,6 +90,14 @@
 // CI (GitHub Actions)
 { "id": "foo.yml", "name": "表示名", "what": "何をするか", "expect_hours": 26 }
 
+// GitHub が管理する dynamic workflow (CodeQL default setup / Dependabot) は
+// **数値の workflow id** を書く。path 文字列 ("dynamic/github-code-scanning/codeql")
+// を渡すと `actions/workflows/{id}/runs` が 404 を返し、その行は恒久的に「未検証」に
+// なる (2026-08-14 実測 / #408)。id は `gh api repos/{owner}/{repo}/actions/workflows`
+// の該当 path から引く。**この id はリポジトリ固有**で、機能を無効化 → 再有効化すると
+// 別の id が振られる (そのときは行が「未検証」に落ちる — 静かに緑にはならない)。
+{ "id": "333008403", "name": "SAST (CodeQL default setup)", "what": "…", "expect_hours": 192 }
+
 // Routine (claude.ai 側。痕跡の在り処で生死を測る)
 { "name": "表示名", "what": "…", "expect_hours": 26,
   "trace": { "kind": "issue_comment", "issue": 127 } }

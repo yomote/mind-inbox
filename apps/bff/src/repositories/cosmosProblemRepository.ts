@@ -18,6 +18,7 @@
  * - **DB / コンテナは作らない**。器の宣言は bicep (`cicd/modules/bootstrap-core.bicep`)。
  */
 import type { Container } from "@azure/cosmos";
+import { logErrorEvent, trackDependency } from "../observability/telemetry";
 import { summarizeIssues } from "../schemaIssues";
 import { ProblemSchema, type Problem } from "../trpc/domain";
 import type { ProblemFilter, ProblemRepository } from "./problemRepository";
@@ -44,9 +45,11 @@ function toDomainOrNull(doc: unknown): Problem | null {
   // **ドキュメントの中身をログに出さない** — Problem の title / summary / mentions は
   // 相談の本文そのもの。出すのは「どの doc の」「どこが」「どう壊れているか」だけ
   // (id は生成された識別子で本文を含まない)。
-  console.warn(
-    `[cosmosProblemRepository] skipping invalid document id=${describeId(doc)} issues=${summarizeIssues(parsed.error)}`,
-  );
+  logErrorEvent("cosmos.invalid-document", {
+    kind: describeId(doc),
+    errorType: "SchemaViolation",
+    errorMessage: summarizeIssues(parsed.error),
+  });
   return null;
 }
 
@@ -70,6 +73,27 @@ export class CosmosProblemRepository implements ProblemRepository {
     this.userId = userId;
   }
 
+  /**
+   * Cosmos への 1 ホップを開始 / 終了 / 所要 ms / 結果として残す (#307)。
+   *
+   * **userId は生で出さない** — Cosmos のパーティションキー = 「誰の相談か」そのもの。
+   * ここでハッシュ化はしない: 出口 (`telemetry.ts` の `HASHED_FIELDS`) が `userId` を
+   * `userHash=<ハッシュ>` に強制する。**呼び出し側でハッシュすると、次に足す人が
+   * 素で渡した瞬間に漏れる** (漏れたことは誰にも見えない / `Runbook: bff-telemetry.md`)。
+   * ドキュメントの中身 (title / summary / mentions) は 1 文字も出さない。
+   */
+  private track<T>(
+    operation: string,
+    run: () => Promise<T>,
+    describeResult?: (result: T) => Record<string, string | number | boolean | null | undefined>,
+  ): Promise<T> {
+    return trackDependency(
+      { target: "cosmos", operation, sessionId: undefined },
+      run,
+      (result) => ({ userId: this.userId, ...describeResult?.(result) }),
+    );
+  }
+
   async list(filter?: ProblemFilter): Promise<Problem[]> {
     // 並び順は SQL 側で明示する (挿入順に依存しない)。
     // lastMentionedAt は ISO 8601 文字列なので辞書順 = 時系列順。
@@ -84,15 +108,18 @@ export class CosmosProblemRepository implements ProblemRepository {
       parameters.push({ name: "@status", value: filter.status });
     }
 
-    const { resources } = await this.container.items
-      .query<unknown>(
-        {
-          query: `SELECT * FROM c WHERE ${conditions.join(" AND ")} ORDER BY c.lastMentionedAt DESC`,
-          parameters,
-        },
-        { partitionKey: this.userId },
-      )
-      .fetchAll();
+    const resources = await this.track("query problems", async () => {
+      const page = await this.container.items
+        .query<unknown>(
+          {
+            query: `SELECT * FROM c WHERE ${conditions.join(" AND ")} ORDER BY c.lastMentionedAt DESC`,
+            parameters,
+          },
+          { partitionKey: this.userId },
+        )
+        .fetchAll();
+      return page.resources;
+    });
 
     // 壊れた doc は落とす (throw しない)。1 件の poison document で一覧全体を失わない。
     return resources.flatMap((doc) => {
@@ -103,7 +130,10 @@ export class CosmosProblemRepository implements ProblemRepository {
 
   async get(id: string): Promise<Problem | null> {
     // item().read() は 404 を投げずに resource undefined を返す。
-    const { resource } = await this.container.item(id, this.userId).read<ProblemDocument>();
+    const resource = await this.track("read problem", async () => {
+      const read = await this.container.item(id, this.userId).read<ProblemDocument>();
+      return read.resource;
+    });
     // 壊れた doc は「無い」と同じ扱い (NOT_FOUND)。list から消えたものが詳細では 500、
     // という食い違いを作らない。`remove` は parse を通らないので削除経路は残っている。
     return resource ? toDomainOrNull(resource) : null;
@@ -111,16 +141,18 @@ export class CosmosProblemRepository implements ProblemRepository {
 
   async upsert(problem: Problem): Promise<Problem> {
     const doc: ProblemDocument = { ...problem, userId: this.userId };
-    await this.container.items.upsert(doc);
+    await this.track("upsert problem", () => this.container.items.upsert(doc));
     // 保存した値をそのまま返す (in-memory 実装と同じ契約)。読み直しは RU の無駄。
     return problem;
   }
 
   async remove(id: string): Promise<void> {
     try {
-      await this.container.item(id, this.userId).delete();
+      await this.track("delete problem", () => this.container.item(id, this.userId).delete());
     } catch (err) {
       // 既に無いなら成功と同じ (in-memory の Map.delete と揃える)。
+      // 注意: この 404 は `dependency.end outcome=failure` として**先にログに出ている**。
+      // 「消えていた」を記録に残したうえで成功扱いにする、という順序は意図的。
       if (isNotFound(err)) return;
       throw err;
     }

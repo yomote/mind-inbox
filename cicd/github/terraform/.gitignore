@@ -1,0 +1,14 @@
+# Terraform の作業産物。**state と plan ファイルは絶対に commit しない**
+# (public リポジトリ。state には設定の全量が、plan には差分がそのまま入る)。
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+*.auto.tfvars
+terraform.tfvars
+
+# `.terraform.lock.hcl` は **除外しない** (provider をハッシュで固定するため
+# commit する)。commit 済み。CI は `-lockfile=readonly` で init するので、
+# ここに書き足して無視させると run が落ちる。

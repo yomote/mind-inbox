@@ -198,3 +198,124 @@ describe("[L2] handleWarmup / handleTrpc", () => {
     expect(await res.json()).toEqual({ result: { data: { ok: true } } });
   });
 });
+
+/**
+ * [単体] tRPC の失敗をテレメトリに落とすときの**値の落とし方**を固定する。
+ *
+ * `telemetry.ts` の許可リストは**名前しか見ない**ので、`errorMessage` という
+ * 許可された名前に入力値入りの文面を入れれば防壁は素通りする。ここはその
+ * 「許可された名前から漏れる」経路を塞いだことを、入口 (`handleTrpc`) を
+ * 実際に叩いて確かめる。
+ */
+describe("[単体] handleTrpc — 失敗ログに入力値を載せない", () => {
+  /** 相談の本文に相当する値。これがログ行に現れたら事故。 */
+  const SECRET = "会社を辞めたいと誰にも言えていない";
+
+  function recorder() {
+    const errors: string[] = [];
+    return { errors, log: () => {}, error: (m: string) => errors.push(m) };
+  }
+
+  it("アプリが組み立てた文面 (Problem not found: <入力>) を出さない", async () => {
+    // 無いと何が静かに通るか: `problem.get` の id は自由文字列なので、
+    // 相談の本文をそのまま入れると `Problem not found: <本文>` が
+    // errorMessage として Application Insights に 30 日残る。
+    const log = recorder();
+
+    const res = await handleTrpc(
+      new Request(
+        `http://x/api/trpc/problem.get?input=${encodeURIComponent(JSON.stringify({ id: SECRET }))}`,
+      ),
+      log,
+    );
+
+    expect(res.status).toBe(404);
+    expect(log.errors).toHaveLength(1);
+    expect(log.errors[0]).not.toContain(SECRET);
+    expect(log.errors[0]).toContain("event=trpc.error");
+    expect(log.errors[0]).toContain("route=problem.get");
+    expect(log.errors[0]).toContain("errorType=NOT_FOUND");
+  });
+
+  it("zod の検証失敗も受信値ではなく path と種別だけを出す", async () => {
+    // 無いと何が静かに通るか: TRPCError.message は ZodError の JSON で、
+    // `invalid_enum_value` などは**受け取った値そのもの**を含む。
+    const log = recorder();
+
+    const res = await handleTrpc(
+      new Request(
+        `http://x/api/trpc/problem.list?input=${encodeURIComponent(
+          JSON.stringify({ theme: SECRET }),
+        )}`,
+      ),
+      log,
+    );
+
+    expect(res.status).toBe(400);
+    expect(log.errors).toHaveLength(1);
+    expect(log.errors[0]).not.toContain(SECRET);
+    expect(log.errors[0]).toContain("errorType=BAD_REQUEST");
+    // 場所と壊れ方は残る (残らないと切り分けができない)
+    expect(log.errors[0]).toContain("theme");
+  });
+});
+
+/**
+ * [単体] `/api/chat/stream` の sessionId を入口から追って、生のまま行に出ないことを固定する。
+ *
+ * `ChatStreamRequestSchema` の sessionId は**長さしか検証していない自由文字列**なので、
+ * 「不透明 ID だから相関キーとして残してよい」という前提が成り立たない (#413 の Codex 指摘)。
+ * ハッシュ化は `telemetry.ts` の出口が強制するが、**この経路を実際に叩いて**確かめる —
+ * 出口を直しても代入点が別の名前 (許可された文字列フィールド) に載せ替えれば漏れるため。
+ */
+describe("[単体] handleChatStream — sessionId を生のまま記録しない", () => {
+  /** クライアントが sessionId に詰め込んだ相談の本文。行に現れたら事故。 */
+  const SECRET = "会社を辞めたいと誰にも言えていない";
+
+  function recorder() {
+    const lines: string[] = [];
+    return { lines, log: (m: string) => lines.push(m), error: (m: string) => lines.push(m) };
+  }
+
+  it("成功経路 (request.start / chat.request / request.end) のどの行にも出ない", async () => {
+    // 無いと何が静かに通るか: 出口のハッシュ化を戻すと `sessionId=<本文>` が
+    // Application Insights に 30 日残り、Cosmos のアクセス制御 (ADR 0030) を回り込む。
+    vi.mocked(openChatStream).mockResolvedValue(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close();
+        },
+      }),
+    );
+    const log = recorder();
+
+    const res = await handleChatStream(
+      postJson("http://x/api/chat/stream", { sessionId: SECRET, message: "hi" }),
+      log,
+    );
+
+    expect(res.status).toBe(200);
+    expect(log.lines.length).toBeGreaterThan(0);
+    for (const line of log.lines) expect(line).not.toContain(SECRET);
+    // 相関は生きている (ハッシュとして残っている / 落とされてはいない)
+    expect(
+      log.lines.some((l) => l.includes("event=chat.request") && l.includes("sessionHash=")),
+    ).toBe(true);
+  });
+
+  it("失敗経路 (chat.failed) でも出ない", async () => {
+    // 無いと何が静かに通るか: 成功経路だけ直して失敗経路を見落とすと、
+    // **障害時にだけ**本文が漏れる (最も見つかりにくい漏れ方)。
+    vi.mocked(openChatStream).mockRejectedValue(new Error("upstream down"));
+    const log = recorder();
+
+    const res = await handleChatStream(
+      postJson("http://x/api/chat/stream", { sessionId: SECRET, message: "hi" }),
+      log,
+    );
+
+    expect(res.status).toBe(502);
+    expect(log.lines.some((l) => l.includes("event=chat.failed"))).toBe(true);
+    for (const line of log.lines) expect(line).not.toContain(SECRET);
+  });
+});

@@ -8,6 +8,8 @@
 - **#318 で「人にお願いしていたクリック作業」はこれに置き換わる** — Web UI のチェックボックスを 1 つずつ押す代わりに、`settings.yml` を PR で直して `apply` を 1 回流す
 
 > **エージェントはこの操作をできない。** リポジトリ管理系 API はエージェントのセッションから届かない (実測 403 "GitHub access is not enabled for this session.")。これはガードレールなので迂回しない。だからここは **PO 本人が承認タップする** 設計になっている。
+>
+> **これが現役の仕組み。** [#390](https://github.com/yomote/mind-inbox/issues/390) が「この 5,221 行は Terraform provider の再実装」と判定し、宣言の Terraform 化が `cicd/github/terraform/` で着工しているが、**まだ `terraform plan` すら回せていない** (認証が未決定 / provider 取得が egress で塞がれている)。移行の状態は [`github-terraform.md`](github-terraform.md)。**点検・適用はこの Runbook で行う。**
 
 ## Prerequisites
 
