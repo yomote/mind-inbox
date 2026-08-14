@@ -77,12 +77,14 @@
    >
    > budget は作成後 ARM の incremental デプロイで残るので、**2 回目以降は省略しても消えません**。ただし省略した回の deployment output `budgetAlertEnabled` は `false` になります (output はその回に渡したパラメータの写しで、budget が実在するかとは無関係)。**確認には output ではなく実リソースを見てください** (Verification 5)。
 
-6. E2E trace 復号鍵の URI (kid) を控える。`az keyvault key decrypt --id <kid>` にそのまま渡せます ([#301](https://github.com/yomote/mind-inbox/issues/301) / ADR 0045 D5 — **本文は未マージ** (PR #332) なのでリンクは張っていません)。
+6. E2E trace 復号鍵の URI (kid) を控える。`az keyvault key decrypt --id <kid>` にそのまま渡せます ([#301](https://github.com/yomote/mind-inbox/issues/301) / [裁定記録](../adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D5)。
 
    ```bash
    az deployment group show -g rg-mgmt-mindbox -n main-mgmt \
      --query properties.outputs.e2eTraceKeyUri.value -o tsv
    ```
+
+   **適用が済んだら [`cicd/keys/README.md`](../../cicd/keys/README.md) の「管理系 RG の適用後」の手順が有効になります** — この時点でエージェントも `az keyvault key decrypt` で trace を復号してよくなり、公開鍵ファイルを `e2e-artifacts.pub.json` (PEM + 鍵バージョン) に差し替える作業が始まります。
 
 ## Verification
 
@@ -194,7 +196,7 @@ az rest --method get --url "https://management.azure.com/subscriptions/$(az acco
 
 ## Related
 
-- ADR: [0056 管理系 / アプリ系とバックアップによるデータ保護](../adr/0056-management-and-app-layers-with-backup-based-data-protection.md) (**層の定義の正典**。Proposed — Status を動かすのは PO) / [0046 環境は宣言から再構築できる](../adr/0046-environment-rebuildable-from-declaration.md) D6/D9 (D1 は 0056 が Accept され次第 supersede) / ADR 0045 D5 (E2E artifact は既定で秘密 — 未マージ / PR #332) / [0003 2 フェーズ Bicep](../adr/0003-two-phase-bicep.md)
+- ADR: [0056 管理系 / アプリ系とバックアップによるデータ保護](../adr/0056-management-and-app-layers-with-backup-based-data-protection.md) (**層の定義の正典**。Proposed — Status を動かすのは PO) / [0046 環境は宣言から再構築できる](../adr/0046-environment-rebuildable-from-declaration.md) D6/D9 (D1 は 0056 が Accept され次第 supersede) / [E2E artifact は既定で秘密 (2026-08-12 の裁定記録)](../adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D5 (**ADR ではありません** — #385 で運用文書へ退避。鍵の運用手順の正典は [`cicd/keys/README.md`](../../cicd/keys/README.md)) / [0003 2 フェーズ Bicep](../adr/0003-two-phase-bicep.md)
 - 関連 Runbook: [`claude-web-azure-access.md`](claude-web-azure-access.md) / [`cosmos-persistence.md`](cosmos-persistence.md)
 - 宣言とパラメータの説明: [`cicd/iac/README.md`](../../cicd/iac/README.md#1-5-管理系レイヤrg-mgmt-mindbox--一度きり)
 - 撤収ガード: `cicd/scripts/env/` ([README](../../cicd/scripts/env/README.md))
