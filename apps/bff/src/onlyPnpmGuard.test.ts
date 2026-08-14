@@ -10,7 +10,7 @@ import { isPnpmAgent } from "../scripts/only-pnpm.mjs";
  * 仕様: `scripts/only-pnpm.mjs` は `npm_config_user_agent` が `pnpm/` で始まる
  * ときだけ install を許す。判定できない (未設定 / 非文字列) は**許さない**。
  */
-describe("isPnpmAgent", () => {
+describe("[単体] isPnpmAgent", () => {
   it("pnpm の user agent は許す", () => {
     expect(isPnpmAgent("pnpm/9.15.0 npm/? node/v22.22.2 linux x64")).toBe(true);
   });

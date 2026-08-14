@@ -27,8 +27,10 @@ need zip
 # zip の中身の symlink 検査に使う。無いなら検査できない = 「確認できていない」ので、
 # 黙って飛ばさずここで落とす。
 need zipinfo
+need python3 # 検査の判定 (verify_deploy_tree.py) を持つ
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 BFF_DIR="$ROOT_DIR/apps/bff"
 ZIP_PATH="${ZIP_PATH:-$ROOT_DIR/.local/functionapp.zip}"
 STAGE_DIR="${STAGE_DIR:-$ROOT_DIR/.local/functionapp-pkg}"
@@ -67,35 +69,14 @@ pnpm install --frozen-lockfile --prod --node-linker=hoisted
 # だけなので落とす (npm 時代の zip でも -x で除外していた)。
 rm -rf node_modules/.bin
 
-# ── Verify ────────────────────────────────────────────────────────────────────
+# ── Verify (tree) ─────────────────────────────────────────────────────────────
 # 「hoisted を指定したか」ではなく**実際のツリーを数えて**判定する。
+# 判定そのものはシェルに埋めず verify_deploy_tree.py の純粋関数が持つ
+# (cicd/CLAUDE.md「判定ロジックをシェルや workflow の中に埋めない」)。
+# 回帰は cicd/scripts/deploy/test_verify_deploy_tree.py = `npm run test:scripts`。
 echo ""
 echo "=== Verifying deploy tree has no symlinks ==="
-# `find | head` にしない — pipefail で find が SIGPIPE を受け、検査の失敗が
-# 「141 で落ちた」に化けて理由が読めなくなる。配列に取ってから数える。
-mapfile -t SYMLINKS < <(find node_modules -type l)
-echo "symlinks in node_modules: ${#SYMLINKS[@]}"
-if [[ "${#SYMLINKS[@]}" -ne 0 ]]; then
-  echo "ERROR: node_modules に symlink が ${#SYMLINKS[@]} 本残っています (Functions の zip deploy で壊れます)" >&2
-  printf '  %s\n' "${SYMLINKS[@]:0:20}" >&2
-  exit 1
-fi
-# hoisted でも node_modules/.pnpm/lock.yaml (メタデータ 1 ファイル) は作られる。
-# 壊れるのは**仮想ストアに実体が入り、top-level から symlink で参照される**形なので、
-# 「.pnpm の存在」ではなく「.pnpm 配下にパッケージのディレクトリがあるか」で見る。
-mapfile -t VIRTUAL_STORE < <(find node_modules/.pnpm -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
-if [[ "${#VIRTUAL_STORE[@]}" -ne 0 ]]; then
-  echo "ERROR: node_modules/.pnpm に仮想ストアが残っています (--node-linker=hoisted が効いていない)" >&2
-  printf '  %s\n' "${VIRTUAL_STORE[@]:0:10}" >&2
-  exit 1
-fi
-# 実体が入っていること自体も確認する — 「symlink 0 本」は node_modules が空でも成立する。
-for dep in @azure/functions @azure/cosmos @trpc/server zod; do
-  [[ -f "node_modules/$dep/package.json" ]] || {
-    echo "ERROR: node_modules/$dep が実体で入っていません" >&2
-    exit 1
-  }
-done
+python3 "$SCRIPT_DIR/../verify_deploy_tree.py" tree "$STAGE_DIR"
 echo "node_modules top-level entries: $(find node_modules -mindepth 1 -maxdepth 1 | wc -l)"
 
 # ── Zip ───────────────────────────────────────────────────────────────────────
@@ -119,14 +100,8 @@ zip -qr "$ZIP_PATH" \
   -x "**/*.map"
 
 # ステージングが正しくても zip の作り方次第で symlink エントリは入りうるので、
-# **送るファイルそのもの**も数える。zipinfo の権限欄が l で始まるものが symlink。
-mapfile -t ZIP_SYMLINKS < <(zipinfo -l "$ZIP_PATH" | awk '$1 ~ /^l/ {print $NF}')
-if [[ "${#ZIP_SYMLINKS[@]}" -ne 0 ]]; then
-  echo "ERROR: zip に symlink エントリが ${#ZIP_SYMLINKS[@]} 件含まれています:" >&2
-  printf '  %s\n' "${ZIP_SYMLINKS[@]:0:20}" >&2
-  exit 1
-fi
-echo "zip symlink entries: 0"
+# **送るファイルそのもの**も数える (判定は同じ純粋関数側)。
+python3 "$SCRIPT_DIR/../verify_deploy_tree.py" zip "$ZIP_PATH"
 
 ZIP_BYTES="$(stat -c%s "$ZIP_PATH" 2>/dev/null || stat -f%z "$ZIP_PATH")"
 echo "Zip size: $ZIP_BYTES bytes ($ZIP_PATH)"
