@@ -99,7 +99,7 @@ Codex が応答できない間 ([#345](https://github.com/yomote/mind-inbox/issu
 
 **ここが手順の唯一の真実。** 巡回 Routine のプロンプトは「この節を読んで従え」しか書いていない ([ADR 0052](../adr/archive/operations/codex-derived-review-rubric-and-stand-in-judge.md) D8)。手順を変えたいときは**この節を直す** — Routine 側は触らない (`subagent 定義は薄いラッパ` と同じ理由: claude.ai 側の本文は git に無く、diff に出ないので、そこに手順を持たせると壊れても気づけない)。
 
-1. **対象を選ぶ** — open PR のうち、(a) base が `main`、(b) draft でない、(c) コード PR (`apps/` か `cicd/` に触れる)、(d) **現 head SHA に対する独立レビューがまだ無い**もの。(d) は「Codex (`chatgpt-codex-connector[bot]`) のレビューがある」か「`<!-- standin-review -->` + 現 head SHA 先頭 7 桁を含む権限保持者のコメントがある」のどちらでもない、で判定する。**古い SHA の代役レビューは無効** (push で失効する)
+1. **対象を選ぶ** — open PR のうち、(a) base が `main`、(b) draft でない、(c) コード PR (`apps/` か `cicd/` に触れる)、(d) **現 head SHA に対する独立レビューがまだ無い**もの。(d) は「Codex (`chatgpt-codex-connector[bot]`) のレビューがある」か「**行頭の** `<!-- standin-review -->` マーカー行 + 現 head SHA 先頭 7 桁を持つ権限保持者のコメントがある」のどちらでもない、で判定する (構文一致 — 引用・コードブロック内・行の途中の言及は数えない / Issue #380 と同型の厳密化)。**古い SHA の代役レビューは無効** (push で失効する)
    - 複数あるときは**更新が古い順に最大 3 本**。残りは痕跡に「未着手 n 本」と書く (全部やろうとして途中で力尽きるより、3 本を rubric どおり書き切る)
 2. **1 本ずつ `code-reviewer` subagent を起動する** (Agent tool / `subagent_type: code-reviewer`)。**自分で diff を読んでレビューを書かない** — judge を新品コンテキストの subagent に分けているのが独立性の担保そのもの。対象 PR 番号と head SHA を渡す
 3. **返ってきたレポートを PR に投稿する** — サマリコメント 1 本 + 行が特定できる `blocker` / `major` の inline コメント。サマリ先頭 2 行は [`review-rubric.md`](../../.github/claude/review-rubric.md) Part 6 の**必須ヘッダ**を厳守 (これが無いと `review-gate` が独立レビューとして数えず、PR は赤のまま動かない)。SHA は**投稿直前に取り直した現 head**。レビュー中に push があったらそのレビューは古い — 投稿せず次回に回す

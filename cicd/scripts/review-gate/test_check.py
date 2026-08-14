@@ -173,6 +173,12 @@ def test_l1_受け入れ行は行頭マーカー直後のshaだけを読む() ->
     assert has_pm_accept([("[pm-accept] abc1234 — 意図どおり", "OWNER")], HEAD)
     assert has_pm_accept([("[pm-accept] abc1234", "OWNER")], HEAD)
     assert has_pm_accept([(f"[pm-accept] {HEAD}", "OWNER")], HEAD)
+    # 正: SHA のバッククォート囲み (このリポジトリの慣習 / PR #404 代役レビュー
+    # major-2 — 弾くと PM と機械が「受け入れたのに赤」で食い違い続ける)
+    assert has_pm_accept([("[pm-accept] `abc1234` — ok", "OWNER")], HEAD)
+    assert (
+        latest_pm_accept_token([("[pm-accept] `abc1234` — ok", "OWNER")]) == "abc1234"
+    )
     assert has_pm_accept(
         [(f"確認しました。\n\n[pm-accept] {HEAD[:7]} — ok", "OWNER")], HEAD
     )
@@ -231,6 +237,24 @@ def test_l1_markdownの全コードブロック形式を判定対象から外す
         "OWNER",
     )
     assert not has_pm_accept([mixed], HEAD)
+    # 閉じは同数以上 (CommonMark / PR #404 代役レビュー major-1): ```` で包んで
+    # ``` 込みの例文を引用しても、中の ``` 行でフェンスは閉じない
+    nested = (
+        "受け入れはこの形で:\n"
+        "````\n"
+        "```text\n"
+        f"[pm-accept] {HEAD[:7]} — 理由\n"
+        "```\n"
+        "````\n",
+        "OWNER",
+    )
+    assert not has_pm_accept([nested], HEAD)
+    # 対照: ```` を同数の ```` で閉じた後の本物の受け入れ行は通る (閉じの退行防止)
+    closed_then_real = (
+        f"````\n例\n````\n\n[pm-accept] {HEAD[:7]} — ok\n",
+        "OWNER",
+    )
+    assert has_pm_accept([closed_then_real], HEAD)
     # 過剰除外の対照: インデント無しの正規の受け入れは通る (上の正のテストと重複
     # だが、この除外がどこまでかをこのテスト内で読めるようにする)
     assert has_pm_accept([(f"[pm-accept] {HEAD[:7]} — ok", "OWNER")], HEAD)

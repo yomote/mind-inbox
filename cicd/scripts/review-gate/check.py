@@ -108,10 +108,16 @@ PM_ACCEPT_MARKER = "[pm-accept]"
 # 地の文 (「[pm-accept] は押していません」) と見出しの SHA の組み合わせを
 # 受け入れとして読んだ (PR #379 で実発生 / 13 秒後に success が貼られた)。
 # 正典の書式 (`/merge` skill): `[pm-accept] a1b2c3d — <一言の判定理由>`。
+# SHA はこのリポジトリの慣習であるバッククォート囲み (`` `a1b2c3d` ``) も受ける
+# (PR #404 代役レビュー major-2: 慣習どおり書いた PM の受け入れを弾くと、
+# PM と機械が「受け入れたのに赤」で食い違い続ける)。
 # SHA の後ろは自由文 (判定理由) を許す — 否定文の検出はしない (言い回しは
 # 無限にあるので脆い / #380 案 C の却下理由)。守るのは「マーカーの直後が
 # 現 head の SHA である」ことだけで、これは偶然の文章では満たしにくい。
-PM_ACCEPT_LINE_RE = re.compile(r"^\s*\[pm-accept\]\s+([0-9a-fA-F]{7,40})\b")
+# **受け入れの取り消しは文章ではなくコメントの削除で行う** (PR #404 代役レビュー
+# minor-4: 「[pm-accept] <sha> を取り消します」の文型は構文一致で受け入れと
+# 読まれる。削除は sweep のマージ直前再評価 / reverify_and_merge が検出する)。
+PM_ACCEPT_LINE_RE = re.compile(r"^\s*\[pm-accept\]\s+`?([0-9a-fA-F]{7,40})\b`?")
 # 受け入れとして数えるコメントの投稿者。**このリポジトリは public なので、
 # 誰でも PR にコメントできる** — 投稿者を見ないと第三者が `[pm-accept] <sha>` と
 # 書くだけで門が開く (2026-08-10 の受け入れレビューで発見)。
@@ -714,21 +720,26 @@ def _machine_lines(body: str) -> list[str]:
       GitHub Markdown でコードになる 3 形式すべてを外す (Codex P1 / PR #404 —
       ``` フェンスだけ外しても ~~~ フェンスとインデントコードが残る):
       ``` フェンス / ~~~ フェンス / 行頭 4 スペース以上・タブのインデントコード。
-      フェンスの閉じは**開いたのと同じ文字**だけ (``` の中の ~~~ 行は中身)。
-      インデストコードの厳密な文法 (直前に空行が要る等) は追わず、4 スペース
+      フェンスの閉じは**開いたのと同じ文字かつ同数以上** (CommonMark §fenced
+      code blocks / PR #404 代役レビュー major-1: 文字だけ見ると、```` で包んで
+      ``` 込みの例文を引用したとき中の ``` 行が閉じ扱いになり、以降のブロック
+      内容が判定対象に漏れる)。``` の中の ~~~ 行も中身。
+      インデントコードの厳密な文法 (直前に空行が要る等) は追わず、4 スペース
       以上は一律で外す — 過剰除外は門が閉じる側 (安全側) にしか倒れない
       (正典の書式はどちらも行頭から書く)。
     """
     lines: list[str] = []
     fence: str | None = None  # 開いているフェンスの文字 ("`" か "~")。None = 外
+    fence_len = 0  # 開きフェンスの文字数 (閉じは同数以上が要る)
     for line in body.splitlines():
         stripped = line.lstrip()
         if stripped.startswith("```") or stripped.startswith("~~~"):
             char = stripped[0]
+            run = len(stripped) - len(stripped.lstrip(char))
             if fence is None:
-                fence = char
-            elif fence == char:
-                fence = None
+                fence, fence_len = char, run
+            elif char == fence and run >= fence_len:
+                fence, fence_len = None, 0
             continue
         if fence is not None or stripped.startswith(">"):
             continue
