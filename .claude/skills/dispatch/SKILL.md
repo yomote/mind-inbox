@@ -102,7 +102,8 @@ create_session(
 - **`model` も書く** (Step 2 のモデル規約)。省略時は親の Fable 5 を継承する
 - 起動には 1〜3 分かかる
 - **使い終わったら `archive_session` する**
-- 子が止まったら `get_session` の `status_category` を見る。**`need_input` なら権限待ち** — `needs_action` のツール名を `.claude/settings.json` の `allow` に足す (その場しのぎで user に承認させない)
+- **`create_session` が `-32003 needs_approval` を返したら、それは MCP サーバ側の承認ゲートで、`.claude/settings.json` の `allow` では解けない** — 解けるのは **UI の「事後承認カード」を人間が押す**層だけなので、**待たずに subagent (`isolation: "worktree"`) に倒す**。allow への追記で直そうとしない ([2026-08-14 実測](https://github.com/yomote/mind-inbox/issues/353#issuecomment-5288785576): 両名 9 ツールが allow 済みでも発生し、CLI は UUID 名を正準名 `mcp__Claude_Code_Remote__*` にマップするのでどちらの名前で書いても同じ)
+- 子が止まったら `get_session` の `status_category` を見る。**`need_input` はローカルの権限待ちのことがある** (上の `-32003` はこの層ではない) — `needs_action` のツール名を `.claude/settings.json` の `allow` に足す (その場しのぎで user に承認させない)
   - ただし **`deny` に載っているツールは足さない** — 塞いだのは意図。子には commit + PR に切り替えさせる
   - **allow の追加は起動済みの子には効かない**。子は clone した時点のブランチの設定を読むので、**足したうえで子を起こし直す** (設定を main に入れるか、修正済みブランチを `source_revision` に指定する)
   - **MCP サーバ名は対話セッションと子セッションで違う** (`Claude_Code_Remote` / UUID `bf7c680d-…`)。allow は**両方の名前**を書く。破壊的なツールはサーバ単位ではなくツール単位でも列挙する
@@ -136,6 +137,7 @@ create_session(
 ## 失敗時の挙動
 
 - 子が `need_input` のまま進まない → `needs_action` のツールを allow に足し、**起こし直す** (待っても解けない)
+- `create_session` が `-32003 needs_approval` で落ちる → **allow では解けないサーバ側のゲート**。subagent に倒す (Step 4)
 - 子が黙って止まった → `get_session` で状態を確認し (これは窓口がやってよい)、成果が無ければ**別の subagent に出し直す**。**「たぶん動いている」で放置しない**
 - `create_session` が使えない → subagent (`isolation: "worktree"`) に倒す。分配自体を諦めない
 - 分配先の作業が想定より対話を要すると分かった → 子を archive して subagent で引き取る (往復を積まない)
