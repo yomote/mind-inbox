@@ -22,7 +22,7 @@ from agent_framework import (
 from agent_framework.openai import OpenAIChatClient, OpenAIChatOptions
 
 from .config import get_settings
-from .tools import function_invocation_limits, identity_arg_guard
+from .tools import function_invocation_limits, identity_arg_guard, tool_boundary
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,11 @@ _client: BaseChatClient | None = None
 # temperature / max_tokens を受け付けない推論モデルの接頭辞 (#55)。
 # Azure ではデプロイ名がモデル名と一致する運用 (gpt-4o / gpt-5-mini 等) を前提とする。
 _REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+# ツール実行に必ず通す function middleware。**順序が意味を持つ**: 外側の
+# `tool_boundary` が例外の一般化 (#417 P2 / Issue #418) と実行の記録 (#417 P1) を
+# 担うので、内側 (identity_arg_guard やツール本体) で起きた例外もここで捕まる。
+_TOOL_MIDDLEWARE = [tool_boundary, identity_arg_guard]
 
 
 def _options_for_model(
@@ -174,7 +179,7 @@ async def chat(
         return await client.get_response(
             list(messages),
             options=_options_for_model(_current_model(), tools),
-            middleware=[identity_arg_guard],
+            middleware=_TOOL_MIDDLEWARE,
         )
 
 
@@ -200,7 +205,7 @@ async def chat_stream(
         list(messages),
         stream=True,
         options=_options_for_model(_current_model(), tools),
-        middleware=[identity_arg_guard],
+        middleware=_TOOL_MIDDLEWARE,
     ).__aiter__()
     while True:
         # timeout は __anext__ の待ちだけに掛ける (消費側の処理時間は含めない)

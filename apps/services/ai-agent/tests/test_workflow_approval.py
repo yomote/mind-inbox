@@ -6,6 +6,8 @@
 - 再開後の履歴積み忘れ (tool result / assistant 応答) で次ターンの文脈が壊れる退行
 - 完了した run の checkpoint が解放されず、長寿命レプリカのメモリを食い潰す退行
   (PR #243 レビュー指摘)
+- **再開後**にモデルが別の副作用ツールを要求したターンを完了扱いし、承認レコードを
+  作らないまま空 reply で閉じる退行 (PR #417 P1 / TestChainedApproval)
 
 ここで test しないこと:
 - SSE / HTTP の枠組み (それは L2 /chat 系)
@@ -18,6 +20,8 @@ fixture 置き換え (#320): 承認は自前の `is_side_effecting` 判定では
 検証意図 (承認の中断 / 再開 / 却下 / 掃除) は不変。
 """
 
+import logging
+
 import pytest
 
 from app.workflow import (
@@ -26,11 +30,17 @@ from app.workflow import (
     resume_after_approval,
     run_workflow,
 )
-from tests.fakes import ScriptedChatClient, text_step, tool_call_step
+from tests.fakes import (
+    ScriptedChatClient,
+    text_step,
+    tool_call_step,
+    tool_calls_step,
+)
 
 pytestmark = pytest.mark.usefixtures("tools_enabled")
 
 APPROVAL_ARGS = {"to": "a@example.com", "body": "hi"}
+ARCHIVE_ARGS = {"message_id": "m-1"}
 
 
 def approval_script(reply: str = "対応しました。") -> ScriptedChatClient:
@@ -38,6 +48,24 @@ def approval_script(reply: str = "対応しました。") -> ScriptedChatClient:
     return ScriptedChatClient(
         [tool_call_step("send_reply", APPROVAL_ARGS), text_step(reply)]
     )
+
+
+def chained_approval_script(reply: str = "両方やりました。") -> ScriptedChatClient:
+    """`send_reply` を承認 → **その実行後にモデルが別の副作用ツールを要求する**台本。
+
+    Codex 指摘 (PR #417 P1) の再現ケースそのもの。
+    """
+    return ScriptedChatClient(
+        [
+            tool_call_step("send_reply", APPROVAL_ARGS),
+            tool_call_step("archive_message", ARCHIVE_ARGS, call_id="call-2"),
+            text_step(reply),
+        ]
+    )
+
+
+def pending_records(approval_repo) -> list:
+    return [r for r in approval_repo._store.values() if r.status == "pending"]
 
 
 class TestApprovalCheckpointMapping:
@@ -184,6 +212,149 @@ class TestResumeAfterApproval:
             await resume_after_approval(
                 res.approval_request_id, True, session_repo, approval_repo, client
             )
+
+
+class TestChainedApproval:
+    """承認済みツールの実行後に**別の副作用ツール**が要求されたターン (PR #417 P1)。
+
+    無いと何が静かに通るか: 再開後の応答に含まれる新しい `function_approval_request`
+    を検査せずに完了扱いし、**承認レコードも作らず空の reply でターンが閉じる**。
+    1 本目の副作用だけ実行済みで、2 本目は承認も実行もされないまま消える。
+    """
+
+    async def test_l1_再開後の追加承認要求は新しい承認レコードとして立て直される(
+        self, session_repo, approval_repo
+    ):
+        client = chained_approval_script()
+
+        first = await run_workflow(
+            "s-chain", "返信して整理して", session_repo, approval_repo, client
+        )
+        reply = await resume_after_approval(
+            first.approval_request_id, True, session_repo, approval_repo, client
+        )
+
+        # 空 reply で完了しない (壊れていたときの実測値は "")
+        assert (
+            reply
+            == "「archive_message」を実行するには承認が必要です。実行してよろしいですか？"
+        )
+
+        # 1 本目は解決済み、2 本目は**新しい ID の** pending として立っている
+        assert (await approval_repo.get(first.approval_request_id)).status == "approved"
+        pending = pending_records(approval_repo)
+        assert len(pending) == 1
+        follow_up = pending[0]
+        assert follow_up.id != first.approval_request_id
+        assert follow_up.plan.tool_name == "archive_message"
+        assert follow_up.plan.tool_args == ARCHIVE_ARGS
+        assert follow_up.checkpoint_id is not None
+
+        # 2 本目は**まだ実行されていない** (承認前に副作用が走っていない)
+        history = await session_repo.get("s-chain")
+        contents = [m.text for m in history.messages]
+        assert not any("Tool result (archive_message)" in c for c in contents)
+
+    async def test_l1_中断前に実行済みツールの結果が履歴に残る(
+        self, session_repo, approval_repo
+    ):
+        # 無いと: 承認要求で打ち切られた応答からは MAF が function_result を落とす
+        # ため (実測)、**実行された send_reply が履歴に残らない**。次のターンで
+        # モデルが同じ副作用ツールをもう一度呼びうる (二重送信)。
+        client = chained_approval_script()
+
+        first = await run_workflow(
+            "s-chain-hist", "返信して整理して", session_repo, approval_repo, client
+        )
+        await resume_after_approval(
+            first.approval_request_id, True, session_repo, approval_repo, client
+        )
+
+        history = await session_repo.get("s-chain-hist")
+        contents = [m.text for m in history.messages]
+        assert any(
+            "Tool result (send_reply): [stub] Reply sent to a@example.com." in c
+            for c in contents
+        )
+        # 空の assistant 応答を履歴に積まない (中断であって完了ではない)
+        assert not any(m.role == "assistant" and m.text == "" for m in history.messages)
+
+    async def test_l1_追加承認を承認すると2本目のツールが実行されて連鎖が閉じる(
+        self, session_repo, approval_repo
+    ):
+        # 無いと: 立て直した承認レコードが checkpoint に繋がっておらず、
+        # 「承認したのに何も起きない」ままターンが終わる
+        client = chained_approval_script()
+
+        first = await run_workflow(
+            "s-chain-done", "返信して整理して", session_repo, approval_repo, client
+        )
+        await resume_after_approval(
+            first.approval_request_id, True, session_repo, approval_repo, client
+        )
+        follow_up = pending_records(approval_repo)[0]
+
+        reply = await resume_after_approval(
+            follow_up.id, True, session_repo, approval_repo, client
+        )
+
+        assert reply == "両方やりました。"
+        history = await session_repo.get("s-chain-done")
+        contents = [m.text for m in history.messages]
+        assert any("Tool result (send_reply)" in c for c in contents)
+        assert any("Tool result (archive_message)" in c for c in contents)
+        assert contents[-1] == "両方やりました。"
+
+    async def test_l1_追加承認へ_checkpoint_storage_が引き継がれる(
+        self, session_repo, approval_repo
+    ):
+        # 無いと (in-memory 構成): 解決時に storage を手放したまま新しい承認だけが
+        # 残り、その /approve が必ず「checkpoint not found」になる。
+        # あるいは古い ID の参照が解放されずに溜まり続ける (PR #243 指摘)
+        client = chained_approval_script()
+
+        first = await run_workflow(
+            "s-chain-store", "返信して整理して", session_repo, approval_repo, client
+        )
+        await resume_after_approval(
+            first.approval_request_id, True, session_repo, approval_repo, client
+        )
+        follow_up = pending_records(approval_repo)[0]
+
+        assert get_pending_checkpoint_storage(first.approval_request_id) is None
+        assert get_pending_checkpoint_storage(follow_up.id) is not None
+
+    async def test_l1_1ターンに並んだ承認要求のうち承認していない側は実行されない(
+        self, session_repo, approval_repo, caplog
+    ):
+        # 「先頭のみ + warning」の暫定 (#321 で題材を決めるまで) が**安全側に倒れて
+        # いる**ことを pin する。無いと: 2 本目まで実行する実装に変わっても
+        # 気づけない = 「承認したつもりのない副作用」が通る。
+        # 実測 (#417): 残りは MAF が再開時に黙って捨てるため実行されない。
+        client = ScriptedChatClient(
+            [
+                tool_calls_step(
+                    ("send_reply", APPROVAL_ARGS),
+                    ("archive_message", ARCHIVE_ARGS),
+                ),
+                text_step("両方やりました。"),
+            ]
+        )
+
+        with caplog.at_level(logging.WARNING, logger="app.workflow"):
+            res = await run_workflow(
+                "s-two", "返信して整理して", session_repo, approval_repo, client
+            )
+        await resume_after_approval(
+            res.approval_request_id, True, session_repo, approval_repo, client
+        )
+
+        history = await session_repo.get("s-two")
+        contents = [m.text for m in history.messages]
+        assert any("Tool result (send_reply)" in c for c in contents)
+        assert not any("Tool result (archive_message)" in c for c in contents)
+        # 捨てたことがログに残る (静かに落とさない)
+        assert any("承認要求が 2 件届いた" in r.getMessage() for r in caplog.records)
 
 
 class TestCheckpointCleanup:

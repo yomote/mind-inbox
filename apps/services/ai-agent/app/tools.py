@@ -33,15 +33,22 @@ from agent_framework import (
     Content,
     FunctionInvocationContext,
     FunctionTool,
+    MiddlewareTermination,
     function_middleware,
     tool,
 )
+from agent_framework.exceptions import UserInputRequiredException
 
 from .config import get_settings
-from .observability import fingerprint
+from .observability import fingerprint, new_ref, redact_framework_tool_logs
 from .rag import retrieve
 
 logger = logging.getLogger(__name__)
+
+# **import 時に張る** (#417 P2): ツールが走る経路は必ずこのモジュールを import する
+# ので、本番の入口 (main.py) を待たずにここで掛けておけば、workflow 経由でも
+# 将来の MAF 直呼びでも取りこぼしが無い。冪等なので何度 import されても 1 枚。
+redact_framework_tool_logs()
 
 
 # ── 実行コンテキスト (主体の出どころ) ─────────────────────────────────────────
@@ -59,11 +66,40 @@ class ToolContext:
       ツール側で ContextVar を **再代入** しても呼び出し側には伝わらない。同じ
       list オブジェクトを共有して append する形だけが並列実行を跨いで届く
       (tests/test_tools.py が並列 2 本で pin する)。
+    - `executions`: **MAF が実際に実行した**ツール呼び出しの記録 (`tool_boundary`
+      middleware が積む)。citations と同じ理由で mutable。用途は
+      `ToolExecution` の docstring を参照。
     """
 
     session_id: str
     user_id: Optional[str] = None
     citations: list[str] = field(default_factory=list)
+    executions: list["ToolExecution"] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ToolExecution:
+    """ツールが 1 回実行された事実 (`tool_boundary` middleware が記録する)。
+
+    **なぜ MAF の応答 (function_result) だけでは足りないか** (#417 P1 / 実測):
+    MAF の function invocation loop は、そのターンで**新しい承認要求が出た瞬間に
+    return する**ため、`_prepend_function_call_messages` を通らない。結果、
+    「承認済みツールを実行 → モデルが別の副作用ツールを要求」というターンでは、
+    **実行済みツールの function_result が応答から丸ごと落ちる**。応答だけを見て
+    履歴を書くと「実行されたのに履歴に無い」= 次のターンで同じ副作用ツールが
+    もう一度呼ばれる、が静かに成立する。
+
+    そこで**ツール境界で直接**記録する。`call_id` で応答側の function_result と
+    突き合わせられるので、両方に現れるものは二重に履歴へ積まない (workflow 側)。
+
+    `error_ref` が入っているものは実行が例外で失敗したもの。例外文そのものは
+    どこにも持たない — 出せるのは ref だけ (Issue #313)。
+    """
+
+    call_id: str
+    name: str
+    result: Optional[str] = None
+    error_ref: Optional[str] = None
 
 
 class ToolContextUnavailable(RuntimeError):
@@ -220,6 +256,81 @@ def exposed_tools() -> tuple[FunctionTool, ...]:
             f"LLM_EXPOSED_TOOLS に registry に無いツール名が含まれています: {unknown}"
         )
     return tuple(_REGISTRY[name] for name in names)
+
+
+# ── ツール境界 (実行の記録 + 例外の一般化) ───────────────────────────────────
+
+# 一般化した例外文の目印。workflow 側がこれを見て「ref は境界で採番済み」と分かる。
+_TOOL_ERROR_REF_PREFIX = "ToolExecutionFailed ref="
+
+
+class ToolExecutionFailed(RuntimeError):
+    """ツール本体の例外を **ref だけに置き換えた**もの (原文は外に出さない)。"""
+
+
+def tool_error_ref(exception_text: Optional[str]) -> Optional[str]:
+    """MAF の function_result に載った例外文から、境界で採番した ref を取り出す。
+
+    `tool_boundary` が一般化していない失敗 (MAF 内部が作る "Function not found" 等)
+    では None を返す — 呼び出し側はそこで新しい ref を採番してログに残す。
+    """
+    if not exception_text or _TOOL_ERROR_REF_PREFIX not in exception_text:
+        return None
+    return exception_text.split(_TOOL_ERROR_REF_PREFIX, 1)[1].split()[0] or None
+
+
+@function_middleware
+async def tool_boundary(context: FunctionInvocationContext, call_next) -> None:
+    """ツール境界で (1) 実行を記録し (2) 例外を ref だけに一般化する (#417 P2 / Issue #418)。
+
+    **(2) が無いと何が静かに通るか**: MAF は本体が投げた例外を function_result に
+    落とす前に `agent_framework._tools` ロガーへ `Exception: %r` でそのまま出す
+    (実測 / WARNING レベル)。ツールが上流の URL・外部応答・相談内容を含む例外を
+    投げれば、こちらの `_record_tool_outcomes` が指紋化しても**その前に原文が
+    Log Analytics へ流れている**。境界で `ToolExecutionFailed(ref)` に差し替えれば、
+    フレームワークが出せるのは ref だけになる。
+
+    `raise ... from None` にしているのは、`__cause__` として原文の例外を繋ぐと
+    traceback 整形 (`exc_info=True` を使う第三者コード) の最終行に原文が復活する
+    ため。**原文はこのプロセスのログにも残さず、指紋だけを残す**。
+
+    **(1)** は #417 P1: 承認要求で打ち切られたターンでは実行済みツールの
+    function_result が応答から落ちる (`ToolExecution` の docstring)。
+
+    MAF が制御フローに使う例外 (`MiddlewareTermination` /
+    `UserInputRequiredException`) は握らずそのまま通す — ここで一般化すると
+    「承認待ち」「middleware による打ち切り」が「ツールが失敗した」に化ける。
+    """
+    name = context.function.name
+    call_id = str(context.metadata.get("call_id") or "")
+    # 実行コンテキストは呼び出し側 (workflow) が立てる。MAF を直に叩く経路では
+    # 立っていないことがあり、そこでは記録だけを諦める (例外の一般化は常に効く)。
+    execution_log = getattr(_tool_context.get(), "executions", None)
+    try:
+        await call_next()
+    except (MiddlewareTermination, UserInputRequiredException):
+        raise
+    except Exception as exc:
+        ref = new_ref()
+        logger.error(
+            "Tool execution failed ref=%s tool=%s kind=execution detail=%s",
+            ref,
+            name,
+            fingerprint(str(exc)),
+        )
+        if execution_log is not None:
+            execution_log.append(
+                ToolExecution(call_id=call_id, name=name, error_ref=ref)
+            )
+        raise ToolExecutionFailed(f"{_TOOL_ERROR_REF_PREFIX}{ref}") from None
+    if execution_log is not None:
+        # MAF が function_result を作るときと**同じ正規化**を通す (`Content` の
+        # 生リストや非文字列がそのまま履歴に出ないように)。応答経由で記録された
+        # 場合と履歴の 1 行が一致する形にしておく
+        normalized = Content.from_function_result(call_id, result=context.result)
+        execution_log.append(
+            ToolExecution(call_id=call_id, name=name, result=str(normalized.result))
+        )
 
 
 # ── 主体識別子の防御 (Issue #313) ─────────────────────────────────────────────

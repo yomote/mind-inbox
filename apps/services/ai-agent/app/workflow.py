@@ -21,6 +21,9 @@ v1 の自前 7 状態 FSM を MAF の graph Workflow に写し (ADR 0016 / M1-3)
   対応を `ApprovalRecord` に記録し、API 契約 (requiresApproval / approvalRequestId) を
   不変に保つ。/approve は checkpoint から `workflow.run(responses=..., checkpoint_id=...)`
   で再開し、承認は `to_function_approval_response` として会話に差し戻される。
+  **再開したターンも最初のターンと同じ経路 (`_settle`) を通る** — 承認済みツールの
+  実行後にモデルが別の副作用ツールを要求したら、そこで新しい承認要求として立て直す
+  (完了扱いにしない / PR #417 P1)。
 - **ストリーミング**: converse executor がトークンを intermediate output として
   yield し、アダプタが ChatStreamDelta へ写す (契約は #120 / ADR 0024 のまま)。
 """
@@ -67,8 +70,10 @@ from .schemas import (
 )
 from .tools import (
     ToolContext,
+    ToolExecution,
     exposed_tools,
     report_identity_arg_attempts,
+    tool_error_ref,
     use_tool_context,
 )
 
@@ -247,6 +252,7 @@ def _record_tool_outcomes(
     history: ChatHistory,
     response: MafChatResponse,
     call_names: Optional[dict[str, str]] = None,
+    executions: Sequence[ToolExecution] = (),
 ) -> None:
     """MAF が実行したツールの結果 / 失敗を履歴に写す。
 
@@ -263,21 +269,28 @@ def _record_tool_outcomes(
     例外文・引数の値は履歴に入れない — 履歴はそのまま LLM へ再送され、最終的に
     ユーザーの画面まで届きうる出口 (上流のエンドポイント名等が漏れる)。詳細は
     サーバのログにだけ残し、ref で突き合わせる (Issue #313)。
+
+    `executions` は `tool_boundary` middleware がツール境界で直に記録した実行分。
+    **応答に function_result が現れないケースがある**ため必要になる (#417 P1 /
+    `ToolExecution` の docstring)。応答にも現れているものは call_id で除いて
+    二重に積まない。
     """
     # 承認再開のターンでは function_call は checkpoint 側 (pending_messages) にあり、
     # 応答には function_result しか来ない。呼び出し側が名前の手がかりを渡す。
     names = {**(call_names or {}), **_tool_names_by_call_id(response.messages)}
+    recorded: set[str] = set()
     for content in _contents(response):
         if content.type != "function_result":
             continue
+        recorded.add(content.call_id or "")
         name = names.get(content.call_id or "", "?")
         result = content.result
         if content.exception is None:
             history.add_system_message(f"Tool result ({name}): {result}")
             continue
-        ref = new_ref()
         if isinstance(result, str) and result.startswith(_MAF_ARGUMENT_ERROR_PREFIX):
             # 引数の値も検証エラー文もユーザー入力由来なので指紋だけ残す
+            ref = new_ref()
             logger.error(
                 "Tool argument validation failed ref=%s tool=%s kind=schema_validation detail=%s",
                 ref,
@@ -289,14 +302,34 @@ def _record_tool_outcomes(
                 f"引数がツールの定義と合いませんでした (ref: {ref})"
             )
             continue
-        logger.error(
-            "Tool execution failed ref=%s tool=%s kind=execution detail=%s",
-            ref,
-            name,
-            fingerprint(str(content.exception)),
-        )
+        # 実行の失敗は `tool_boundary` が境界で ref を採番済み (ログもそこで出ている)。
+        # 採番されていない = MAF 内部が作った失敗 (未知のツール等) なので、ここで
+        # 採番して残す — 拾えなかったものを黙って通さない
+        ref = tool_error_ref(str(content.exception))
+        if ref is None:
+            ref = new_ref()
+            logger.error(
+                "Tool execution failed ref=%s tool=%s kind=execution detail=%s",
+                ref,
+                name,
+                fingerprint(str(content.exception)),
+            )
         history.add_system_message(
             f"Tool error ({name}): 実行に失敗しました (ref: {ref})"
+        )
+
+    # 応答から落ちた実行分 (承認要求で打ち切られたターンで起きる / #417 P1)
+    for execution in executions:
+        if execution.call_id in recorded:
+            continue
+        if execution.error_ref is not None:
+            history.add_system_message(
+                f"Tool error ({execution.name}): 実行に失敗しました "
+                f"(ref: {execution.error_ref})"
+            )
+            continue
+        history.add_system_message(
+            f"Tool result ({execution.name}): {execution.result}"
         )
 
 
@@ -385,14 +418,14 @@ class ConverseExecutor(Executor):
         *,
         stream: bool,
         updates: list,
-    ) -> tuple[MafChatResponse, ToolContext]:
+        tool_context: ToolContext,
+    ) -> MafChatResponse:
         """ツールを載せて LLM を 1 回呼ぶ。stream 時はテキスト差分を intermediate output へ。
 
-        `updates` は呼び出し側が持つ受け皿。**途中で落ちてもそこまでの update が
-        残る**ようにしてある — ツールは既に実行済みかもしれず、その事実を握り潰すと
-        「実行されたのに履歴に無い」が生まれる。
+        `updates` / `tool_context` は呼び出し側が持つ受け皿。**途中で落ちても
+        そこまでの update と実行記録が残る**ようにしてある — ツールは既に実行済み
+        かもしれず、その事実を握り潰すと「実行されたのに履歴に無い」が生まれる。
         """
-        tool_context = ToolContext(session_id=session_id)
         tools = exposed_tools()
         client = _resolve_client(self._client)
         logger.info(
@@ -406,15 +439,15 @@ class ConverseExecutor(Executor):
         # (並列に走るツールにも copy_context 経由で同じ context が見える)。
         with use_tool_context(tool_context):
             if not stream:
-                return await chat(client, messages, tools=tools), tool_context
+                return await chat(client, messages, tools=tools)
             async for update in chat_stream(client, messages, tools=tools):
                 updates.append(update)
                 if update.text:
                     await ctx.yield_output(update.text)
-            return MafChatResponse.from_updates(updates), tool_context
+            return MafChatResponse.from_updates(updates)
 
     async def _flush_partial_tool_outcomes(
-        self, session_id: str, updates: list
+        self, session_id: str, updates: list, tool_context: ToolContext
     ) -> None:
         """LLM 呼び出しが途中で落ちたとき、そこまでに実行されたツールの結果を履歴へ残す。
 
@@ -422,11 +455,88 @@ class ConverseExecutor(Executor):
         履歴には何も残らない**。フロントは非ストリーミングへ自動フォールバックするので、
         同じツールがもう一度呼ばれうる (副作用ツールなら二重実行)。
         """
-        if not updates:
+        if not updates and not tool_context.executions:
             return
         history = await _get_or_create_session(session_id, self._session_repo)
-        _record_tool_outcomes(history, MafChatResponse.from_updates(updates))
+        _record_tool_outcomes(
+            history,
+            MafChatResponse.from_updates(updates),
+            executions=tool_context.executions,
+        )
         await self._session_repo.save(session_id, history)
+
+    async def _settle(
+        self,
+        session_id: str,
+        response: MafChatResponse,
+        tool_context: ToolContext,
+        ctx: WorkflowContext,
+        call_names: Optional[dict[str, str]] = None,
+    ) -> None:
+        """LLM 呼び出しの結果を「完了」か「承認待ちで中断」のどちらかに落とす。
+
+        **最初のターンと承認再開のターンで同じ経路を通す** (#417 P1)。分けていた
+        頃は、再開後にモデルが**別の**副作用ツールを要求しても承認レコードを作らず、
+        空の reply でターンを完了させていた — 1 本目の副作用だけ実行済みで、
+        2 本目は承認もされず実行もされない状態が黙って残る (Codex 指摘の再現:
+        `send_reply` 承認後に `archive_message`)。
+        """
+        report_identity_arg_attempts(_function_calls(response))
+        pending = _approval_requests(response)
+        if pending:
+            await self._request_approval(
+                session_id, response, tool_context, ctx, pending, call_names
+            )
+            return
+        await self._finish_turn(session_id, response, tool_context, ctx, call_names)
+
+    async def _request_approval(
+        self,
+        session_id: str,
+        response: MafChatResponse,
+        tool_context: ToolContext,
+        ctx: WorkflowContext,
+        pending: list[Content],
+        call_names: Optional[dict[str, str]] = None,
+    ) -> None:
+        """承認要求で workflow を中断する (checkpoint に全状態が残る)。"""
+        request = pending[0]
+        call = request.function_call
+        logger.info("Workflow[APPROVAL_IF_NEEDED] tool=%s", call.name if call else None)
+        if len(pending) > 1:
+            # 1 ターンに複数の副作用ツールが並ぶのは今の題材では起こらないが、
+            # 黙って 1 本目だけ承認して残りを捨てると「承認したつもりのない実行」に
+            # なりうる。**実測 (#417)**: 残りは再開時に MAF が黙って捨てる = 実行は
+            # されない (安全側) が、モデルは「やった」と応答しうる。起きたことが
+            # 分かるようにログに残す (#321 で題材を決めるまでの暫定)。
+            logger.warning(
+                "Workflow[APPROVAL_IF_NEEDED] 承認要求が %d 件届いた — 先頭のみを扱う",
+                len(pending),
+            )
+        # **中断前に実行済みツールの結果を履歴へ**: 承認は再開されないかもしれない
+        # (ユーザーが承認画面を閉じる / 承認要求で打ち切られた応答から
+        # function_result が落ちる #417 P1)。ここで残さないと「実行されたのに履歴に
+        # 無い」= 次のターンで同じツールがもう一度呼ばれる、が静かに成立する
+        history = await _get_or_create_session(session_id, self._session_repo)
+        _record_tool_outcomes(
+            history, response, call_names, executions=tool_context.executions
+        )
+        await self._session_repo.save(session_id, history)
+        await ctx.request_info(
+            ApprovalRequest(
+                session_id=session_id,
+                plan=Plan(
+                    tool_name=call.name if call else None,
+                    tool_args=(call.parse_arguments() or {}) if call else {},
+                    is_side_effecting=True,
+                ),
+                approval_content_id=request.id or "",
+                pending_messages=[m.to_dict() for m in response.messages],
+                citations=list(tool_context.citations),
+            ),
+            ApprovalDecision,
+            request_id=str(uuid.uuid4()),
+        )
 
     async def _finish_turn(
         self,
@@ -438,7 +548,9 @@ class ConverseExecutor(Executor):
     ) -> None:
         """ツール結果と assistant 応答を履歴へ積み、FinalReply を送る。"""
         history = await _get_or_create_session(session_id, self._session_repo)
-        _record_tool_outcomes(history, response, call_names)
+        _record_tool_outcomes(
+            history, response, call_names, executions=tool_context.executions
+        )
         reply = response.text
         history.add_assistant_message(reply)
         await self._session_repo.save(session_id, history)
@@ -456,52 +568,23 @@ class ConverseExecutor(Executor):
     ) -> None:
         history = await _get_or_create_session(turn.session_id, self._session_repo)
         updates: list = []
+        tool_context = ToolContext(session_id=turn.session_id)
         try:
-            response, tool_context = await self._call_llm(
+            response = await self._call_llm(
                 turn.session_id,
                 list(history.messages),
                 ctx,
                 stream=self._stream,
                 updates=updates,
+                tool_context=tool_context,
             )
         except Exception:
-            await self._flush_partial_tool_outcomes(turn.session_id, updates)
+            await self._flush_partial_tool_outcomes(
+                turn.session_id, updates, tool_context
+            )
             raise
-        report_identity_arg_attempts(_function_calls(response))
 
-        pending = _approval_requests(response)
-        if pending:
-            request = pending[0]
-            call = request.function_call
-            logger.info(
-                "Workflow[APPROVAL_IF_NEEDED] tool=%s", call.name if call else None
-            )
-            if len(pending) > 1:
-                # 1 ターンに複数の副作用ツールが並ぶのは今の題材では起こらないが、
-                # 黙って 1 本目だけ承認して残りを捨てると「承認したつもりのない実行」に
-                # なりうる。起きたことが分かるようにログに残す (#321 で題材を決めるまでの暫定)。
-                logger.warning(
-                    "Workflow[APPROVAL_IF_NEEDED] 承認要求が %d 件届いた — 先頭のみを扱う",
-                    len(pending),
-                )
-            await ctx.request_info(
-                ApprovalRequest(
-                    session_id=turn.session_id,
-                    plan=Plan(
-                        tool_name=call.name if call else None,
-                        tool_args=(call.parse_arguments() or {}) if call else {},
-                        is_side_effecting=True,
-                    ),
-                    approval_content_id=request.id or "",
-                    pending_messages=[m.to_dict() for m in response.messages],
-                    citations=list(tool_context.citations),
-                ),
-                ApprovalDecision,
-                request_id=str(uuid.uuid4()),
-            )
-            return
-
-        await self._finish_turn(turn.session_id, response, tool_context, ctx)
+        await self._settle(turn.session_id, response, tool_context, ctx)
 
     @response_handler
     async def on_approval_decision(
@@ -546,11 +629,19 @@ class ConverseExecutor(Executor):
             ),
         ]
         # 再開は常に非ストリーミング (/approve は SSE ではない)
-        response, tool_context = await self._call_llm(
-            request.session_id, messages, ctx, stream=False, updates=[]
+        tool_context = ToolContext(session_id=request.session_id)
+        response = await self._call_llm(
+            request.session_id,
+            messages,
+            ctx,
+            stream=False,
+            updates=[],
+            tool_context=tool_context,
         )
         tool_context.citations.extend(request.citations)
-        await self._finish_turn(
+        # `_settle` を通す = 再開後にモデルが別の副作用ツールを要求したら、
+        # **新しい承認要求として立て直す** (完了扱いにしない / #417 P1)
+        await self._settle(
             request.session_id,
             response,
             tool_context,
@@ -766,6 +857,24 @@ async def resume_after_approval(
         responses={approval_id: ApprovalDecision(approved=approved)},
         checkpoint_id=record.checkpoint_id,
     )
+
+    # 再開したターンでモデルが**別の副作用ツール**を要求した場合 (#417 P1)。
+    # 完了 output は無く、代わりに新しい request_info event が立つ。ここで
+    # 新しい承認レコード (= 新しい checkpoint への写像) を作らないと、承認も
+    # 実行もされないまま空の reply でターンが閉じる。
+    #
+    # **残る制約**: `/approve` の応答型 (ApproveResponse) は reply しか運べないため、
+    # ここで採番した approvalRequestId をクライアントへ渡す口が今は無い
+    # (契約変更 = BFF + フロントの追随が要る)。サービス層では承認レコードも
+    # checkpoint も正しく立っているので、続きの承認は次の /chat ターンで
+    # 立て直される。end-to-end の連鎖は Issue #82 のスレッドで扱う。
+    requests = result.get_request_info_events()
+    if requests:
+        follow_up = await _record_approval_request(requests[0], approval_repo, storage)
+        if _cosmos_enabled():
+            await storage.delete(record.checkpoint_id)
+        return follow_up.reply
+
     outputs = result.get_outputs()
     if not outputs:
         raise RuntimeError("Chat workflow resume completed without a response")

@@ -27,7 +27,11 @@ from app.workflow import (
     resume_after_approval,
     run_workflow,
 )
-from tests.test_workflow_approval import approval_script
+from tests.test_workflow_approval import (
+    approval_script,
+    chained_approval_script,
+    pending_records,
+)
 
 pytestmark = pytest.mark.usefixtures("tools_enabled")
 
@@ -127,6 +131,34 @@ class TestCosmosModeApprovalLifecycle:
             d.get("checkpoint_id") == record.checkpoint_id
             for d in cosmos_mode.items.values()
         )
+
+    async def test_l1_追加承認は自分の_checkpoint_で再開でき祖先は消えている(
+        self, cosmos_mode, session_repo, approval_repo
+    ):
+        # 無いと (#417 P1 / 共有ストア構成): 再開後に立て直した承認が、解決済みで
+        # 削除された祖先 checkpoint に依存していて「承認したのに再開できない」に
+        # なる退行が通る。**祖先を消したあとで**追加承認を再開して確かめる。
+        client = chained_approval_script()
+
+        first = await run_workflow(
+            "s-cosmos-chain", "返信して整理して", session_repo, approval_repo, client
+        )
+        first_record = await approval_repo.get(first.approval_request_id)
+        await resume_after_approval(
+            first.approval_request_id, True, session_repo, approval_repo, client
+        )
+
+        follow_up = pending_records(approval_repo)[0]
+        assert follow_up.checkpoint_id not in (None, first_record.checkpoint_id)
+        # 解決済みの祖先は消え、追加承認の checkpoint は残っている
+        stored = [d.get("checkpoint_id") for d in cosmos_mode.items.values()]
+        assert first_record.checkpoint_id not in stored
+        assert follow_up.checkpoint_id in stored
+
+        reply = await resume_after_approval(
+            follow_up.id, True, session_repo, approval_repo, client
+        )
+        assert reply == "両方やりました。"
 
     async def test_l1_resume_missing_checkpoint_raises_not_found(
         self, cosmos_mode, session_repo, approval_repo

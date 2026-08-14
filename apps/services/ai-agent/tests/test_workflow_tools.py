@@ -12,6 +12,8 @@ MAF の `FunctionInvocationLayer` を**本物のまま**通す fake (tests/fakes
   主体依存のツールだけが「Tool error」に化ける
 - 引数のスキーマ検証失敗が "Tool error" に埋もれ、
   「ツール定義とモデルの噛み合わせが悪い」と「実行が壊れた」を区別できなくなる
+- ツールが投げた例外の**原文**が `agent_framework` のログ経由で外へ出る
+  (こちらの指紋化より前に走る層がある / PR #417 P2・Issue #418)
 
 ここで test しないこと:
 - 承認の中断 / 再開 (test_workflow_approval.py)
@@ -160,20 +162,61 @@ class TestToolFailureClassification:
             [tool_call_step("exploding_tool", {}), text_step("できませんでした。")]
         )
 
-        with caplog.at_level(logging.ERROR, logger="app.workflow"):
+        with caplog.at_level(logging.DEBUG):
             await run_workflow("s-boom", "やって", session_repo, approval_repo, client)
 
         history = await session_repo.get("s-boom")
         contents = [m.text for m in history.messages]
         assert any("Tool error (exploding_tool)" in c for c in contents)
         assert not any("Tool argument error" in c for c in contents)
-        # 例外文 (上流のホスト名) を履歴にも**このサービスのログ**にも出さない (Issue #313)。
-        # 注意: MAF 自身は `agent_framework` ロガーに例外文をそのまま出す (実測)。
-        # それはフレームワーク側の挙動なのでここでは検査対象にしていない —
-        # 「このサービスが書く行は指紋だけ」という不変条件だけを pin する。
         assert not any("upstream.example" in c for c in contents)
         ours = [r.getMessage() for r in caplog.records if r.name.startswith("app.")]
         assert ours and not any("upstream.example" in r for r in ours)
+        # 失敗の事実は残る (握り潰していない) — ref で同じ失敗のログに辿り着ける
+        assert any("kind=execution" in r for r in ours)
+
+    async def test_l1_ツール例外の原文はフレームワークのログにも出ない(
+        self, tools_enabled, monkeypatch, session_repo, approval_repo, caplog
+    ):
+        # 無いと (PR #417 P2 / Issue #418): MAF は例外を function_result に落とす
+        # 前に `agent_framework` ロガーへ原文をそのまま出す (2 箇所 / 実測)。
+        # こちらが指紋化しても**その前に**上流 URL や相談内容が Log Analytics へ
+        # 流れる。層が 2 つあるので対策も 2 つ要る:
+        #   1. `tool_boundary` middleware が例外を ref だけに一般化する
+        #      (FunctionTool.invoke の**外側** = 呼び出しループのログを塞ぐ)
+        #   2. `redact_framework_tool_logs` のフィルタが payload 行を指紋に替える
+        #      (invoke の**内側**のログはアプリの middleware より先に走るため)
+        # どちらかを外すとこのテストが赤になる。
+        secret = "https://upstream.example/patient-9931 相談内容そのもの"
+
+        @tool(
+            name="leaky_tool",
+            description="raises a sensitive exception",
+            approval_mode="never_require",
+        )
+        async def leaky_tool() -> str:
+            raise RuntimeError(secret)
+
+        monkeypatch.setitem(_REGISTRY, "leaky_tool", leaky_tool)
+        client = ScriptedChatClient(
+            [tool_call_step("leaky_tool", {}), text_step("できませんでした。")]
+        )
+
+        with caplog.at_level(logging.DEBUG):
+            await run_workflow("s-leak", "やって", session_repo, approval_repo, client)
+
+        framework = [
+            r.getMessage()
+            for r in caplog.records
+            if r.name.startswith("agent_framework")
+        ]
+        assert framework, (
+            "フレームワークのログを 1 行も拾えていない (検査になっていない)"
+        )
+        assert not any("upstream.example" in r for r in framework)
+        assert not any("相談内容" in r for r in framework)
+        # 「ツールが失敗した」事実そのものは残す (行ごと消していない)
+        assert any("Function failed." in r for r in framework)
 
     async def test_l1_成功したツールの結果は履歴に残る(
         self, tools_enabled, session_repo, approval_repo
