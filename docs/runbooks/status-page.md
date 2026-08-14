@@ -10,10 +10,10 @@
 
 過去に試して駄目だった 2 つを避けている。
 
-| やり方                                 | なぜ駄目だったか                                                                                                                                    |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| セッションで作る HTML (報告会スライド) | **静的なスナップショット**。作った瞬間に古くなり、更新にエージェントの起動が要る                                                                    |
-| docs に置く手書きの表                  | **Excel と同じ**。維持する人がいないと腐る。しかも実行状態を docs に置くのは [ADR 0011](../adr/0011-github-projects-as-execution-dashboard.md) 違反 |
+| やり方                                 | なぜ駄目だったか                                                                                                                                                  |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| セッションで作る HTML (報告会スライド) | **静的なスナップショット**。作った瞬間に古くなり、更新にエージェントの起動が要る                                                                                  |
+| docs に置く手書きの表                  | **Excel と同じ**。維持する人がいないと腐る。しかも実行状態を docs に置くのは [ADR 0011](../adr/archive/operations/github-projects-as-execution-dashboard.md) 違反 |
 
 このページは **毎回 GitHub の実データから組み立て直す**。手で書く欄はゼロで、状態を保存する
 場所も持たない。ページは真実ではなく**生成物**。
@@ -21,7 +21,7 @@
 - 定義 (何を見張るか): [`cicd/scripts/status-page/watchers.json`](../../cicd/scripts/status-page/watchers.json)
 - 組み立て: [`cicd/scripts/status-page/build.py`](../../cicd/scripts/status-page/build.py)
 - 実行: [`.github/workflows/status-page.yml`](../../.github/workflows/status-page.yml)
-- UX トレンド節: データブランチ `data/ux-observations` から描く ([ADR 0041](../adr/0041-ux-observations-on-git-data-branch.md) D6)。
+- UX トレンド節: データブランチ `data/ux-observations` から描く ([ADR 0041](../adr/archive/operations/ux-observations-on-git-data-branch.md) D6)。
   PM tick の採点追記はページ再生成のトリガーではないため、採点直後は次の生成
   (毎朝 07:10 JST か手動) まで反映されない
 
@@ -121,5 +121,5 @@
 
 ## 関連
 
-- [ADR 0011](../adr/0011-github-projects-as-execution-dashboard.md) (実行状態の真実は GitHub 側) / [ADR 0018](../adr/0018-runtime-verification-in-the-loop.md) (動作検証をループに組み込む)
+- [ADR 0011](../adr/archive/operations/github-projects-as-execution-dashboard.md) (実行状態の真実は GitHub 側) / [ADR 0018](../adr/archive/operations/runtime-verification-in-the-loop.md) (動作検証をループに組み込む)
 - 個別の運用: [cd-watchdog](cd-watchdog.md) / [ux-probe-judge](ux-probe-judge.md) / [review-agents](review-agents.md) / [ops-inspect](ops-inspect.md)

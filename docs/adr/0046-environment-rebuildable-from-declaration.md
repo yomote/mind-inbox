@@ -6,7 +6,7 @@
 - Consulted: —
 - Informed: —
 
-関連: [ADR 0013](0013-standing-low-cost-dev-env-with-auto-deploy.md)（「常設」の解釈を**追補**する / supersede しない）/ [ADR 0003](0003-two-phase-bicep.md)（2-phase Bicep — 本 ADR はこの構造の上に乗る）/ [ADR 0025](0025-deploy-container-images-by-immutable-sha-tag.md)（image は不変 sha）/ [ADR 0045](0045-e2e-artifacts-are-secret-by-default.md)（「管理系 RG」の初出。本 ADR がその実体を定義する）/ [ADR 0018](0018-runtime-verification-in-the-loop.md)（動作検証）/ [ADR 0006](0006-azure-access-via-device-code.md)
+関連: [ADR 0013](0013-standing-low-cost-dev-env-with-auto-deploy.md)（「常設」の解釈を**追補**する / supersede しない）/ [ADR 0003](0003-two-phase-bicep.md)（2-phase Bicep — 本 ADR はこの構造の上に乗る）/ [ADR 0025](0025-deploy-container-images-by-immutable-sha-tag.md)（image は不変 sha）/ [ADR 0045](archive/operations/e2e-artifacts-are-secret-by-default.md)（「管理系 RG」の初出。本 ADR がその実体を定義する）/ [ADR 0018](archive/operations/runtime-verification-in-the-loop.md)（動作検証）/ [ADR 0006](0006-azure-access-via-device-code.md)
 
 対象 Issue: [#302](https://github.com/yomote/mind-inbox/issues/302)（ライフサイクル分断）/ [#303](https://github.com/yomote/mind-inbox/issues/303)（設定を宣言に一本化）/ [#306](https://github.com/yomote/mind-inbox/issues/306)（プロビジョンテスト）
 
@@ -56,15 +56,15 @@ Chosen option: **Option A**。
 
 ### D1 — リソースをライフサイクルで 3 層に分ける
 
-| 層             | 置き場所                                                                                                 | 中身（`cicd/modules/bootstrap-core.bicep` の行）                                                                                                                                                                                  | 撤収の対象            |
-| -------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
-| **持続層**     | `rg-shared-mindbox`（[ADR 0045](0045-e2e-artifacts-are-secret-by-default.md) が言う「管理系 RG」の実体） | Cosmos `:1250`（ユーザーデータ）/ Azure OpenAI `:912`（アカウント + デプロイ = クォータ）/ **Speech `:952`（F0 = 1 サブスクに 1 つ）** / Log Analytics `:398`（履歴）/ **Key Vault（新設）** / バックアップ保管ストレージ（新設） | ❌ **触らない**       |
-| **環境層**     | `rg-dev-mind-inbox`                                                                                      | SWA `:1426` / Function App `:661` + Plan `:632` + Storage `:615` / Container Apps `:851,:1039,:1080` + managed environment `:834`                                                                                                 | ✅ **壊して作り直す** |
-| **デプロイ層** | （リソースを作らない）                                                                                   | image の sha 差し替え / zip deploy / 静的配信                                                                                                                                                                                     | —                     |
+| 層             | 置き場所                                                                                                               | 中身（`cicd/modules/bootstrap-core.bicep` の行）                                                                                                                                                                                  | 撤収の対象            |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| **持続層**     | `rg-shared-mindbox`（[ADR 0045](archive/operations/e2e-artifacts-are-secret-by-default.md) が言う「管理系 RG」の実体） | Cosmos `:1250`（ユーザーデータ）/ Azure OpenAI `:912`（アカウント + デプロイ = クォータ）/ **Speech `:952`（F0 = 1 サブスクに 1 つ）** / Log Analytics `:398`（履歴）/ **Key Vault（新設）** / バックアップ保管ストレージ（新設） | ❌ **触らない**       |
+| **環境層**     | `rg-dev-mind-inbox`                                                                                                    | SWA `:1426` / Function App `:661` + Plan `:632` + Storage `:615` / Container Apps `:851,:1039,:1080` + managed environment `:834`                                                                                                 | ✅ **壊して作り直す** |
+| **デプロイ層** | （リソースを作らない）                                                                                                 | image の sha 差し替え / zip deploy / 静的配信                                                                                                                                                                                     | —                     |
 
 **Speech を持続層に置くことで、#306 の「Speech を検証対象に含めるか」は構造的に解ける** — F0 は 1 サブスクに 1 つなので、環境層に置くと再作成のたびに枠の取り合いになる。持続層なら壊さないので競合しない。**含めない**が答えになる。
 
-**Key Vault は現在 dev に存在しない** — `sqlAdminKeyVault` は `if (enableSql)` 条件つきで（`bootstrap-core.bicep:495`）、dev は `enableSql=false` なので作られていない。[ADR 0045](0045-e2e-artifacts-are-secret-by-default.md) D5 が秘密鍵の置き場所として要求している Key Vault は、**持続層で新規に宣言する**（これが [#301](https://github.com/yomote/mind-inbox/issues/301) の前提）。VNet / Private Endpoint も同様に dev では未作成（`:418` `if (vnetEnabled)`）。
+**Key Vault は現在 dev に存在しない** — `sqlAdminKeyVault` は `if (enableSql)` 条件つきで（`bootstrap-core.bicep:495`）、dev は `enableSql=false` なので作られていない。[ADR 0045](archive/operations/e2e-artifacts-are-secret-by-default.md) D5 が秘密鍵の置き場所として要求している Key Vault は、**持続層で新規に宣言する**（これが [#301](https://github.com/yomote/mind-inbox/issues/301) の前提）。VNet / Private Endpoint も同様に dev では未作成（`:418` `if (vnetEnabled)`）。
 
 **Entra のアプリ登録はどの RG にも属さない**（テナントのオブジェクト）。ライフサイクルとしては**持続層と同じ扱い**にする（D5）。
 
@@ -187,7 +187,7 @@ purge が要るのは「同名で作り直すために soft-delete を退かす�
 | `deploy-ai-agent.sh:197-203` / `deploy-voicevox-wrapper.sh:107-123` | **認証ゲート**（`az containerapp auth microsoft update`）                                  | `:1133` / `:1161` `authConfigs`（[ADR 0017](0017-container-apps-access-via-auth-gate.md)）    |
 | `deploy-voicevox-wrapper.sh:66-69`                                  | `VOICEVOX_ENGINE_BASE_URL` / `LOG_LEVEL`                                                   | Container App `:1080` の env                                                                  |
 
-**認証ゲートが二重宣言だったのは新しい発見**。[ADR 0017](0017-container-apps-access-via-auth-gate.md) の「Container Apps は組み込み認証で閉じる」は守るべき資源（OpenAI の課金）に直結する門なので、**宣言とスクリプトのどちらが勝つかが曖昧なまま放置してはいけない**（[ADR 0018](0018-runtime-verification-in-the-loop.md) の「到達経路を全部数える」）。
+**認証ゲートが二重宣言だったのは新しい発見**。[ADR 0017](0017-container-apps-access-via-auth-gate.md) の「Container Apps は組み込み認証で閉じる」は守るべき資源（OpenAI の課金）に直結する門なので、**宣言とスクリプトのどちらが勝つかが曖昧なまま放置してはいけない**（[ADR 0018](archive/operations/runtime-verification-in-the-loop.md) の「到達経路を全部数える」）。
 
 ロール割り当てについては **[PR #292](https://github.com/yomote/mind-inbox/pull/292)（持ち主を bicep 1 本にする）が本治療**であり、本 ADR はその方針を追認する。
 
@@ -237,7 +237,7 @@ ADR 0013 は「オンデマンド teardown をやめて常設にする」と決�
 
 ### 受け入れる穴 — 持続層の「再構築」は検証されない
 
-持続層を壊さないと決めた結果、**持続層の bicep だけが検証されない部分として残る**。しかもそこには**バックアップと、e2e trace 復号用の非エクスポート RSA 鍵オブジェクト**（[ADR 0045](0045-e2e-artifacts-are-secret-by-default.md) D5 — Key Vault の外に出せないため、失われたら保持中の artifact は永久に開けない）が置かれる——**腐っていたことに気づくのが、いちばん困っているとき**という構造になる。
+持続層を壊さないと決めた結果、**持続層の bicep だけが検証されない部分として残る**。しかもそこには**バックアップと、e2e trace 復号用の非エクスポート RSA 鍵オブジェクト**（[ADR 0045](archive/operations/e2e-artifacts-are-secret-by-default.md) D5 — Key Vault の外に出せないため、失われたら保持中の artifact は永久に開けない）が置かれる——**腐っていたことに気づくのが、いちばん困っているとき**という構造になる。
 
 ただし穴は見た目ほど大きくない: **週次の復元が持続層の「中身」（バックアップが読める / Key Vault に届く）を毎週使う**ので、検証されないのは「**持続層を作り直せるか**」だけ。
 
@@ -290,7 +290,7 @@ ADR 0013 は「オンデマンド teardown をやめて常設にする」と決�
 - Bad, because **蓄積がプロダクトの中核**（Problem 中心 2 層モデル / [ADR 0007](0007-problem-centric-two-layer-domain-model.md)）。毎週データが消える環境では、蓄積から出る挙動（#102 / #244）を確認できない
 - Bad, because OpenAI のクォータ再取得が毎週要る
 
-## 動作検証（実装後に何を叩くか / [ADR 0018](0018-runtime-verification-in-the-loop.md)）
+## 動作検証（実装後に何を叩くか / [ADR 0018](archive/operations/runtime-verification-in-the-loop.md)）
 
 「設定したか」ではなく**振る舞い**で書く:
 
@@ -311,4 +311,4 @@ ADR 0013 は「オンデマンド teardown をやめて常設にする」と決�
 - Issue: [#302](https://github.com/yomote/mind-inbox/issues/302) / [#303](https://github.com/yomote/mind-inbox/issues/303) / [#306](https://github.com/yomote/mind-inbox/issues/306) / 関連: [#301](https://github.com/yomote/mind-inbox/issues/301)（鍵の設置 — D1 の持続層が前提）/ [#308](https://github.com/yomote/mind-inbox/issues/308)（what-if — D4 が関係）/ [#305](https://github.com/yomote/mind-inbox/issues/305)（deploy の job 分割）
 - PR: [#292](https://github.com/yomote/mind-inbox/pull/292)（D7 のロール割り当て部分の本治療）
 - 一次ソース: [Graph Bicep v1.0 リファレンス](https://learn.microsoft.com/en-us/graph/templates/reference/overview) / [Graph Bicep の制約](https://learn.microsoft.com/en-us/graph/templates/bicep/limitations) / [Microsoft.Graph/applications](https://learn.microsoft.com/en-us/graph/templates/reference/applications)
-- 関連 ADR: [0013](0013-standing-low-cost-dev-env-with-auto-deploy.md)（D10 で追補）/ [0003](0003-two-phase-bicep.md) / [0025](0025-deploy-container-images-by-immutable-sha-tag.md) / [0045](0045-e2e-artifacts-are-secret-by-default.md) / [0018](0018-runtime-verification-in-the-loop.md) / [0007](0007-problem-centric-two-layer-domain-model.md)
+- 関連 ADR: [0013](0013-standing-low-cost-dev-env-with-auto-deploy.md)（D10 で追補）/ [0003](0003-two-phase-bicep.md) / [0025](0025-deploy-container-images-by-immutable-sha-tag.md) / [0045](archive/operations/e2e-artifacts-are-secret-by-default.md) / [0018](archive/operations/runtime-verification-in-the-loop.md) / [0007](0007-problem-centric-two-layer-domain-model.md)

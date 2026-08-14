@@ -77,6 +77,6 @@ description: 前回以降にマージされた PR と Proposed のままの ADR 
 
 ## 関連
 
-- ADR 0014 (この仕組みの設計判断): `docs/adr/0014-design-comprehension-gate-and-debrief.md`
+- ADR 0014 (この仕組みの設計判断): `docs/adr/archive/operations/design-comprehension-gate-and-debrief.md`
 - 記録: `docs/debrief/journal.md`
 - 対: `design-gate` skill (事前・同期のゲート) / `status` skill (進捗の pull) / `explain` skill (オンデマンド可視化)

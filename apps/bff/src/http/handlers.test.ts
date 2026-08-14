@@ -5,7 +5,7 @@
  * `handlers.ts` に status の決定を集約した。**が、集約しただけでは status のズレは止まらない。**
  *
  * 実際 2026-08-08 に「TTS のプリフェッチが 202 を返すようになったのに L4 が 200 を
- * 期待し続けて落ちる」事故が起きている ([ADR 0032](../../../../docs/adr/0032-use-case-acceptance-tests-against-real-wiring.md) の動機)。
+ * 期待し続けて落ちる」事故が起きている ([ADR 0032](../../../../docs/adr/archive/operations/use-case-acceptance-tests-against-real-wiring.md) の動機)。
  * L3-real は VOICEVOX 未設定 (204) の経路しか通らないので、**200 / 202 / 502 の分岐は
  * どのテストも踏んでいなかった** (PR #170 のレビュー指摘)。ここがその穴を塞ぐ。
  *

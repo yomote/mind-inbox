@@ -53,7 +53,7 @@ GitHub Pages のモック（フロントのみ）では **声の UX が評価で
    ```
 
    > **`func` を入れたくない / 声を評価しない場合**は、Azure Functions Core Tools を使わずに
-   > 素の node で同じ BFF を配信できる（[ADR 0032](../adr/0032-use-case-acceptance-tests-against-real-wiring.md)）。
+   > 素の node で同じ BFF を配信できる（[ADR 0032](../adr/archive/operations/use-case-acceptance-tests-against-real-wiring.md)）。
    > 本番の Functions と**同じ `src/http/handlers.ts`** を呼ぶので応答は一致する。
    >
    > ```bash

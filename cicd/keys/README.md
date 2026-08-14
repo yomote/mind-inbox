@@ -1,7 +1,7 @@
 # E2E 成果物の暗号化鍵
 
 実環境 E2E (`e2e-live`) の **trace を暗号化するための公開鍵**を置く場所。判断の正典は
-[ADR 0045](../../docs/adr/0045-e2e-artifacts-are-secret-by-default.md)。
+[ADR 0045](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md)。
 
 ## なぜ鍵が要るのか
 
@@ -27,7 +27,7 @@ GitHub ユーザーなら誰でもダウンロードできる。したがって 
 | `e2e-artifacts.pub.json` | 恒久形。**公開鍵 (PEM) と Key Vault の鍵バージョンを 1 ファイルに** | **する** (#302 で作る)                                                            |
 | 秘密鍵                   | —                                                                   | **しない**。管理系 RG の Azure Key Vault に置く (#302 完了までは暫定で PO の手元) |
 
-恒久形を 1 ファイルにする理由 ([ADR 0045](../../docs/adr/0045-e2e-artifacts-are-secret-by-default.md) D4 / D9):
+恒久形を 1 ファイルにする理由 ([ADR 0045](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D4 / D9):
 **CI は Azure の資格情報を持たない**ので、「どの鍵バージョンで wrap したか」をリポジトリから
 受け取る以外に知る方法が無い。公開鍵とバージョンを別ファイルにすると、片方だけ更新して
 **食い違ったまま暗号化し続ける**ことができてしまい、それに気づくのは復号しようとした時
@@ -58,10 +58,10 @@ GitHub ユーザーなら誰でもダウンロードできる。したがって 
 **この制限は GPG 方式に固有のもので、恒久方式には適用されない。** どちらの方式かは
 リポジトリの公開鍵ファイルの形で判る (`*.pub.asc` = GPG / `*.pub.json` = 恒久)。
 
-| | GPG (#302 完了まで) | 恒久 (Key Vault の非エクスポート鍵オブジェクト) |
-| --- | --- | --- |
-| 鍵の生成・ローテーション | **PO の管理環境のみ** | **PO の管理環境のみ** |
-| **復号** | **PO の管理環境のみ** | **エージェントが実行してよい** |
+|                          | GPG (#302 完了まで)   | 恒久 (Key Vault の非エクスポート鍵オブジェクト) |
+| ------------------------ | --------------------- | ----------------------------------------------- |
+| 鍵の生成・ローテーション | **PO の管理環境のみ** | **PO の管理環境のみ**                           |
+| **復号**                 | **PO の管理環境のみ** | **エージェントが実行してよい**                  |
 
 **GPG で復号をエージェントにやらせない理由**: `gpg --import` した時点でパスフレーズ無しの
 長期秘密鍵がディスクに置かれ、そのセッション内の任意コードから読める状態になる。
@@ -72,7 +72,7 @@ GitHub ユーザーなら誰でもダウンロードできる。したがって 
 **RSA 秘密鍵は一度も外に出ない**。ただし露出がゼロになるわけではない — 侵害された
 セッションは保持中の wrapped key を順に開けるし、**返ってきた AES 鍵は失効できない**。
 残る露出の正確な範囲は
-[ADR 0045](../../docs/adr/0045-e2e-artifacts-are-secret-by-default.md) D5
+[ADR 0045](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D5
 「消える穴 / 消えない穴」が正典。
 
 ### gpg 実行時の注意: GNUPGHOME は短いパスにする
@@ -116,7 +116,7 @@ gpg --armor --export-secret-keys "mind-inbox e2e artifacts"
 
 - GitHub Secrets: workflow が復号できても、**public リポジトリでは Actions のログが
   公開**なので復号結果の出力先が無い
-- 環境変数: [ADR 0031](../../docs/adr/0031-agent-reaches-outside-via-github-actions.md)
+- 環境変数: [ADR 0031](../../docs/adr/archive/operations/agent-reaches-outside-via-github-actions.md)
   の「サンドボックスに長期クレデンシャルを置かない」に反する。Claude Code の公式
   ドキュメントも「cloud environments have no dedicated secrets store, so don't add
   API keys or other credentials」と明示している
@@ -148,7 +148,7 @@ gpg --armor --export-secret-keys "mind-inbox e2e artifacts"
 > ディスク (`$GNUPGHOME/private-keys-v1.d/*.key`) に置かれ、**そのセッション内の任意の
 > コードが読める**。一度読み出せばセッションの外へ持ち出せるため、**鍵を交換するまでの
 > 全 artifact** が復号可能になる。サンドボックスが使い捨てであることは被害を限定しない
-> ([ADR 0045](../../docs/adr/0045-e2e-artifacts-are-secret-by-default.md) 「エージェント
+> ([ADR 0045](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md) 「エージェント
 > 復号を保留する理由」/ 2026-08-12 の Codex レビュー P1)。
 >
 > **エージェント復号を有効にできるのは、鍵をサンドボックスに出さない方式** (Key Vault の
@@ -187,7 +187,7 @@ artifact の取得自体はエージェントからも可能 (`download_workflow
 ## 復号して trace を見る (#302 完了後 / **エージェントも実行してよい**)
 
 恒久方式では**秘密鍵が Key Vault から出ない**ので、この手順はエージェントのサンドボックスで
-実行してよい ([ADR 0045](../../docs/adr/0045-e2e-artifacts-are-secret-by-default.md) D5)。
+実行してよい ([ADR 0045](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D5)。
 
 ```bash
 az login --use-device-code            # ADR 0006。短命トークン
@@ -241,7 +241,7 @@ az rest --method POST \
 
 ## 鍵を替えるとき
 
-**方式が移行中なので手順が 2 つある** ([ADR 0045](../../docs/adr/0045-e2e-artifacts-are-secret-by-default.md) D5 / D9)。
+**方式が移行中なので手順が 2 つある** ([ADR 0045](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D5 / D9)。
 今どちらかは、リポジトリに置かれている公開鍵の形 (`*.pub.asc` = GPG / `*.pub.json` = 鍵オブジェクトの公開部 + バージョン) で判る。
 
 ### #302 完了まで — GPG (現行)
@@ -266,7 +266,7 @@ CI 側の変更は要らない (秘密を持っていないため)。**古い鍵
    artifact ができる** — JSON の読み込みも公開鍵での wrap も通るので、成功パスは緑のまま。
    気づくのは復号を試みた時 (最大 14 日後) になる。1 ファイルにしても**この 2 つは独立に
    編集できる**ので、ファイルを分けないだけでは防げない。だから 2 つを契約にする
-   ([ADR 0045](../../docs/adr/0045-e2e-artifacts-are-secret-by-default.md) D4):
+   ([ADR 0045](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D4):
 
    - **JSON 全体を 1 つの Azure 応答から生成する** — `az keyvault key show` の
      応答は `key.kid` (末尾がバージョン) と公開鍵の材料 (`key.n` / `key.e`) を**同時に**返す。

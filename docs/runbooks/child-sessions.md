@@ -2,8 +2,8 @@
 
 親 (PM) セッションから子セッションを起こし、追加指示を届け、成果を回収するまでの手順。
 
-判断の背景: [ADR 0048](../adr/0048-child-sessions-are-usable-again-with-a-one-way-poke-channel.md) / 2026-08-12 の実測。
-分配してよい作業の種類は [CLAUDE.md](../../CLAUDE.md) の「分配の基準」を見ること
+判断の背景: [ADR 0048](../adr/archive/operations/child-sessions-are-usable-again-with-a-one-way-poke-channel.md) / 2026-08-12 の実測。
+分配してよい作業の種類は [`dispatch` skill](../../.claude/skills/dispatch/SKILL.md) の Step 2 (実行者を決める) を見ること
 (**往復が多い作業は子ではなく subagent**)。
 
 ## 前提
@@ -20,8 +20,8 @@ UUID 名 `bf7c680d-...` として見える**。片方しか書いていないと
 `create_session` / `archive_session` / `set_session_title` / `interrupt_session` / `delete_trigger` /
 `update_trigger` は両方の名前でツール単位に列挙する。
 
-`set_session_title` は **2026-08-12 に PO が常設許可**にした (窓口の識別と退役をエージェントが機械で行う /
-[ADR 0043](../adr/0043-pm-self-driving-mode.md) D5・CLAUDE.md)。これが無いと、窓口が自分に `[PM]` を付ける /
+`set_session_title` は **PO が常設許可**にしてある (窓口の識別と退役はエージェントが機械で行う —
+手順は [`dispatch` skill](../../.claude/skills/dispatch/SKILL.md) の Step 1)。これが無いと、窓口が自分に `[PM]` を付ける /
 旧窓口を `[PM-retired]` にリネームする動作のたびに承認プロンプトが出て、**無人セッションでは止まる**。
 
 **`permissions.deny` も要る。** `mcp__github` をサーバ単位で許可すると、PR を経由せずリポジトリを
@@ -58,14 +58,15 @@ create_session(
 
 ### プロンプトに必ず書くこと
 
-[ADR 0028](../adr/0028-dispatch-packet-in-issue-and-session-start-preflight.md) の起票パケット 4 点に、子セッション固有の 2 点を足す。
+起票パケットの 5 点 ([`dispatch` skill](../../.claude/skills/dispatch/SKILL.md) が正典) に、子セッション固有の 2 点を足す。
 
 1. 対象 Issue
 2. 完遂条件
 3. **触ってはいけないファイル境界**
 4. CLAUDE.md を読むこと
-5. **詰まったら Issue にコメントを残して終了すること** (黙って止まらせない)
-6. **報告先** — 既定は「対象 Issue にコメントを残す」(下の §3)。Routine で親に直接返させるのは未検証なので、当てにしない
+5. **コミットと push まで完遂すること** — ブランチ名と、PR まで出すのかを名指しで書く。**親は統合しない**
+6. **詰まったら Issue にコメントを残して終了すること** (黙って止まらせない)
+7. **報告先** — 既定は「対象 Issue にコメントを残す」(下の §3)。Routine で親に直接返させるのは未検証なので、当てにしない
 
 ## 2. 追加指示を送る (親 → 子)
 
@@ -96,10 +97,10 @@ Routine は発火後 `ended_reason: run_once_fired` で無効化され、二度�
 
 **経路は 2 つある。既定は GitHub。**
 
-| 経路                                             | 検証状況        | 使いどころ                                                                                                                         |
-| ------------------------------------------------ | --------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| **Issue コメント** (既定)                        | ✅ **実測済み** | 成果・詰まり・診断。**記録が残る**ので後から誰でも拾える ([ADR 0021](../adr/0021-parent-session-as-pm-orchestrator.md) 条項 3・4)  |
-| **`create_trigger` + `run_once_at` を親に bind** | ⚠️ **未検証**   | 親にすぐ気づいてほしいとき。親 → 子の方向は実測済みだが、**子 → 親の方向はまだ通していない**。当てにせず、通す前に必ず実測すること |
+| 経路                                             | 検証状況        | 使いどころ                                                                                                                                      |
+| ------------------------------------------------ | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Issue コメント** (既定)                        | ✅ **実測済み** | 成果・詰まり・診断。**記録が残る**ので後から誰でも拾える ([ADR 0021](../adr/archive/operations/parent-session-as-pm-orchestrator.md) 条項 3・4) |
+| **`create_trigger` + `run_once_at` を親に bind** | ⚠️ **未検証**   | 親にすぐ気づいてほしいとき。親 → 子の方向は実測済みだが、**子 → 親の方向はまだ通していない**。当てにせず、通す前に必ず実測すること              |
 
 **子 → 親の既定は Issue コメント一択にする。** 子セッションは `mcp__github__*` を承認プロンプト無しで
 使えることが実測済みで、記録も残る。逆方向の Routine 経路は理屈の上では同じ仕組みだが、
@@ -148,5 +149,5 @@ archive_session(session_id)
 
 ## Links
 
-- 判断: [ADR 0048](../adr/0048-child-sessions-are-usable-again-with-a-one-way-poke-channel.md) / [ADR 0033](../adr/0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) / [ADR 0021](../adr/0021-parent-session-as-pm-orchestrator.md)
+- 判断: [ADR 0048](../adr/archive/operations/child-sessions-are-usable-again-with-a-one-way-poke-channel.md) / [ADR 0033](../adr/archive/operations/parent-implements-via-subagent-when-child-sessions-are-gated.md) / [ADR 0021](../adr/archive/operations/parent-session-as-pm-orchestrator.md)
 - 残課題: [#353](https://github.com/yomote/mind-inbox/issues/353) (`fire_trigger` が配送しない理由 / `delete_trigger` だけ承認が出る理由)
