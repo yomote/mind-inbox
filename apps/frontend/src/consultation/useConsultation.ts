@@ -19,11 +19,13 @@ import {
   loadProblems,
   previewExtraction,
   previewSupported,
+  respondToApproval,
   sendMessage,
   startNewConsultation,
   triageProblem,
 } from "../api";
 import type {
+  ApprovalRequest,
   ChatMessage,
   ConsultationSession,
   ExtractionResult,
@@ -57,6 +59,14 @@ export type Consultation = {
   /** 手動「今すぐ整理」(ADR 0039 D2)。 */
   refreshPreview: () => void;
 
+  /**
+   * 副作用ツールの実行前に人間の承認を待っている要求 (#82 / G1 / §5.9)。
+   * null = 承認待ちなし。
+   */
+  pendingApproval: ApprovalRequest | null;
+  /** 承認 (true) / 却下 (false) をサーバへ返す。 */
+  respondToPendingApproval: (approved: boolean) => Promise<void>;
+
   startConsultation: () => Promise<void>;
   sendDraftMessage: () => Promise<void>;
   extract: () => Promise<void>;
@@ -88,6 +98,8 @@ const FAILURE_MESSAGE = {
   problemNotFound: "その困りごとは見つかりませんでした。一覧を開き直してください。",
   triage: "困りごとを更新できませんでした。通信状況を確認して、もう一度お試しください。",
   dismiss: "却下できませんでした。通信状況を確認して、もう一度お試しください。",
+  approval:
+    "承認の結果を送れませんでした。操作はまだ実行されていません。通信状況を確認して、もう一度お試しください。",
 } as const;
 
 /**
@@ -129,6 +141,11 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
   const [extraction, setExtraction] = React.useState<ExtractionResult | null>(null);
   const [problems, setProblems] = React.useState<Problem[]>([]);
   const [selectedProblem, setSelectedProblem] = React.useState<Problem | null>(null);
+
+  // 承認待ちの副作用ツール (#82 / G1 / §5.9)。**既定は「実行しない」** — ここが
+  // null に戻る経路 (承認 / 却下 / 次の発話 / セッション破棄) はどれもツールを
+  // 実行しない側に倒れる。実行が起きるのは respondToPendingApproval(true) だけ。
+  const [pendingApproval, setPendingApproval] = React.useState<ApprovalRequest | null>(null);
 
   const [preview, setPreview] = React.useState<ExtractionResult | null>(null);
   const [previewStatus, setPreviewStatus] = React.useState<"idle" | "updating" | "error">("idle");
@@ -282,6 +299,8 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     // 前セッションの下書きを持ち込まない + 飛行中の旧応答を無効化する
     // (下書きはセッション内で揮発 — ADR 0039 / PR #282 Codex P2)。
     invalidatePreview();
+    // 前セッションの承認要求も持ち込まない (別の会話の実行確認を新しい会話で押させない)。
+    setPendingApproval(null);
     transition("session");
   }, [invalidatePreview, runAction, transition]);
 
@@ -296,6 +315,9 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     };
 
     setDraftMessage("");
+    // 承認せずに会話を続けたら要求は破棄する (§5.9 / 既定は「実行しない」)。
+    // 押していない = 実行されていない、なのでカードを畳んでも副作用は起きない。
+    setPendingApproval(null);
     // 最初のユーザー発話でタイトルを内容から自動生成 (開始時は聞かない)。
     const isFirstUserMessage = !session.messages.some((m) => m.role === "user");
     const nextTitle = isFirstUserMessage ? deriveSessionTitle(userMessage.text) : session.title;
@@ -313,16 +335,46 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
       return;
     }
 
-    setSession((prev) => (prev ? { ...prev, messages: [...prev.messages, outcome.value] } : prev));
+    setSession((prev) =>
+      prev ? { ...prev, messages: [...prev.messages, outcome.value.message] } : prev,
+    );
+    // 承認要求は応答と同じ往復で届く (#82)。ここで拾わないと、サーバは承認待ちのまま
+    // 画面には普通の返事だけが出て「止まっているのに止まって見えない」状態になる。
+    setPendingApproval(outcome.value.approval);
 
     // ユーザー発話 2 往復ごとに下書きプレビューを自動更新する (#187 / ADR 0039 D2)。
     // 毎ターンは LLM 呼び出しが倍増するため間引く。fire-and-forget — 会話を待たせない。
-    const messagesAfterReply = [...session.messages, userMessage, outcome.value];
+    const messagesAfterReply = [...session.messages, userMessage, outcome.value.message];
     const userTurnCount = messagesAfterReply.filter((m) => m.role === "user").length;
     if (userTurnCount > 0 && userTurnCount % 2 === 0) {
       void runPreview(session.id, messagesAfterReply);
     }
   }, [draftMessage, runAction, runPreview, session]);
+
+  /**
+   * 承認 / 却下をサーバへ返す (#82 / G1 / §5.9)。
+   *
+   * **却下も必ず送る** — 送らないとサーバ側の承認待ち (checkpoint) が宙に浮く。
+   * 失敗したら要求を消さない (もう一度押せる)。ここで消すと「却下したつもりが
+   * サーバには届いておらず、承認待ちが残っている」状態を画面から隠してしまう。
+   */
+  const respondToPendingApproval = React.useCallback(
+    async (approved: boolean) => {
+      if (!pendingApproval) return;
+
+      const outcome = await runAction(FAILURE_MESSAGE.approval, () =>
+        respondToApproval(pendingApproval.id, approved),
+      );
+      if (!outcome.ok) return;
+
+      setPendingApproval(null);
+      // 承認・却下どちらの結果もガイドの発話として会話に残す (何が起きたかを消さない)。
+      setSession((prev) =>
+        prev ? { ...prev, messages: [...prev.messages, outcome.value] } : prev,
+      );
+    },
+    [pendingApproval, runAction],
+  );
 
   const extract = React.useCallback(async () => {
     if (!session) return;
@@ -456,6 +508,7 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     setExtraction(null);
     setProblems([]);
     setSelectedProblem(null);
+    setPendingApproval(null);
     invalidatePreview();
   }, [invalidatePreview, setBusy]);
 
@@ -472,6 +525,8 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     preview,
     previewStatus,
     refreshPreview,
+    pendingApproval,
+    respondToPendingApproval,
     startConsultation,
     sendDraftMessage,
     extract,

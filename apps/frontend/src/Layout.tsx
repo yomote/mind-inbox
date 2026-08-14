@@ -370,6 +370,10 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
                 preview={consultation.preview}
                 previewStatus={consultation.previewStatus}
                 handleRefreshPreview={consultation.refreshPreview}
+                pendingApproval={consultation.pendingApproval}
+                handleRespondToApproval={(approved) =>
+                  void consultation.respondToPendingApproval(approved)
+                }
                 themeMode={themeMode}
                 onToggleTheme={onToggleTheme}
                 transition={transition}

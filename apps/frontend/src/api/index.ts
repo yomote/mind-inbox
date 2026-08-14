@@ -1,4 +1,4 @@
-export { startNewConsultation, sendMessage } from "./consultation";
+export { startNewConsultation, sendMessage, respondToApproval } from "./consultation";
 
 export {
   ExtractFailed,

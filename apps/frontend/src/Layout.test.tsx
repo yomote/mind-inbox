@@ -29,6 +29,7 @@ vi.mock("./api", () => ({
     messages: [{ id: "a-1", role: "assistant", text: "どうしましたか", createdAt: "2026-01-01" }],
   })),
   sendMessage: vi.fn(),
+  respondToApproval: vi.fn(),
   organizeResult: vi.fn(),
   createActionPlan: vi.fn(),
   extractMentions: vi.fn(),
@@ -43,7 +44,7 @@ vi.mock("./api", () => ({
 }));
 
 import { Layout } from "./Layout";
-import { startNewConsultation } from "./api";
+import { respondToApproval, sendMessage, startNewConsultation } from "./api";
 
 /**
  * iOS の解錠は「音量 0 の空発話を speechSynthesis に流す」で表現されるので、
@@ -208,5 +209,54 @@ describe("[L2] Layout — 新しい相談の開始で読み上げを止める (#
     await waitFor(() =>
       expect(screen.queryByText("このブラウザは音声読み上げに対応していません。")).toBeNull(),
     );
+  });
+});
+
+describe("[単体] Layout — 承認カードの結線 (#82 / G1 / dialogue-session.mdx §5.9)", () => {
+  it("承認要求つきの応答でカードが出て、承認が api まで届き、カードが閉じる", async () => {
+    // 無いと何が静かに通るか: api 層と hook の単体テストは互いを知らないので、
+    // **hook → Router → SessionScreen の受け渡しを 1 本落としただけ**で承認カードが
+    // どの画面にも出なくなる (= #82 の着手前と同じ状態) のに、両方の単体は緑のまま。
+    // ブラウザを起動しない層で「画面に出て、押すと api が呼ばれる」までを固定する。
+    vi.mocked(startNewConsultation).mockResolvedValue({
+      id: "appr-session",
+      title: "相談セッション",
+      messages: [],
+    } as never);
+    vi.mocked(sendMessage).mockResolvedValue({
+      message: {
+        id: "a-appr",
+        role: "assistant",
+        text: "「send_reply」を実行するには承認が必要です。実行してよろしいですか？",
+        createdAt: "2026-01-01",
+      },
+      approval: {
+        id: "appr-1",
+        description: "「send_reply」を実行するには承認が必要です。実行してよろしいですか？",
+      },
+    } as never);
+    vi.mocked(respondToApproval).mockResolvedValue({
+      id: "a-done",
+      role: "assistant",
+      text: "[stub] Reply sent to team@example.com.",
+      createdAt: "2026-01-01",
+    } as never);
+
+    renderLayout();
+    await userEvent.click(await screen.findByRole("button", { name: "新しい相談を始める" }));
+    await userEvent.type(
+      await screen.findByPlaceholderText("ここに入力 / 話して入力"),
+      "この件、返信しておいて",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "送信" }));
+
+    const card = await screen.findByTestId("approval-request");
+    expect(card.textContent).toContain("send_reply");
+
+    await userEvent.click(screen.getByRole("button", { name: "承認して実行" }));
+
+    await waitFor(() => expect(respondToApproval).toHaveBeenCalledWith("appr-1", true));
+    await waitFor(() => expect(screen.queryByTestId("approval-request")).toBeNull());
+    expect(screen.getByText("[stub] Reply sent to team@example.com.")).toBeTruthy();
   });
 });

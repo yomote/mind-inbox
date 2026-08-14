@@ -1,5 +1,5 @@
 import * as mock from "../mockApi";
-import type { ChatMessage, ConsultationSession } from "./types";
+import type { ApprovalRequest, AssistantReply, ChatMessage, ConsultationSession } from "./types";
 import { trpc } from "../trpc/client";
 import { chatStreamFetch, ttsPrefetchFetch, useMock } from "./http";
 import { parseSseJsonStream } from "./sse";
@@ -113,11 +113,26 @@ function createSentencePrefetcher() {
   };
 }
 
+/**
+ * 応答の承認フラグを UI の承認要求へ写す (#82 / G1 / dialogue-session.mdx §5.9)。
+ *
+ * `requiresApproval` が立っていても id が無ければ承認要求を作らない — 承認 API を
+ * 呼べない要求カードは「押しても何も起きないボタン」にしかならないため。
+ */
+function toApprovalRequest(
+  requiresApproval: boolean | undefined,
+  approvalRequestId: string | null | undefined,
+  reply: string,
+): ApprovalRequest | null {
+  if (requiresApproval !== true || !approvalRequestId) return null;
+  return { id: approvalRequestId, description: reply };
+}
+
 async function sendMessageStreaming(
   sessionId: string,
   text: string,
   messageId: string,
-): Promise<ChatMessage> {
+): Promise<AssistantReply> {
   const res = await chatStreamFetch(sessionId, text);
   if (!res.ok || !res.body) {
     throw new Error(`chat stream unavailable: HTTP ${res.status}`);
@@ -128,6 +143,7 @@ async function sendMessageStreaming(
   let accumulated = "";
   const prefetchSentences = createSentencePrefetcher();
   let finalReply: string | null = null;
+  let approval: ApprovalRequest | null = null;
 
   for await (const raw of parseSseJsonStream(res.body)) {
     const event = asChatStreamEvent(raw);
@@ -138,6 +154,11 @@ async function sendMessageStreaming(
       prefetchSentences(accumulated);
     } else if (event.type === "done") {
       finalReply = event.response.reply;
+      approval = toApprovalRequest(
+        event.response.requires_approval,
+        event.response.approval_request_id,
+        event.response.reply,
+      );
       // stub 応答の可視化 (#146): 実応答 (フラグ無し) なら下ろす。
       reportStubbedResponse(event.response.stubbed);
     } else {
@@ -151,26 +172,29 @@ async function sendMessageStreaming(
   }
 
   return {
-    id: messageId,
-    role: "assistant",
-    text: finalReply,
-    createdAt: new Date().toISOString(),
+    message: {
+      id: messageId,
+      role: "assistant",
+      text: finalReply,
+      createdAt: new Date().toISOString(),
+    },
+    approval,
   };
 }
 
 /** mock でもストリーミングの体感 (伸びるバブル) を再現する (ADR 0004: データの真実は mock 側)。 */
-async function streamMockReply(sessionId: string, text: string): Promise<ChatMessage> {
-  const message = await mock.sendMessage(sessionId, text);
-  beginStreamingReply(message.id);
+async function streamMockReply(sessionId: string, text: string): Promise<AssistantReply> {
+  const reply = await mock.sendMessage(sessionId, text);
+  beginStreamingReply(reply.message.id);
   const step = 4;
-  for (let i = 0; i < message.text.length; i += step) {
-    appendStreamingReply(message.text.slice(i, i + step));
+  for (let i = 0; i < reply.message.text.length; i += step) {
+    appendStreamingReply(reply.message.text.slice(i, i + step));
     await new Promise((resolve) => setTimeout(resolve, 45));
   }
-  return message;
+  return reply;
 }
 
-export async function sendMessage(sessionId: string, text: string): Promise<ChatMessage> {
+export async function sendMessage(sessionId: string, text: string): Promise<AssistantReply> {
   if (useMock) return streamMockReply(sessionId, text);
 
   const messageId = crypto.randomUUID();
@@ -188,10 +212,36 @@ export async function sendMessage(sessionId: string, text: string): Promise<Chat
     // stub 応答の可視化 (#146)。ストリーミング不能時のフォールバック経路でも見落とさない。
     reportStubbedResponse(res.stubbed);
     return {
-      id: messageId,
-      role: "assistant",
-      text: res.reply,
-      createdAt: new Date().toISOString(),
+      message: {
+        id: messageId,
+        role: "assistant",
+        text: res.reply,
+        createdAt: new Date().toISOString(),
+      },
+      // フォールバック経路でも承認要求は落とさない (#82)。ここを落とすと
+      // 「ストリーミングが死んでいる環境でだけ副作用ツールが承認なしに見える」になる。
+      approval: toApprovalRequest(res.requiresApproval, res.approvalRequestId, res.reply),
     };
   }
+}
+
+/**
+ * 承認要求への応答 (承認 = 実行 / 却下 = キャンセル) を返し、続きの応答を受け取る
+ * (#82 / G1 / dialogue-session.mdx §5.9)。
+ *
+ * **却下も送る**: 送らないとサーバ側の承認待ち (checkpoint) が宙に浮いたままになる。
+ */
+export async function respondToApproval(
+  approvalRequestId: string,
+  approved: boolean,
+): Promise<ChatMessage> {
+  if (useMock) return mock.respondToApproval(approvalRequestId, approved);
+
+  const res = await trpc.consultation.approve.mutate({ approvalRequestId, approved });
+  return {
+    id: crypto.randomUUID(),
+    role: "assistant",
+    text: res.reply,
+    createdAt: new Date().toISOString(),
+  };
 }

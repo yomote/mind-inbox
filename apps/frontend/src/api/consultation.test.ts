@@ -13,6 +13,7 @@ vi.mock("../trpc/client", () => ({
     consultation: {
       start: { mutate: vi.fn() },
       sendMessage: { mutate: vi.fn() },
+      approve: { mutate: vi.fn() },
       organize: { mutate: vi.fn() },
       createPlan: { mutate: vi.fn() },
     },
@@ -28,7 +29,7 @@ vi.mock("./http", () => ({
 
 import { trpc } from "../trpc/client";
 import { chatStreamFetch, ttsPrefetchFetch } from "./http";
-import { sendMessage, startNewConsultation } from "./consultation";
+import { respondToApproval, sendMessage, startNewConsultation } from "./consultation";
 import { clearStreamingReply, getStreamingReply } from "./streamingReply";
 import { getStubbedResponse, reportStubbedResponse, resetStubbedResponse } from "./stubStatus";
 
@@ -67,10 +68,12 @@ describe("[L2] sendMessage — ストリーミング経路", () => {
       ]),
     );
 
-    const message = await sendMessage("s1", "疲れました");
+    const { message, approval } = await sendMessage("s1", "疲れました");
 
     expect(message.role).toBe("assistant");
     expect(message.text).toBe("それは大変でしたね。");
+    // 承認不要の応答で承認要求を作らない (常時承認カードが出る実装を弾く)
+    expect(approval).toBeNull();
     // ストアは done では消さない (ちらつき防止) — 最終メッセージと同じ id で残る
     const streaming = getStreamingReply();
     expect(streaming?.id).toBe(message.id);
@@ -112,7 +115,7 @@ describe("[L2] sendMessage — ストリーミング経路", () => {
       citations: [],
     } as never);
 
-    const message = await sendMessage("s1", "m");
+    const { message } = await sendMessage("s1", "m");
 
     expect(message.text).toBe("全文応答");
     expect(trpc.consultation.sendMessage.mutate).toHaveBeenCalledWith({
@@ -135,7 +138,7 @@ describe("[L2] sendMessage — ストリーミング経路", () => {
       citations: [],
     } as never);
 
-    const message = await sendMessage("s1", "m");
+    const { message } = await sendMessage("s1", "m");
 
     expect(message.text).toBe("取り直した全文");
     // 中途半端な「途中」バブルが残らない
@@ -201,5 +204,96 @@ describe("[L2] sendMessage — ストリーミング経路", () => {
     await startNewConsultation("仕事が辛い");
 
     expect(getStubbedResponse()).toBe(true);
+  });
+});
+
+describe("[単体] 副作用ツールの承認要求 (#82 / G1)", () => {
+  it("done の requires_approval / approval_request_id を承認要求として返す", async () => {
+    // 無いと: 承認が要る応答をフロントが「ただの返事」として扱っても画面は普通に
+    // 描画されるため、承認カードが一度も出ないまま (= G1 が画面から消えたまま)
+    // サーバだけが承認待ちで止まっている状態が静かに通る。
+    vi.mocked(chatStreamFetch).mockResolvedValue(
+      sseResponse([
+        { type: "delta", text: "「send_reply」を実行するには承認が必要です。" },
+        {
+          type: "done",
+          response: {
+            reply: "「send_reply」を実行するには承認が必要です。実行してよろしいですか？",
+            requires_approval: true,
+            approval_request_id: "appr-1",
+            citations: [],
+          },
+        },
+      ]),
+    );
+
+    const { approval } = await sendMessage("s1", "この件、返信しておいて");
+
+    expect(approval).toEqual({
+      id: "appr-1",
+      // カードは単体で「何を実行しようとしているか」が読める必要がある (§5.9)
+      description: "「send_reply」を実行するには承認が必要です。実行してよろしいですか？",
+    });
+  });
+
+  it("approval_request_id が無ければ承認要求を作らない", async () => {
+    // 無いと: approve に渡す ID が無いまま承認カードだけが出て、押しても何も起きない
+    // ボタン (2026-08-09 に踏んだ「押しても無反応」と同じ形) を作る。
+    vi.mocked(chatStreamFetch).mockResolvedValue(
+      sseResponse([
+        {
+          type: "done",
+          response: { reply: "承認が必要です", requires_approval: true, citations: [] },
+        },
+      ]),
+    );
+
+    const { approval } = await sendMessage("s1", "m");
+
+    expect(approval).toBeNull();
+  });
+
+  it("tRPC フォールバック経路でも承認要求を落とさない", async () => {
+    // 無いと: ストリーミングが使えない環境 (BFF 旧版 / 通信断) でだけ承認カードが
+    // 消え、副作用ツールが「承認なしで実行できるように見える」状態が静かに通る。
+    vi.mocked(chatStreamFetch).mockResolvedValue(new Response("nf", { status: 404 }));
+    vi.mocked(trpc.consultation.sendMessage.mutate).mockResolvedValue({
+      reply: "「archive_message」を実行するには承認が必要です。実行してよろしいですか？",
+      requiresApproval: true,
+      approvalRequestId: "appr-2",
+      citations: [],
+    } as never);
+
+    const { approval } = await sendMessage("s1", "m");
+
+    expect(approval?.id).toBe("appr-2");
+  });
+
+  it("承認 / 却下は approved をそのまま BFF へ渡し、応答を発話にする", async () => {
+    // 無いと: approved の真偽反転 (承認したのに却下される / 却下したのに実行される)
+    // が静かに通る。どちらも「返事が返ってくる」ので画面上は区別が付かない。
+    vi.mocked(trpc.consultation.approve.mutate).mockResolvedValue({
+      reply: "操作はキャンセルされました。他にご用件はありますか？",
+    } as never);
+
+    const rejected = await respondToApproval("appr-1", false);
+
+    expect(trpc.consultation.approve.mutate).toHaveBeenCalledWith({
+      approvalRequestId: "appr-1",
+      approved: false,
+    });
+    expect(rejected.role).toBe("assistant");
+    expect(rejected.text).toBe("操作はキャンセルされました。他にご用件はありますか？");
+
+    vi.mocked(trpc.consultation.approve.mutate).mockResolvedValue({
+      reply: "[stub] Reply sent to team@example.com.",
+    } as never);
+
+    await respondToApproval("appr-1", true);
+
+    expect(trpc.consultation.approve.mutate).toHaveBeenLastCalledWith({
+      approvalRequestId: "appr-1",
+      approved: true,
+    });
   });
 });

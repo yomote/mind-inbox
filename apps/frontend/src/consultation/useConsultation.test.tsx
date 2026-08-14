@@ -21,6 +21,7 @@ vi.mock("../api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api")>()),
   startNewConsultation: vi.fn(),
   sendMessage: vi.fn(),
+  respondToApproval: vi.fn(),
   extractMentions: vi.fn(),
   loadProblems: vi.fn(async () => []),
   loadProblem: vi.fn(),
@@ -46,6 +47,7 @@ import {
   loadProblem,
   loadProblems,
   previewExtraction,
+  respondToApproval,
   sendMessage,
   startNewConsultation,
   triageProblem,
@@ -105,10 +107,13 @@ describe("[L1] useConsultation — 相談の開始と発話", () => {
     // 無いと: 履歴の見出しが「相談セッション」のまま並び、何の相談か分からなくなる
     vi.mocked(startNewConsultation).mockResolvedValue(session());
     vi.mocked(sendMessage).mockResolvedValue({
-      id: "a-2",
-      role: "assistant",
-      text: "詳しく教えてください",
-      createdAt: "2026-01-01",
+      message: {
+        id: "a-2",
+        role: "assistant",
+        text: "詳しく教えてください",
+        createdAt: "2026-01-01",
+      },
+      approval: null,
     });
     const { result } = setup();
     await act(async () => {
@@ -300,10 +305,13 @@ describe("[L1] useConsultation — 無音失敗の禁止 (ADR 0018)", () => {
 
 describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039)", () => {
   const reply = (id: string) => ({
-    id,
-    role: "assistant" as const,
-    text: "受け止めました",
-    createdAt: "2026-01-01",
+    message: {
+      id,
+      role: "assistant" as const,
+      text: "受け止めました",
+      createdAt: "2026-01-01",
+    },
+    approval: null,
   });
 
   async function sendTimes(result: ReturnType<typeof setup>["result"], texts: string[]) {
@@ -733,5 +741,95 @@ describe("[L1] useConsultation — 抽出の失敗をユーザーに見せる (#
 
     act(() => result.current.clearActionError());
     expect(result.current.actionError).toBeNull();
+  });
+});
+
+describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / dialogue-session.mdx §5.9)", () => {
+  const approvalReply = {
+    message: {
+      id: "a-appr",
+      role: "assistant" as const,
+      text: "「send_reply」を実行するには承認が必要です。実行してよろしいですか？",
+      createdAt: "2026-01-01",
+    },
+    approval: { id: "appr-1", description: "「send_reply」を実行するには承認が必要です。" },
+  };
+
+  async function startAndAskForApproval() {
+    vi.mocked(startNewConsultation).mockResolvedValue(session());
+    vi.mocked(sendMessage).mockResolvedValue(approvalReply);
+    const { result } = setup();
+    await act(async () => await result.current.startConsultation());
+    act(() => result.current.setDraftMessage("この件、返信しておいて"));
+    await act(async () => await result.current.sendDraftMessage());
+    return result;
+  }
+
+  it("応答に載ってきた承認要求を保持し、承認すると要求を閉じて結果を会話に残す", async () => {
+    // 無いと: 承認要求を受け取っても状態に入らず (= カードが出ず)、あるいは押しても
+    //         要求が残り続ける退行が通る。どちらも「返事は出ている」ので画面は
+    //         正常に見え、サーバだけが承認待ちで止まる。
+    const result = await startAndAskForApproval();
+    expect(result.current.pendingApproval?.id).toBe("appr-1");
+
+    vi.mocked(respondToApproval).mockResolvedValue({
+      id: "a-done",
+      role: "assistant",
+      text: "[stub] Reply sent to team@example.com.",
+      createdAt: "2026-01-01",
+    });
+    await act(async () => await result.current.respondToPendingApproval(true));
+
+    expect(respondToApproval).toHaveBeenCalledWith("appr-1", true);
+    expect(result.current.pendingApproval).toBeNull();
+    expect(result.current.session?.messages.at(-1)?.text).toContain("Reply sent");
+  });
+
+  it("却下もサーバへ送る (画面から消すだけにしない)", async () => {
+    // 無いと: 却下を送らずカードだけ閉じる実装でもテストが通り、サーバ側の承認待ち
+    //         (checkpoint) が宙に浮いたまま残る。
+    const result = await startAndAskForApproval();
+
+    vi.mocked(respondToApproval).mockResolvedValue({
+      id: "a-cancel",
+      role: "assistant",
+      text: "操作はキャンセルされました。他にご用件はありますか？",
+      createdAt: "2026-01-01",
+    });
+    await act(async () => await result.current.respondToPendingApproval(false));
+
+    expect(respondToApproval).toHaveBeenCalledWith("appr-1", false);
+    expect(result.current.pendingApproval).toBeNull();
+    expect(result.current.session?.messages.at(-1)?.text).toContain("キャンセル");
+  });
+
+  it("送信に失敗したら要求を消さない (もう一度押せる)", async () => {
+    // 無いと: 通信失敗でカードだけ消え、「却下したつもりでサーバには届いていない」
+    //         状態が画面から見えなくなる (ADR 0018 の無音失敗)。
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await startAndAskForApproval();
+    vi.mocked(respondToApproval).mockRejectedValue(new Error("boom"));
+
+    await act(async () => await result.current.respondToPendingApproval(true));
+
+    expect(result.current.pendingApproval?.id).toBe("appr-1");
+    expect(result.current.actionError).toContain("実行されていません");
+  });
+
+  it("承認せずに次の発話を送ると要求は破棄される (既定は実行しない)", async () => {
+    // 無いと: 会話が進んだ後も古い承認カードが残り、いつのものか分からない実行確認を
+    //         押させることになる (押した瞬間に副作用が走る操作でこれをやらない)。
+    const result = await startAndAskForApproval();
+    expect(result.current.pendingApproval).not.toBeNull();
+
+    vi.mocked(sendMessage).mockResolvedValue({
+      message: { id: "a-3", role: "assistant", text: "受け止めました", createdAt: "2026-01-01" },
+      approval: null,
+    });
+    act(() => result.current.setDraftMessage("やっぱりやめておく"));
+    await act(async () => await result.current.sendDraftMessage());
+
+    expect(result.current.pendingApproval).toBeNull();
+    expect(respondToApproval).not.toHaveBeenCalled();
   });
 });
