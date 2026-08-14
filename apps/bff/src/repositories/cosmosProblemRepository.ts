@@ -18,7 +18,7 @@
  * - **DB / コンテナは作らない**。器の宣言は bicep (`cicd/modules/bootstrap-core.bicep`)。
  */
 import type { Container } from "@azure/cosmos";
-import { hashIdentifier, logErrorEvent, trackDependency } from "../observability/telemetry";
+import { logErrorEvent, trackDependency } from "../observability/telemetry";
 import { summarizeIssues } from "../schemaIssues";
 import { ProblemSchema, type Problem } from "../trpc/domain";
 import type { ProblemFilter, ProblemRepository } from "./problemRepository";
@@ -77,7 +77,9 @@ export class CosmosProblemRepository implements ProblemRepository {
    * Cosmos への 1 ホップを開始 / 終了 / 所要 ms / 結果として残す (#307)。
    *
    * **userId は生で出さない** — Cosmos のパーティションキー = 「誰の相談か」そのもの。
-   * 相関には要るのでハッシュだけ載せる (`Runbook: bff-telemetry.md`)。
+   * ここでハッシュ化はしない: 出口 (`telemetry.ts` の `HASHED_FIELDS`) が `userId` を
+   * `userHash=<ハッシュ>` に強制する。**呼び出し側でハッシュすると、次に足す人が
+   * 素で渡した瞬間に漏れる** (漏れたことは誰にも見えない / `Runbook: bff-telemetry.md`)。
    * ドキュメントの中身 (title / summary / mentions) は 1 文字も出さない。
    */
   private track<T>(
@@ -88,7 +90,7 @@ export class CosmosProblemRepository implements ProblemRepository {
     return trackDependency(
       { target: "cosmos", operation, sessionId: undefined },
       run,
-      (result) => ({ userHash: hashIdentifier(this.userId), ...describeResult?.(result) }),
+      (result) => ({ userId: this.userId, ...describeResult?.(result) }),
     );
   }
 

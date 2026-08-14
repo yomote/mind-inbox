@@ -119,7 +119,9 @@ export async function handleChatStream(
       return new Response(`Invalid request: ${parsed.error.message}`, { status: 400 });
     }
 
-    // sessionId は生成された不透明 ID (本文を含まない) なので相関キーとして残す。
+    // sessionId は**行にはハッシュ (`sessionHash=`) として出る** — このスキーマは長さしか
+    // 見ておらず、クライアントは本文をそのまま sessionId に入れられるため (#413 レビュー指摘)。
+    // ハッシュ化は出口 (telemetry.ts の HASHED_FIELDS) が強制するので、ここでは生を渡す。
     // message は**長さだけ** — 本文はテレメトリに載せない (telemetry.ts の不変条件)。
     logEvent("chat.request", {
       sessionId: parsed.data.sessionId,

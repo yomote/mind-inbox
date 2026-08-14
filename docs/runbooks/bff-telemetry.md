@@ -124,9 +124,9 @@ q() { az monitor log-analytics query -w "$LAW_CUSTOMER_ID" --analytics-query "$1
   | where Message has "event=dependency."
   | extend ev = extract(@"event=(\S+)", 1, Message),
            target = extract(@"target=(\S+)", 1, Message),
-           sessionId = extract(@"sessionId=(\S+)", 1, Message)
+           sessionHash = extract(@"sessionHash=(\S+)", 1, Message)
   | summarize starts = countif(ev == "dependency.start"), ends = countif(ev == "dependency.end")
-      by sessionId, target
+      by sessionHash, target
   | where starts > ends
   ```
 
@@ -173,8 +173,8 @@ q() { az monitor log-analytics query -w "$LAW_CUSTOMER_ID" --analytics-query "$1
 | 種別            | 例                                                                                             | 扱い                                                                                                                        |
 | --------------- | ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | 相談の本文      | ユーザー発話 / AI の応答 / 抽出された statement・excerpt / Problem の title・summary / concern | **載せない**。長さ (`chars`) と件数 (`count`) だけ                                                                          |
-| 個人の識別子    | `userId` (Cosmos のパーティションキー)                                                         | **生では載せない**。`hashIdentifier()` の出力 (`userHash`) だけ                                                             |
-| 不透明な ID     | `sessionId` / `approvalRequestId`                                                              | 載せてよい (生成された値で中身を含まない)。相関に要る                                                                       |
+| 個人の識別子    | `userId` (Cosmos のパーティションキー)                                                         | **生では載せない**。出口が `userHash=<ハッシュ>` に変える (呼び出し側はハッシュしない)                                      |
+| 相関用の ID     | `sessionId`                                                                                    | **生では載せない**。出口が `sessionHash=<ハッシュ>` に変える (理由は下記「相関 ID は…」)                                    |
 | 経路と結果      | route / method / status / outcome / 所要 ms / 下流の target・operation                         | 載せる。**これが無いと障害を追えない**                                                                                      |
 | URL             | 下流の呼び先                                                                                   | `origin + pathname` だけ。**クエリ文字列は自動で落ちる**                                                                    |
 | 認証情報        | Authorization ヘッダ / MI トークン / App Insights 接続文字列                                   | **一切載せない**。接続文字列は bicep の output にもしない                                                                   |
@@ -192,6 +192,23 @@ q() { az monitor log-analytics query -w "$LAW_CUSTOMER_ID" --analytics-query "$1
 - zod の入力検証失敗 — `TRPCError.message` は `ZodError` の JSON で、`invalid_enum_value` などは**受け取った値そのもの**を含む
 
 よって `handlers.ts` の `describeTrpcError()` で `error.code` と、値を落とした要約 (`summarizeIssues` / 例外クラス名) だけに正規化してから出す。**同じ罠は「文面を載せる」他のフィールドにもある** — 文字列をテレメトリに渡すときは、名前が許可されているかではなく**その文字列を誰が組み立てたか**で判断する。
+
+### 相関 ID は「不透明」ではない — 出口でハッシュ化する
+
+`sessionId` を「生成された不透明 ID だから載せてよい」と扱っていたが、**サーバはそれを検証していない**。スキーマは `z.string().min(1).max(MAX_ID_LENGTH)` = 長さだけで、UUID を強制していない。認証済みクライアントが相談の本文をそのまま `sessionId` に入れれば、相関キーの顔をした本文が 30 日残る (PR #413 の Codex 指摘)。しかも代入点は `/api/chat/stream` / tRPC (`sendMessage` / `preview` / `extract`) / 下流依存ログと散っている。
+
+対処は **UUID の強制ではなく出口でのハッシュ化**にした。入力の形を縛る案は、既存セッションを弾く後方互換の問題を持ち込むうえ、「検証を 1 箇所足し忘れた入口」が同じ穴として残る。`telemetry.ts` の `HASHED_FIELDS` は `url` → `redactUrl` と同じ位置 (行を組み立てる出口) にあり、**呼び出し側が何を渡しても**通る。
+
+| 呼び出し側が渡す名前 | 行に出る名前  | 値                   |
+| -------------------- | ------------- | -------------------- |
+| `sessionId`          | `sessionHash` | SHA-256 の先頭 12 桁 |
+| `userId`             | `userHash`    | 同上                 |
+
+- **名前を変える**のは、読む人が生 ID と取り違えて Cosmos の `id` と突き合わせようとしないため
+- **salt を入れない**のは、プロセスや再起動をまたいで同じ ID が同じ値になる必要があるため (相関が死ぬ)。ここで守りたいのは秘匿性ではなく「本文をそのまま焼かない」こと
+- **呼び出し側でハッシュしない** — その作法に戻すと、次に足す人が素で渡した瞬間に漏れ、漏れたことは誰にも見えない
+
+> KQL を書くときは `sessionId=` ではなく `sessionHash=` で引く (この Runbook の Verification の例も同様)。
 
 ## Rollback
 
@@ -239,7 +256,7 @@ q() { az monitor log-analytics query -w "$LAW_CUSTOMER_ID" --analytics-query "$1
 ## Related
 
 - Issue: [#307](https://github.com/yomote/mind-inbox/issues/307) (この配線) / [#293](https://github.com/yomote/mind-inbox/issues/293) (観測性が無くて丸一日溶かした実例) / [#303](https://github.com/yomote/mind-inbox/issues/303) (設定を宣言に一本化)
-- ADR: [ADR 0013 常設・低コスト dev](../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) / [ADR 0046 環境は宣言から再構築できる](../adr/0046-environment-rebuildable-from-declaration.md) / [ADR 0030 Cosmos 永続化](../adr/0030-persistence-on-cosmos-db-single-store-behind-bff.md)
+- ADR: [ADR 0055 BFF のテレメトリ基盤](../adr/0055-bff-telemetry-on-workspace-based-app-insights.md) (**この配線の判断記録** — 保持・コスト・機微データの境界) / [ADR 0013 常設・低コスト dev](../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) / [ADR 0046 環境は宣言から再構築できる](../adr/0046-environment-rebuildable-from-declaration.md) / [ADR 0030 Cosmos 永続化](../adr/0030-persistence-on-cosmos-db-single-store-behind-bff.md)
 - 関連 Runbook: [`ops-inspect.md`](ops-inspect.md) (サンドボックスから Azure の実態を取る) / [`cosmos-persistence.md`](cosmos-persistence.md)
 - コード: `apps/bff/src/observability/telemetry.ts` (テレメトリの唯一の出口) / `apps/bff/host.json` (サンプリング)
 - IaC: `cicd/modules/bootstrap-core.bicep` (`appInsights` / `diagFunctionApp`) / `cicd/iac/main-bootstrap.bicep` (output の re-export)

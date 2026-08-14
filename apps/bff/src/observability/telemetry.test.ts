@@ -88,7 +88,41 @@ describe("[単体] formatTelemetryLine", () => {
     // 無いと何が静かに通るか: undefined が `key=undefined` として出ると
     // 「値が無い」と「値を渡していない」が同じ行になり、欠測の切り分けができない。
     const line = formatTelemetryLine("x", { sessionId: null, status: undefined });
-    expect(line).toBe("event=x sessionId=null");
+    expect(line).toBe("event=x sessionHash=null");
+  });
+
+  it("sessionId は生のまま出さず、ハッシュにして名前も付け替える", () => {
+    // 無いと何が静かに通るか: sessionId は `z.string().min(1).max(MAX_ID_LENGTH)` =
+    // **長さしか見ていない自由文字列**なので、クライアントが相談の本文をそのまま
+    // sessionId に入れれば、相関キーの顔をした本文が 30 日残る (#413 の Codex 指摘)。
+    // 名前を `sessionHash` に変えるのは、読む人が生 ID と取り違えないため。
+    const line = formatTelemetryLine("chat.request", { sessionId: SECRET, chars: 12 });
+
+    expect(line).not.toContain(SECRET);
+    expect(line).toContain(`sessionHash=${hashIdentifier(SECRET)}`);
+    expect(line).not.toContain("sessionId=");
+    // 相関は死んでいない (同じ入力なら同じ値)
+    expect(formatTelemetryLine("x", { sessionId: SECRET })).toContain(hashIdentifier(SECRET));
+  });
+
+  it("userId も同じ出口でハッシュ化される (呼び出し側の作法に頼らない)", () => {
+    // 無いと何が静かに通るか: 「呼び出し側が hashIdentifier() を通す」規約に戻すと、
+    // 次に足す人が `userId` を素で渡した瞬間に Cosmos のパーティションキー
+    // (= 誰の相談か) が平文で残り、**忘れたことは誰にも見えない**。
+    const userId = "user-0e2f-abc";
+    const line = formatTelemetryLine("dependency.end", { target: "cosmos", userId });
+
+    expect(line).not.toContain(userId);
+    expect(line).toContain(`userHash=${hashIdentifier(userId)}`);
+  });
+
+  it("ハッシュ対象は文字列以外で渡されても生では出ない", () => {
+    // 無いと何が静かに通るか: 型で逃げ道が残ると (数値 ID など) ハッシュ化を
+    // 素通りして生の値が焼かれる。TelemetryValue は string 以外も許すので実際に通る。
+    const line = formatTelemetryLine("x", { sessionId: 12345 as unknown as string });
+
+    expect(line).not.toContain("12345");
+    expect(line).toContain(`sessionHash=${hashIdentifier("12345")}`);
   });
 });
 
@@ -159,6 +193,26 @@ describe("[単体] trackDependency", () => {
     expect(log.lines[0]).toContain("event=dependency.start target=voicevox");
     expect(log.errors[0]).toContain("outcome=failure");
     expect(log.errors[0]).toContain("errorType=Error");
+  });
+
+  it("spec の sessionId は開始行・終了行のどちらでも生では出ない", async () => {
+    // 無いと何が静かに通るか: 下流依存ログは `...spec` を展開して出すので、
+    // 出口のハッシュ化が効いていないと **1 ホップにつき 2 行**、自由文字列の
+    // sessionId (= 本文を入れられる) がそのまま焼かれる (#413 の Codex 指摘)。
+    const log = recorder();
+
+    await runWithLogger(log, () =>
+      trackDependency(
+        { target: "ai-agent", operation: "POST /chat", sessionId: SECRET },
+        async () => "ok",
+      ),
+    );
+
+    expect(log.lines).toHaveLength(2);
+    for (const line of log.lines) {
+      expect(line).not.toContain(SECRET);
+      expect(line).toContain(`sessionHash=${hashIdentifier(SECRET)}`);
+    }
   });
 });
 

@@ -22,6 +22,13 @@
  * 許可されていない名前は値ごと捨て、代わりに `dropped=<名前>` を出す
  * (黙って消すと「載せたつもり」と「落とされた」が区別できなくなる / CLAUDE.md)。
  *
+ * ただし許可リストは**名前しか見ない**ので、これだけでは足りない。許可された名前に
+ * 本文を入れれば素通りする。よって値の側にも 2 つの門を置く:
+ *
+ *   1. 形が決まっている値は出口で正規化する — `url` → `redactUrl` / `errorMessage` → 1 行化 + 上限
+ *   2. **相関 ID は出口で必ずハッシュ化する** — `HASHED_FIELDS`。`sessionId` は長さしか
+ *      検証されない自由文字列なので、相関キーの顔をして本文を運べる (#413 のレビュー指摘)
+ *
  * 何を記録し何を落とすかの正典は [`docs/runbooks/bff-telemetry.md`](../../../../docs/runbooks/bff-telemetry.md)。
  *
  * ## 例外メッセージの扱い
@@ -62,9 +69,7 @@ const ALLOWED_FIELDS: ReadonlySet<string> = new Set([
   "operation",
   "url", // 値は redactUrl() を必ず通す (下の renderValue 参照)
   "upstreamStatus",
-  // -- 相関に使う不透明な ID (中身を含まない) --
-  "sessionId",
-  "userHash", // 生の userId は載せない。hashIdentifier() の出力だけ
+  // -- 相関に使う ID は HASHED_FIELDS 側 (生では 1 つも通さない) --
   // -- 量と種別 (中身ではなく形) --
   "chars",
   "count",
@@ -79,6 +84,31 @@ const ALLOWED_FIELDS: ReadonlySet<string> = new Set([
   // -- 失敗 --
   "errorType",
   "errorMessage",
+]);
+
+/**
+ * **値を必ずハッシュ化してから出す**フィールド。左が呼び出し側が渡す名前、右が行に出る名前。
+ *
+ * ここに載っている名前は `ALLOWED_FIELDS` には入れない — 生で通す道を残さないため。
+ * 名前も `...Hash` に変えるのは、ログを読む人が「これは元の値ではない」と分かるようにするため
+ * (`sessionId=8b1a…` だと生の ID に見えて、行を Cosmos の id と突き合わせようとする)。
+ *
+ * ## なぜ「呼び出し側でハッシュする」ではないのか (#413 レビュー指摘)
+ *
+ * `sessionId` は `z.string().min(1).max(MAX_ID_LENGTH)` = **長さしか見ていない自由文字列**で、
+ * UUID を強制していない。認証済みクライアントが相談の本文をそのまま `sessionId` に入れれば、
+ * 相関キーの顔をした本文が Application Insights に 30 日残る。これは `errorMessage` で踏んだ
+ * 「許可された名前に本文を入れれば素通りする」と同じ穴で、代入点は
+ * `/api/chat/stream` / tRPC (sendMessage・preview・extract) / 下流依存ログと**散っている**。
+ *
+ * 呼び出し側の作法 (`sessionId: hashIdentifier(x)`) に頼ると、1 箇所忘れただけで漏れ、
+ * **忘れたことは誰にも見えない**。よって `url` → `redactUrl` と同じく、**出口で強制する**。
+ */
+const HASHED_FIELDS: ReadonlyMap<string, string> = new Map([
+  // 相関には要るが、値の中身を信用しない (自由文字列)。
+  ["sessionId", "sessionHash"],
+  // Cosmos のパーティションキー = 「誰の相談か」そのもの。生で残す理由が無い。
+  ["userId", "userHash"],
 ]);
 
 /** `errorMessage` の上限。切っても安全にはならない (冒頭コメント参照) — 事故時の被害を減らすだけ。 */
@@ -102,10 +132,17 @@ export function redactUrl(url: string): string {
 }
 
 /**
- * 個人を指す ID (userId 等) をテレメトリ用の不透明な値に変える。
+ * ID (userId / sessionId) をテレメトリ用の不透明な値に変える。
  *
- * userId は Cosmos のパーティションキー = 「誰の相談か」そのもの。
- * 相関には必要だが平文で残す理由が無いので、片方向ハッシュの先頭だけ使う。
+ * userId は Cosmos のパーティションキー = 「誰の相談か」そのもの。sessionId は
+ * 自由文字列で本文を入れられる。どちらも相関には必要だが平文で残す理由が無いので、
+ * 片方向ハッシュの先頭だけ使う。
+ *
+ * **salt を入れない** — 入れるとプロセス間・再起動をまたいで同じ ID が別の値になり、
+ * 相関 (この行とこの行は同じセッションか) が死ぬ。ここで守りたいのは秘匿性ではなく
+ * 「本文をそのまま焼かない」こと。
+ *
+ * 呼び出し側からこれを直接呼ぶ必要は無い (出口の `HASHED_FIELDS` が強制する)。
  */
 export function hashIdentifier(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 12);
@@ -116,7 +153,12 @@ function sanitizeScalar(text: string): string {
 }
 
 function renderValue(key: string, value: string | number | boolean | null): string {
+  // null は「値が無い」の記録なのでハッシュ化しない (ハッシュすると欠測が定数に化ける)。
   if (value === null) return "null";
+
+  // ハッシュ対象は**文字列以外で来ても**必ず潰す。型で逃げ道を作らない。
+  if (HASHED_FIELDS.has(key)) return hashIdentifier(String(value));
+
   if (typeof value !== "string") return String(value);
 
   // 許可した名前でも、値の形が決まっているものは**ここで**強制する。
@@ -134,6 +176,10 @@ function renderValue(key: string, value: string | number | boolean | null): stri
 /**
  * 1 行のテレメトリ行を組み立てる。**許可リストに無いフィールドは値ごと捨てる。**
  *
+ * 通るのは 2 種類だけ:
+ *   - `ALLOWED_FIELDS` — そのまま出す (値の正規化は `renderValue` が担う)
+ *   - `HASHED_FIELDS` — **必ずハッシュ化**し、名前も `...Hash` に付け替えて出す
+ *
  * 戻り値は `event=... key=value ...` の 1 行。Log Analytics の
  * `FunctionAppLogs` / App Insights の `AppTraces` から `has` / `parse` で引ける形。
  */
@@ -143,11 +189,12 @@ export function formatTelemetryLine(event: string, fields: TelemetryFields = {})
 
   for (const [key, value] of Object.entries(fields)) {
     if (value === undefined) continue;
-    if (!ALLOWED_FIELDS.has(key)) {
+    const hashedName = HASHED_FIELDS.get(key);
+    if (hashedName === undefined && !ALLOWED_FIELDS.has(key)) {
       dropped.push(key);
       continue;
     }
-    parts.push(`${key}=${renderValue(key, value)}`);
+    parts.push(`${hashedName ?? key}=${renderValue(key, value)}`);
   }
 
   // 落としたことを黙らせない。名前だけ出す (値は捨てたので出しようがない)。
@@ -215,6 +262,7 @@ export type DependencySpec = {
   operation: string;
   /** 呼び先 URL (クエリは自動で落ちる)。 */
   url?: string;
+  /** 相関用のセッション ID。**行には `sessionHash=` としてハッシュだけが出る** (生では出ない)。 */
   sessionId?: string;
 };
 

@@ -40,6 +40,7 @@ AI Agent への薄いプロキシではなく、**アーティファクト生成
 
 - **テレメトリの出口は [`src/observability/telemetry.ts`](src/observability/telemetry.ts) 1 箇所**。`console.log` を直接書かない — Functions v4 では console はどの invocation の話か紐づかず、並行リクエストで突き合わせ不能になる
 - 出せるフィールドは同ファイルの `ALLOWED_FIELDS` が持つ。**そこに無い名前は値ごと捨てられ `dropped=<名前>` だけが残る**。足したい名前が無いなら、それは本文である可能性が高い
+- **ID (`sessionId` / `userId`) は呼び出し側でハッシュしない** — 出口の `HASHED_FIELDS` が `sessionHash=` / `userHash=` に変える。`sessionId` はスキーマが長さしか見ていない自由文字列で、**相関キーの顔をして本文を運べる** (#413)
 - 何を記録し何を落とすかの正典は [`docs/runbooks/bff-telemetry.md`](../../docs/runbooks/bff-telemetry.md)
 - 下流ホップは `trackDependency` で挟む。**開始と終了を対で出す** — 終了だけにすると「呼んだが返ってこなかった」が沈黙になり、正常時の沈黙と混ざる (#293)
 
