@@ -11,6 +11,10 @@
         中身を一度も検証していない RG に `az group delete` が飛ぶ
   - test_deletes_when_rg_is_present_throughout
       … 上のテストが「常に拒否」でも緑になる (= 拒否の証明にならない) のを防ぐ対照
+  - test_default_mgmt_rg_survives_redirected_mgmt_rg_and_override
+      … MGMT_RG を別名に向けて ALLOW_PROTECTED_DELETE=true にするだけで、
+        管理系 RG 本体に `az group delete` が飛ぶ (2026-08-14 の内部 judge が実測した経路。
+        シェルが --mgmt-rg を「置き換え」として渡す作りに戻ると再発する)
 
 az はスタブ。**通信も課金も発生しない**が、その代わり「az の返し方が実物と違えば
 このテストは実物を保証しない」— 見ているのは az の挙動ではなく、
@@ -45,7 +49,7 @@ case "$1 $2" in
     fi
     ;;
   "resource list")
-    echo '[]'
+    echo "${AZ_STUB_INVENTORY:-[]}"
     ;;
   "group delete")
     ;;
@@ -57,8 +61,12 @@ esac
 
 
 def _run(
-    tmp_path: Path, mode: str
+    tmp_path: Path,
+    mode: str,
+    *,
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     stub = bin_dir / "az"
@@ -74,6 +82,7 @@ def _run(
         "AZ_STUB_LOG": str(log),
         "AZ_STUB_MODE": mode,
         "RG": "rg-dev-mind-inbox",
+        **(extra_env or {}),
     }
     proc = subprocess.run(
         ["bash", str(SCRIPT)],
@@ -108,3 +117,57 @@ def test_deletes_when_rg_is_present_throughout(tmp_path: Path) -> None:
 
     assert proc.returncode == 0, proc.stderr
     assert any(c.startswith("group delete") for c in calls), calls
+
+
+# 管理系 RG に居る (= 層タグ付きの) Key Vault。override で通ってしまうと、
+# 「どのフラグでも消せない」はずの RG が中身ごと消える。
+MANAGEMENT_INVENTORY = (
+    '[{"type":"Microsoft.KeyVault/vaults","name":"kv-dev-mindbox",'
+    '"tags":{"mindInboxLayer":"management"}}]'
+)
+
+
+def test_default_mgmt_rg_survives_redirected_mgmt_rg_and_override(
+    tmp_path: Path,
+) -> None:
+    """再現テスト: MGMT_RG を別名に向けて override しても管理系 RG は消えない。
+
+    無いと: 2026-08-14 の内部 judge が実測した経路が戻る —
+    `MGMT_RG=rg-somewhere-else ALLOW_PROTECTED_DELETE=true RG=rg-mgmt-mindbox` で
+    `target-is-management-rg` に落ちず、層タグの findings は override で通り、
+    `az group delete -n rg-mgmt-mindbox` が 1 回走って exit 0 になる。
+    """
+    proc, calls = _run(
+        tmp_path,
+        mode="present",
+        extra_env={
+            "RG": "rg-mgmt-mindbox",
+            "MGMT_RG": "rg-somewhere-else",
+            "ALLOW_PROTECTED_DELETE": "true",
+            "AZ_STUB_INVENTORY": MANAGEMENT_INVENTORY,
+        },
+    )
+
+    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert "target-is-management-rg" in (proc.stdout + proc.stderr)
+    # 本体はここ。メッセージだけ出して消していたら意味がない。
+    assert not any(c.startswith("group delete") for c in calls), calls
+
+
+def test_mgmt_rg_adds_protection_for_another_rg(tmp_path: Path) -> None:
+    """対照: MGMT_RG は「足す」側としては効く (常に拒否ではないことの証明も兼ねる)。"""
+    protected, protected_calls = _run(
+        tmp_path / "protected",
+        mode="present",
+        extra_env={"RG": "rg-ops-mindbox", "MGMT_RG": "rg-ops-mindbox"},
+    )
+    assert protected.returncode == 3, protected.stdout + protected.stderr
+    assert not any(c.startswith("group delete") for c in protected_calls)
+
+    unprotected, unprotected_calls = _run(
+        tmp_path / "unprotected",
+        mode="present",
+        extra_env={"RG": "rg-ops-mindbox"},
+    )
+    assert unprotected.returncode == 0, unprotected.stderr
+    assert any(c.startswith("group delete") for c in unprotected_calls)

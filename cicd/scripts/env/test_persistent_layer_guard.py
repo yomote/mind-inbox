@@ -7,6 +7,9 @@
 各テストの「無いと何が静かに通るか」:
   - test_refuses_management_rg_itself       … 管理系 RG そのものが削除される
   - test_override_cannot_delete_management_rg … override を付けるだけで管理系 RG が消える
+  - test_default_management_rg_*            … MGMT_RG を別名に向けるだけで既定の管理系 RG
+                                              (rg-mgmt-mindbox) が保護から外れ、override
+                                              と組み合わせると実際に削除まで通る
   - test_refuses_when_data_restore_unproven … 復元を通していない Cosmos ごと消える
   - test_data_and_management_codes_differ   … 暫定の拒否と恒久の拒否が同じコードになり、
                                               復元実証後にどちらを緩めてよいか読めなくなる
@@ -38,6 +41,7 @@ from persistent_layer_guard import (
     DEFAULT_MANAGEMENT_RG,
     decide,
     main,
+    management_rg_set,
 )
 
 APP_LAYER_TYPES = [
@@ -96,6 +100,80 @@ def test_case_insensitive_management_rg_match() -> None:
     assert d.code == "target-is-management-rg"
 
 
+# ---- 既定の管理系 RG は「外せない」(逃げ道が可変値 1 つに依存しない) ----
+#
+# 2026-08-14 の内部 judge が実測した経路の再現:
+#   MGMT_RG を別名に向ける → rg-mgmt-mindbox が target-is-management-rg に落ちない
+#   → 層タグの findings は ALLOW_PROTECTED_DELETE=true で override
+#   → az group delete -n rg-mgmt-mindbox が 1 回走って exit 0
+# 「どのフラグでも消せない」は、可変値 1 つで消える保護であってはならない。
+
+
+def test_default_management_rg_is_protected_even_when_mgmt_rg_points_elsewhere() -> None:
+    """`--mgmt-rg` を別名に向けても既定の管理系 RG は守られる。
+
+    無いと: MGMT_RG の指し先を変えるだけで rg-mgmt-mindbox がただの RG に落ちる。
+    """
+    d = decide(
+        target_rg=DEFAULT_MANAGEMENT_RG,
+        extra_management_rgs=["rg-somewhere-else"],
+        resources=[],
+    )
+    assert not d.allowed
+    assert d.code == "target-is-management-rg"
+
+
+def test_default_management_rg_survives_override_with_redirected_mgmt_rg() -> None:
+    """再現テスト: 別名 + override でも既定の管理系 RG は削除に進めない。
+
+    無いと: judge が実測した「層タグごと override されて az group delete が走る」
+    経路がそのまま残る。
+    """
+    d = decide(
+        target_rg=DEFAULT_MANAGEMENT_RG,
+        extra_management_rgs=["rg-somewhere-else"],
+        resources=[
+            {
+                "type": "Microsoft.KeyVault/vaults",
+                "name": "kv-dev-mindbox",
+                "tags": MANAGEMENT_TAGS,
+            }
+        ],
+        allow_protected=True,
+    )
+    assert not d.allowed
+    assert d.code == "target-is-management-rg"
+
+
+def test_extra_management_rgs_are_additive() -> None:
+    """`--mgmt-rg` は「足す」だけ。足した名前も既定名もどちらも守られる。"""
+    protected = management_rg_set(["rg-ops-mindbox"])
+    assert protected == {DEFAULT_MANAGEMENT_RG, "rg-ops-mindbox"}
+
+    added = decide(
+        target_rg="rg-ops-mindbox", extra_management_rgs=["rg-ops-mindbox"], resources=[]
+    )
+    assert not added.allowed
+    assert added.code == "target-is-management-rg"
+
+    # 足していない RG は普通に撤収できる (常に拒否ではないことの対照)。
+    other = decide(target_rg="rg-dev-mind-inbox", resources=APP_LAYER_TYPES)
+    assert other.allowed
+
+
+def test_management_rg_refusal_names_what_is_protected() -> None:
+    """何が恒久保護なのかを黙らない (既定名が外せないことを含めて出す)。"""
+    d = decide(
+        target_rg=DEFAULT_MANAGEMENT_RG,
+        extra_management_rgs=["rg-ops-mindbox"],
+        resources=[],
+    )
+    assert not d.allowed
+    joined = " ".join(d.notes)
+    assert DEFAULT_MANAGEMENT_RG in joined
+    assert "rg-ops-mindbox" in joined
+
+
 def test_allows_app_layer_only() -> None:
     d = decide(target_rg="rg-dev-mind-inbox", resources=APP_LAYER_TYPES)
     assert d.allowed
@@ -137,9 +215,7 @@ def test_rg_existence_unknown_is_overridable() -> None:
 
 def test_management_rg_wins_over_existence_unknown() -> None:
     """管理系 RG は「存在すら確かめられない」状況でも override で通らない。"""
-    d = decide(
-        target_rg=DEFAULT_MANAGEMENT_RG, rg_exists=None, allow_protected=True
-    )
+    d = decide(target_rg=DEFAULT_MANAGEMENT_RG, rg_exists=None, allow_protected=True)
     assert not d.allowed
     assert d.code == "target-is-management-rg"
 
@@ -800,12 +876,14 @@ def test_cli_protected_name_flag() -> None:
     )
 
 
-def test_cli_mgmt_rg_flag_is_honored() -> None:
-    """`--mgmt-rg` を渡したらそちらを管理系 RG として扱う。
+def test_cli_mgmt_rg_flag_adds_without_replacing_default() -> None:
+    """`--mgmt-rg` は保護を**足す**だけで、既定名を置き換えない。
 
-    無いと: 呼び出し側 (cleanup-env.sh) の MGMT_RG が guard に届かなくなっても
-    誰も気づかず、既定名以外に置いた管理系 RG が消せてしまう。
+    無いと: (1) 呼び出し側 (cleanup-env.sh) の MGMT_RG が guard に届かなくなっても
+    誰も気づかず、既定名以外に置いた管理系 RG が消せてしまう。(2) 逆に MGMT_RG を
+    別名に向けるだけで rg-mgmt-mindbox の恒久保護が外れる (judge 実測の経路)。
     """
+    # 足した名前は守られる。
     assert (
         main(
             [
@@ -818,7 +896,22 @@ def test_cli_mgmt_rg_flag_is_honored() -> None:
         )
         == 3
     )
+    # 足していない名前は守られない (常に拒否ではないことの対照)。
     assert main(["--target-rg", "rg-ops-mindbox", "--rg-missing"]) == 0
+    # **既定名は --mgmt-rg を別名に向けても、override を足しても守られる。**
+    assert (
+        main(
+            [
+                "--target-rg",
+                "rg-mgmt-mindbox",
+                "--mgmt-rg",
+                "rg-somewhere-else",
+                "--rg-missing",
+                "--allow-protected",
+            ]
+        )
+        == 3
+    )
 
 
 def test_cli_layer_tag_from_az_output() -> None:

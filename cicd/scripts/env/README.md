@@ -32,7 +32,7 @@ Cosmos が**アプリ系 RG に居るのは正しい姿**です ([#302](https://
 
 | 状況                                                                                    | 判定コード                       | 挙動                                      | 逃げ道                                                 |
 | --------------------------------------------------------------------------------------- | -------------------------------- | ----------------------------------------- | ------------------------------------------------------ |
-| `RG` が管理系 RG (`MGMT_RG` / 既定 `rg-mgmt-mindbox`)                                   | `target-is-management-rg`        | **拒否**                                  | **無い** (どのフラグでも消せない — これが層分断の実体) |
+| `RG` が管理系 RG (組み込みの `rg-mgmt-mindbox`、または `MGMT_RG` で**足した**名前)      | `target-is-management-rg`        | **拒否**                                  | **無い** (どのフラグでも消せない — これが層分断の実体) |
 | `RG` の中に管理系のリソースが居る (下記「何を管理系と見なすか」)                        | `management-resources-present`   | 拒否 (恒久)                               | `ALLOW_PROTECTED_DELETE=true`                          |
 | `RG` の中に**復元を実証していないデータ**が居る (Cosmos)                                | `data-restore-unproven`          | 拒否 (**暫定** / ADR 0046 D9 まで)        | `ALLOW_PROTECTED_DELETE=true`                          |
 | `RG` が**存在するかを確かめられなかった** (`az group exists` が失敗)                    | `rg-existence-unknown`           | 拒否 (「RG が無い」と読み替えない)        | `ALLOW_PROTECTED_DELETE=true`                          |
@@ -42,6 +42,8 @@ Cosmos が**アプリ系 RG に居るのは正しい姿**です ([#302](https://
 | **soft-delete 済みの保護対象**を purge しようとしている (`PURGE_DELETED_*=true` のとき) | `protected-soft-deleted-present` | 拒否 (purge は復旧手段を恒久的に消す)     | `ALLOW_PROTECTED_DELETE=true`                          |
 | soft-delete 一覧 (`list-deleted`) を**確かめられなかった**                              | `protected-soft-deleted-present` | 拒否 (「保護対象は無い」と読み替えない)   | `ALLOW_PROTECTED_DELETE=true`                          |
 
+> ⚠️ **`rg-mgmt-mindbox` の保護は、設定で外せません。** `MGMT_RG` は保護対象を**足す**だけで、組み込みの既定名を置き換えられません (`persistent_layer_guard.py` の `management_rg_set`)。置き換えられる作りだった頃は、`MGMT_RG` を別名に向けるだけで管理系 RG が恒久保護から落ち、`ALLOW_PROTECTED_DELETE=true` と組み合わせると `az group delete` まで通りました (2026-08-14 の内部 judge が実測)。「逃げ道が無い」は、可変値 1 つで消える保護であってはいけません。
+>
 > **管理系とデータで判定コードを分けてあるのは飾りではありません。** 復元実証 (ADR 0046 D9) が済んだときに緩めてよいのは `data-restore-unproven` の側だけで、同じコードにすると「どちらを緩めるつもりだったか」がログからもコードからも読めなくなります。
 >
 > **soft-delete 済みの保護対象は `az resource list` に出ません。** live だけを見ていると判定は `ok` になり、`PURGE_DELETED_KEYVAULTS=true` などを立てた実行が **E2E trace 復号鍵やバックアップの復旧手段を恒久的に消します**。そこで **purge を有効にした種類だけ** `list-deleted` も判定材料に渡します (有効にしていない種類は触らないので渡さない = 無関係な soft-delete で撤収が止まらない)。この判定は **RG の存在とは独立**に効きます — purge は RG を消した後に走るので、`RG が存在しない` の下に置くと素通りするためです。
@@ -79,18 +81,18 @@ purge を有効化した場合、Key Vault と Cognitive Services は RG が既�
 
 ### 主な環境変数
 
-| 変数                               | 既定値              | 役割                                                      |
-| ---------------------------------- | ------------------- | --------------------------------------------------------- |
-| `RG`                               | `rg-dev-mind-inbox` | 対象リソースグループ                                      |
-| `DELETE_ENTRA_APP`                 | `false`             | 自動作成された Entra アプリを削除                         |
-| `FORCE_DELETE_LOG_ANALYTICS`       | `false`             | LA workspace を `--force` で即時削除                      |
-| `PURGE_DELETED_KEYVAULTS`          | `false`             | Key Vault の soft-delete を purge                         |
-| `PURGE_DELETED_COGNITIVE_SERVICES` | `false`             | Cognitive Services / OpenAI の soft-delete を purge       |
-| `NO_WAIT`                          | `true`              | `az group delete --no-wait` で非同期削除                  |
-| `PURGE_WAIT_SECONDS`               | `1800`              | RG 削除や soft-delete 状態の最大待機秒                    |
-| `MGMT_RG`                          | `rg-mgmt-mindbox`   | 管理系 RG。**この RG は撤収できない**                     |
-| `PROTECTED_RESOURCE_NAMES`         | (空)                | 層タグの無いリソースを名指しで管理系扱いする (空白区切り) |
-| `ALLOW_PROTECTED_DELETE`           | `false`             | 保護対象が居ても撤収を続行する (不可逆)                   |
+| 変数                               | 既定値              | 役割                                                                                           |
+| ---------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------- |
+| `RG`                               | `rg-dev-mind-inbox` | 対象リソースグループ                                                                           |
+| `DELETE_ENTRA_APP`                 | `false`             | 自動作成された Entra アプリを削除                                                              |
+| `FORCE_DELETE_LOG_ANALYTICS`       | `false`             | LA workspace を `--force` で即時削除                                                           |
+| `PURGE_DELETED_KEYVAULTS`          | `false`             | Key Vault の soft-delete を purge                                                              |
+| `PURGE_DELETED_COGNITIVE_SERVICES` | `false`             | Cognitive Services / OpenAI の soft-delete を purge                                            |
+| `NO_WAIT`                          | `true`              | `az group delete --no-wait` で非同期削除                                                       |
+| `PURGE_WAIT_SECONDS`               | `1800`              | RG 削除や soft-delete 状態の最大待機秒                                                         |
+| `MGMT_RG`                          | (空)                | 管理系として**追加で**守る RG。**組み込みの `rg-mgmt-mindbox` は常に守られ、これでは外せない** |
+| `PROTECTED_RESOURCE_NAMES`         | (空)                | 層タグの無いリソースを名指しで管理系扱いする (空白区切り)                                      |
+| `ALLOW_PROTECTED_DELETE`           | `false`             | 保護対象が居ても撤収を続行する (不可逆)                                                        |
 
 > **破壊系の既定は off** ([ADR 0046](../../../docs/adr/0046-environment-rebuildable-from-declaration.md) D5/D6)。
 > purge は **soft-delete という唯一の復旧手段を消す**ので、明示的に頼まれた時だけ行う。

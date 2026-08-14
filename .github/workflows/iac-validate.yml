@@ -11,6 +11,9 @@ on:
       - "cicd/iac/**"
       - "cicd/modules/**"
       - "cicd/bicepconfig.json"
+      # 層タグの照合は bicep 側と撤収ガード側の**両方**が入力なので、
+      # ガードだけを触った PR でもここを走らせる (片方だけ変えて素通りするのを防ぐ)。
+      - "cicd/scripts/env/**"
       - ".github/workflows/iac-validate.yml"
   push:
     branches: [main]
@@ -18,6 +21,7 @@ on:
       - "cicd/iac/**"
       - "cicd/modules/**"
       - "cicd/bicepconfig.json"
+      - "cicd/scripts/env/**"
 
 permissions:
   contents: read
@@ -46,3 +50,22 @@ jobs:
             az bicep build --file "$f" --stdout > /dev/null
           done
           echo "✅ bicep build OK（main-bootstrap は modules/bootstrap-core.bicep も含めて検証）"
+
+      # 層タグ (mindInboxLayer=management) は「bicep が刻む値」と「撤収ガードが探す値」の
+      # 2 箇所に分かれている。**片方だけ変えても両方のテストが緑のまま通る**ので、
+      # 突き合わせをここで機械にする (ズレると管理系リソースが撤収で黙って消える)。
+      #
+      # 同じ検査の bicep ソース側は `npm run test:scripts` でも走るが、
+      # **コンパイル後の ARM を見る層は bicep が要る** ので、bicep のあるこの job で走らせる
+      # (test.yml のランナーには bicep が入っていない)。
+      - name: 層タグと撤収ガードの定数が一致するか（ARM まで評価して照合）
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pytest
+          out="$(python3 -m pytest cicd/scripts/env/test_mgmt_layer_tag_contract.py -q -rs 2>&1)"
+          echo "$out"
+          # bicep のあるこの job で skip されたら「未検証のまま緑」になる。落とす。
+          if grep -qi 'skipped' <<<"$out"; then
+            echo "::error title=層タグ照合が skip された::bicep が見えていないため ARM 照合が未検証のまま緑になりました"
+            exit 1
+          fi

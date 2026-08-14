@@ -91,7 +91,7 @@
 - [ ] デプロイが `Succeeded` (下の 1)
 - [ ] **作ったリソース全部に層タグが付いている** (下の 2) — このタグが撤収ガードの判定入力なので、**付いていないものはアプリ系と見なされて撤収で消えます**
 - [ ] 鍵が**エクスポート不可**で作られている (下の 3 が `false` を返すこと)
-- [ ] **撤収ガードが管理系 RG を拒否する** (下の 4 が exit 3 で、何も消えないこと)
+- [ ] **撤収ガードが管理系 RG を拒否する** (下の 4 が **2 回とも** exit 3 で、何も消えないこと) — 2 本目は `MGMT_RG` を別名に向けて `ALLOW_PROTECTED_DELETE=true` を足した場合で、**組み込みの保護が設定で外せない**ことを見ています
 - [ ] **月次予算が実在する** (下の 5 が `budget-mgmt-mindbox` を 1 件返し、`contacts` が空でないこと) — 空 (`[]`) なら `budgetContactEmails` を渡し忘れており、**管理系 RG のコストがどの予算にも載っていません**
 
 ```bash
@@ -107,8 +107,11 @@ az resource list -g rg-mgmt-mindbox \
 az keyvault key show --vault-name kv-dev-mindbox -n e2e-artifacts \
   --query key.exportable -o tsv
 
-# 4. 撤収ガードが管理系 RG を拒否するか
+# 4. 撤収ガードが管理系 RG を拒否するか。**逃げ道が無いことまで見る** --
+#    MGMT_RG を別名に向けて override を足しても exit 3 で何も消えないこと。
 cd cicd && RG=rg-mgmt-mindbox ./scripts/env/cleanup-env.sh; echo "exit=$?"
+cd cicd && RG=rg-mgmt-mindbox MGMT_RG=rg-somewhere-else ALLOW_PROTECTED_DELETE=true \
+  ./scripts/env/cleanup-env.sh; echo "exit=$?"
 
 # 5. 月次予算が「実在するか」。deployment output (budgetAlertEnabled) は見ない --
 #    あれは最後に流したときのパラメータの写しで、2 回目以降 budgetContactEmails を
@@ -129,11 +132,11 @@ az rest --method get --url "https://management.azure.com/subscriptions/$(az acco
 
 `cleanup-env.sh` の判定 (`cicd/scripts/env/persistent_layer_guard.py`) が止めるものは 2 種類あり、**片方は恒久、片方は暫定**です。
 
-| 判定コード                     | 何を止めるか                                    | 性質                                     |
-| ------------------------------ | ----------------------------------------------- | ---------------------------------------- |
-| `target-is-management-rg`      | 管理系 RG そのものの削除                        | **恒久**。どのフラグでも通らない         |
-| `management-resources-present` | 層タグ / 名指しの管理系リソースが居る RG の撤収 | **恒久** (`ALLOW_PROTECTED_DELETE` は可) |
-| `data-restore-unproven`        | Cosmos が居る RG の撤収                         | **暫定**                                 |
+| 判定コード                     | 何を止めるか                                    | 性質                                                      |
+| ------------------------------ | ----------------------------------------------- | --------------------------------------------------------- |
+| `target-is-management-rg`      | 管理系 RG そのものの削除                        | **恒久**。どのフラグでも通らない (`MGMT_RG` でも外せない) |
+| `management-resources-present` | 層タグ / 名指しの管理系リソースが居る RG の撤収 | **恒久** (`ALLOW_PROTECTED_DELETE` は可)                  |
+| `data-restore-unproven`        | Cosmos が居る RG の撤収                         | **暫定**                                                  |
 
 **`data-restore-unproven` は「Cosmos がアプリ系に居るのが間違い」という意味ではありません。** アプリ系に居るのが正しい姿で、止めている理由は **バックアップからの復元をまだ 1 回も通していない**ことだけです ([ADR 0018](../adr/archive/operations/runtime-verification-in-the-loop.md) 「復元したことのないバックアップはバックアップではない」)。
 

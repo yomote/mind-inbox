@@ -1,6 +1,6 @@
 # 0056. 層は「管理系 / アプリ系」で分け、データは RG 移動ではなくバックアップ + 復元実証で守る
 
-- Status: Accepted (2026-08-14, PO 裁定)
+- Status: Proposed (2026-08-14 起案)
 - Date: 2026-08-14
 - Deciders: omoteforlab
 - Consulted: —
@@ -8,7 +8,14 @@
 
 Technical Story: [#302](https://github.com/yomote/mind-inbox/issues/302)（ライフサイクル分断）
 
-関連: [ADR 0046](0046-environment-rebuildable-from-declaration.md)（**D1 を supersede する**。D2〜D8 / D10 は現行）/ [ADR 0003](0003-two-phase-bicep.md)（2-phase Bicep）/ [ADR 0013](0013-standing-low-cost-dev-env-with-auto-deploy.md)（常設 dev / 予算）/ [ADR 0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md)（Cosmos 単一ストア）/ [ADR 0041](archive/operations/ux-observations-on-git-data-branch.md)（git データブランチ — **本 ADR はこの手法をユーザーデータには使わないと決める**）/ [ADR 0045](archive/operations/e2e-artifacts-are-secret-by-default.md)（「管理系 RG」の初出）/ [ADR 0018](archive/operations/runtime-verification-in-the-loop.md)（復元したことのないバックアップはバックアップではない）
+関連: [ADR 0046](0046-environment-rebuildable-from-declaration.md)（**本 ADR が Accept され次第 D1 を supersede する**。D2〜D10 は現行 — D9 本文の「持続層」は管理系 RG と読み替える）/ [ADR 0003](0003-two-phase-bicep.md)（2-phase Bicep）/ [ADR 0013](0013-standing-low-cost-dev-env-with-auto-deploy.md)（常設 dev / 予算）/ [ADR 0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md)（Cosmos 単一ストア）/ [ADR 0041](archive/operations/ux-observations-on-git-data-branch.md)（git データブランチ — **本 ADR はこの手法をユーザーデータには使わないと決める**）/ [ADR 0045](archive/operations/e2e-artifacts-are-secret-by-default.md)（「管理系 RG」の初出）/ [ADR 0018](archive/operations/runtime-verification-in-the-loop.md)（復元したことのないバックアップはバックアップではない）
+
+> **Status について。** 本 ADR は **2026-08-14 の PO 口頭裁定**（窓口 PM セッション経由。
+> 「[#302](https://github.com/yomote/mind-inbox/issues/302) の 2026-08-12 の設計対話を正とする」という指示）に基づく**エージェント起案**です。
+> 裁定そのものは PO が下していますが、**ADR の Status を `Accepted` へ動かすのは PO の操作**なので
+> （[`docs/adr/README.md`](README.md) / `/adr` skill Step 4）、ここでは `Proposed` で入れています。
+> **Proposed の判断を前提に実装を進めてよい**（[#419](https://github.com/yomote/mind-inbox/pull/419) が対応する実装）一方、
+> [ADR 0046](0046-environment-rebuildable-from-declaration.md) D1 の supersede が確定するのは Accept 時です。
 
 ## Context and Problem Statement
 
@@ -118,7 +125,7 @@ Key Vault / Storage / Log Analytics は**両層に同じ型が居る**（アプ�
 - **D2 が動くまで「使い捨て」は宣言でしかない** — バックアップ / 復元の往復を 1 回通すまで、アプリ系 RG の撤収は暫定的に拒否され続ける
 - **OpenAI / Speech が撤収ガードの拒否対象から外れる** — データは持たないが、クォータ / F0 枠を取り直せるかは未検証のまま撤収が通る
 - **管理系の bicep だけが検証されない**（[ADR 0046](0046-environment-rebuildable-from-declaration.md) の「受け入れる穴」は本 ADR でも引き継ぐ）
-- **[ADR 0046](0046-environment-rebuildable-from-declaration.md) を読むときに 2 本を突き合わせる必要がある** — D1 だけが本 ADR に置き換わり、D2〜D8 / D10 はあちらに残る
+- **[ADR 0046](0046-environment-rebuildable-from-declaration.md) を読むときに 2 本を突き合わせる必要がある** — D1 だけが本 ADR に置き換わり、D2〜D10 は現行（D9 本文の「持続層」は管理系 RG と読み替える）としてあちらに残る
 
 ## Pros and Cons of the Options
 
@@ -164,4 +171,4 @@ Key Vault / Storage / Log Analytics は**両層に同じ型が居る**（アプ�
 - Issue: [#302](https://github.com/yomote/mind-inbox/issues/302) — PO の原設計は [2026-08-12 のコメント](https://github.com/yomote/mind-inbox/issues/302#issuecomment-5263080034)
 - PR: [#412](https://github.com/yomote/mind-inbox/pull/412)（[ADR 0046](0046-environment-rebuildable-from-declaration.md) D1 初版に従った実装）/ [#419](https://github.com/yomote/mind-inbox/pull/419)（本 ADR の実装）
 - Runbook: [`docs/runbooks/mgmt-layer-apply.md`](../runbooks/mgmt-layer-apply.md)
-- 関連 ADR: [0046](0046-environment-rebuildable-from-declaration.md)（D1 を supersede）/ [0003](0003-two-phase-bicep.md) / [0013](0013-standing-low-cost-dev-env-with-auto-deploy.md) / [0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md) / [0041](archive/operations/ux-observations-on-git-data-branch.md) / [0045](archive/operations/e2e-artifacts-are-secret-by-default.md) / [0018](archive/operations/runtime-verification-in-the-loop.md)
+- 関連 ADR: [0046](0046-environment-rebuildable-from-declaration.md)（Accept され次第 D1 を supersede / D2〜D10 は現行 — D9 本文の「持続層」は管理系 RG と読み替える）/ [0003](0003-two-phase-bicep.md) / [0013](0013-standing-low-cost-dev-env-with-auto-deploy.md) / [0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md) / [0041](archive/operations/ux-observations-on-git-data-branch.md) / [0045](archive/operations/e2e-artifacts-are-secret-by-default.md) / [0018](archive/operations/runtime-verification-in-the-loop.md)

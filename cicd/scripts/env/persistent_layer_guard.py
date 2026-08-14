@@ -70,6 +70,7 @@ import argparse
 import json
 import sys
 from dataclasses import dataclass, field
+from collections.abc import Iterable
 from typing import Any
 
 # **暫定**: アプリ系に居るのが正しいが、中身を復元できると実証するまで撤収を止める型。
@@ -106,6 +107,13 @@ APP_LAYER_NOTABLE_TYPES: dict[str, str] = {
 LAYER_TAG_KEY = "mindinboxlayer"
 LAYER_TAG_MANAGEMENT_VALUE = "management"
 
+# **恒久的に撤収できない RG。既定名はどんな設定でも保護対象から外れない。**
+#
+# ここを「呼び出し側が渡した 1 個の名前」にしていると、`MGMT_RG` を別名に向けるだけで
+# 管理系 RG そのものが `target-is-management-rg` に落ちなくなり、層タグの findings も
+# `ALLOW_PROTECTED_DELETE=true` で override されて `az group delete` が通る
+# (2026-08-14 の内部 judge が実測。逃げ道の無いはずの保護が可変値 1 つに依存していた)。
+# **`--mgmt-rg` は「足す」だけで、この既定名を置き換えられない。**
 DEFAULT_MANAGEMENT_RG = "rg-mgmt-mindbox"
 
 # findings の種類。**管理系 (恒久) と データ (暫定) を混ぜない** — 混ぜると、
@@ -202,6 +210,25 @@ def normalize_rg(name: str) -> str:
     return name.strip().lower()
 
 
+def management_rg_set(extra: Iterable[str] | str | None = None) -> frozenset[str]:
+    """恒久的に撤収できない RG の集合。**既定名を必ず含む (追加専用)**。
+
+    無いと: 呼び出し側が `--mgmt-rg` を別名に向けた瞬間、`rg-mgmt-mindbox` が
+    「ただの RG」に落ちる。層タグの findings は override で通るので、
+    「どのフラグでも消せない」という唯一逃げ道の無い保護が消える。
+    """
+    names = {normalize_rg(DEFAULT_MANAGEMENT_RG)}
+    if extra is None:
+        return frozenset(names)
+    if isinstance(extra, str):
+        extra = [extra]
+    for name in extra:
+        normalized = normalize_rg(str(name))
+        if normalized:
+            names.add(normalized)
+    return frozenset(names)
+
+
 def classify(
     resources: list[Any],
     protected_names: list[str] | None = None,
@@ -268,7 +295,7 @@ def classify(
 def _decide_for_current_state(
     *,
     target_rg: str,
-    management_rg: str = DEFAULT_MANAGEMENT_RG,
+    extra_management_rgs: Iterable[str] | str | None = None,
     rg_exists: bool | None = True,
     resources: list[Any] | None = None,
     deleted_resources: list[Any] | None = None,
@@ -281,7 +308,8 @@ def _decide_for_current_state(
 
     引数:
       target_rg:        撤収しようとしている RG。
-      management_rg:    管理系の RG。
+      extra_management_rgs: 管理系として**追加で**守る RG 名。既定名
+                        (`rg-mgmt-mindbox`) は常に守られ、ここで外せない。
       rg_exists:        target_rg が実在するか。**確認そのものに失敗したときは None**
                         を渡すこと (False と区別する — False は「調べたら無かった」)。
       resources:        target_rg の中身 (str か {type,name,tags})。**取得に失敗した
@@ -302,13 +330,19 @@ def _decide_for_current_state(
       6. 管理系が居る     → 拒否 (override 可) / 恒久
       7. 復元未実証のデータが居る → 拒否 (override 可) / **暫定** (ADR 0046 D9 まで)
     """
-    if normalize_rg(target_rg) == normalize_rg(management_rg):
+    protected_rgs = management_rg_set(extra_management_rgs)
+    if normalize_rg(target_rg) in protected_rgs:
         return Decision(
             allowed=False,
             code="target-is-management-rg",
             reason=(
                 f"{target_rg} は管理系の RG です。撤収の対象はアプリ系だけで、"
                 "管理系はどのフラグでも削除できません (ADR 0056 D1)。"
+            ),
+            notes=(
+                "恒久的に撤収できない RG: "
+                + " / ".join(sorted(protected_rgs))
+                + f" (既定 {DEFAULT_MANAGEMENT_RG} は --mgmt-rg では外せない)",
             ),
         )
 
@@ -414,7 +448,8 @@ def _decide_for_current_state(
             code="management-resources-present",
             reason=(
                 f"{target_rg} に管理系 (運用のためのもの) のリソースが残っています。"
-                f"先に管理系 RG ({management_rg}) へ移してから撤収してください (Issue #302)。"
+                f"先に管理系 RG ({DEFAULT_MANAGEMENT_RG}) へ移してから撤収してください "
+                "(Issue #302)。"
             ),
             findings=tuple(management),
             notes=tuple(notes),
@@ -466,7 +501,7 @@ def saw_rg_absent(previous_codes: list[str] | None) -> bool:
 def decide(
     *,
     target_rg: str,
-    management_rg: str = DEFAULT_MANAGEMENT_RG,
+    extra_management_rgs: Iterable[str] | str | None = None,
     rg_exists: bool | None = True,
     resources: list[Any] | None = None,
     deleted_resources: list[Any] | None = None,
@@ -495,7 +530,7 @@ def decide(
     """
     decision = _decide_for_current_state(
         target_rg=target_rg,
-        management_rg=management_rg,
+        extra_management_rgs=extra_management_rgs,
         rg_exists=rg_exists,
         resources=resources,
         deleted_resources=deleted_resources,
@@ -549,8 +584,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target-rg", required=True, help="撤収しようとしている RG")
     parser.add_argument(
         "--mgmt-rg",
-        default=DEFAULT_MANAGEMENT_RG,
-        help=f"管理系の RG (既定: {DEFAULT_MANAGEMENT_RG})",
+        action="append",
+        default=[],
+        help=(
+            f"管理系として**追加で**守る RG (繰り返し可)。既定の {DEFAULT_MANAGEMENT_RG} は "
+            "常に守られ、このフラグでは外せない"
+        ),
     )
     parser.add_argument(
         "--rg-missing",
@@ -673,7 +712,7 @@ def main(argv: list[str] | None = None) -> int:
 
     decision = decide(
         target_rg=args.target_rg,
-        management_rg=args.mgmt_rg,
+        extra_management_rgs=args.mgmt_rg,
         rg_exists=rg_exists,
         resources=resources,
         deleted_resources=deleted_resources,

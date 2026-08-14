@@ -15,7 +15,12 @@ FORCE_DELETE_LOG_ANALYTICS="${FORCE_DELETE_LOG_ANALYTICS:-false}"
 PURGE_WAIT_SECONDS="${PURGE_WAIT_SECONDS:-1800}"
 # 管理系 RG (ADR 0056 D1 / #302)。撤収の対象はアプリ系だけで、ここは**削除できない**。
 # 判定は persistent_layer_guard.py が持つ (このスクリプトは材料を集めるだけ)。
-MGMT_RG="${MGMT_RG:-rg-mgmt-mindbox}"
+#
+# **この変数は保護を「足す」だけで、既定の rg-mgmt-mindbox を外せない。**
+# 外せる作りにしていた頃は、MGMT_RG を別名に向けるだけで管理系 RG そのものが
+# 恒久保護から落ち、ALLOW_PROTECTED_DELETE=true と組み合わせると削除まで通った
+# (2026-08-14 の内部 judge が実測)。既定名は guard 側の DEFAULT_MANAGEMENT_RG が持つ。
+MGMT_RG="${MGMT_RG:-}"
 ALLOW_PROTECTED_DELETE="${ALLOW_PROTECTED_DELETE:-false}"
 # 層タグ (mindInboxLayer=management) の付いていない管理系リソースを名指しで守る。
 # 空白区切り。移行前の (mgmt bicep をまだ流していない) Storage / Log Analytics 用。
@@ -51,9 +56,13 @@ Environment variables:
   PURGE_DELETED_KEYVAULTS         true|false. Purge soft-deleted Key Vaults after RG deletion (default: false)
   PURGE_DELETED_COGNITIVE_SERVICES true|false. Purge soft-deleted CS / OpenAI accounts after RG deletion (default: false)
   PURGE_WAIT_SECONDS              Max seconds to wait for RG deletion / soft-deleted state (default: 1800)
-  MGMT_RG                         Management-layer RG that must never be torn down (default: rg-mgmt-mindbox)
+  MGMT_RG                         EXTRA management-layer RG to protect. Additive only -- the built-in
+                                  rg-mgmt-mindbox is always protected and cannot be turned off (default: empty)
   PROTECTED_RESOURCE_NAMES        Space-separated resource names to treat as management even without the layer tag (default: empty)
   ALLOW_PROTECTED_DELETE          true|false. Proceed even though protected resources are in the target RG (default: false)
+
+The built-in management RG (rg-mgmt-mindbox) can never be torn down, no matter what
+MGMT_RG or ALLOW_PROTECTED_DELETE are set to. MGMT_RG only ADDS more RGs to that set.
 
 This script refuses to run when the target RG is the management layer, when the
 target RG still holds management resources, when it holds data whose restore has
@@ -168,7 +177,12 @@ declare -a GUARD_PREVIOUS_CODES=()
 # persistent_layer_guard.py に渡すだけ。**呼ぶたびに材料を取り直す** (使い回さない)。
 run_layer_guard() {
   local guard="${SCRIPT_DIR}/persistent_layer_guard.py"
-  local -a guard_args=(--target-rg "$RG" --mgmt-rg "$MGMT_RG")
+  local -a guard_args=(--target-rg "$RG")
+
+  # **空なら渡さない。** 既定の管理系 RG は guard 側が常に守るので、ここは追加分だけ。
+  if [[ -n "$MGMT_RG" ]]; then
+    guard_args+=(--mgmt-rg "$MGMT_RG")
+  fi
   local inventory deleted err_file rg_state name code rc=0
 
   if [[ "$ALLOW_PROTECTED_DELETE" == "true" ]]; then
@@ -265,7 +279,7 @@ assert_safe_to_destroy() {
   if ! run_layer_guard; then
     echo "" >&2
     echo "Nothing was deleted (refused before ${phase}). See the guard line above:" >&2
-    echo "  - management resources still in the RG -> move them to ${MGMT_RG} first (Issue #302)" >&2
+    echo "  - management resources still in the RG -> move them to the management RG first (Issue #302)" >&2
     echo "  - data whose restore is unproven (Cosmos) -> provisional refusal until the backup" >&2
     echo "    and restore round-trip has been run once (ADR 0046 D9)" >&2
     echo "  - could not check (existence or contents) -> fix az login / permissions and re-run" >&2
