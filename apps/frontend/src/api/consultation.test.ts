@@ -308,8 +308,8 @@ describe("[単体] 副作用ツールの承認要求 (#82 / G1)", () => {
     });
   });
 
-  it("NOT_FOUND (期限切れ) は ApprovalExpired に写す", async () => {
-    // 無いと: 失効した承認 (ai-agent の TTL 1h / 再起動) への応答が通信失敗と同じ
+  it("NOT_FOUND (期限切れ / 処理済み) は ApprovalExpired に写す", async () => {
+    // 無いと: 失効した承認 (ai-agent の TTL 1h / 再起動) や処理済みの承認への応答が通信失敗と同じ
     // 汎用エラーになり、UI は「再試行してください」しか出せない。再試行は決して
     // 成功しないので承認カードが閉じられず、その会話は永久に詰む (PR #416 judge major-1)。
     const err = new TRPCClientError("approval-not-found");
@@ -320,7 +320,7 @@ describe("[単体] 副作用ツールの承認要求 (#82 / G1)", () => {
   });
 
   it("NOT_FOUND 以外の失敗は ApprovalExpired にしない (再試行で直る失敗を消さない)", async () => {
-    // 無いと: 上流障害まで「期限切れ」に化けてカードが閉じ、サーバには承認待ちが
+    // 無いと: 上流障害まで「もう受け付けられない」に化けてカードが閉じ、サーバには承認待ちが
     // 残ったまま画面から消える。
     vi.mocked(trpc.consultation.approve.mutate).mockRejectedValue(new TRPCClientError("boom"));
 

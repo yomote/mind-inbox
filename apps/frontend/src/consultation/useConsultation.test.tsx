@@ -834,23 +834,33 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
     expect(result.current.actionError).not.toContain("まだ実行されていません");
   });
 
-  it("期限切れ (ApprovalExpired) はカードを閉じ、期限切れとして伝える", async () => {
-    // 無いと: 失効した承認 (ai-agent の TTL 1h / 再起動) を押しても「通信状況を確認して
+  it("受け付けられない承認 (ApprovalExpired) はカードを閉じ、実行の有無は断定せずに伝える", async () => {
+    // 無いと (1): 失効した承認 (ai-agent の TTL 1h / 再起動) を押しても「通信状況を確認して
     //         再試行」が出続け、再試行は決して成功しないのでカードが閉じられない。
     //         承認も却下もできず、次の発話も送れない行き止まりになる (judge major-1)。
+    // 無いと (2): 「期限切れです。操作は実行されていません」と断定する文面が通る。
+    //         ai-agent は approved 済みの ID にも同じ 404 を返し (`Approval already
+    //         processed`)、status の保存は resume 実行の**前**なので、承認が実行された
+    //         あとの再試行でも 404 になる。断定すると、送信済みのメールをユーザーが
+    //         もう一度送る判断をしうる (judge / Codex P1)。
     const result = await startAndAskForApproval();
     vi.mocked(respondToApproval).mockRejectedValue(new ApprovalExpired());
 
     await act(async () => await result.current.respondToPendingApproval(true));
 
     expect(result.current.pendingApproval).toBeNull();
-    expect(result.current.actionError).toContain("期限切れ");
+    expect(result.current.actionError).toContain("もう受け付けられません");
+    // 期限切れと処理済みを混同しない / 未実行を断定しない
+    expect(result.current.actionError).toContain("すでに処理済み");
+    expect(result.current.actionError).not.toContain("実行されていません");
   });
 
-  it("期限切れの承認を抱えたまま次の発話を送ると、カードが閉じて発話が送信される", async () => {
-    // 無いと: 却下が 404 (期限切れ) で失敗するたびに「発話を送らずカードを残す」経路に
-    //         落ち、その会話は二度と先へ進めなくなる。期限切れは**サーバが何も実行せずに
-    //         解放された状態**なので、止める理由が無い (judge major-1 の機械化文)。
+  it("受け付けられない承認を抱えたまま次の発話を送ると、カードが閉じて発話が送信される", async () => {
+    // 無いと: 却下が 404 で失敗するたびに「発話を送らずカードを残す」経路に落ち、その
+    //         会話は二度と先へ進めなくなる。この ID へ却下を送り直しても永久に 404 なので、
+    //         止める理由が無い (judge major-1 の機械化文)。
+    //         なお「何も実行せずに解放された」とは限らない (処理済みでも 404 / Codex P1)。
+    //         止めない理由は「実行されていないから」ではなく「再試行が成功しないから」。
     const result = await startAndAskForApproval();
     expect(result.current.pendingApproval).not.toBeNull();
 
@@ -864,7 +874,8 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
 
     expect(result.current.pendingApproval).toBeNull();
     expect(sendMessage).toHaveBeenLastCalledWith("s1", "やっぱり別の話をしたい");
-    expect(result.current.actionError).toContain("期限切れ");
+    expect(result.current.actionError).toContain("もう受け付けられません");
+    expect(result.current.actionError).not.toContain("実行されていません");
     expect(result.current.session?.messages.map((m) => m.text)).toEqual(
       expect.arrayContaining(["やっぱり別の話をしたい", "受け止めました"]),
     );

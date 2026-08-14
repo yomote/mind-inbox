@@ -130,17 +130,23 @@ export class ApprovalRequestUnusable extends Error {
 }
 
 /**
- * 承認要求がもう存在しない (#82 / PR #416 judge major-1)。
+ * 承認要求がもう受け付けられない (#82 / PR #416 judge major-1)。
  *
  * ai-agent の承認レコードは TTL 1 時間で失効し、in-memory 構成では再起動でも消える。
  * BFF はこれを `NOT_FOUND` で返す。**通信失敗と同じ扱いにしない** — 再試行しても
  * 永久に成功しないので、「再試行してください」を出し続けると承認カードが閉じられず
  * 会話が二度と進まなくなる (404 デッドロック)。UI 側はこれを受けてカードを閉じ、
  * 次の発話を送れる状態に戻す。
+ *
+ * **クラス名の "Expired" は「もう受け付けられない」の略で、「期限切れ」の断定ではない**
+ * (PR #416 judge / Codex P1)。ai-agent は approved / rejected 済みの ID にも同じ 404 を
+ * 返す (`Approval already processed`) ため、**この例外から「操作は実行されていない」は
+ * 導けない**。ユーザーに出す文面で断定しないこと (`FAILURE_MESSAGE.approvalExpired`)。
+ * 区別できるようにするには契約側の冪等化 (409 + status 返却) が要る → #82 に選択肢を記録。
  */
 export class ApprovalExpired extends Error {
   constructor() {
-    super("approval request no longer exists (expired or released)");
+    super("approval request no longer accepted (expired, released, or already processed)");
     this.name = "ApprovalExpired";
   }
 }
@@ -280,7 +286,8 @@ export async function respondToApproval(
   try {
     res = await trpc.consultation.approve.mutate({ approvalRequestId, approved });
   } catch (err) {
-    // 期限切れ (TTL 1h) / ai-agent 再起動で承認レコードが消えている。
+    // 承認レコードがもう受け付けられない: 期限切れ (TTL 1h) / ai-agent 再起動で消えた、
+    // または**すでに approved / rejected 済み**。ai-agent はこの 3 つを区別せず 404 を返す。
     // ここで種別を立てないと UI は「通信失敗 → 再試行」しか出せず、
     // 何度押しても同じ 404 に当たり続ける (#82 / PR #416 judge major-1)。
     if (isNotFound(err)) throw new ApprovalExpired();

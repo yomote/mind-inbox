@@ -118,11 +118,18 @@ const FAILURE_MESSAGE = {
   approvalApprove:
     "承認の結果を送れませんでした。操作が実行されたか確認できませんでした。会話を続けると状態が確認されます。",
   /**
-   * 承認レコードが失効していた (TTL 1h / ai-agent 再起動)。**失敗ではなく終了状態**
-   * なので、カードは閉じて会話を続けられるようにする (#82 / PR #416 judge major-1)。
+   * 承認レコードがもう無い (BFF の `NOT_FOUND`)。**失敗ではなく終了状態**なので、
+   * カードは閉じて会話を続けられるようにする (#82 / PR #416 judge major-1)。
+   *
+   * **「実行されていません」と断定してはいけない** (PR #416 judge / Codex P1)。
+   * ai-agent は失効した ID だけでなく **approved / rejected 済みの ID にも 404** を返し
+   * (`workflow.py` の `Approval already processed`)、しかも status の保存は resume 実行の
+   * **前**に起きる。つまり「承認が実行されたあとの再試行」でも 404 になるので、
+   * 404 から「実行されていない」は導けない — 断定すると、送信済みのメールを
+   * ユーザーがもう一度送る判断をしうる (approvalApprove と同じ事故)。
    */
   approvalExpired:
-    "この承認は期限切れです。操作は実行されていません。必要なら、もう一度お願いしてください。",
+    "この承認はもう受け付けられません (期限が切れたか、すでに処理済みです)。操作が実行されたかは、会話を続けてご確認ください。",
 } as const;
 
 /** 承認 / 却下の失敗文面。断定してよい範囲が承認と却下で違う (judge major-2)。 */
@@ -131,9 +138,9 @@ function approvalFailureMessage(approved: boolean): string {
 }
 
 /**
- * 承認応答の結末。**期限切れは「失敗」ではない** (#82 / PR #416 judge major-1)。
+ * 承認応答の結末。**「もう受け付けられない」は「失敗」ではない** (#82 / PR #416 judge major-1)。
  *
- * 失効した承認への再試行は永久に成功しないので、runAction のエラー経路
+ * 404 を返す承認への再試行は永久に成功しないので、runAction のエラー経路
  * (= Snackbar + カードを残す) に流すと会話が二度と進まなくなる。ここで
  * 「送れた / もう無い」に分け、どちらもカードを閉じる側へ倒す。
  */
@@ -417,9 +424,11 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
       if (!discarded.ok) return;
 
       if (discarded.value.expired) {
-        // 承認レコードがもう無い (TTL 失効 / ai-agent 再起動)。**却下できないことは
-        // 発話を止める理由にならない** — 実行されずに解放されているので、カードを
-        // 閉じてそのまま送る (ここで止めると会話が永久に詰む / judge major-1)。
+        // 承認レコードがもう無い (期限切れ / ai-agent 再起動 / すでに処理済み)。
+        // **却下できないことは発話を止める理由にならない** — この ID へ却下を送り直しても
+        // 永久に 404 なので、カードを閉じてそのまま送る (ここで止めると会話が永久に詰む /
+        // judge major-1)。ただし**「実行されなかった」とは言えない** (処理済みでも 404 に
+        // なる / Codex P1) ので、文面は approvalExpired 側で断定しない。
         setPendingApproval(null);
         setActionError(FAILURE_MESSAGE.approvalExpired);
       } else {
@@ -478,8 +487,9 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
    * 失敗したら要求を消さない (もう一度押せる)。ここで消すと「却下したつもりが
    * サーバには届いておらず、承認待ちが残っている」状態を画面から隠してしまう。
    *
-   * ただし**期限切れ (NOT_FOUND) は例外でカードを閉じる** — 承認レコードが無い相手への
-   * 再試行は永久に成功しないので、残すと会話が二度と進まない (judge major-1)。
+   * ただし**受け付けられない承認 (NOT_FOUND) は例外でカードを閉じる** — 期限切れでも
+   * 処理済みでも 404 なので、この ID への再試行は永久に成功しない。残すと会話が二度と
+   * 進まない (judge major-1)。閉じる理由は「実行されていないから」ではない (Codex P1)。
    */
   const respondToPendingApproval = React.useCallback(
     async (approved: boolean) => {
@@ -493,8 +503,10 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
       const responded = outcome.value;
       setPendingApproval(null);
       if (responded.expired) {
-        // 会話には残す発話が無い (サーバは何も実行していない)。何が起きたかは
-        // Snackbar で言葉にする — 黙ってカードが消えると「押したのに無反応」になる。
+        // 会話に残せる発話が無い (サーバは応答を返さない)。**「何も実行していない」とは
+        // 書かない** — 処理済みの ID でも 404 なので、実行済みかどうかは分からない
+        // (Codex P1)。何が起きたかは Snackbar で言葉にする — 黙ってカードが消えると
+        // 「押したのに無反応」になる。
         setActionError(FAILURE_MESSAGE.approvalExpired);
         return;
       }
