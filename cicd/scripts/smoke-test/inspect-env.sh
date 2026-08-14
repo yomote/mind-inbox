@@ -351,4 +351,4 @@ fi
 echo
 echo "---"
 echo
-echo "生成: \`cicd/scripts/smoke-test/inspect-env.sh\` ([ADR 0018](../../../docs/adr/0018-runtime-verification-in-the-loop.md))"
+echo "生成: \`cicd/scripts/smoke-test/inspect-env.sh\` ([ADR 0018](../../../docs/adr/archive/operations/runtime-verification-in-the-loop.md))"

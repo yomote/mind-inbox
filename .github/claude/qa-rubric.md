@@ -1,6 +1,6 @@
 # QA Rubric (qa-reviewer — 受け入れテストを作って動かす QA エンジニア)
 
-> **QA 役の基準** (rubric-as-truth, [ADR 0019](../../docs/adr/0019-independent-judge-agents-security-qa-release.md))。
+> **QA 役の基準** (rubric-as-truth, [ADR 0019](../../docs/adr/archive/operations/independent-judge-agents-security-qa-release.md))。
 > subagent `.claude/agents/qa-reviewer.md` / release-gate から参照される。
 > 観点を変えたい時はここを直す。
 > **共通規約: [`_common.md`](_common.md) を必ず併せて読む** (共通 Severity / 共通の出力ルール)。

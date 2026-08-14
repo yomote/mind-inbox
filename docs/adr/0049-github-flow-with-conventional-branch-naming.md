@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-08-12
 - Deciders: yomote (PO — 「ベストプラクティスがあればそれで決めて ADR に残して」/ 裁定は次回 debrief) / PM セッション
-- Related: [ADR 0011](0011-github-projects-as-execution-dashboard.md) (実行状態の真実は GitHub) / [ADR 0021](0021-parent-session-as-pm-orchestrator.md) (hub-and-spoke) / [ADR 0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) (分配基準) / [ADR 0036](0036-merge-gate-as-required-check-and-pm-cadence.md) (マージの門 / WIP 上限 2) / [ADR 0041](0041-ux-observations-on-git-data-branch.md) (`data/ux-observations` — 機械が読むブランチ) / ADR 0043 (**`main` に未収録** — PR [#284](https://github.com/yomote/mind-inbox/pull/284)) (D5 の `claim/<Issue 番号>` 着工ロック) / [ADR 0044](0044-stream-lanes-as-the-project-map.md) (地図)
+- Related: [ADR 0011](archive/operations/github-projects-as-execution-dashboard.md) (実行状態の真実は GitHub) / [ADR 0021](archive/operations/parent-session-as-pm-orchestrator.md) (hub-and-spoke) / [ADR 0033](archive/operations/parent-implements-via-subagent-when-child-sessions-are-gated.md) (分配基準) / [ADR 0036](archive/operations/merge-gate-as-required-check-and-pm-cadence.md) (マージの門 / WIP 上限 2) / [ADR 0041](archive/operations/ux-observations-on-git-data-branch.md) (`data/ux-observations` — 機械が読むブランチ) / ADR 0043 (**`main` に未収録** — PR [#284](https://github.com/yomote/mind-inbox/pull/284)) (D5 の `claim/<Issue 番号>` 着工ロック) / [ADR 0044](archive/operations/stream-lanes-as-the-project-map.md) (地図)
 
 Technical Story: 2026-08-12 の PO 依頼。ブランチ戦略・命名規約がリポジトリのどこにも文書化されていないことが判明した (`grep` で確認 — ヒットしたのは ADR 0033 と CLAUDE.md の「セッション名」の話で、ブランチではない)。関連: [#175](https://github.com/yomote/mind-inbox/issues/175) (並行する作業を機械で数えられない、と同型の問題)。
 
@@ -218,8 +218,8 @@ ADR 0043 D5 との接続を明文化する。
 ### 関連 ADR / Issue
 
 - ADR 0043 (**`main` に未収録** — PR [#284](https://github.com/yomote/mind-inbox/pull/284)) D5 — `refs/heads/claim/<Issue 番号>` の CAS 着工ロック (本 ADR D4 の接続先 / PR [#284](https://github.com/yomote/mind-inbox/pull/284) がマージされるまで `main` に存在しない)
-- [ADR 0041](0041-ux-observations-on-git-data-branch.md) — `data/ux-observations` (機械が読み書きするブランチ / D4 の予約名前空間)
-- [ADR 0036](0036-merge-gate-as-required-check-and-pm-cadence.md) D2 / D5 — ブランチ保護と WIP 上限 2 (D7 の機構化条件)
-- [ADR 0033](0033-parent-implements-via-subagent-when-child-sessions-are-gated.md) / [ADR 0021](0021-parent-session-as-pm-orchestrator.md) — セッション分配 (ブランチが増える源)
-- [ADR 0011](0011-github-projects-as-execution-dashboard.md) / [ADR 0044](0044-stream-lanes-as-the-project-map.md) — Issue が真実 / 地図 (D3 の「先に Issue を立てる」の根拠)
+- [ADR 0041](archive/operations/ux-observations-on-git-data-branch.md) — `data/ux-observations` (機械が読み書きするブランチ / D4 の予約名前空間)
+- [ADR 0036](archive/operations/merge-gate-as-required-check-and-pm-cadence.md) D2 / D5 — ブランチ保護と WIP 上限 2 (D7 の機構化条件)
+- [ADR 0033](archive/operations/parent-implements-via-subagent-when-child-sessions-are-gated.md) / [ADR 0021](archive/operations/parent-session-as-pm-orchestrator.md) — セッション分配 (ブランチが増える源)
+- [ADR 0011](archive/operations/github-projects-as-execution-dashboard.md) / [ADR 0044](archive/operations/stream-lanes-as-the-project-map.md) — Issue が真実 / 地図 (D3 の「先に Issue を立てる」の根拠)
 - [#175](https://github.com/yomote/mind-inbox/issues/175) — open PR 間の並行を機械で数えられない (本 ADR の Context 1 と同型の問題)

@@ -26,9 +26,11 @@ test.skip(liveEnvMissing, "LIVE_* env が未設定 (実環境向けのみ実行)
 // 4 往復 × (実 AI + コールドスタート) を許容する。config の既定 240s では足りない。
 // 待受予算 (下の per-hop timeout の合計): 到達+opener 120s
 // + turn1 (stream 210 + settle 60 + visible 30 + tts 120)s
-// + turn2〜4 (stream 120 + settle 60 + visible 30 + tts 60)s×3 = 1,350s < 1,500s
-// (SSE 移行で「応答が出そろうまで待つ」settle 分が増えたので予算に加算 — レビュー指摘)
-test.setTimeout(1_500_000);
+// + turn2〜4 (stream 120 + settle 60 + visible 30 + tts 60)s×3
+// + 送信操作 (fill 30 + click 30)s×4 = 1,590s < 1,700s
+// (SSE 移行で「応答が出そろうまで待つ」settle 分が増えたので予算に加算 — レビュー指摘。
+//  送信操作分は #287 で有限化した — それまでは無期限で、予算に載せようがなかった)
+test.setTimeout(1_700_000);
 
 /** シナリオ変更時は id を上げる (時系列比較の断絶点を明示するため)。 */
 const SCENARIO = {
@@ -53,6 +55,33 @@ const WARN_TTS_SYNTH_MS = Number(process.env.UX_PROBE_WARN_TTS_MS ?? 8_000);
  * 超えた場合は途中経過を warning つきで記録する。下の待受予算に組み込み済み。
  */
 const SETTLE_TIMEOUT_MS = 60_000;
+
+/**
+ * 送信操作 (入力欄への fill / 「送信」クリック) の上限。
+ *
+ * **上限が無いと、止まった場所と違う場所の名前で赤くなる** — #287 / #293 の実害。
+ * live config は `actionTimeout` を持っていなかったため Playwright のアクションは
+ * 無期限に actionable 待ちができ、`fill` が止まっても `fill` は落ちない。代わりに
+ * **送信前に張ってあった** `waitForResponse` が 210 秒で落ち、
+ * 「SSE `/api/chat/stream` が 1 往復目でハングする」として 2 日間追われた。
+ * 実際にはリクエストは 1 本も出ていない (#293 のタイトルが指す症状は起きていない)。
+ *
+ * ここを有限にすると、止まったときに Playwright 自身の call log
+ * (`waiting for element to be visible, enabled and editable`) が **job ログに出る**。
+ * trace は ADR 0045 で暗号化されており agent は復号できないので、
+ * 「入力欄のどの状態が満たされなかったか」を平文のログ側に出せるかが調査可否を分ける。
+ */
+const SEND_ACTION_TIMEOUT_MS = 30_000;
+
+/**
+ * ガイド発話バブルの読み取り上限。**「まだ無い」は正常な状態** (1 往復目の送信前 /
+ * ストリーム開始前) なので、無ければ空文字で返して呼び出し側に判断させる。
+ *
+ * 上限が要るのは `.catch(() => "")` を**実際に到達可能にする**ため。上限が無いと
+ * textContent は要素が現れるまで無期限に待ち、catch は永久に発火しない —
+ * 「無ければ空で続ける」と読めるコードが、実体は無言のハングになる。
+ */
+const BUBBLE_READ_TIMEOUT_MS = 2_000;
 
 /**
  * warn の分類 (レビュー指摘 — U6 の機械判定に速度と無関係な障害を混ぜないため):
@@ -167,7 +196,13 @@ const STREAMING_CARET = "▍";
 /** 直近のガイド発話の表示テキストと、まだストリーミング中か (= キャレットが出ているか)。 */
 async function lastAssistantBubble(page: Page): Promise<{ text: string; streaming: boolean }> {
   const bubble = page.locator(".MuiPaper-root").filter({ hasText: "ガイド" }).last();
-  const raw = ((await bubble.textContent().catch(() => "")) ?? "").toString();
+  // 上限つきで読む理由は BUBBLE_READ_TIMEOUT_MS の宣言を参照 (無いとこの catch が死ぬ)。
+  // catch で握り潰しているのは「バブルがまだ無い」だけ — それ以外の失敗も空文字になるが、
+  // 空文字は呼び出し側で「新しい応答が来ていない」として扱われ、最終的に
+  // settled=false / 応答が空 の形で必ず表に出る (無言では通らない)。
+  const raw = (
+    (await bubble.textContent({ timeout: BUBBLE_READ_TIMEOUT_MS }).catch(() => "")) ?? ""
+  ).toString();
   return {
     // ラベル "ガイド" とキャレットは表示上の飾りなので応答文から除く。
     // キャレットを残すと judge の採点入力が汚れ、後段の getByText(excerpt) も
@@ -315,6 +350,18 @@ test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間�
     const trpcTimeoutMs = i === 0 ? 210_000 : 120_000;
     const ttsTimeoutMs = i === 0 ? 120_000 : 60_000;
 
+    // 前ターンの応答。これと同じものを「今回の応答」と誤認しないための基準。
+    const previousReply = (await lastAssistantBubble(page)).text;
+
+    // **入力 → 待受 → 送信 の順を崩さないこと** (#287 / #293)。
+    // 以前は待受 (waitForResponse) を fill の前に張っていたため、送信の手前で
+    // 止まったときも「/api/chat/stream が返らない」という顔で赤くなり、
+    // 実際には 1 本もリクエストが出ていないのに SSE の障害として 2 日追われた。
+    // fill が先なら、送信できなかったときは **fill が fill として** 落ちる。
+    // リクエストを出すのは下の「送信」クリックなので、fill と click の間で
+    // 待受を張れば取りこぼしは起きない。
+    await composer.fill(userText, { timeout: SEND_ACTION_TIMEOUT_MS });
+
     // #132 (ADR 0024) で応答は SSE サイドチャネルに移り、UI から
     // `/api/trpc/consultation.sendMessage` は呼ばれなくなった。ここで待つのは
     // ストリームの応答ヘッダ = **最初のバイトが返るまで**の時間 (体感の初動)。
@@ -323,12 +370,8 @@ test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間�
       { timeout: trpcTimeoutMs },
     );
 
-    // 前ターンの応答。これと同じものを「今回の応答」と誤認しないための基準。
-    const previousReply = (await lastAssistantBubble(page)).text;
-
-    await composer.fill(userText);
     const sentAt = Date.now();
-    await page.getByRole("button", { name: "送信" }).click();
+    await page.getByRole("button", { name: "送信" }).click({ timeout: SEND_ACTION_TIMEOUT_MS });
 
     const trpcRes = await trpcPromise;
     const trpcAt = Date.now();

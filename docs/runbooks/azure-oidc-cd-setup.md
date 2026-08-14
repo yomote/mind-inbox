@@ -193,7 +193,7 @@ az role assignment delete --ids "<上で確認した Contributor の id>"
 sleep 300
 ```
 
-### 5. 振る舞いで確認する（設定ではなく動作 / [ADR 0018](../adr/0018-runtime-verification-in-the-loop.md)）
+### 5. 振る舞いで確認する（設定ではなく動作 / [ADR 0018](../adr/archive/operations/runtime-verification-in-the-loop.md)）
 
 **必ずこの順で、全部緑になるまで次に進まない。**
 
@@ -269,6 +269,75 @@ az role assignment list --all --assignee "$CLIENT_ID" \
 > 同じチェックの中の **Log Analytics クエリ側は Reader で動く**し、コメントにあるとおり
 > 「過去の障害はそこでしか追えない」ので、実用上の損失は小さい。失敗しても
 > `(未検証: 理由)` として可視化される設計になっている。
+
+## read-only の識別を足す (#209 / ops-inspect 用)
+
+**なぜ**: 上のデプロイ用 SP は `main` 限定のフェデレーション資格情報しか持たない。
+そのため **Azure を「読む」だけの確認にも main へのマージが必要**だった
+(2026-08-10 の 1 セッションで 6 往復)。読むだけの用途を、書き込み権を持つ SP から切り離す。
+
+**ワイルドカードは使えない**。標準のフェデレーション資格情報はサブジェクトの完全一致なので、
+`claude/*` のような指定は通らない。そこで **`ops/inspect` という専用ブランチ 1 本に寄せる**
+(エージェントは調査のたびにこのブランチへ push して dispatch する)。
+
+### 手順
+
+1. **アプリ登録を作る** — 例 `gha-oidc-readonly-mind-inbox`。リダイレクト URI は空
+2. **フェデレーション資格情報を 1 本**追加する
+   - シナリオ: 「GitHub Actions が Azure リソースをデプロイする」
+   - 組織 `yomote` / リポジトリ `mind-inbox`
+   - エンティティ型: **ブランチ** / ブランチ名: `ops/inspect`
+   - 生成されるサブジェクト: `repo:yomote/mind-inbox:ref:refs/heads/ops/inspect`
+3. **ロールを 3 つ**割り当てる (サブスクリプション スコープ / **書き込み系は付けない**)
+   - 閲覧者 / Cost Management 閲覧者 / Log Analytics 閲覧者
+4. GitHub の **Actions Variables** に `AZURE_CLIENT_ID_RO` = アプリ登録のクライアント ID
+
+テナントとサブスクリプションは既存の `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` を流用する。
+
+上の 1〜4 は `ro.sh` が冪等にやる。Azure Cloud Shell (Bash) から、**必ず commit sha で固定して**実行する:
+
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/yomote/mind-inbox/<commit-sha>/ro.sh)
+```
+
+sha は GitHub の `ro.sh` のページで `y` を押す (Copy permalink) と URL に入る。
+
+> **ブランチ名 (`ops/inspect`) で取ってはいけない。** このスクリプトは PO 自身の Azure 権限
+> ([ADR 0006](../adr/0006-azure-access-via-device-code.md) の device-code ログイン) の下で走る一方、
+> `ops/inspect` は調査のたびに直 push する運用のため**ブランチ保護が無い**。ブランチ名で
+> always-latest を取ると、このブランチに push できる者が中身を差し替えた瞬間、次の実行で
+> read-only の枠を超えて PO の全権限で任意コマンドが走る。
+
+**失敗したら client ID を登録しない**。`ro.sh` はどこか 1 ステップでも失敗すると、末尾に
+「❌ 未完了のステップがあります」と失敗一覧を出して**非ゼロで終了し、登録案内を出さない**。
+資格情報やロールが欠けたまま `AZURE_CLIENT_ID_RO` を登録すると、次の `ops-inspect` が
+Azure login やクエリで落ちるまで不完全な構成に気づけないため。原因を直してそのまま再実行してよい
+(全ステップ冪等)。
+
+### この構成のトレードオフ ([ADR 0054](../adr/0054-readonly-investigation-identity-on-unprotected-branch.md) — Proposed)
+
+`ops/inspect` に保護を掛けると「調査のたびに直 push して dispatch する」という用途が成立しないため、
+**保護なしのまま受容している**。つまり**このリポジトリに push できる主体は、read-only の Azure
+資格情報 (Reader / Cost Management Reader / Log Analytics Reader) を実質的に取得できる**。
+Log Analytics には相談ログや例外詳細が載りうるので、「read-only だから無害」ではない。
+
+受容の条件は ADR 0054 に 4 つ書いてある (書き込みロールを足さない / workflow は読むだけ /
+`ro.sh` は sha 固定 / **共同作業者が増えたら再判断**)。条件を外すときは ADR を先に改訂すること。
+
+### どう使われるか
+
+`ops-inspect.yml` の guard が ref を見て使い分ける。
+
+| ref | ログインに使う識別 |
+| --- | --- |
+| `main` | 従来のデプロイ SP (`AZURE_CLIENT_ID`) |
+| それ以外 | **read-only ID** (`AZURE_CLIENT_ID_RO`) |
+
+### 動作検証
+
+`ops/inspect` ブランチから `ops-inspect` を dispatch し、`check: azure-resources` が
+🟢 になること。ログの guard ステップに `ログインに使う識別: read-only ID (ops/inspect)`
+が出ていれば、read-only 側で通っている。
 
 ## Verification
 
@@ -366,7 +435,7 @@ Environment を作り、4 本すべてに `environment:` を宣言してから s
 ## Related
 
 - Issue: [#46 OIDC CD の SP ロールスコープ最小化](https://github.com/yomote/mind-inbox/issues/46)
-- ADR: [0009 オンデマンド CD](../adr/0009-on-demand-cd-via-github-actions-oidc.md) / [0013 常設 dev](../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) / [0006 device-code](../adr/0006-azure-access-via-device-code.md) / [0018 動作検証](../adr/0018-runtime-verification-in-the-loop.md)
+- ADR: [0009 オンデマンド CD](../adr/0009-on-demand-cd-via-github-actions-oidc.md) / [0013 常設 dev](../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) / [0006 device-code](../adr/0006-azure-access-via-device-code.md) / [0018 動作検証](../adr/archive/operations/runtime-verification-in-the-loop.md)
 - ワークフロー: `.github/workflows/deploy.yml`
 - スクリプト: `cicd/scripts/cloud-env/setup-oidc.sh` / `cicd/scripts/deploy/provision.sh` / `cicd/scripts/env/cleanup-env.sh`
 - 関連 Runbook: [claude-web-azure-access.md](./claude-web-azure-access.md) / [local-fullstack-dev.md](./local-fullstack-dev.md) / [refresh-infra-diagram.md](./refresh-infra-diagram.md)

@@ -1,8 +1,21 @@
 # Merge Queue と pm-accept 引き継ぎ (review-gate) の運用
 
+> ⚠️ **Merge Queue の節は現行運用ではありません (2026-08-11 実測)。**
+> Merge Queue は **organization 所有リポジトリ専用**の機能で、`yomote/mind-inbox` は
+> 個人アカウント所有のため **web UI に設定項目自体が出ません** ([#269 の訂正コメント](https://github.com/yomote/mind-inbox/issues/269#issuecomment-5262150635))。
+> 以下の queue 関連の手順は **将来 organization へ移した場合にだけ読むもの**です。
+>
+> **現行の渋滞対策は「Require branches to be up to date (strict) を OFF にする」**で、
+> 2026-08-11 に PO が実施済み。追いつきレースはこれで消えています
+> ([ADR 0042](../adr/archive/operations/pm-accept-carryover-and-merge-queue.md) の「D2 の改訂」)。
+> **base が進んだからといって反射的に追随しないこと** — 追随が要るのはコンフリクトが
+> 実際に出たときだけです。
+>
+> **この Runbook で今も有効なのは「pm-accept 引き継ぎ」の節だけ**です。
+
 ## Trigger
 
-- main の merge queue を有効化 / 設定変更 / 一時停止する (needs-human Issue #269 の設定作業)
+- **(org 移行後のみ)** main の merge queue を有効化 / 設定変更 / 一時停止する
 - review-gate の「pm-accept 引き継ぎ」(ADR 0042) の挙動を確認・切り分けする
 - queue に入れた PR が check 待ちのままタイムアウト脱落する
 
@@ -74,6 +87,6 @@
 
 ## Related
 
-- ADR: [0042 pm-accept 引き継ぎ + Merge Queue](../adr/0042-pm-accept-carryover-and-merge-queue.md) / [0036 マージの門](../adr/0036-merge-gate-as-required-check-and-pm-cadence.md)
+- ADR: [0042 pm-accept 引き継ぎ + Merge Queue](../adr/archive/operations/pm-accept-carryover-and-merge-queue.md) / [0036 マージの門](../adr/archive/operations/merge-gate-as-required-check-and-pm-cadence.md)
 - スクリプト: `cicd/scripts/review-gate/`
 - needs-human: Issue #269 (queue 有効化)

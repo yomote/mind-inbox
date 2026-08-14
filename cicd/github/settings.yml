@@ -1,0 +1,131 @@
+# このリポジトリの GitHub 設定の「あるべき姿」の宣言 (Issue #344)。
+#
+# ⚠️ ここに書いてあるのは **意図 (宣言)** であって **現実ではない**。
+#    エージェントはリポジトリ管理系 API に到達できない (実測 2026-08-12:
+#    GET /repos/.../branches/main/protection → 403 "GitHub access is not enabled
+#    for this session.")。したがって初期値は「あるべき姿」として書いてあり、
+#    **`github-settings` workflow の check を 1 回流すまで、現実と一致している保証は無い**。
+#    観測された現実 (事実) はデータブランチ `data/github-settings` に置かれる
+#    (意図 = ここ / 事実 = データブランチ / 差分 = check の出力)。
+#
+# ⚠️ **public リポジトリなので「設定の形は書く、秘密の値は書かない」**
+#    (apps/bff/local.settings.json.example と同じ区別)。トークン・メールアドレス・
+#    ユーザー ID・チーム名などの**値**をここに書かない。適用先リポジトリすら
+#    書かない — 対象は常に「この workflow が動いているリポジトリ」(GITHUB_REPOSITORY)
+#    であり、宣言に書かないことで**別リポジトリへコピーしたときに他所へ適用する事故**を
+#    構造的に潰している。
+#
+# 使い方 (スマホから):  docs/runbooks/github-settings.md
+# 判定ロジック (純関数): cicd/scripts/github-settings/settings_diff.py
+#
+# 既知の事実 (2026-08-12 時点で確認済み):
+#   - `main` と `release` はどちらも protected: true
+#   - required check には test.yml の 2 job と review-gate (commit status) がある
+
+version: 1
+
+# ---------------------------------------------------------------------------
+# セキュリティ機能 (リポジトリ全体)
+#
+# 値は GitHub の語彙をそのまま使う: enabled / disabled、code scanning は
+# configured / not-configured。**適用の順序に依存関係がある** — push protection は
+# secret scanning が有効でないと有効にできず、Dependabot security updates は
+# alerts が有効でないと有効にできない。順序は settings_diff.py の op_id が持つ
+# (強めるときは前から、弱めるときは後ろから)。
+# ---------------------------------------------------------------------------
+#
+# どうしてもこの環境では読めない / 触れない機能が出たら、値に `unmanaged` と書ける。
+# 比較も適用もしなくなる代わりに、**レポートに毎回「管理対象外」として名前が出る**
+# (黙って見ないのとは違う)。逃げ道として使い、常用しない。
+# ---------------------------------------------------------------------------
+security:
+  secret_scanning: enabled
+  secret_scanning_push_protection: enabled
+  dependabot_alerts: enabled
+  dependabot_security_updates: enabled
+  # CodeQL の default setup (advanced setup = 自前 workflow は使わない)。
+  # 検出言語 (languages) と実行スケジュールは GitHub 側が決めるため比較しない —
+  # 比較しない項目はレポートの「比較していない領域」に毎回出る (黙って狭めない)。
+  code_scanning_default_setup: configured
+
+# ---------------------------------------------------------------------------
+# ブランチ保護
+#
+# ⚠️ **required_status_checks.contexts に書けるのは「その base への PR で必ず走る
+#    check」だけ**。走らない check を required にすると PR が永久に pending になり
+#    マージ不能になる。実例:
+#      - iac-validate は paths フィルタ付き → required にしない
+#        (adr-number-guard は 2026-08-13 に paths を外して required にした)
+#      - test.yml は `pull_request: branches: [main]` → **release への PR では走らない**
+#        (だから release の required_status_checks は null)
+#      - review-gate は base=main の PR だけを判定する (リリース PR は対象外 / ADR 0019)
+#
+# ⚠️ **context 名は job の `name:` そのもの**。job 名を変えると required check が
+#    行方不明になり、PR が永久 pending になる。test.yml の job 名を変えるときは
+#    ここも同じ PR で変えること。
+#
+# 宣言に書いていない項目は比較されない — が、**PUT /branches/{b}/protection は
+# 送らなかった項目を既定値に戻す**。そのため「PUT が送る項目 = ここで宣言する項目」を
+# テストで固定してある (test_settings_diff.py)。項目を減らすとテストが落ちる。
+# ---------------------------------------------------------------------------
+branch_protection:
+  main:
+    protected: true
+    required_status_checks:
+      # strict = マージ前に base に追いつくことを必須にする。false —
+      # 追いつき競争になり、bot コミットの多い本リポジトリでは回らない
+      strict: false
+      contexts:
+        - "test (L0 / L1+L2 / L3 / L3-real)"
+        - "lint-and-build"
+        # マージの門 (ADR 0036)。commit status であって check run ではないが、
+        # required の指定方法は同じ
+        - "review-gate"
+        # ADR 番号の衝突ガード。2026-08-13 に paths フィルタを外して常時走るようにした
+        # ため required にできる (ADR に触れない PR では「衝突なし」で即緑)。required に
+        # した理由: #222 で実際に番号が衝突し、guard は赤だったのにマージ可能だった
+        - "ADR 番号の衝突を検査"
+    # PR を必須にする (= 直 push を塞ぐ)。**承認数は 0** — 実質 1 人 + エージェントの
+    # 開発で、承認の質は review-gate (PM 受け入れ + スレッド解決 + Codex) が持つ。
+    # ここを 1 にすると自分の PR を自分で承認できず、auto-merge の主経路が死ぬ
+    required_pull_request_reviews:
+      required_approving_review_count: 0
+      dismiss_stale_reviews: false
+      require_code_owner_reviews: false
+      require_last_push_approval: false
+    # スレッド解決の強制は review-gate が判定している (ADR 0036)。GitHub 側でも
+    # 二重にかけるかは check の結果を見てから決める (今は現実に寄せて false)
+    required_conversation_resolution: false
+    required_linear_history: false
+    enforce_admins: false # 壊れたときに PO 本人が直せる余地を残す
+    allow_force_pushes: false
+    allow_deletions: false
+    block_creations: false
+    lock_branch: false
+    allow_fork_syncing: false
+    # push できる人・チーム・App の制限。**宣言に書けるのは none だけ** —
+    # 誰を許すか (値) を public な宣言に書かない方針なので、制限がある状態を
+    # 宣言から復元できない。現実に制限があれば「弱める差分」として出るので、
+    # 許可 (allow_weakening) なしに静かに外れることは無い
+    restrictions: none
+
+  release:
+    protected: true
+    # release への PR では test.yml が走らない (上の警告を参照)。走らない check を
+    # required にすると永久 pending になるため null。リリースの門は release-gate の
+    # 独立 judge + 人間のマージ (ADR 0019) が持つ
+    required_status_checks: null
+    required_pull_request_reviews:
+      required_approving_review_count: 0
+      dismiss_stale_reviews: false
+      require_code_owner_reviews: false
+      require_last_push_approval: false
+    required_conversation_resolution: false
+    required_linear_history: false
+    enforce_admins: false
+    allow_force_pushes: false
+    allow_deletions: false
+    block_creations: false
+    lock_branch: false
+    allow_fork_syncing: false
+    restrictions: none

@@ -33,6 +33,16 @@ export default defineConfig({
 
   use: {
     baseURL: process.env.LIVE_APP_URL ?? "",
+    // **アクションに上限を持たせる** (#287)。既定 (未設定) は 0 = 無期限で、
+    // `fill` / `click` が actionable 待ちのまま止まっても**そのアクションは落ちない**。
+    // 落ちるのは同時に走っている別の待受で、赤の名前が止まった場所とずれる —
+    // 2026-08-11〜13 の golden-path-monitor / deploy の連敗は、送信手前で止まったものが
+    // 「SSE `/api/chat/stream` が返らない」として報告され、2 日間 SSE を疑わせた (#293)。
+    // 有限にすると Playwright の call log (どの actionability を待っていたか) が
+    // job ログに出る。trace は ADR 0045 で暗号化されていて agent は読めないので、
+    // 平文のログに理由が出るかどうかが「調査できる / できない」を分ける。
+    // 長時間の待ちは各 spec が明示 timeout で持っている (実 AI 応答・コールドスタート)。
+    actionTimeout: 60_000,
     screenshot: "only-on-failure",
     // sources: false — trace に **spec のソースコードを同梱しない** (ADR 0045 D8)。
     // 2026-08-12 の実測で、trace の resources/src@*.txt にテストの中身がそのまま

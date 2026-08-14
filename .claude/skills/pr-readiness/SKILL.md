@@ -46,17 +46,17 @@ git status --short
 下表を `git diff main...HEAD --name-only` の結果に当てる。**該当があれば必ず指摘**:
 
 | パターン (変更検出) | 指摘内容 (Test) | 指摘内容 (Docs) |
-|---|---|---|
-| `apps/bff/local.settings.json.example` 変更, または `process.env.*` の追加 | — | `CLAUDE.md` Environment Variables 表 / `documentation/strategy.md` §2 (環境変数) |
-| `apps/bff/src/trpc/router.ts` または `apps/bff/src/trpc/routers/**` の追加・I/O 変更 | 契約 (ai-agent とまたぐ I/O 変更なら) + 入場条件 (strategy.md §2.2「壊れても例外が出ず、データが静かに間違う」) を満たすドメインルール変更なら単体 (プロパティ優先) — `apps/bff/**/*.{test,spec}.ts` を grep。**受け渡し・ルーティングだけならテスト不要 — 代わりに Verification 欄の実測を確認** | `docs/api/bff-trpc.yaml` 再生成 / `CLAUDE.md` BFF: tRPC Router 節 |
+| --- | --- | --- |
+| `apps/bff/local.settings.json.example` 変更, または `process.env.*` の追加 | — | `apps/bff/CLAUDE.md` の環境変数表 (未設定時の挙動まで) / `documentation/strategy.md` §2 (環境変数) |
+| `apps/bff/src/trpc/router.ts` または `apps/bff/src/trpc/routers/**` の追加・I/O 変更 | 契約 (ai-agent とまたぐ I/O 変更なら) + 入場条件 (strategy.md §2.2「壊れても例外が出ず、データが静かに間違う」) を満たすドメインルール変更なら単体 (プロパティ優先) — `apps/bff/**/*.{test,spec}.ts` を grep。**受け渡し・ルーティングだけならテスト不要 — 代わりに Verification 欄の実測を確認** | `docs/api/bff-trpc.yaml` 再生成 (`npm run docs:openapi` — 手書きしない) / `apps/bff/CLAUDE.md` (zod が真実 / 承認の門) |
 | `apps/services/ai-agent/**/*.py` の endpoint 追加・I/O 変更 (FastAPI route) | 契約 + 入場条件を満たすロジック (パース等) なら単体 — `apps/services/ai-agent/**/test_*.py` または `tests/` を grep。受け渡しだけならテスト不要 (Verification 実測) | `docs/api/ai-agent.yaml` 再生成 |
 | `apps/services/voicevox/**/*.py` の endpoint 変更 | 入場条件を満たすロジックのみ単体 (placeholder 解消は #2) | `docs/api/voicevox.yaml` 再生成 |
 | `apps/frontend/src/components/screens/**` の新規/挙動変更 | 異常系スモーク (`apps/frontend/e2e-uc/`) / 実環境 E2E の hop に影響しないか確認。**廃止方針の旧 L3 mock (`apps/frontend/e2e/`) に新規シナリオを足さない** (strategy.md §6.3。E2E の本数も増やさない) | `docs/frontend/ui_specs/*.mdx` の対応 spec / `apps/frontend/src/spec/previews/` |
-| `cicd/iac/**/*.bicep` でのリソース追加・命名変更 | smoke-test スクリプト側で疎通確認が必要か | `docs/runbooks/` (deploy/rollback) / `CLAUDE.md` Azure Infrastructure 節 |
-| `cicd/scripts/deploy/*.sh` または `cicd/scripts/smoke-test/*.sh` の追加・引数変更 | — | `docs/runbooks/` / `CLAUDE.md` Deployment Scripts 節 |
+| `cicd/iac/**/*.bicep` でのリソース追加・命名変更 | smoke-test スクリプト側で疎通確認が必要か | `docs/runbooks/` (deploy/rollback) / `cicd/CLAUDE.md` (2-phase Bicep / リソース命名 / コスト前提) |
+| `cicd/scripts/deploy/*.sh` または `cicd/scripts/smoke-test/*.sh` の追加・引数変更 | — | `docs/runbooks/` / `cicd/CLAUDE.md` のデプロイスクリプト一覧 |
 | アーキテクチャ判断級の変更 (新サービス追加 / DB スキーマ変更 / 認証フロー変更 / 大幅な依存追加) | — | `docs/adr/NNNN-{slug}.md` を **実装より先に** 書く方針 (documentation/strategy.md §4.4) |
 | `package.json` の dependency 追加 | — | 大物 (新フレームワーク級) なら ADR 検討 |
-| `.github/workflows/**` の変更 | — | `CLAUDE.md` Commands / `docs/runbooks/` |
+| `.github/workflows/**` の変更 | — | `.claude/skills/dev/SKILL.md` (コマンドが変わったなら) / `docs/runbooks/` |
 
 検出は通常の `git diff --name-only` のグロブで十分。ファイル名だけで判定が苦しい場合 (例: `process.env.*` 追加検出) は `git diff main...HEAD -- apps/bff/` の中身を `grep` する。
 
@@ -73,7 +73,7 @@ git status --short
 
 Step 2 で立った各 trigger について、**diff に対応するテスト/docs ファイルが含まれているか** を `git diff main...HEAD --name-only` で確認する。判定は trigger の性質で分岐する:
 
-- **無条件トリガー** (該当したら必ず対応が要る行 — 言語間 I/O 変更の契約テスト、OpenAPI 再生成、Runbook / CLAUDE.md 更新、実装より先の ADR): 対応ファイルが diff に含まれていれば「✅ 対応あり」、無ければ「⚠️ 未対応」
+- **無条件トリガー** (該当したら必ず対応が要る行 — 言語間 I/O 変更の契約テスト、OpenAPI 再生成、Runbook / 領域別 `CLAUDE.md` 更新、実装より先の ADR): 対応ファイルが diff に含まれていれば「✅ 対応あり」、無ければ「⚠️ 未対応」
 - **条件付きトリガー** (入場条件・影響判定に依存する行 — 単体テストの要否、スモーク / E2E への影響確認): 対応テストが diff に有れば「✅ 対応あり」。無くても機械分類で ⚠️ にせず、**diff の中身で条件を判定する** — 入場条件 (strategy.md §2.2「壊れても例外が出ず、データが静かに間違う」) を満たすドメインルール変更か / スモーク・E2E の対象シナリオに影響するか。**満たす・影響するのにテスト/更新が無ければ「⚠️ 未対応」。満たさない・影響しない (受け渡し・ルーティング・型の詰め替えだけ等) ならテストは要求せず、PR 本文の Verification 欄に実測が貼られているか (これから貼る前提が示されているか) の確認に切り替える** — 実測の予定すら無ければ「⚠️ Verification 実測なし」
 
 例:

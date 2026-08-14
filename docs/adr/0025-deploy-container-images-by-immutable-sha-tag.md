@@ -93,6 +93,6 @@ no-op への退行も検知できるため。具体的には:
 ## Links
 
 - 関連 ADR: [0013](0013-standing-low-cost-dev-env-with-auto-deploy.md) (本 ADR はその
-  「タグ差し替えのみ」の参照方式を具体化・修正する) / [0018](0018-runtime-verification-in-the-loop.md)
+  「タグ差し替えのみ」の参照方式を具体化・修正する) / [0018](archive/operations/runtime-verification-in-the-loop.md)
 - Runbook: [ghcr-images.md](../runbooks/ghcr-images.md)
 - 実装: PR #131 (Fixes #107)

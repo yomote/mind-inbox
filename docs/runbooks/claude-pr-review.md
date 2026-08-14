@@ -1,4 +1,14 @@
-# Claude PR Review (LLM-as-a-judge) のセットアップ
+# Claude PR Review (LLM-as-a-judge) のセットアップ — **退役 / 歴史的経緯**
+
+> ⚠️ **この Runbook は現役ではない**。ここで説明している **PR レビュー Routine は削除済み** (#225) で、判断記録の [ADR 0008](../adr/archive/operations/pr-review-via-cloud-routine.md) も **Superseded by [0035](../adr/archive/operations/role-split-across-agents-and-actions.md)** (技術レビューを Codex に、監視を Actions に移した)。**以下の手順を再現しないこと** — Routine は生死が見えないため ADR 0035 D1 で原則廃止されている。
+>
+> **移行先 (現時点)**:
+>
+> - 技術レビューの**担い手**: Codex (`@codex review`)。停止時 ([#345](https://github.com/yomote/mind-inbox/issues/345)) は代役 judge [`.claude/agents/code-reviewer.md`](../../.claude/agents/code-reviewer.md) を PM が呼ぶ ([ADR 0052](../adr/archive/operations/codex-derived-review-rubric-and-stand-in-judge.md))
+> - 審査**基準**: [`.github/claude/review-rubric.md`](../../.github/claude/review-rubric.md) は現役 (2026-08-12 に全面改訂 — 旧版の軸 A / B / C は残っていない)
+> - **強制力**: ブランチ保護の会話解決ゲートではなく、required check `review-gate` ([ADR 0036](../adr/archive/operations/merge-gate-as-required-check-and-pm-cadence.md))。判定の実体は [`cicd/scripts/review-gate/check.py`](../../cicd/scripts/review-gate/check.py) が正典
+> - judge の運用手順: [`review-agents.md`](review-agents.md)
+> - 以下は当時の手順の記録として残す
 
 開発セッションとは**別軸**の「審査役」を、Claude Code on the web の **Routine** として動かす。
 PR が来るたびにサブスク枠の Claude が別セッションで diff をレビューし、inline comment +
@@ -6,7 +16,7 @@ PR が来るたびにサブスク枠の Claude が別セッションで diff を
 
 「指摘 → 修正 → 再レビュー → 直ったら自動 Resolve → 解決するまでマージ不可」を**ループ**として
 運用する (後述の「レビューのループと強制力」)。**merge は人間**が行う。
-方式選択の判断記録: [ADR 0008](../adr/0008-pr-review-via-cloud-routine.md)。
+方式選択の判断記録: [ADR 0008](../adr/archive/operations/pr-review-via-cloud-routine.md)。
 
 ## Trigger
 
@@ -14,7 +24,7 @@ PR 自動レビューを有効化したい / 止めたい / 観点を変えた�
 
 ## なぜ Routine か (方式の選択)
 
-方式比較 (Routine / 管理版 Code Review / Actions + `ANTHROPIC_API_KEY` / CodeRabbit) と採否の理由は [ADR 0008](../adr/0008-pr-review-via-cloud-routine.md) が正典 (ここには再掲しない)。運用上の要点だけ: Routine は**サブスク枠で走り、日次実行上限を超えても課金されず拒否される** — 「$5 が溶ける」事故が起きない。仕様: <https://code.claude.com/docs/en/routines>
+方式比較 (Routine / 管理版 Code Review / Actions + `ANTHROPIC_API_KEY` / CodeRabbit) と採否の理由は [ADR 0008](../adr/archive/operations/pr-review-via-cloud-routine.md) が正典 (ここには再掲しない)。運用上の要点だけ: Routine は**サブスク枠で走り、日次実行上限を超えても課金されず拒否される** — 「$5 が溶ける」事故が起きない。仕様: <https://code.claude.com/docs/en/routines>
 
 ## Prerequisites
 
@@ -74,7 +84,7 @@ PR 作成 (opened)
 ```
 
 - **自動 Resolve の挙動仕様**は [`review-rubric.md`](../../.github/claude/review-rubric.md) の「再レビュー時の挙動 (収束 + 自動 Resolve)」が正典 (ここには再掲しない)。Routine セッションは管理 GitHub 接続経由で resolve / merge ツールを **PAT なしで**持つ (実測確認済み) が、**merge は使わせない**。
-- **強制力と「merge は人間」の設計理由**は [ADR 0008](../adr/0008-pr-review-via-cloud-routine.md)。運用としては、ブランチ保護「会話の解決を必須」により未解決スレッドが残るとマージできない。
+- **強制力と「merge は人間」の設計理由**は [ADR 0008](../adr/archive/operations/pr-review-via-cloud-routine.md)。運用としては、ブランチ保護「会話の解決を必須」により未解決スレッドが残るとマージできない。
 
 ## Verification
 
@@ -130,7 +140,7 @@ PR 作成 (opened)
 
 ## Related
 
-- 判断記録: [ADR 0008](../adr/0008-pr-review-via-cloud-routine.md)
+- 判断記録: [ADR 0008](../adr/archive/operations/pr-review-via-cloud-routine.md)
 - 審査基準: [`.github/claude/review-rubric.md`](../../.github/claude/review-rubric.md)
 - Routines ドキュメント: <https://code.claude.com/docs/en/routines>
 - Claude Code on the web: <https://code.claude.com/docs/en/claude-code-on-the-web>

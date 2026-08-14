@@ -1,5 +1,5 @@
 {
-  "_comment": "状況ページ (gh-pages /status/) が読む定義。ここが『何を見張るか』の唯一の真実で、状態そのものは持たない (状態は GitHub の実データから毎回生成する)。自動化を足したらここに 1 行足す。足せないなら作らない。 cd-watchdog は ADR 0035 D2 で廃止した — 落ちた workflow 自身が Issue を立てる (.github/actions/report-failure) ので、見張り役は不要になった。routines は ADR 0035 D1 / ADR 0037 で 0 本にした — ux-judge は ux-eval.yml (機械計測) + PM tick の LLM 採点 (traces 欄) に、maint-check は debt-check.yml に移し、PR レビューは Codex の GitHub 連携 + review-gate.yml (required check) が痕跡を持つ。claude.ai 側の Routine 実体の削除は needs-human。",
+  "_comment": "状況ページ (gh-pages /status/) が読む定義。ここが『何を見張るか』の唯一の真実で、状態そのものは持たない (状態は GitHub の実データから毎回生成する)。自動化を足したらここに 1 行足す。足せないなら作らない。 cd-watchdog は ADR 0035 D2 で廃止した — 落ちた workflow 自身が Issue を立てる (.github/actions/report-failure) ので、見張り役は不要になった。routines は 0 本を目標にしており、現在 1 本 (当番 PM tick)。**PR レビューの代役 judge Routine は 2026-08-13 に退役した** — 一度も発火しないまま、同じ仕事を当番 PM tick が実測で完遂できることが分かったため (2026-08-13 の tick が PR #330 で code-reviewer subagent を新品コンテキストで回し、スタブ HTTP サーバとミューテーション 3 種まで実行して verdict を出しマージした)。**引く仕組みを増やすのではなく、門が独立レビュー無しで開かないようにするのが本筋** (review-gate の REVIEW_GATE_REQUIRE_CODEX)。claude.ai 側の Routine 実体の削除は エージェントから通らない (created_via: http_api は読めても書けない — 2026-08-13 実測) ため needs-human。",
   "workflows": [
     {
       "id": "deploy.yml",
@@ -26,6 +26,12 @@
       "id": "ux-data-migrate.yml",
       "name": "UX 観測の過去データ移行 (one-shot)",
       "what": "旧蓄積 (#162/#127 のコメント) をデータブランチの JSONL に取り込む (ADR 0041 D7。初期移行の 1 回きり)",
+      "expect": "必要なときだけ (手動)"
+    },
+    {
+      "id": "github-settings.yml",
+      "name": "GitHub 設定の点検 / 適用 (宣言 → 現実)",
+      "what": "宣言 (cicd/github/settings.yml) と実際のリポジトリ設定を突き合わせ、事実をデータブランチ data/github-settings に記録する。ズレがあれば Issue に積み、apply で適用する (#344。device-code 認証なので PO 本人の承認が要る = 手動)",
       "expect": "必要なときだけ (手動)"
     },
     {

@@ -1,6 +1,6 @@
 # Runbook: ops-inspect — サンドボックスの外を見る
 
-エージェントのセッションから届かない「事実」を、GitHub Actions の runner を踏み台にして取るための手順。判断の根拠は [ADR 0031](../adr/0031-agent-reaches-outside-via-github-actions.md)。
+エージェントのセッションから届かない「事実」を、GitHub Actions の runner を踏み台にして取るための手順。判断の根拠は [ADR 0031](../adr/archive/operations/agent-reaches-outside-via-github-actions.md)。
 
 ## いつ使うか
 
@@ -30,6 +30,22 @@ actions_run_trigger {
 
 GitHub の Actions タブ → `ops-inspect` → **Run workflow** → `check` を選んで実行。結果は job summary に出る。
 
+## workflow artifact をエージェントが取る (失敗した run の証拠)
+
+> **できる。** 2026-08-09 の [ADR 0029](../adr/archive/operations/probe-record-transport-via-issue-comment.md) は「agent は artifact を落とせない」を前提に書かれたが、その直後に `*.blob.core.windows.net` が egress 許可に入った (#168 / 下の節)。**前提が変わったのに再測定されず、「取れない」だけが 4 日間リポジトリ中に残って調査を止めていた** (#287 / #293)。
+
+`gh` は使えないので **MCP + `curl` の 2 段**で取る。
+
+1. `actions_list` (`list_workflow_run_artifacts`, `resource_id` = run ID) で artifact の `id` を引く
+2. `actions_get` (`download_workflow_run_artifact`, `resource_id` = artifact ID) が **署名付き URL** を返す
+3. その URL を `curl -o out.zip "<url>"` で落として `unzip` する (URL は数分で失効する。**必ずクエリ文字列ごと引用符で囲む**)
+
+`e2e-live-failure-*` / `playwright-live-report-*` に入っている `error-context.md` (aria スナップショット) と `test-failed-1.png` は、E2E が落ちた瞬間の画面そのもの。**「入力欄が disabled だったのか」級の問いはこれで決着する。**
+
+**取れないもの**: `e2e-live-trace-*` (Playwright の trace) は公開鍵で暗号化されている ([ADR 0045](../adr/archive/operations/e2e-artifacts-are-secret-by-default.md) — 記録は archive だが暗号化そのものは現役)。ダウンロードはできるが**復号できるのは PO だけ** ([`cicd/keys/README.md`](../../cicd/keys/README.md))。trace にしか無い情報 (アクション実行の記録・DOM の時系列) が要る場合はここで人手が要る — その一歩手前まではエージェントで進む。
+
+**動作確認 (2026-08-13)**: run `31648071011` の `playwright-live-report-31648071011` を `http=200 size=83809` で取得し、`error-context.md` を読めた。
+
 ## 触るときの約束 (ADR 0031 D2)
 
 このワークフローを拡張するとき、**次の 2 つは絶対に破らないこと**。
@@ -53,6 +69,6 @@ GitHub の Actions タブ → `ops-inspect` → **Run workflow** → `check` を
 
 ## 関連
 
-- [ADR 0031](../adr/0031-agent-reaches-outside-via-github-actions.md) (この仕組みの判断) / [ADR 0018](../adr/0018-runtime-verification-in-the-loop.md) (実態の読み取り) / [ADR 0006](../adr/0006-azure-access-via-device-code.md) (Azure 対話ログインの制約)
+- [ADR 0031](../adr/archive/operations/agent-reaches-outside-via-github-actions.md) (この仕組みの判断) / [ADR 0018](../adr/archive/operations/runtime-verification-in-the-loop.md) (実態の読み取り) / [ADR 0006](../adr/0006-azure-access-via-device-code.md) (Azure 対話ログインの制約)
 - `cicd/scripts/smoke-test/inspect-env.sh` — `azure-resources` が内部で流す詳細ダンプ
 - 対: `smoke-test.sh` (合否を出して CD を止める) / `inspect-env.sh` (人が読む。判定しない) / **`ops-inspect` (エージェントが読む。判定しない)**

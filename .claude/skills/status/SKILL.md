@@ -194,8 +194,8 @@ user が「HTML で」「レポートにまとめて」「見れる形で」等�
 
 ## 関連
 
-- ADR 0044（戦況図 = stream レーン / 裁定 3 件 / board 退役）: `docs/adr/0044-stream-lanes-as-the-project-map.md`
-- ADR 0043（PM 自走モード — 週次目標・日次ダイジェスト）: **PR #284 で審議中。マージされるまで `docs/adr/` に無い** — 「今週の目標」「dev 到達」の扱いは本 skill の記述を正とする
-- ADR 0011（実行状態 = GitHub Issues が真実）: `docs/adr/0011-github-projects-as-execution-dashboard.md`
+- ADR 0044（戦況図 = stream レーン / 裁定 3 件 / board 退役）: `docs/adr/archive/operations/stream-lanes-as-the-project-map.md`
+- ADR 0043（PM 自走モード — 週次目標・日次ダイジェスト）: `docs/adr/archive/operations/pm-self-driving-mode.md`。**運用系として退避済み = 現行ルールではない** — 「今週の目標」「dev 到達」の扱いは本 skill の記述を正とする
+- ADR 0011（実行状態 = GitHub Issues が真実）: `docs/adr/archive/operations/github-projects-as-execution-dashboard.md`
 - レーン定義: `cicd/scripts/status-page/streams.json`
 - status ページ: <https://yomote.github.io/mind-inbox/status/>（現在は**自動化の生死のみ**。戦況図の描画は #289 / Runbook: `docs/runbooks/status-page.md`）

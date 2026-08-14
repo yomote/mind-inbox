@@ -1,5 +1,5 @@
 # サンドボックスの外にある「事実」をエージェントが自力で取るための read-only ワークフロー。
-# 判断の根拠: ADR 0031 (docs/adr/0031-agent-reaches-outside-via-github-actions.md)
+# 判断の根拠: ADR 0031 (docs/adr/archive/operations/agent-reaches-outside-via-github-actions.md)
 #
 # なぜ必要か:
 #   エージェントのセッションは (1) egress ポリシーで一部ドメインに届かず
@@ -21,7 +21,16 @@
 #   - **入力をシェルに展開しない**。`run:` の中に ${{ inputs.* }} を直接書かず、
 #     必ず env: 経由で渡して "$VAR" として引用符付きで参照する
 #     (${{ }} は run の実行前にテキスト置換されるため、直接書くと注入口になる)。
-#   - **書き込み操作をしない**。az は show/list のみ、curl は GET のみ。
+#   - **状態を変える操作をしない**。az は show / list のみ、curl は GET のみ。
+#     **例外は 1 つだけ** — Cost Management の query API
+#     (`az rest --method post .../Microsoft.CostManagement/query`) は POST だが読み取り。
+#     この API は集計条件 (期間・粒度・グルーピング) を body で渡す設計のため
+#     メソッドが POST になるだけで、**サブスクリプションの状態は何も変えない**
+#     (GET の `az consumption usage list` は pretaxCost が "None" で返り実額が取れない
+#     — 2026-08-10 実測。cost-summary の中のコメント参照)。
+#     **例外はこの URI に閉じる。他の POST / PUT / PATCH / DELETE は書かない。**
+#     広げるときは ADR 0054 の受容条件 2 を先に改訂すること
+#     (docs/adr/0054-readonly-investigation-identity-on-unprotected-branch.md)。
 #   - **取得できなかったことを「異常なし」と書かない** (inspect-env.sh と同じ規律)。
 #     失敗は `(未検証: 理由)` として出す。
 
@@ -67,16 +76,27 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Azure を触る check だけ OIDC が要る。fetch-doc は不要。
+      #
+      # 2026-08-10 (#209): main 限定の OIDC しか無かったため、**Azure を読むクエリを 1 行
+      # 直すたびに main へマージが必要**だった (この日だけで 6 往復)。読むだけの確認に
+      # 書き込みブランチを経由していた。そこで read-only 専用の ID を足し、
+      # **main 以外はそちらでログインする**。
+      #   - main            → 従来のデプロイ SP (AZURE_CLIENT_ID)
+      #   - それ以外のブランチ → read-only ID (AZURE_CLIENT_ID_RO)
+      # read-only ID のフェデレーション資格情報は `ops/inspect` ブランチに紐づけている
+      # (ワイルドカードは使えないため専用ブランチに寄せた / Runbook: azure-oidc-cd-setup.md)。
       - name: Guard — OIDC 設定済みか
         id: guard
         env:
           CHECK: ${{ inputs.check }}
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_ID_RO: ${{ vars.AZURE_CLIENT_ID_RO }}
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           if [ "$CHECK" = "fetch-doc" ]; then
@@ -84,19 +104,33 @@ jobs:
             exit 0
           fi
           echo "needs_azure=true" >> "$GITHUB_OUTPUT"
-          # deploy.yml と同じ規律: 3 変数すべて揃って初めて true。partial を後段へ持ち越さない。
-          if [ -n "$AZURE_CLIENT_ID" ] && [ -n "$AZURE_TENANT_ID" ] && [ -n "$AZURE_SUBSCRIPTION_ID" ]; then
+
+          if [ "$REF_NAME" = "main" ]; then
+            CID="$AZURE_CLIENT_ID"
+            WHICH="デプロイ SP (main)"
+            HINT="docs/runbooks/azure-oidc-cd-setup.md"
+          else
+            CID="$AZURE_CLIENT_ID_RO"
+            WHICH="read-only ID ($REF_NAME)"
+            HINT="Issue #209 — AZURE_CLIENT_ID_RO の登録と ops/inspect 向け資格情報が要る"
+          fi
+          echo "which=$WHICH" >> "$GITHUB_OUTPUT"
+          echo "client_id=$CID" >> "$GITHUB_OUTPUT"
+
+          # deploy.yml と同じ規律: 3 つ揃って初めて true。partial を後段へ持ち越さない。
+          if [ -n "$CID" ] && [ -n "$AZURE_TENANT_ID" ] && [ -n "$AZURE_SUBSCRIPTION_ID" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "ログインに使う識別: $WHICH"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::OIDC 未設定 (AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID のいずれか空)。docs/runbooks/azure-oidc-cd-setup.md を参照。"
+            echo "::warning::OIDC 未設定のため Azure に接続しない ($WHICH)。$HINT"
           fi
 
       - name: Azure login (OIDC, no stored secret)
         if: steps.guard.outputs.needs_azure == 'true' && steps.guard.outputs.run == 'true'
-        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          client-id: ${{ steps.guard.outputs.client_id }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
@@ -320,67 +354,78 @@ jobs:
               if [ "$AZURE_READY" != "true" ]; then
                 fail "OIDC 未設定のため Azure に接続していない"
               else
-                START=$(date -u +%Y-%m-01)
-                END=$(date -u +%Y-%m-%d)
-                echo "" >> "$OUT"
-                echo "期間: $START 〜 $END (UTC)" >> "$OUT"
-                # 2026-08-10: --query で projection すると、フィールド名を間違えたときに
-                # 「Cost が全部 None の表」が success として返る (実際に踏んだ)。
-                # 生 JSON を取って python 側で集計し、**金額のキーが見つからなければ
-                # キー一覧を出して落とす** — 次の 1 回で名前が分かる形にしておく。
-                if ! az consumption usage list --start-date "$START" --end-date "$END" \
-                      -o json > /tmp/usage.json 2>/tmp/err.txt; then
-                  echo '```' >> "$OUT"
-                  cat /tmp/err.txt >> "$OUT"
-                  echo '```' >> "$OUT"
-                  fail "az consumption usage list が失敗した (SP に課金データの参照権が無い可能性)"
+                # 2026-08-10: 当初 `az consumption usage list` を使っていたが、このサブスクリプ
+                # ションでは **pretaxCost が文字列 "None" で返る** (89 件すべて)。金額が取れて
+                # いないのに合計 0.00 と表示され、「0 円」と誤読しかけた。権限の問題ではなく
+                # (Cost Management Reader を付けても変わらない) API の選択ミスだった。
+                # Cost Management の query API は同じ資格情報で実額を返す。
+                cat > /tmp/costq.json <<'JSON'
+          {
+            "type": "ActualCost",
+            "timeframe": "MonthToDate",
+            "dataset": {
+              "granularity": "None",
+              "aggregation": { "totalCost": { "name": "Cost", "function": "Sum" } },
+              "grouping": [ { "type": "Dimension", "name": "ResourceId" } ]
+            }
+          }
+          JSON
+                SUB=$(az account show --query id -o tsv 2>/dev/null)
+                URI="https://management.azure.com/subscriptions/$SUB/providers/Microsoft.CostManagement/query?api-version=2023-03-01"
+
+                # この API は 429 を返しやすい。リトライして、それでも駄目なら未検証で落とす。
+                RESP=""
+                for i in 1 2 3; do
+                  RESP=$(az rest --method post --uri "$URI" --body @/tmp/costq.json -o json 2>/tmp/err.txt)
+                  case "$RESP" in *'"rows"'*) break ;; esac
+                  sleep 20
+                done
+
+                if ! printf '%s' "$RESP" | grep -q '"rows"'; then
+                  echo '```' >> "$OUT"; head -c 500 /tmp/err.txt >> "$OUT"; echo '```' >> "$OUT"
+                  fail "Cost Management query が失敗した (429 か権限不足。Cost Management Reader が要る)"
                 else
-                  # 1 本の python で「$OUT への markdown 追記」と「判定行の stdout」を
-                  # 両方やる。`python3 -` はプログラムを stdin から読むので、
-                  # heredoc とパイプ入力は同時に使えない (最初に書いて踏んだ)。
-                  SUMMARY=$(python3 - /tmp/usage.json "$OUT" <<'PY'
-          import json, sys, collections
+                  # 応答は **ファイル経由**で渡し、集計の成否を必ず bash 側で受け取る。
+                  # `python3 - "$OUT" <<'PY'` は stdin をプログラムに占有させるので、
+                  # パイプで渡したつもりの応答は届かず json.load(sys.stdin) が EOF を
+                  # 読んで必ず落ちる。このスクリプトは (意図的に) set -e を使わないため、
+                  # 落ちても STATUS は初期値 ok のまま残り、**コストを 1 円も取れて
+                  # いないのに機械可読ブロックが "ok" を返す**。冒頭の規律
+                  # 「取得できなかったことを『異常なし』と書かない」に正面から反する。
+                  cat > /tmp/costsum.py <<'PY'
+          import json, sys
 
-          rows = json.load(open(sys.argv[1]))
+          d = json.load(open(sys.argv[1]))
           out = open(sys.argv[2], "a")
-          COST_KEYS = ("pretaxCost", "costInBillingCurrency", "cost", "paygCostInBillingCurrency")
-          NAME_KEYS = ("instanceName", "instanceId", "consumedService")
-          CUR_KEYS = ("currency", "billingCurrency", "billingCurrencyCode")
-
-          def bail(reason):
-              out.write("\n集計できませんでした: %s\n" % reason)
-              print("NOKEY\t%s" % reason)
+          props = d.get("properties", {})
+          cols = [c["name"] for c in props.get("columns", [])]
+          rows = props.get("rows", [])
+          if "Cost" not in cols or not rows:
+              out.write("\n集計できませんでした: 返ってきた列 %s / 行数 %d\n" % (cols, len(rows)))
+              print("NOKEY")
               raise SystemExit(0)
 
-          if not rows:
-              bail("課金レコードが 0 件 (当月ぶんがまだ確定していない可能性)")
-          sample = rows[0]
-          ck = next((k for k in COST_KEYS if k in sample), None)
-          if ck is None:
-              bail("金額のキーが見つからない。実際のキー: " + ", ".join(sorted(sample)))
-          nk = next((k for k in NAME_KEYS if k in sample), None)
-          cur = next((sample[k] for k in CUR_KEYS if sample.get(k)), "")
+          ci = cols.index("Cost")
+          ri = cols.index("ResourceId") if "ResourceId" in cols else None
+          cur = rows[0][cols.index("Currency")] if "Currency" in cols else ""
+          total = sum(float(r[ci] or 0) for r in rows)
 
-          agg = collections.Counter()
-          total = 0.0
-          for r in rows:
-              try:
-                  c = float(r.get(ck) or 0)
-              except (TypeError, ValueError):
-                  c = 0.0
-              total += c
-              agg[str(r.get(nk) or "?").rsplit("/", 1)[-1]] += c
-
-          out.write("\n**合計 %.2f %s** (課金レコード %d 件 / 金額キー: %s)\n\n" % (total, cur, len(rows), ck))
+          out.write("\n**合計 %.2f %s** (当月・ActualCost)\n\n" % (total, cur))
           out.write("| リソース | コスト |\n| --- | ---: |\n")
-          for name, c in agg.most_common(15):
-              out.write("| %s | %.2f |\n" % (name, c))
-          print("OK\t%.2f\t%s" % (total, cur))
+          for r in sorted(rows, key=lambda x: -float(x[ci] or 0))[:15]:
+              name = str(r[ri]).rsplit("/", 1)[-1] if ri is not None else "?"
+              out.write("| %s | %.2f |\n" % (name, float(r[ci] or 0)))
+          print("OK %.2f" % total)
           PY
-          )
-                  case "$SUMMARY" in
-                    NOKEY*) fail "コスト集計に失敗 (上の理由を見て次の run で直すこと)" ;;
-                  esac
+                  printf '%s' "$RESP" > /tmp/costresp.json
+                  if ! SUMMARY=$(python3 /tmp/costsum.py /tmp/costresp.json "$OUT" 2>/tmp/costerr.txt); then
+                    echo '```' >> "$OUT"; head -c 500 /tmp/costerr.txt >> "$OUT"; echo '```' >> "$OUT"
+                    fail "コスト集計が異常終了した (上の details を見ること)"
+                  else
+                    case "$SUMMARY" in
+                      NOKEY*) fail "コストを集計できなかった (Cost 列が無いか当月の行が 0 件 — 本文の列名を見ること)" ;;
+                    esac
+                  fi
                 fi
               fi
               ;;
