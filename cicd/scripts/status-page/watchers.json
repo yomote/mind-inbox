@@ -26,7 +26,8 @@
       "id": "ux-data-migrate.yml",
       "name": "UX 観測の過去データ移行 (one-shot)",
       "what": "旧蓄積 (#162/#127 のコメント) をデータブランチの JSONL に取り込む (ADR 0041 D7。初期移行の 1 回きり)",
-      "expect": "必要なときだけ (手動)"
+      "expect": "必要なときだけ (手動)",
+      "note": "**初期移行 (2026-08-11) は完了済みだが、退役させていない** — `docs/runbooks/ux-probe-judge.md` の Rollback が「データブランチが壊れた場合、凍結された #162 / #127 のコメントから `ux-data-migrate` の再実行で再構築できる」を復旧手段として指しており、その入力 (#162 は closed だがコメント 4 件が残存 — 2026-08-14 実測) はまだ生きている。消すなら runbook の Rollback を先に書き換えること (Issue #408 で PO 判断待ち)。"
     },
     {
       "id": "github-settings.yml",
@@ -41,10 +42,11 @@
       "expect_hours": 192
     },
     {
-      "id": "codeql.yml",
-      "name": "SAST (CodeQL)",
-      "what": "自分たちが書いたコードの injection / SSRF 等を PR と週次で解析し、Security タブの alert に積む (依存の CVE は security-sweep の担当)",
-      "expect_hours": 192
+      "id": "333008403",
+      "name": "SAST (CodeQL default setup)",
+      "what": "自分たちが書いたコードの injection / SSRF 等を PR / push(main) で解析し、Security タブの alert に積む (依存の CVE は security-sweep の担当)",
+      "expect_hours": 192,
+      "note": "**id が数字なのは仕様** — GitHub が管理する dynamic workflow (path は `dynamic/github-code-scanning/codeql`) は、`actions/workflows/{id}/runs` に path 文字列を渡すと 404 になり、**数値の workflow id でしか run 履歴を引けない** (2026-08-14 実測: 数値 333008403 は 84 run を返す / path 文字列は 404 Not Found)。自前 workflow の `codeql.yml` (advanced setup) は 2026-08-12 18:42 UTC に default setup が有効化された副作用で `disabled_manually` になり、Issue #408 の PO 裁定 (2026-08-14) で退役した — この行がその置き換え。**expect_hours 192 は『PR / push が 8 日間 1 度も無いのは異常』という下限**であって、default setup の週次 schedule に依存した値ではない (2026-08-14 実測では直近 30 run がすべて PR / push 由来で、schedule 由来の run は**未確認**)。数値 id はこのリポジトリでしか通用せず、default setup を一度無効化して有効化し直すと**別の id が振られてこの行は「未検証」に落ちる** (静かに緑にはならない)。"
     },
     {
       "id": "security-sweep.yml",

@@ -23,7 +23,10 @@
 - 運用手順 (Runbook の領域)
 - **開発の運用・プロセスの決め事** — エージェントの回し方 / レビュー体制 / PM 機構 / セッション分配 / CI の運転ルール。
   これらは**数日で改訂される**ため不変記録の棚に合わない。置き場は [`CLAUDE.md`](../../CLAUDE.md)。
-  過去に ADR として書かれた 29 本は [`archive/`](archive/README.md) へ退避済み
+  過去に ADR として書かれた 30 本は [`archive/`](archive/README.md) へ退避済み
+- **開発設備 (CI / 資格情報 / エージェントの実行環境) の運用判断** — プロダクトの構成ではなく
+  「開発を回すための設備」をどう運転するかは ADR ではない。置き場は [`docs/runbooks/`](../runbooks/README.md)。
+  旧 0054 (調査用 read-only 識別) がこれに当たり、2026-08-14 の debrief で退避した
 
 ## 書き方
 
@@ -44,8 +47,8 @@ git fetch origin main -q
 
 ⚠️ **`ls docs/adr/` のローカル最大値を使わないこと。** 並行セッションが同じ番号を取り、過去 2 回衝突している (0015→0019 / 0026→0027)。**採番は書く瞬間に上のコマンドで取る** (セッション開始時に取っておいた値は、その間に別 PR が ADR を着地させると腐る)。取り違えは CI (`adr-number-guard`) が退役番号の再利用も含めて赤にする。
 
-⚠️ **欠番は埋めないこと。** 0008 / 0011 / 0014 / 0018〜0022 … が飛んでいるのは、運用系 29 本を
-[`archive/`](archive/README.md) へ退避したためです。番号は ID であって順序ではなく、振り直すと
+⚠️ **欠番は埋めないこと。** 0008 / 0011 / 0014 / 0018〜0022 … が飛んでいるのは、30 本
+(運用・プロセス系 29 本 + 開発設備 1 本) を [`archive/`](archive/README.md) へ退避したためです。番号は ID であって順序ではなく、振り直すと
 Issue / PR 本文の「ADR 0030 を見て」がすべてリンク切れになります (リポジトリ外なので機械置換が届かない)。
 **常に main の最大番号 +1 で続けてください。**
 
@@ -125,10 +128,13 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0025](0025-deploy-container-images-by-immutable-sha-tag.md) — コンテナ image のデプロイは :latest ではなく不変 sha タグの解決 + 稼働検証で行う (#107)
 - [0046](0046-environment-rebuildable-from-declaration.md) — 環境を「宣言から作り直せるもの」にする — ライフサイクル 3 層分断 / Entra の Graph Bicep 宣言 / 週次プロビジョンテスト (0013 の「常設」を追補)
 - [0055](0055-bff-telemetry-on-workspace-based-app-insights.md) — BFF のサーバ側観測性を workspace-based Application Insights で持つ (保持 30 日 / 日次上限つき / 本文は名前と値の両面で落とす) — **Proposed**
-- [0054](0054-readonly-investigation-identity-on-unprotected-branch.md) — 調査用 read-only ID は保護のないブランチ (`ops/inspect`) に紐づけ、トレードオフを条件つきで受容する — **Proposed**
 - [0009](0009-on-demand-cd-via-github-actions-oidc.md) — デプロイは GitHub Actions のオンデマンド CD（手動 up/down + 夜間 teardown, OIDC）で行う — **Superseded by 0013**
 
 ## 退避された運用系 (ADR ではない)
 
-開発の運用・プロセスの決め事として書かれていた 29 本は [`archive/`](archive/README.md) にある。
+[`archive/`](archive/README.md) にあるのは計 30 本 — **開発の運用・プロセスの決め事として
+書かれていた 29 本**と、**開発設備の運用判断 1 本** (旧 0054)。
 **現行ルールではない** — 今どう動かすかは [`CLAUDE.md`](../../CLAUDE.md) を見ること。
+
+その 1 本 (旧 0054 / 調査用 read-only 識別) は運用ではなく**開発設備の運用判断**として退避した。
+現に守るべき条件の正典は Runbook [`azure-oidc-cd-setup.md`](../runbooks/azure-oidc-cd-setup.md) にある。
