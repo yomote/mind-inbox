@@ -12,6 +12,7 @@
  */
 
 import { config } from "../config";
+import { describeError, logEvent } from "../observability/telemetry";
 import { serviceHeaders } from "../clients/serviceToken";
 import {
   sendChatMessage,
@@ -99,14 +100,32 @@ function stubStream(req: ChatRequest): ReadableStream<Uint8Array> {
  */
 export async function openChatStream(req: ChatRequest): Promise<ReadableStream<Uint8Array>> {
   if (!config.aiAgentBaseUrl) {
-    console.log("[chatStream] AI_AGENT_BASE_URL not set — using stub stream");
+    logEvent("dependency.skipped", {
+      target: "ai-agent",
+      operation: "POST /chat/stream",
+      reason: "base-url-unset",
+      sessionId: req.sessionId,
+    });
     return stubStream(req);
   }
 
   const url = `${config.aiAgentBaseUrl}/chat/stream`;
-  console.log(`[chatStream] POST ${url}`);
+
+  // ここは #293 の本丸なので `trackDependency` ではなく手で書く — この呼び出しは
+  // **ヘッダが返った時点で終わり**で、本体のバイトはこの後に流れる。共通ラッパの
+  // 「終了 = 完了」に混ぜると「流し切った」と読める行になってしまう。
+  // outcome は `headers-received` (ヘッダまで) と明示して嘘をつかないようにする。
+  const startedAt = Date.now();
+  logEvent("dependency.start", {
+    target: "ai-agent",
+    operation: "POST /chat/stream",
+    url,
+    sessionId: req.sessionId,
+    chars: req.message.length,
+  });
 
   let upstream: Response | null = null;
+  let failure: unknown = null;
   try {
     upstream = await fetch(url, {
       method: "POST",
@@ -117,16 +136,33 @@ export async function openChatStream(req: ChatRequest): Promise<ReadableStream<U
       body: JSON.stringify({ session_id: req.sessionId, message: req.message }),
     });
   } catch (err) {
-    console.warn(`[chatStream] upstream fetch failed: ${(err as Error).message}`);
+    failure = err;
   }
 
   if (!upstream || !upstream.ok || !upstream.body) {
-    // 旧版 ai-agent (エンドポイント未実装 404 等) や一時失敗 → 非ストリーミングで成立させる
-    console.warn(
-      `[chatStream] upstream not streamable (status=${upstream?.status ?? "n/a"}) — falling back to POST /chat`,
-    );
+    // 旧版 ai-agent (エンドポイント未実装 404 等) や一時失敗 → 非ストリーミングで成立させる。
+    // **縮退したことを黙らせない** — 「SSE で流れた」と「/chat に落ちた」は画面上ほぼ
+    // 同じに見えるので、ログで区別できないと #293 と同じ誤診に戻る。
+    logEvent("dependency.end", {
+      target: "ai-agent",
+      operation: "POST /chat/stream",
+      sessionId: req.sessionId,
+      outcome: "fallback-to-post-chat",
+      upstreamStatus: upstream?.status ?? null,
+      ms: Date.now() - startedAt,
+      ...(failure ? describeError(failure) : {}),
+    });
     return syntheticStream(await sendChatMessage(req));
   }
+
+  logEvent("dependency.end", {
+    target: "ai-agent",
+    operation: "POST /chat/stream",
+    sessionId: req.sessionId,
+    outcome: "headers-received",
+    upstreamStatus: upstream.status,
+    ms: Date.now() - startedAt,
+  });
 
   return upstream.body;
 }

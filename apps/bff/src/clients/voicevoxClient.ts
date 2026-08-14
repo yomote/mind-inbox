@@ -1,4 +1,5 @@
 import { config } from "../config";
+import { logEvent, trackDependency } from "../observability/telemetry";
 import { serviceHeaders } from "./serviceToken";
 
 export type SynthesizeRequest = {
@@ -19,27 +20,36 @@ export function isConfigured(): boolean {
  */
 export async function synthesize(req: SynthesizeRequest): Promise<ArrayBuffer | null> {
   if (!config.voicevoxBaseUrl) {
-    console.log("[voicevoxClient] VOICEVOX_BASE_URL not set — returning null (stub)");
+    logEvent("dependency.skipped", { target: "voicevox", reason: "base-url-unset" });
     return null;
   }
 
   const url = `${config.voicevoxBaseUrl}/synthesize`;
-  console.log(`[voicevoxClient] POST ${url}`);
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: await serviceHeaders(config.voicevoxAudience, {
-      "Content-Type": "application/json",
-    }),
-    body: JSON.stringify({
-      text: req.text,
-      speaker: req.speakerId ?? 3,
-    }),
-  });
+  // 開始と終了を対で残す (#307)。**text は送るがログには出さない** — 読み上げ対象は
+  // AI の応答本文そのもの。残すのは長さと所要時間と結果だけ。
+  return await trackDependency(
+    { target: "voicevox", operation: "POST /synthesize", url },
+    async () => {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: await serviceHeaders(config.voicevoxAudience, {
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({
+          text: req.text,
+          speaker: req.speakerId ?? 3,
+        }),
+      });
 
-  if (!res.ok) {
-    throw new Error(`voicevoxClient: POST /synthesize failed — ${res.status} ${res.statusText}`);
-  }
+      if (!res.ok) {
+        throw new Error(
+          `voicevoxClient: POST /synthesize failed — ${res.status} ${res.statusText}`,
+        );
+      }
 
-  return await res.arrayBuffer();
+      return await res.arrayBuffer();
+    },
+    (audio) => ({ bytes: audio.byteLength }),
+  );
 }

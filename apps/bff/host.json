@@ -4,8 +4,12 @@
     "applicationInsights": {
       "samplingSettings": {
         "isEnabled": true,
-        "excludedTypes": "Request"
+        "maxTelemetryItemsPerSecond": 5,
+        "excludedTypes": "Request;Exception"
       }
+    },
+    "logLevel": {
+      "default": "Information"
     }
   },
   "extensionBundle": {

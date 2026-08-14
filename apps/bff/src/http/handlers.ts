@@ -22,12 +22,22 @@ import { MAX_ID_LENGTH, MAX_MESSAGE_LENGTH, MAX_TTS_TEXT_LENGTH } from "../limit
 import { openChatStream } from "../chat/chatStream";
 import { planTts, prefetchTts, synthesizeTts } from "../tts/ttsService";
 import { warmupDownstreams } from "../warmup/warmupService";
+import {
+  describeError,
+  logErrorEvent,
+  logEvent,
+  trackRequest,
+  type TelemetryLogger,
+} from "../observability/telemetry";
 
-/** 入口が違っても同じログが出るように、ログ関数だけ差し込めるようにする。 */
-export type HandlerLogger = {
-  log: (message: string) => void;
-  error: (message: string) => void;
-};
+/**
+ * 入口が違っても同じログが出るように、ログ関数だけ差し込めるようにする。
+ *
+ * 実体はテレメトリの出口 (`observability/telemetry.ts`) と同じ型。
+ * Azure Functions 側は `contextLogger(context)` を渡すので、この logger 経由の行は
+ * invocation に紐づく (`console.*` だと紐づかない / #307)。
+ */
+export type HandlerLogger = TelemetryLogger;
 
 const consoleLogger: HandlerLogger = {
   log: (m) => console.log(m),
@@ -39,15 +49,27 @@ export async function handleTrpc(
   request: Request,
   logger: HandlerLogger = consoleLogger,
 ): Promise<Response> {
-  return await fetchRequestHandler({
-    endpoint: "/api/trpc",
-    req: request,
-    router: appRouter,
-    createContext: () => createContext(request),
-    onError({ path, error }) {
-      logger.error(`[tRPC error] path=${path ?? "unknown"} message=${error.message}`);
-    },
-  });
+  return await trackRequest(
+    "trpc",
+    logger,
+    async () =>
+      await fetchRequestHandler({
+        endpoint: "/api/trpc",
+        req: request,
+        router: appRouter,
+        createContext: () => createContext(request),
+        onError({ path, error }) {
+          // path は手続き名 (`consultation.sendMessage` 等) で入力の中身を含まない。
+          // message は tRPC が組み立てた文面なので、テレメトリ側の上限・1 行化に従う。
+          logErrorEvent("trpc.error", {
+            route: path ?? "unknown",
+            errorType: error.code,
+            errorMessage: error.message,
+          });
+        },
+      }),
+    { method: request.method },
+  );
 }
 
 // 入力の大きさの上限は `../limits.ts` に集約する (#313 C-1)。tRPC 経路 (router.ts) と
@@ -62,26 +84,33 @@ export async function handleChatStream(
   request: Request,
   logger: HandlerLogger = consoleLogger,
 ): Promise<Response> {
-  const body = await readJson(request);
-  if (!body.ok) return INVALID_JSON();
+  return await trackRequest("chat/stream", logger, async () => {
+    const body = await readJson(request);
+    if (!body.ok) return INVALID_JSON();
 
-  const parsed = ChatStreamRequestSchema.safeParse(body.value);
-  if (!parsed.success) {
-    return new Response(`Invalid request: ${parsed.error.message}`, { status: 400 });
-  }
+    const parsed = ChatStreamRequestSchema.safeParse(body.value);
+    if (!parsed.success) {
+      return new Response(`Invalid request: ${parsed.error.message}`, { status: 400 });
+    }
 
-  logger.log(`[chatStream] sessionId=${parsed.data.sessionId}`);
-
-  try {
-    const stream = await openChatStream(parsed.data);
-    return new Response(stream, {
-      status: 200,
-      headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+    // sessionId は生成された不透明 ID (本文を含まない) なので相関キーとして残す。
+    // message は**長さだけ** — 本文はテレメトリに載せない (telemetry.ts の不変条件)。
+    logEvent("chat.request", {
+      sessionId: parsed.data.sessionId,
+      chars: parsed.data.message.length,
     });
-  } catch (err) {
-    logger.error(`[chatStream] failed: ${(err as Error).message}`);
-    return new Response("chat stream failed", { status: 502 });
-  }
+
+    try {
+      const stream = await openChatStream(parsed.data);
+      return new Response(stream, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+      });
+    } catch (err) {
+      logErrorEvent("chat.failed", { sessionId: parsed.data.sessionId, ...describeError(err) });
+      return new Response("chat stream failed", { status: 502 });
+    }
+  });
 }
 
 const TtsRequestSchema = z.object({
@@ -97,57 +126,71 @@ export async function handleTts(
   request: Request,
   logger: HandlerLogger = consoleLogger,
 ): Promise<Response> {
-  const body = await readJson(request);
-  if (!body.ok) return INVALID_JSON();
+  return await trackRequest("tts", logger, async () => {
+    const body = await readJson(request);
+    if (!body.ok) return INVALID_JSON();
 
-  const parsed = TtsRequestSchema.safeParse(body.value);
-  if (!parsed.success) {
-    return new Response(`Invalid request: ${parsed.error.message}`, { status: 400 });
-  }
-
-  const { text, speaker, prefetch, plan } = parsed.data;
-  logger.log(
-    `[tts] text(len)=${text.length} speaker=${speaker ?? 3} prefetch=${Boolean(prefetch)} plan=${Boolean(plan)}`,
-  );
-
-  try {
-    if (plan) {
-      // 文分割の真実は BFF が単独で持つ (ADR 0024)。フロントはこの並びをそのまま
-      // 1 文ずつ投げ返して逐次再生する (#185)。
-      const result = planTts({ text, speakerId: speaker });
-      if (result.status === "stub") return new Response(null, { status: 204 });
-      logger.log(`[tts] plan sentences=${result.sentences.length}`);
-      return Response.json({ sentences: result.sentences }, { status: 200 });
+    const parsed = TtsRequestSchema.safeParse(body.value);
+    if (!parsed.success) {
+      return new Response(`Invalid request: ${parsed.error.message}`, { status: 400 });
     }
 
-    if (prefetch) {
-      // text は「ストリーミングで今までに届いた途中経過」。どこが文の切れ目かの判断は
-      // BFF 側 (prefetchTts) が単独で持つ — フロントに分割ロジックを置かない (ADR 0024)。
-      const result = await prefetchTts({ text, speakerId: speaker });
-      logger.log(`[tts] prefetch status=${result.status} sentences=${result.sentences}`);
-      // stub (VOICEVOX 未構成) でも 204 で返す — プリフェッチは fire-and-forget なので
-      // フロントは結果を使わないが、区別できるようにはしておく。
-      return new Response(null, { status: result.status === "stub" ? 204 : 202 });
+    const { text, speaker, prefetch, plan } = parsed.data;
+    // text は読み上げ対象 = AI の応答本文。**長さだけ**残す。
+    logEvent("tts.request", {
+      chars: text.length,
+      speaker: speaker ?? 3,
+      prefetch: Boolean(prefetch),
+      plan: Boolean(plan),
+    });
+
+    try {
+      if (plan) {
+        // 文分割の真実は BFF が単独で持つ (ADR 0024)。フロントはこの並びをそのまま
+        // 1 文ずつ投げ返して逐次再生する (#185)。
+        const result = planTts({ text, speakerId: speaker });
+        if (result.status === "stub") return new Response(null, { status: 204 });
+        logEvent("tts.plan", { count: result.sentences.length });
+        return Response.json({ sentences: result.sentences }, { status: 200 });
+      }
+
+      if (prefetch) {
+        // text は「ストリーミングで今までに届いた途中経過」。どこが文の切れ目かの判断は
+        // BFF 側 (prefetchTts) が単独で持つ — フロントに分割ロジックを置かない (ADR 0024)。
+        const result = await prefetchTts({ text, speakerId: speaker });
+        logEvent("tts.prefetch", { status: result.status, count: result.sentences });
+        // stub (VOICEVOX 未構成) でも 204 で返す — プリフェッチは fire-and-forget なので
+        // フロントは結果を使わないが、区別できるようにはしておく。
+        return new Response(null, { status: result.status === "stub" ? 204 : 202 });
+      }
+
+      const audio = await synthesizeTts({ text, speakerId: speaker });
+      if (!audio) return new Response(null, { status: 204 });
+
+      return new Response(audio, { status: 200, headers: { "Content-Type": "audio/wav" } });
+    } catch (err) {
+      logErrorEvent("tts.failed", describeError(err));
+      return new Response("TTS synthesis failed", { status: 502 });
     }
-
-    const audio = await synthesizeTts({ text, speakerId: speaker });
-    if (!audio) return new Response(null, { status: 204 });
-
-    return new Response(audio, { status: 200, headers: { "Content-Type": "audio/wav" } });
-  } catch (err) {
-    logger.error(`[tts] synthesize failed: ${(err as Error).message}`);
-    return new Response("TTS synthesis failed", { status: 502 });
-  }
+  });
 }
 
 /** scale-to-zero の下流を温める (`GET /api/warmup`, #120)。 */
 export async function handleWarmup(logger: HandlerLogger = consoleLogger): Promise<Response> {
-  const result = await warmupDownstreams();
-  logger.log(
-    `[warmup] aiAgent=${result.aiAgent.status}(${result.aiAgent.ms}ms) ` +
-      `voicevox=${result.voicevox.status}(${result.voicevox.ms}ms)`,
-  );
-  return Response.json(result, { status: 200 });
+  return await trackRequest("warmup", logger, async () => {
+    const result = await warmupDownstreams();
+    logEvent("warmup.result", {
+      target: "ai-agent",
+      status: result.aiAgent.status,
+      ms: result.aiAgent.ms,
+    });
+    logEvent("warmup.result", {
+      target: "voicevox",
+      status: result.voicevox.status,
+      ms: result.voicevox.ms,
+    });
+    return Response.json(result, { status: 200 });
+  });
 }
 
 /**
