@@ -1,4 +1,10 @@
-export { startNewConsultation, sendMessage } from "./consultation";
+export {
+  ApprovalExpired,
+  ApprovalRequestUnusable,
+  startNewConsultation,
+  sendMessage,
+  respondToApproval,
+} from "./consultation";
 
 export {
   ExtractFailed,

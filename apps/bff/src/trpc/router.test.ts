@@ -31,6 +31,7 @@ vi.mock("../clients/aiAgentClient", async (importOriginal) => ({
 }));
 
 import {
+  ApprovalNotFoundError,
   ExtractError,
   approve as approveAiAgent,
   createPlan as createPlanAiAgent,
@@ -48,6 +49,7 @@ import {
 import { InMemoryProblemRepository } from "../repositories/problemRepository";
 import { runWithLogger } from "../observability/telemetry";
 import type { TrpcContext } from "./context";
+import { APPROVAL_NOT_FOUND_TOKEN } from "./errorTokens";
 import { appRouter } from "./router";
 
 // ---- helpers ---------------------------------------------------------------
@@ -283,6 +285,44 @@ describe("[L2] consultation.approve", () => {
       approvalRequestId: "appr-1",
       approved,
     });
+  });
+
+  it("承認レコードが無い (ApprovalNotFoundError) は NOT_FOUND に写す", async () => {
+    // 無いと: 期限切れ (TTL 1h) / ai-agent 再起動後の承認応答が汎用エラーとして
+    // フロントに届き、UI は「通信状況を確認して再試行」しか出せない。再試行は
+    // 決して成功しないので承認カードが閉じられず、その会話は永久に進まなくなる
+    // (404 デッドロック / PR #416 judge major-1)。
+    //
+    // **code だけでは足りない** (Codex 4 巡目 P2): tRPC は procedure 未配備でも
+    // NOT_FOUND を返すので、フロントは code + token の一致で判定する。つまり
+    // **token が message に載っていること**もこの写しの本体。
+    vi.mocked(approveAiAgent).mockRejectedValue(new ApprovalNotFoundError("appr-1"));
+
+    const err = await makeCaller()
+      .consultation.approve({ approvalRequestId: "appr-1", approved: true })
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+
+    expect(err).toBeInstanceOf(TRPCError);
+    expect((err as TRPCError).code).toBe("NOT_FOUND");
+    expect((err as TRPCError).message).toBe(APPROVAL_NOT_FOUND_TOKEN);
+  });
+
+  it("上流障害はそのまま失敗させる (NOT_FOUND に丸めない)", async () => {
+    // 無いと: 再試行で直る障害まで「期限切れ」に化け、フロントが承認カードを閉じて
+    // しまう。サーバには承認待ちが残ったまま、画面からは消える。
+    vi.mocked(approveAiAgent).mockRejectedValue(new Error("upstream 503"));
+
+    const err = await makeCaller()
+      .consultation.approve({ approvalRequestId: "appr-1", approved: true })
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+
+    expect((err as TRPCError).code).not.toBe("NOT_FOUND");
   });
 });
 

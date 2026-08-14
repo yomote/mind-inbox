@@ -4,7 +4,9 @@ import { ConversationMessageSchema } from "../clients/aiAgentContracts";
 import type { ConversationMessage } from "../clients/aiAgentContracts";
 import { z } from "zod";
 import type { TrpcContext } from "./context";
+import { APPROVAL_NOT_FOUND_TOKEN } from "./errorTokens";
 import {
+  ApprovalNotFoundError,
   approve as approveAiAgent,
   createPlan as createPlanAiAgent,
   ExtractError,
@@ -723,10 +725,29 @@ const consultationRouter = router({
         // 「承認が通ったか」を残す — 承認対象の中身は ai-agent 側の記録。
         kind: input.approved ? "approved" : "rejected",
       });
-      return await approveAiAgent({
-        approvalRequestId: input.approvalRequestId,
-        approved: input.approved,
-      });
+      try {
+        return await approveAiAgent({
+          approvalRequestId: input.approvalRequestId,
+          approved: input.approved,
+        });
+      } catch (err) {
+        // 承認レコードがもう無い (TTL 1h 失効 / ai-agent 再起動 / 消費済み) は
+        // **回復不能な失敗として区別する** (#82 / PR #416 judge major-1)。汎用エラーで
+        // 返すとフロントは「再試行してください」を出し続け、承認カードが閉じられない
+        // まま会話が永久に詰む (再試行は決して成功しない)。
+        if (err instanceof ApprovalNotFoundError) {
+          logErrorEvent("approve.record-gone", {
+            route: "consultation.approve",
+            kind: input.approved ? "approved" : "rejected",
+          });
+          // message は機械可読な token に固定する。**フロントは code だけでは判定できない**
+          // (tRPC は procedure 未配備でも NOT_FOUND を返す / Codex 4 巡目 P2) ので、
+          // この token がフロントとの唯一の合図になる。リテラルは errorTokens.ts が
+          // 1 個だけ持ち、フロントも同じものを import する (二重定義にしない)。
+          throw new TRPCError({ code: "NOT_FOUND", message: APPROVAL_NOT_FOUND_TOKEN });
+        }
+        throw err;
+      }
     }),
 });
 

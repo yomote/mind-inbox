@@ -15,7 +15,13 @@ const mockConfig = vi.hoisted(() => ({}) as { aiAgentBaseUrl?: string; aiAgentAu
 
 vi.mock("../config", () => ({ config: mockConfig }));
 
-import { ExtractError, extract, sendChatMessage } from "./aiAgentClient";
+import {
+  ApprovalNotFoundError,
+  ExtractError,
+  approve,
+  extract,
+  sendChatMessage,
+} from "./aiAgentClient";
 import type { ExtractionResult } from "../trpc/domain";
 
 beforeEach(() => {
@@ -230,5 +236,103 @@ describe("[単体] /extract の応答は返す前に検証する (poison documen
     const res = await extract({ sessionId: "s1", existingProblems: [], messages: [] });
     expect(res.items[0]?.mention.statement).toBe(SECRET);
     expect(res.newProblemCount).toBe(1);
+  });
+});
+
+// ---- /approve の 404 (#82 / PR #416 judge major-1) ---------------------------
+
+describe("[単体] /approve の 404 は「承認レコードがもう無い」として区別する", () => {
+  // 無いと何が静かに通るか: 失効した承認 (TTL 1h / ai-agent 再起動) への応答が
+  // 汎用 Error のまま上がり、router が 500 相当で返す → フロントは「通信状況を確認して
+  // 再試行」を出し続ける。再試行は**決して成功しない**ので承認カードが閉じられず、
+  // その会話は承認も却下も次の発話もできない行き止まりになる (404 デッドロック)。
+  // 種別が立つ場所はここ (HTTP status を見ている唯一の層) なので、この境界で固定する。
+  beforeEach(() => {
+    mockConfig.aiAgentBaseUrl = "http://ai-agent.example";
+  });
+
+  // ai-agent が承認レコードについて返す 404 の detail (workflow.resume_after_approval の
+  // ValueError そのまま)。3 本とも同じ「もう受け付けられない」に落ちる。
+  it.each([
+    { name: "未知 ID / TTL 失効", detail: "Approval not found: 'appr-1'" },
+    { name: "消費済み", detail: "Approval already processed: 'approved'" },
+    { name: "checkpoint が消えた", detail: "Approval checkpoint not found: 'appr-1'" },
+  ])("$name の 404 は ApprovalNotFoundError で失敗する", async ({ detail }) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ detail }, { status: 404 })),
+    );
+
+    const err = await approve({ approvalRequestId: "appr-1", approved: true }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(ApprovalNotFoundError);
+  });
+
+  // 承認レコードについて何も言っていない 404 (PR #416 Codex 3 巡目 P2)。
+  //
+  // 無いと何が静かに通るか: ルート未配備 / プロキシの経路不整合 / ベース URL 違いの
+  // 汎用 404 まで「もう受け付けられません」に化け、フロントは**生きている checkpoint を
+  // 持つ承認カードを閉じる**。サーバは承認待ちのまま、ユーザーは承認も却下も再試行も
+  // できない (デプロイ事故が「処理済み」に見えるので、原因にも辿り着けない)。
+  it.each([
+    { name: "FastAPI の既定 404 (ルート未配備)", body: { detail: "Not Found" } },
+    { name: "別リソースの 404", body: { detail: "Session not found: 's1'" } },
+    { name: "detail が文字列でない", body: { detail: { code: 404 } } },
+    { name: "detail が無い", body: { error: "not found" } },
+  ])("$name は ApprovalNotFoundError にしない (上流障害として扱う)", async ({ body }) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(body, { status: 404 })),
+    );
+
+    const err = await approve({ approvalRequestId: "appr-1", approved: true }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(ApprovalNotFoundError);
+  });
+
+  it("JSON ですらない 404 本文 (プロキシの HTML) も ApprovalNotFoundError にしない", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<html>404 Not Found</html>", { status: 404 })),
+    );
+
+    const err = await approve({ approvalRequestId: "appr-1", approved: true }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).not.toBeInstanceOf(ApprovalNotFoundError);
+    // 上流本文を例外文に転記しない (#313 B-3)。
+    expect((err as Error).message).not.toContain("<html>");
+  });
+
+  it("404 以外の失敗は ApprovalNotFoundError にしない (上流障害と混ぜない)", async () => {
+    // 上流障害まで「期限切れ」に写すと、復帰できる失敗 (再試行で直る) のカードまで
+    // 閉じてしまい、承認待ちがサーバに残ったまま画面から消える。
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("boom", { status: 503, statusText: "Service Unavailable" })),
+    );
+
+    const err = await approve({ approvalRequestId: "appr-1", approved: true }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(ApprovalNotFoundError);
+  });
+
+  it("200 はそのまま応答を返す (正常系を切っていない)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ reply: "実行しました" }, { status: 200 })),
+    );
+
+    const res = await approve({ approvalRequestId: "appr-1", approved: true });
+    expect(res.reply).toBe("実行しました");
   });
 });

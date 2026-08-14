@@ -34,6 +34,33 @@ export type ConsultationSession = {
   messages: ChatMessage[];
 };
 
+/**
+ * 副作用ツールの実行前に人間の承認を求める要求 (G1 / dialogue-session.mdx §5.9)。
+ *
+ * 契約の真実は BFF の `ChatReplySchema` (`requiresApproval` / `approvalRequestId`)。
+ * **承認の要否をフロントで判定しない** — 判定源は ai-agent のツールメタデータ
+ * (`approval_mode`) で、こちらで条件を書くと判定が 2 箇所に分かれ、片方だけ変わっても
+ * 気づけない (= 承認が要るツールが黙って承認なしで実行される)。
+ */
+export type ApprovalRequest = {
+  /** BFF `consultation.approve` に渡す ID。 */
+  id: string;
+  /** 何を実行しようとしているか (ai-agent が返す確認文)。 */
+  description: string;
+};
+
+/**
+ * AI 応答 1 往復分。承認要求はメッセージと同じ応答に載って来るので一緒に返す。
+ *
+ * メッセージだけを返す形にしないのは、承認要求を落としても「返事は出ている」ため
+ * 画面上は正常に見えてしまうから (= G1 が静かに無効化される)。
+ */
+export type AssistantReply = {
+  message: ChatMessage;
+  /** 承認が要らない応答では null。 */
+  approval: ApprovalRequest | null;
+};
+
 export type ActionPlan = {
   title: string;
   steps: string[];

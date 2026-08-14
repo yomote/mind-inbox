@@ -88,6 +88,23 @@ export function getAccount(): AccountInfo | null {
  */
 let redirectInFlight = false;
 
+/**
+ * **サインアウトを開始したら、以降トークン取得で対話的な復帰 (サインイン画面への
+ * リダイレクト) をしない** (#82 / PR #416 judge major-1 の副指摘)。
+ *
+ * サインアウト経路では最後に 1 本だけ BFF を呼ぶ (承認待ちの却下 — §5.9)。その
+ * `getAccessToken()` が「active account が無い / トークンが期限切れ」に当たると
+ * `loginRedirect` / `acquireTokenRedirect` を叩き、**サインアウトの操作が
+ * サインイン画面への遷移に化ける**。ここを一度落としたら二度と戻さない
+ * (この後に来るのは `logoutRedirect` による離脱だけ)。
+ */
+let interactiveRecoveryDisabled = false;
+
+/** サインアウト開始を宣言する。以降 `getAccessToken()` はリダイレクトを起こさない。 */
+export function disableInteractiveRecovery(): void {
+  interactiveRecoveryDisabled = true;
+}
+
 export async function login(): Promise<void> {
   const msal = getMsal();
   if (!msal || redirectInFlight) return;
@@ -114,6 +131,10 @@ export async function getAccessToken(): Promise<string | null> {
 
   const account = msal.getActiveAccount();
   if (!account) {
+    // サインアウト中はサインイン画面へ倒さない (上の disableInteractiveRecovery 参照)。
+    // 見えなくなるもの: 「トークンが取れなかった」理由。呼び出し側には null が返り、
+    // Authorization 無しで送って 401 になる = 失敗として観測できる (無音ではない)。
+    if (interactiveRecoveryDisabled) return null;
     await login();
     return null;
   }
@@ -123,7 +144,7 @@ export async function getAccessToken(): Promise<string | null> {
     return result.accessToken;
   } catch (err) {
     if (err instanceof InteractionRequiredAuthError) {
-      if (redirectInFlight) return null;
+      if (redirectInFlight || interactiveRecoveryDisabled) return null;
       redirectInFlight = true;
       await msal.acquireTokenRedirect({ scopes: [apiScope], account });
       return null;

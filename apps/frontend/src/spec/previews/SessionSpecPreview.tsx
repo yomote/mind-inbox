@@ -96,6 +96,13 @@ export function SessionSpecPreview() {
       preview={previewExtraction}
       previewStatus="idle"
       onRefreshPreview={() => {}}
+      // 承認カード (#82 / §5.9) は「承認要求が来ている状態」でしか出ないので、
+      // 仕様プレビューでは常に出しておく (この画面は各状態の見本市)。
+      pendingApproval={{
+        id: "preview-approval",
+        description: "「send_reply」を実行するには承認が必要です。実行してよろしいですか？",
+      }}
+      onRespondToApproval={() => {}}
       onDraftMessageChange={setDraftMessage}
       onSendMessage={() => {}}
       onToggleTtsEnabled={() => {}}
