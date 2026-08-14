@@ -152,19 +152,27 @@ rg_exists() {
 # 直近のガード判定コード (rg-absent / ok / … )。許可か拒否かの 2 値では足りない —
 # 「不在だから通した」のか「中身を見て通した」のかで、その後の扱いが変わる。
 GUARD_DECISION_CODE=""
-# 一度でも「RG は不在」で通したか。**通したあとに RG が現れたら、それは別の誰かが
-# 作った RG** なので触ってはいけない (中身を一度も検証していない)。
-GUARD_SAW_RG_ABSENT=false
+# これまでに出た判定コードを古い順に溜める。**ここで比較はしない** — 溜めて guard に
+# 渡すだけ。「一度不在で通した RG が現れた」の判定は persistent_layer_guard.py 側
+# (decide) が持つ (シェルの if に判定を置くと、壊してもテストが落ちない)。
+declare -a GUARD_PREVIOUS_CODES=()
 
 # 撤収してよい RG かを判定する。判定そのものは持たず、材料 (RG の中身) を集めて
 # persistent_layer_guard.py に渡すだけ。**呼ぶたびに材料を取り直す** (使い回さない)。
 run_persistent_layer_guard() {
   local guard="${SCRIPT_DIR}/persistent_layer_guard.py"
   local -a guard_args=(--target-rg "$RG" --persistent-rg "$PERSISTENT_RG")
-  local inventory deleted err_file rg_state name rc=0
+  local inventory deleted err_file rg_state name code rc=0
 
   if [[ "$ALLOW_PERSISTENT_DELETE" == "true" ]]; then
     guard_args+=(--allow-persistent)
+  fi
+
+  # これまでの判定を材料として渡す (状態遷移の判定は guard 側)。
+  if [[ ${#GUARD_PREVIOUS_CODES[@]} -gt 0 ]]; then
+    for code in "${GUARD_PREVIOUS_CODES[@]}"; do
+      guard_args+=(--previous-code "$code")
+    done
   fi
 
   # 層タグの無い持続層リソースの名指し (移行前の Storage / Log Analytics 向け)。
@@ -232,8 +240,9 @@ run_persistent_layer_guard() {
     rc=3
   fi
 
-  if [[ "$GUARD_DECISION_CODE" == "rg-absent" ]]; then
-    GUARD_SAW_RG_ABSENT=true
+  # 判定コードは中身を見ずにそのまま積む (どれが特別かを知っているのは guard 側)。
+  if [[ -n "$GUARD_DECISION_CODE" ]]; then
+    GUARD_PREVIOUS_CODES+=("$GUARD_DECISION_CODE")
   fi
 
   return "$rc"
@@ -244,26 +253,18 @@ run_persistent_layer_guard() {
 assert_safe_to_destroy() {
   local phase="$1"
 
+  # 「不在だから通した」あとに RG が現れた場合も、この判定 (rg-reappeared-after-absent)
+  # として guard 側から返る。**このシェルは比較しない** — 判定は 1 か所に置く。
   if ! run_persistent_layer_guard; then
     echo "" >&2
     echo "Nothing was deleted (refused before ${phase}). See the guard line above:" >&2
     echo "  - persistent resources still in the RG -> move them to ${PERSISTENT_RG} first (Issue #302)" >&2
     echo "  - could not check (existence or contents) -> fix az login / permissions and re-run" >&2
     echo "  - target IS the persistent RG -> there is no flag for this, on purpose" >&2
+    echo "  - the RG was absent earlier in this run but is not now -> a concurrent provision" >&2
+    echo "    re-created it; nothing was deleted. Re-run from the start if you still want it gone" >&2
     echo "ALLOW_PERSISTENT_DELETE=true overrides the first two only, and what it destroys" >&2
     echo "does not come back." >&2
-    exit 3
-  fi
-
-  # 「不在だから通した」あとに RG が現れた = このスクリプトの外で誰かが作った RG。
-  # **中身が空に見えても消さない** — provision 中の RG を巻き込む事故になる。
-  if [[ "$GUARD_SAW_RG_ABSENT" == "true" && "$GUARD_DECISION_CODE" != "rg-absent" ]]; then
-    echo "" >&2
-    echo "ERROR: ${RG} did not exist when the guard first ran, but exists now" >&2
-    echo "(guard says: ${GUARD_DECISION_CODE}). Something re-created it between the check" >&2
-    echo "and ${phase} -- a concurrent provision, most likely." >&2
-    echo "Refusing to delete a resource group that appeared under us. Nothing was deleted." >&2
-    echo "Re-run this script from the start if you still want it gone." >&2
     exit 3
   fi
 }
@@ -596,6 +597,9 @@ fi
 # `rg_exists` を別に呼ぶと、その返答と「中身を検証した瞬間」がまたズレる。
 assert_safe_to_destroy "the resource group deletion"
 
+# ここは「消してよいか」の判定ではなく、**済んだ判定から動作を選ぶだけ** (不在なら
+# 消すものが無いので呼ばない)。取り違えても `az group delete` が存在しない RG に対して
+# 落ちるだけで、無検証の削除にはならない (削除してよいかの判定は guard が済ませている)。
 if [[ "$GUARD_DECISION_CODE" != "rg-absent" ]]; then
   delete_args=(group delete -n "$RG" --yes)
   if [[ "$NO_WAIT" == "true" ]]; then

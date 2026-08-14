@@ -27,6 +27,14 @@ Log Analytics も同様。型で一括りにすると、正当な環境層の撤
 **環境層として通すが、黙って通さない** — 何を環境層と見なしたかを notes に出す
 (「取れなかったものを異常なしと書かない」の同類。判定の根拠を見えるようにする)。
 
+## 1 回の判定では足りないもの (状態遷移)
+
+撤収は破壊系の手前で**何度も**判定する (TOCTOU)。このとき「前回は不在だった RG が
+今回は存在する」= **このスクリプトの外で誰かが作り直した RG** で、中身を一度も
+検証していないので触ってはいけない。これは 1 回分の材料では判定できないので、
+**過去の判定コードを `previous_codes` で渡す**。呼び出し側は判定コードを溜めて
+渡すだけで、比較はここでやる (シェルの `if` に判定を置かない / cicd/CLAUDE.md)。
+
 終了コード:
   0  削除してよい
   3  拒否 (呼び出し側は削除に進んではいけない)
@@ -61,6 +69,11 @@ LAYER_TAG_KEY = "mindinboxlayer"
 LAYER_TAG_PERSISTENT_VALUE = "persistent"
 
 DEFAULT_PERSISTENT_RG = "rg-shared-mindbox"
+
+# 判定コードのうち、呼び出し側と状態遷移の判定で参照するもの。**文字列リテラルを
+# シェル側に散らさない**ため定数にしてある (散らすと、片方だけ変えても誰も気づけない)。
+CODE_RG_ABSENT = "rg-absent"
+CODE_RG_REAPPEARED = "rg-reappeared-after-absent"
 
 
 @dataclass(frozen=True)
@@ -202,7 +215,7 @@ def find_persistent(
     return list(findings.values()), list(notes.values())
 
 
-def decide(
+def _decide_for_current_state(
     *,
     target_rg: str,
     persistent_rg: str = DEFAULT_PERSISTENT_RG,
@@ -212,7 +225,9 @@ def decide(
     persistent_names: list[str] | None = None,
     allow_persistent: bool = False,
 ) -> Decision:
-    """撤収してよいかを判定する。
+    """**今この瞬間の材料だけ**で撤収してよいかを判定する。
+
+    過去の判定 (状態遷移) は見ない。それは `decide` が重ねる。
 
     引数:
       target_rg:        撤収しようとしている RG。
@@ -300,7 +315,7 @@ def decide(
     if not rg_exists:
         return Decision(
             allowed=True,
-            code="rg-absent",
+            code=CODE_RG_ABSENT,
             reason=f"{target_rg} は存在しません (削除するものが無い)。",
         )
 
@@ -353,6 +368,82 @@ def decide(
         code="ok",
         reason=f"{target_rg} に持続層のリソースはありません。",
         notes=tuple(notes),
+    )
+
+
+def saw_rg_absent(previous_codes: list[str] | None) -> bool:
+    """過去の判定に「RG は不在」が含まれるか。
+
+    呼び出し側は判定コードを溜めて渡すだけで、この比較には関与しない
+    (ここを呼び出し側の `if` に置くと、壊してもテストが落ちない)。
+    """
+    return any(str(code).strip() == CODE_RG_ABSENT for code in (previous_codes or []))
+
+
+def decide(
+    *,
+    target_rg: str,
+    persistent_rg: str = DEFAULT_PERSISTENT_RG,
+    rg_exists: bool | None = True,
+    resources: list[Any] | None = None,
+    deleted_resources: list[Any] | None = None,
+    persistent_names: list[str] | None = None,
+    allow_persistent: bool = False,
+    previous_codes: list[str] | None = None,
+) -> Decision:
+    """今の材料での判定に、**過去の判定との遷移**を重ねて最終判定を出す。
+
+    `previous_codes` は同じ撤収実行の中でこれより前に出た判定コード (古い順)。
+
+    重ねる遷移は 1 つだけ:
+
+      **「不在」で通したあとに RG が不在でなくなった → 拒否。**
+
+    一度 `rg-absent` で通っている = **その RG の中身を一度も検証していない**。
+    そのあと RG が現れたら、それは撤収対象ではなく別の誰かが (provision などで)
+    作った RG なので、中身が空に見えても消してはいけない。
+    **これは `allow_persistent` でも通さない** — override は「持続層を承知で捨てる」
+    ためのもので、「他人の RG を無検証で消す」ためのものではない。
+
+    遷移の判定に**判定コードの不一致ではなく `rg_exists` を使う**のは、purge が
+    RG 削除の後に走るため: そこでは前回も今回も RG は不在で、コードだけを見比べると
+    (soft-delete 側の判定コードが返るだけで) 現れてもいない RG を「再出現」と誤認する。
+    見たいのは「不在 → 不在でなくなった」という**存在の遷移**そのもの。
+    """
+    decision = _decide_for_current_state(
+        target_rg=target_rg,
+        persistent_rg=persistent_rg,
+        rg_exists=rg_exists,
+        resources=resources,
+        deleted_resources=deleted_resources,
+        persistent_names=persistent_names,
+        allow_persistent=allow_persistent,
+    )
+
+    # 今の材料で既に拒否なら、そちらの理由を残す (どちらにせよ削除には進まない)。
+    if not decision.allowed:
+        return decision
+
+    # rg_exists is False = 今も不在 (遷移なし)。None = 確かめられなかった —
+    # **「確かめられなかった」を「まだ不在のはず」に読み替えない**ので拒否側に倒す。
+    if not saw_rg_absent(previous_codes) or rg_exists is False:
+        return decision
+
+    return Decision(
+        allowed=False,
+        code=CODE_RG_REAPPEARED,
+        reason=(
+            f"{target_rg} はこの実行の中で一度「不在」と判定されましたが、"
+            "今は不在ではありません。**不在として通した RG は中身を検証していない**ので、"
+            "撤収の途中で作り直された RG (並行 provision など) を無検証で消さないよう拒否します。"
+            "まだ消したいなら、このスクリプトを最初から流し直してください "
+            "(ALLOW_PERSISTENT_DELETE では通りません)。"
+        ),
+        findings=decision.findings,
+        notes=(
+            *decision.notes,
+            f"今の材料だけなら {decision.code} で通っていた判定です",
+        ),
     )
 
 
@@ -413,6 +504,15 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         help="層タグの無い持続層リソースを名指しする (繰り返し可)",
+    )
+    parser.add_argument(
+        "--previous-code",
+        action="append",
+        default=[],
+        help=(
+            "同じ撤収実行の中でこれより前に出た判定コード (古い順 / 繰り返し可)。"
+            "呼び出し側は溜めて渡すだけでよく、遷移の判定はこちらでする"
+        ),
     )
     parser.add_argument(
         "--allow-persistent",
@@ -496,6 +596,7 @@ def main(argv: list[str] | None = None) -> int:
         deleted_resources=deleted_resources,
         persistent_names=args.persistent_name,
         allow_persistent=args.allow_persistent,
+        previous_codes=args.previous_code,
     )
     print(decision.render(), file=sys.stderr)
     # 判定コードは **stdout** に出す。呼び出し側 (cleanup-env.sh) は許可/拒否の 2 値

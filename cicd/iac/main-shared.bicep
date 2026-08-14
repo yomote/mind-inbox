@@ -675,4 +675,8 @@ output speechAccountName string = enableSpeech ? speechAccountName : ''
 output speechRegion string = enableSpeech ? speechLocation : ''
 output speechAccountResourceId string = enableSpeech ? speechAccount.id : ''
 
+// **この output は「budget が実在するか」ではない。** その回に渡したパラメータの写しなので、
+// budget を作ったあと budgetContactEmails を省いて流し直すと、budget は incremental で
+// 残ったまま false になる。実在の確認は `az consumption budget list` 側で行うこと
+// (docs/runbooks/persistent-layer-apply.md の Verification 5)。
 output budgetAlertEnabled bool = enableBudgetAlert && !empty(budgetContactEmails)

@@ -15,13 +15,21 @@
   - test_env_layer_*                        … 環境層の KV / Storage / LAW で撤収が常に拒否される
                                               (= override 常用でガードが死ぬ)
   - test_persistent_name_*                  … 層タグの無い移行前リソースを守る手段が消える
+  - test_rg_reappeared_*                    … 「不在」で通した RG が再出現しても、中身を
+                                              一度も検証しないまま削除へ進む
 """
 
 from __future__ import annotations
 
 import pytest
 
-from persistent_layer_guard import DEFAULT_PERSISTENT_RG, decide, main
+from persistent_layer_guard import (
+    CODE_RG_ABSENT,
+    CODE_RG_REAPPEARED,
+    DEFAULT_PERSISTENT_RG,
+    decide,
+    main,
+)
 
 APP_LAYER_TYPES = [
     "Microsoft.Web/staticSites",
@@ -112,6 +120,129 @@ def test_persistent_rg_wins_over_existence_unknown() -> None:
     d = decide(target_rg=DEFAULT_PERSISTENT_RG, rg_exists=None, allow_persistent=True)
     assert not d.allowed
     assert d.code == "target-is-persistent-rg"
+
+
+# ---- 状態遷移 (不在で通したあとに RG が現れた) ----
+#
+# 撤収は破壊系の手前で何度も判定する。**1 回分の材料では判定できない**ので、
+# 過去の判定コードを渡して decide 側で遷移を見る。
+
+
+def test_rg_reappeared_after_absent_is_refused() -> None:
+    """「不在」で通したあとに RG が現れたら消さない。
+
+    無いと: 不在判定では中身 (inventory) を一度も見ていないのに、その後 provision が
+    作り直した RG を「空に見えるから」という理由だけで削除できてしまう。
+    """
+    d = decide(
+        target_rg="rg-dev-mind-inbox",
+        rg_exists=True,
+        resources=APP_LAYER_TYPES,
+        previous_codes=[CODE_RG_ABSENT],
+    )
+    assert not d.allowed
+    assert d.code == CODE_RG_REAPPEARED
+    # 今の材料だけなら通っていたことを黙らない (何を退けたのかが追えなくなる)。
+    assert any("ok" in n for n in d.notes)
+
+
+def test_rg_reappeared_after_absent_is_not_overridable() -> None:
+    """再出現だけは ALLOW_PERSISTENT_DELETE でも通さない。
+
+    無いと: override は「持続層を承知で捨てる」ためのものなのに、**他人の RG を
+    無検証で消す**ためにも効いてしまう。
+    """
+    d = decide(
+        target_rg="rg-dev-mind-inbox",
+        rg_exists=True,
+        resources=APP_LAYER_TYPES,
+        previous_codes=[CODE_RG_ABSENT],
+        allow_persistent=True,
+    )
+    assert not d.allowed
+    assert d.code == CODE_RG_REAPPEARED
+
+
+def test_rg_reappeared_refuses_when_existence_becomes_unknown() -> None:
+    """不在で通したあと存在を確かめられなくなったら、「まだ不在のはず」に読み替えない。
+
+    無いと: override 付きの実行で `az group exists` が落ちた瞬間だけ、再出現の判定が
+    素通りする窓が空く。
+    """
+    d = decide(
+        target_rg="rg-dev-mind-inbox",
+        rg_exists=None,
+        previous_codes=[CODE_RG_ABSENT],
+        allow_persistent=True,
+    )
+    assert not d.allowed
+    assert d.code == CODE_RG_REAPPEARED
+
+
+def test_still_absent_after_absent_stays_allowed() -> None:
+    """不在のままなら遷移していないので通す (冪等な再実行を壊さない)。"""
+    d = decide(
+        target_rg="rg-dev-mind-inbox",
+        rg_exists=False,
+        resources=None,
+        previous_codes=[CODE_RG_ABSENT],
+    )
+    assert d.allowed
+    assert d.code == CODE_RG_ABSENT
+
+
+def test_absent_after_delete_is_not_treated_as_reappearance() -> None:
+    """自分で消したあとの判定 (存在 → 不在) を再出現と誤認しない。
+
+    無いと: RG 削除の後に走る purge の直前判定が常に拒否になり、
+    名前衝突の手当て (PURGE_DELETED_*) が一切使えなくなる。
+    """
+    d = decide(
+        target_rg="rg-dev-mind-inbox",
+        rg_exists=False,
+        resources=None,
+        deleted_resources=[DELETED_ENV_KV],
+        previous_codes=["ok"],
+    )
+    assert d.allowed
+    assert d.code == CODE_RG_ABSENT
+
+
+def test_persistent_rg_refusal_wins_over_reappearance() -> None:
+    """持続層 RG は遷移に関係なく持続層 RG として拒否する (理由を上書きしない)。"""
+    d = decide(
+        target_rg=DEFAULT_PERSISTENT_RG,
+        rg_exists=True,
+        resources=[],
+        previous_codes=[CODE_RG_ABSENT],
+    )
+    assert not d.allowed
+    assert d.code == "target-is-persistent-rg"
+
+
+def test_persistent_resources_refusal_wins_over_reappearance() -> None:
+    """今の材料で既に拒否なら、そちらの理由を残す (findings が消えると追えない)。"""
+    d = decide(
+        target_rg="rg-dev-mind-inbox",
+        rg_exists=True,
+        resources=["Microsoft.DocumentDB/databaseAccounts"],
+        previous_codes=[CODE_RG_ABSENT],
+    )
+    assert not d.allowed
+    assert d.code == "persistent-resources-present"
+    assert d.findings
+
+
+def test_previous_codes_without_absent_do_not_block() -> None:
+    """不在を経ていない実行は普通に通す (遷移が無いのに止めない)。"""
+    d = decide(
+        target_rg="rg-dev-mind-inbox",
+        rg_exists=True,
+        resources=APP_LAYER_TYPES,
+        previous_codes=["ok", "ok"],
+    )
+    assert d.allowed
+    assert d.code == "ok"
 
 
 # ---- 型だけで確定するもの (環境層に使い捨ての同型が無い) ----
@@ -566,6 +697,46 @@ def test_cli_prints_decision_code_on_stdout(capsys: pytest.CaptureFixture[str]) 
 
     assert main(["--target-rg", "rg-shared-mindbox", "--rg-missing"]) == 3
     assert capsys.readouterr().out.strip() == "target-is-persistent-rg"
+
+
+def test_cli_previous_code_blocks_reappeared_rg(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`--previous-code` で渡した過去の判定が CLI 越しにも効く。
+
+    無いと: 遷移の判定が呼び出し側 (cleanup-env.sh) の `if` に戻り、
+    そこを壊してもテストが 1 つも落ちない。
+    """
+    inventory = '["Microsoft.Web/sites"]'
+    base = ["--target-rg", "rg-dev-mind-inbox", "--inventory", inventory]
+
+    assert main(base) == 0
+    assert capsys.readouterr().out.strip() == "ok"
+
+    assert main([*base, "--previous-code", "ok"]) == 0
+    assert capsys.readouterr().out.strip() == "ok"
+
+    assert main([*base, "--previous-code", CODE_RG_ABSENT]) == 3
+    assert capsys.readouterr().out.strip() == CODE_RG_REAPPEARED
+
+    # override でも通らない。
+    assert main([*base, "--previous-code", CODE_RG_ABSENT, "--allow-persistent"]) == 3
+
+
+def test_cli_previous_absent_still_absent_is_allowed() -> None:
+    """不在のまま (RG 削除後の purge 直前など) は通す。"""
+    assert (
+        main(
+            [
+                "--target-rg",
+                "rg-dev-mind-inbox",
+                "--rg-missing",
+                "--previous-code",
+                CODE_RG_ABSENT,
+            ]
+        )
+        == 0
+    )
 
 
 def test_cli_broken_inventory_is_refused_not_treated_as_empty() -> None:

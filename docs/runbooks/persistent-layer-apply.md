@@ -73,7 +73,7 @@
    >
    > **持続層を別 RG に出すと、環境層 RG に張ってある予算の射程から Cosmos / OpenAI が外れます。** ここで渡し忘れると、あとで `enableCosmos` / `enableOpenAi` を `true` にした時点で**どちらの RG の予算にも載っていない**状態になります ([ADR 0013](../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md))。
    >
-   > budget は作成後 ARM の incremental デプロイで残るので、**2 回目以降は省略しても消えません**。
+   > budget は作成後 ARM の incremental デプロイで残るので、**2 回目以降は省略しても消えません**。ただし省略した回の deployment output `budgetAlertEnabled` は `false` になります (output はその回に渡したパラメータの写しで、budget が実在するかとは無関係)。**確認には output ではなく実リソースを見てください** (Verification 5)。
 
 6. E2E trace 復号鍵の URI (kid) を控える。`az keyvault key decrypt --id <kid>` にそのまま渡せます ([#301](https://github.com/yomote/mind-inbox/issues/301) / ADR 0045 D5 — **本文は未マージ** (PR #332) なのでリンクは張っていません)。
 
@@ -90,7 +90,7 @@
 - [ ] **作ったリソース全部に層タグが付いている** (下の 2) — このタグが撤収ガードの判定入力なので、**付いていないものは環境層と見なされて撤収で消えます**
 - [ ] 鍵が**エクスポート不可**で作られている (下の 3 が `false` を返すこと)
 - [ ] **撤収ガードが持続層 RG を拒否する** (下の 4 が exit 3 で、何も消えないこと)
-- [ ] **月次予算が作られている** (下の 5 が `true` を返すこと) — `false` なら `budgetContactEmails` を渡し忘れており、**持続層のコストがどの予算にも載っていません**
+- [ ] **月次予算が実在する** (下の 5 が `budget-shared-mindbox` を 1 件返し、`contacts` が空でないこと) — 空 (`[]`) なら `budgetContactEmails` を渡し忘れており、**持続層のコストがどの予算にも載っていません**
 
 ```bash
 # 1. デプロイの結果
@@ -108,9 +108,19 @@ az keyvault key show --vault-name kv-dev-mindbox -n e2e-artifacts \
 # 4. 撤収ガードが持続層 RG を拒否するか
 cd cicd && RG=rg-shared-mindbox ./scripts/env/cleanup-env.sh; echo "exit=$?"
 
-# 5. 月次予算が作られたか (false なら budgetContactEmails の渡し忘れ)
-az deployment group show -g rg-shared-mindbox -n main-shared \
-  --query properties.outputs.budgetAlertEnabled.value -o tsv
+# 5. 月次予算が「実在するか」。deployment output (budgetAlertEnabled) は見ない --
+#    あれは最後に流したときのパラメータの写しで、2 回目以降 budgetContactEmails を
+#    省略すると budget は残ったまま false になる (= 誤って「消えた」と読める)。
+az consumption budget list -g rg-shared-mindbox \
+  --query "[?name=='budget-shared-mindbox'].{name:name,amount:amount,contacts:notifications.actual50.contactEmails}" \
+  -o json
+```
+
+`[]` が返ったら budget は**存在しません** (下の「予算アラートが来ない」を参照)。`az consumption` が使えないサブスクリプション / CLI バージョンでは ARM を直接叩きます (存在しなければ `BudgetNotFound` で落ちるので、**沈黙と区別できます**)。
+
+```bash
+az rest --method get --url "https://management.azure.com/subscriptions/$(az account show --query id -o tsv)/resourceGroups/rg-shared-mindbox/providers/Microsoft.Consumption/budgets/budget-shared-mindbox?api-version=2023-05-01" \
+  --query "{name:name,amount:properties.amount,contacts:properties.notifications.actual50.contactEmails}" -o json
 ```
 
 ## Rollback
@@ -137,10 +147,15 @@ az deployment group show -g rg-shared-mindbox -n main-shared \
 - 原因: 逆のパターン。**User Access Administrator / RBAC Administrator しか持っていない** — これらは**ロール割り当て専用**で、Key Vault や Storage、deployment を作る権限がない
 - 対処: Contributor (または Owner) を足す。この 2 つは片方だけでは足りない (Prerequisites の表を参照)
 
-### 予算アラートが来ない / `budgetAlertEnabled` が `false`
+### 予算アラートが来ない / Verification 5 が `[]` を返す
 
 - 原因: `budgetContactEmails` が空のまま適用した。**通知先の無い予算はアラートとして無意味なので、budget リソース自体を作らない**設計 (`main-shared.bicep` の `enableBudgetAlert && !empty(budgetContactEmails)`)
 - 対処: 手順 5 を `-p budgetContactEmails='["<your-email@example.com>"]'` 付きで流し直す (冪等)。**`enableCosmos` / `enableOpenAi` を `true` にする前に必ず直すこと** — 持続層は環境層 RG の予算の射程外なので、放置するとコストの歯止めがどこにも無くなります
+
+### `budgetAlertEnabled` が `false` なのに budget は生きている
+
+- 原因: **異常ではありません。** output は「その回のデプロイに `budgetContactEmails` を渡したか」を写しているだけで、budget リソースの実在とは無関係です。budget は ARM の incremental デプロイで残るため、2 回目以降に省略すると **budget は生きたまま output だけ `false`** になります
+- 対処: 判断材料にしないでください。**実在の確認は Verification 5** (`az consumption budget list` / `az rest`) で行います。通知先を変えたいときだけ、新しい `budgetContactEmails` を付けて流し直します
 
 ### Cosmos の無料枠 / Speech F0 でデプロイが落ちる
 
