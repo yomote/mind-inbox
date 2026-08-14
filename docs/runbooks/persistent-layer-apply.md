@@ -10,12 +10,21 @@
 
 - **必要なロールは `keyVaultCryptoUserPrincipalIds` を指定するかで変わります。**
 
-  | `keyVaultCryptoUserPrincipalIds` | 必要なロール                                                                                       | なぜ                                                                                                                                     |
-  | -------------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-  | 空 (既定)                        | **Contributor**                                                                                    | リソースを作るだけ                                                                                                                       |
-  | 1 つ以上を指定                   | **Owner** / **User Access Administrator** / **Role Based Access Control Administrator** のいずれか | `Microsoft.Authorization/roleAssignments` を作るため。**組み込みの Contributor にはロール割り当ての作成権限が無く、手順 5 が失敗します** |
+  | `keyVaultCryptoUserPrincipalIds` | 必要なロール                                                                                                                    |
+  | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+  | 空 (既定)                        | **Contributor**                                                                                                                 |
+  | 1 つ以上を指定                   | **Owner** 単独、または **Contributor + (User Access Administrator / Role Based Access Control Administrator)** の**組み合わせ** |
 
-  空のまま適用して**あとから Crypto User を付ける**運用も可能です (その付与だけを権限のある人がやる)。
+  **2 つの権限が要るのがポイントです。**
+
+  | 要る権限                                         | 何に使うか                                         | 持っているロール                                               |
+  | ------------------------------------------------ | -------------------------------------------------- | -------------------------------------------------------------- |
+  | リソースと deployment の作成                     | Key Vault / Storage / `az deployment group create` | Owner / **Contributor**                                        |
+  | `Microsoft.Authorization/roleAssignments` の作成 | Crypto User のロール割り当て                       | Owner / **User Access Administrator** / **RBAC Administrator** |
+
+  **どちらか片方だけでは手順 5 が落ちます。** Contributor だけならロール割り当てで、User Access Administrator / RBAC Administrator だけならリソース作成 (deployment 自体) で失敗します。
+
+  権限を分けたい場合は、**空のまま適用して**あとから Crypto User を付ける運用にしてください (適用は Contributor、付与だけを User Access Administrator が行う)。`main-shared.parameters.json` の既定は空なので、通常はこちらになります。
 
 - `az` (Azure CLI) と Bicep CLI。サンドボックスからは device-code で入る → [`claude-web-azure-access.md`](claude-web-azure-access.md)
 - 宣言と値: [`cicd/iac/main-shared.bicep`](../../cicd/iac/main-shared.bicep) / [`cicd/iac/main-shared.parameters.json`](../../cicd/iac/main-shared.parameters.json)
@@ -108,7 +117,12 @@ cd cicd && RG=rg-shared-mindbox ./scripts/env/cleanup-env.sh; echo "exit=$?"
 ### `AuthorizationFailed` / `does not have authorization to perform action 'Microsoft.Authorization/roleAssignments/write'`
 
 - 原因: `keyVaultCryptoUserPrincipalIds` を指定しているが、実行者が Contributor しか持っていない (Contributor はロール割り当てを作れない)
-- 対処: Owner / User Access Administrator / RBAC Administrator のいずれかで流し直すか、`keyVaultCryptoUserPrincipalIds` を空にして適用し、Crypto User の付与だけを権限のある人に依頼する
+- 対処: Owner 単独か、**Contributor に User Access Administrator / RBAC Administrator を足して**流し直す。または `keyVaultCryptoUserPrincipalIds` を空にして適用し、Crypto User の付与だけを権限のある人に依頼する
+
+### `AuthorizationFailed` が deployment 自体で出る (`Microsoft.Resources/deployments/write` など)
+
+- 原因: 逆のパターン。**User Access Administrator / RBAC Administrator しか持っていない** — これらは**ロール割り当て専用**で、Key Vault や Storage、deployment を作る権限がない
+- 対処: Contributor (または Owner) を足す。この 2 つは片方だけでは足りない (Prerequisites の表を参照)
 
 ### Cosmos の無料枠 / Speech F0 でデプロイが落ちる
 
