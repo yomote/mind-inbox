@@ -28,7 +28,7 @@ function recorder(): TelemetryLogger & { lines: string[]; errors: string[] } {
 /** 相談の本文に相当する値。これがテレメトリ行に現れたら事故。 */
 const SECRET = "離職を考えていることを誰にも言えていない";
 
-describe("formatTelemetryLine", () => {
+describe("[単体] formatTelemetryLine", () => {
   it("許可リストに無いフィールドは値ごと落とす", () => {
     // 無いと何が静かに通るか: ログを 1 行足すだけで相談の本文が
     // Log Analytics に 30 日残る。誰も気づけない。
@@ -77,32 +77,40 @@ describe("formatTelemetryLine", () => {
   });
 
   it("値に空白があっても 1 フィールドとして読める形にする", () => {
+    // 無いと何が静かに通るか: 空白を含む値が引用されなくなると、KQL の
+    // `parse` がフィールド境界を誤読して**別のキーの値として**取り込む
+    // (行は出ているのにクエリ結果だけが静かに間違う)。
     const line = formatTelemetryLine("dependency.end", { operation: "POST /chat stream" });
     expect(line).toContain('operation="POST /chat stream"');
   });
 
   it("null と undefined を区別する (undefined は出さない)", () => {
+    // 無いと何が静かに通るか: undefined が `key=undefined` として出ると
+    // 「値が無い」と「値を渡していない」が同じ行になり、欠測の切り分けができない。
     const line = formatTelemetryLine("x", { sessionId: null, status: undefined });
     expect(line).toBe("event=x sessionId=null");
   });
 });
 
-describe("redactUrl", () => {
+describe("[単体] redactUrl", () => {
   it("読めない URL を推測で通さない", () => {
-    // 壊れた URL にこそ本文が混ざりうるので、元文字列は出さない。
+    // 無いと何が静かに通るか: パース不能な URL を「そのまま出す」フォールバックに
+    // 変えると、壊れた URL (本文が混ざりうる最有力の場所) が丸ごとログに焼かれる。
     expect(redactUrl(`not a url ${SECRET}`)).toBe("(unparsable-url)");
   });
 });
 
-describe("hashIdentifier", () => {
+describe("[単体] hashIdentifier", () => {
   it("同じ入力で同じ値になり、元の値は含まない", () => {
+    // 無いと何が静かに通るか: ハッシュに乱数 (salt/uuid) が混ざると、行は出ているのに
+    // 同一ユーザーの行が繋がらず相関が死ぬ。逆に恒等関数に戻ると userId が平文で残る。
     const userId = "user-0e2f-abc";
     expect(hashIdentifier(userId)).toBe(hashIdentifier(userId));
     expect(hashIdentifier(userId)).not.toContain(userId);
   });
 });
 
-describe("runWithLogger", () => {
+describe("[単体] runWithLogger", () => {
   it("await をまたいでも invocation のロガーを返す", async () => {
     // 無いと何が静かに通るか: 下流クライアントのログが console 送りになり、
     // どの invocation の話か紐づかない (並行リクエストで突き合わせ不能)。
@@ -117,8 +125,11 @@ describe("runWithLogger", () => {
   });
 });
 
-describe("trackDependency", () => {
+describe("[単体] trackDependency", () => {
   it("成功時に開始と終了 (所要 ms つき) を対で残す", async () => {
+    // 無いと何が静かに通るか: 成功時に開始行だけ / 終了行だけになっても誰も気づかず、
+    // 「呼んだが返ってこなかった」(開始だけ) の判定基準そのものが崩れる。
+    // ms が落ちると「遅い」と「ハング」を切り分ける材料も消える。
     const log = recorder();
 
     const value = await runWithLogger(log, () =>
@@ -151,7 +162,7 @@ describe("trackDependency", () => {
   });
 });
 
-describe("trackRequest", () => {
+describe("[単体] trackRequest", () => {
   it("SSE は completed ではなく stream-opened として記録する", async () => {
     // 無いと何が静かに通るか: ストリームを**開いた**だけで「完了」と記録され、
     // 「最後まで流れたか」に答えられないのに答えたつもりになる。
@@ -168,6 +179,8 @@ describe("trackRequest", () => {
   });
 
   it("通常応答は status つきで completed", async () => {
+    // 無いと何が静かに通るか: 非 SSE まで stream-opened になると、
+    // 「全部 stream-opened」= outcome が判定として無意味になる (SSE 側の対も死ぬ)。
     const log = recorder();
 
     await trackRequest("warmup", log, async () => new Response(null, { status: 204 }));
@@ -177,6 +190,8 @@ describe("trackRequest", () => {
   });
 
   it("ハンドラが投げた例外を記録してから再送出する", async () => {
+    // 無いと何が静かに通るか: 計測のための try/catch が例外を飲み込むと、
+    // 500 になるはずの経路が 200 として返り、記録も残らない (二重に見えなくなる)。
     const log = recorder();
 
     await expect(
@@ -189,6 +204,8 @@ describe("trackRequest", () => {
   });
 
   it("ハンドラの中から currentLogger() で同じロガーが引ける", async () => {
+    // 無いと何が静かに通るか: trackRequest がスコープを張り忘れても行は出続けるが、
+    // 出先が console になり invocation に紐づかない (並行リクエストで突き合わせ不能)。
     const log = recorder();
 
     await trackRequest("tts", log, async () => {
@@ -200,8 +217,11 @@ describe("trackRequest", () => {
   });
 });
 
-describe("describeError", () => {
+describe("[単体] describeError", () => {
   it("Error 以外も種別を落とさない", () => {
+    // 無いと何が静かに通るか: `throw "文字列"` や reject(非 Error) を
+    // `instanceof Error` の分岐が素通しし、失敗の記録が空フィールドだけになる
+    // (失敗したことは分かるのに、何が起きたかが残らない)。
     expect(describeError("plain string")).toEqual({
       errorType: "string",
       errorMessage: "plain string",

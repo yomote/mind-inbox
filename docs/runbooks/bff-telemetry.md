@@ -179,9 +179,19 @@ q() { az monitor log-analytics query -w "$LAW_CUSTOMER_ID" --analytics-query "$1
 | URL             | 下流の呼び先                                                                                   | `origin + pathname` だけ。**クエリ文字列は自動で落ちる**                                                                    |
 | 認証情報        | Authorization ヘッダ / MI トークン / App Insights 接続文字列                                   | **一切載せない**。接続文字列は bicep の output にもしない                                                                   |
 | 例外            | 種別 (`errorType`) と文面 (`errorMessage`)                                                     | 載せる。ただし**文面に payload を連結しない** — zod の失敗は `schemaIssues.ts` の `summarizeIssues` (場所と種別だけ) を通す |
+| tRPC の失敗     | `trpc.error` の `errorType` / `reason`                                                         | **`TRPCError.message` は出さない** — 入力値を埋め込む経路が 2 つあるため (下記)                                             |
 | クライアント IP | —                                                                                              | App Insights の既定どおりマスクされる。`DisableIpMasking` は**足さない**                                                    |
 
 新しいログを足すときは、まず `telemetry.ts` の `ALLOWED_FIELDS` を見る。**足したい名前がそこに無いなら、それは本文である可能性が高い。**
+
+### 許可リストは「名前」しか見ない — 値の側で漏らさない
+
+`ALLOWED_FIELDS` はフィールド名の門なので、**許可された名前に本文を入れれば素通りする**。実際に踏んだのが `trpc.error` の `errorMessage` で、`TRPCError.message` には入力値がそのまま入る経路が 2 つある:
+
+- アプリが組み立てる文面 — `problem.get({ id: "会社を辞めたい" })` は `Problem not found: 会社を辞めたい` になる (`router.ts` の `requireProblem`)。`id` は自由文字列なので相談の本文をそのまま入れられる
+- zod の入力検証失敗 — `TRPCError.message` は `ZodError` の JSON で、`invalid_enum_value` などは**受け取った値そのもの**を含む
+
+よって `handlers.ts` の `describeTrpcError()` で `error.code` と、値を落とした要約 (`summarizeIssues` / 例外クラス名) だけに正規化してから出す。**同じ罠は「文面を載せる」他のフィールドにもある** — 文字列をテレメトリに渡すときは、名前が許可されているかではなく**その文字列を誰が組み立てたか**で判断する。
 
 ## Rollback
 

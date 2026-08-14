@@ -15,18 +15,20 @@
  */
 
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { z } from "zod";
+import { z, ZodError } from "zod";
 import { appRouter } from "../trpc/router";
 import { createContext } from "../trpc/context";
 import { MAX_ID_LENGTH, MAX_MESSAGE_LENGTH, MAX_TTS_TEXT_LENGTH } from "../limits";
 import { openChatStream } from "../chat/chatStream";
 import { planTts, prefetchTts, synthesizeTts } from "../tts/ttsService";
 import { warmupDownstreams } from "../warmup/warmupService";
+import { summarizeIssues } from "../schemaIssues";
 import {
   describeError,
   logErrorEvent,
   logEvent,
   trackRequest,
+  type TelemetryFields,
   type TelemetryLogger,
 } from "../observability/telemetry";
 
@@ -44,6 +46,31 @@ const consoleLogger: HandlerLogger = {
   error: (m) => console.error(m),
 };
 
+/**
+ * tRPC の失敗を **値を含まない種別だけ**に正規化する (#413 レビュー P1)。
+ *
+ * `TRPCError.message` を**そのままテレメトリに出してはいけない**。tRPC の文面は
+ * 「機械生成された安全な文字列」ではなく、入力値をそのまま埋め込む経路が 2 つある:
+ *
+ * - アプリが組み立てる文面 — `problem.get({ id: "会社を辞めたい" })` は
+ *   `Problem not found: 会社を辞めたい` になる (router.ts の `requireProblem`)。
+ *   `id` は自由文字列なので、相談の本文をそのまま入れられる
+ * - zod の入力検証失敗 — `TRPCError.message` は `ZodError` の JSON で、
+ *   `invalid_enum_value` などは **受け取った値そのもの**を含む
+ *
+ * どちらも `errorMessage` という**許可された名前**で出てしまうため、
+ * `ALLOWED_FIELDS` (名前しか見ない) の防壁を素通りして Application Insights に
+ * 30 日焼き付く。よって出すのは `error.code` と、値を落とした要約だけにする。
+ */
+export function describeTrpcError(error: { code: string; cause?: unknown }): TelemetryFields {
+  const cause = error.cause;
+  // zod は「場所 (path) と壊れ方 (code)」だけに落とす — 値は summarizeIssues が捨てる。
+  if (cause instanceof ZodError) return { errorType: error.code, reason: summarizeIssues(cause) };
+  // それ以外は例外クラス名だけ (クラス名は機械生成 = 入力を含まない)。
+  if (cause instanceof Error) return { errorType: error.code, reason: cause.name };
+  return { errorType: error.code };
+}
+
 /** tRPC の単一エントリポイント (`/api/trpc/*`)。 */
 export async function handleTrpc(
   request: Request,
@@ -60,11 +87,10 @@ export async function handleTrpc(
         createContext: () => createContext(request),
         onError({ path, error }) {
           // path は手続き名 (`consultation.sendMessage` 等) で入力の中身を含まない。
-          // message は tRPC が組み立てた文面なので、テレメトリ側の上限・1 行化に従う。
+          // error.message は**出さない** — 理由は describeTrpcError のコメント。
           logErrorEvent("trpc.error", {
             route: path ?? "unknown",
-            errorType: error.code,
-            errorMessage: error.message,
+            ...describeTrpcError(error),
           });
         },
       }),

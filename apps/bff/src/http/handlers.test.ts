@@ -198,3 +198,64 @@ describe("[L2] handleWarmup / handleTrpc", () => {
     expect(await res.json()).toEqual({ result: { data: { ok: true } } });
   });
 });
+
+/**
+ * [単体] tRPC の失敗をテレメトリに落とすときの**値の落とし方**を固定する。
+ *
+ * `telemetry.ts` の許可リストは**名前しか見ない**ので、`errorMessage` という
+ * 許可された名前に入力値入りの文面を入れれば防壁は素通りする。ここはその
+ * 「許可された名前から漏れる」経路を塞いだことを、入口 (`handleTrpc`) を
+ * 実際に叩いて確かめる。
+ */
+describe("[単体] handleTrpc — 失敗ログに入力値を載せない", () => {
+  /** 相談の本文に相当する値。これがログ行に現れたら事故。 */
+  const SECRET = "会社を辞めたいと誰にも言えていない";
+
+  function recorder() {
+    const errors: string[] = [];
+    return { errors, log: () => {}, error: (m: string) => errors.push(m) };
+  }
+
+  it("アプリが組み立てた文面 (Problem not found: <入力>) を出さない", async () => {
+    // 無いと何が静かに通るか: `problem.get` の id は自由文字列なので、
+    // 相談の本文をそのまま入れると `Problem not found: <本文>` が
+    // errorMessage として Application Insights に 30 日残る。
+    const log = recorder();
+
+    const res = await handleTrpc(
+      new Request(
+        `http://x/api/trpc/problem.get?input=${encodeURIComponent(JSON.stringify({ id: SECRET }))}`,
+      ),
+      log,
+    );
+
+    expect(res.status).toBe(404);
+    expect(log.errors).toHaveLength(1);
+    expect(log.errors[0]).not.toContain(SECRET);
+    expect(log.errors[0]).toContain("event=trpc.error");
+    expect(log.errors[0]).toContain("route=problem.get");
+    expect(log.errors[0]).toContain("errorType=NOT_FOUND");
+  });
+
+  it("zod の検証失敗も受信値ではなく path と種別だけを出す", async () => {
+    // 無いと何が静かに通るか: TRPCError.message は ZodError の JSON で、
+    // `invalid_enum_value` などは**受け取った値そのもの**を含む。
+    const log = recorder();
+
+    const res = await handleTrpc(
+      new Request(
+        `http://x/api/trpc/problem.list?input=${encodeURIComponent(
+          JSON.stringify({ theme: SECRET }),
+        )}`,
+      ),
+      log,
+    );
+
+    expect(res.status).toBe(400);
+    expect(log.errors).toHaveLength(1);
+    expect(log.errors[0]).not.toContain(SECRET);
+    expect(log.errors[0]).toContain("errorType=BAD_REQUEST");
+    // 場所と壊れ方は残る (残らないと切り分けができない)
+    expect(log.errors[0]).toContain("theme");
+  });
+});
