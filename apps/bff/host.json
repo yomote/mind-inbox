@@ -6,6 +6,9 @@
         "isEnabled": true,
         "maxTelemetryItemsPerSecond": 5,
         "excludedTypes": "Request;Exception"
+      },
+      "httpAutoCollectionOptions": {
+        "enableHttpTriggerExtendedInfoCollection": false
       }
     },
     "logLevel": {

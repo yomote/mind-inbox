@@ -78,7 +78,16 @@ Chosen option: **"Option A"**、理由は 3 つ。(1) HTTP の依存呼び出し
      `code` と値を落とした要約に潰す / **ID (`sessionId` / `userId`) は出口で必ずハッシュ化する**
      (`sessionId` はスキーマが長さしか見ていない自由文字列で、相関キーの顔をして本文を運べる)
    - クライアント IP は App Insights の既定どおりマスクされる。`DisableIpMasking` は**足さない**
-6. **接続文字列は bicep の output にしない**。取り込みキーを含むため、deployment の出力に
+6. **ホストの自動収集も同じ境界に入れる**。接続文字列を配ると Functions ホストは
+   `telemetry.ts` を通さずに `AppRequests` を作り、**受信 URL をそのまま**記録する。
+   tRPC の query 入力は `?input={"id":"…"}` として URL に載るので、アプリ側で塞いだ本文が
+   ここから漏れる。よって `host.json` で
+   `httpAutoCollectionOptions.enableHttpTriggerExtendedInfoCollection: false` にし、
+   **受信 URL・HTTP メソッド・`ResultCode` を収集させない**。失う情報はアプリ自身が出す
+   `event=request.*` (値は固定文字列) で代替する。「収集は許して取り込み時に `Url` 列を潰す」
+   (workspace transformation DCR) は採らない — ワークスペースに 1 個しか置けない特異点を新設し、
+   KQL を誤ると `AppRequests` が丸ごと落ちる沈黙を作るため
+7. **接続文字列は bicep の output にしない**。取り込みキーを含むため、deployment の出力に
    残すと `az deployment group show` で誰でも読める。ローカルの `local.settings.json` にも入れない
    (入れるとローカルの相談内容が実環境のワークスペースへ飛ぶ)
 
@@ -99,6 +108,15 @@ Chosen option: **"Option A"**、理由は 3 つ。(1) HTTP の依存呼び出し
   「無音」になる — Runbook の Verification で**種類ごとの件数**を必ず併せて見る運用を要求する
 - **サンプリングは traces を間引く**。BFF が自分で出した `event=…` 行は取りこぼしうるので、
   「1 件も無い = 起きていない」とは読めない (Request / Exception だけが常時記録)
+- **`AppRequests` が痩せる**。ホストの拡張情報収集を切った代償で `Url` は空、`ResultCode` は常に `0`、
+  `Name` は関数名だけになる。**`ResultCode` を成否の判定に使えない**ので、HTTP ステータスは
+  サンプリングされうる `AppTraces` 側の `event=request.end` に依存する — 「Request は常時記録」という
+  保険が status には効かない
+- **関数に到達しなかったリクエスト** (認証拒否 / 未知のルート) は `AppRequests` に残らなくなる。
+  ホスト側の実行ログ (`FunctionAppLogs` の `Executing/Executed HTTP request`) で見る。
+  なおこちらは元からパスだけでクエリ文字列を含まない
+- **ホスト側の境界が効いているかは自動テストでは守れない**。宣言が消えていないことしか見られないので、
+  Runbook の「漏洩点検」の KQL (`AppRequests | where isnotempty(Url)`) を実測の側に置く
 
 ## Pros and Cons of the Options
 
@@ -146,6 +164,6 @@ Function App に `APPLICATIONINSIGHTS_CONNECTION_STRING` を配り、実体を�
 - Issue: <https://github.com/yomote/mind-inbox/issues/307> (この配線) / <https://github.com/yomote/mind-inbox/issues/293> (観測性が無くて丸一日溶かした実例)
 - PR: <https://github.com/yomote/mind-inbox/pull/413>
 - Runbook: [`docs/runbooks/bff-telemetry.md`](../runbooks/bff-telemetry.md) — **何を記録し何を落とすかの正典**と、流れているかの確かめ方
-- コード: `apps/bff/src/observability/telemetry.ts` (テレメトリの唯一の出口) / `apps/bff/host.json` (サンプリング)
+- コード: `apps/bff/src/observability/telemetry.ts` (アプリが出す行の唯一の出口) / `apps/bff/host.json` (サンプリング + ホストの自動収集の境界)
 - IaC: `cicd/modules/bootstrap-core.bicep` (`appInsights` / `lawDailyQuotaGb`) / `cicd/iac/main-bootstrap.bicep`
 - 関連 ADR: [0013](0013-standing-low-cost-dev-env-with-auto-deploy.md) (常設・低コスト dev) / [0046](0046-environment-rebuildable-from-declaration.md) (宣言から再構築) / [0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md) (機微データの本来の置き場)

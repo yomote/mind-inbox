@@ -52,7 +52,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' "https://func-dev-mindbox.azurewebsite
 echo "$T"
 ```
 
-> `/api/chat/stream` と `/api/trpc/*` は Functions の EasyAuth の内側にあるので、認証なしの curl は 401 になる (それも `AppRequests` に残る)。UI から 1 往復する方が確実。
+> `/api/chat/stream` と `/api/trpc/*` は Functions の EasyAuth の内側にあるので、認証なしの curl は 401 になる。**401 は `AppRequests` には出ない** — 関数に到達しないリクエストは記録されない (ホストの拡張情報収集を切っているため / 下記「ホストの自動収集は…」)。見るなら `FunctionAppLogs` 側。UI から 1 往復する方が確実。
 
 ### 3. KQL で引く
 
@@ -69,9 +69,11 @@ q() { az monitor log-analytics query -w "$LAW_CUSTOMER_ID" --analytics-query "$1
   ```kusto
   AppRequests
   | where TimeGenerated > ago(1h)
-  | project TimeGenerated, Name, ResultCode, DurationMs, Success, OperationId
+  | project TimeGenerated, Name, DurationMs, Success, OperationId
   | order by TimeGenerated desc
   ```
+
+  > `Name` は**関数名** (`trpc` / `chatStream` / `tts` / `warmup`) であって URL ではない。`Url` は空、`ResultCode` は常に `0` になる — ホストの拡張情報収集を切っているため (下記「ホストの自動収集は `telemetry.ts` を通らない」)。**HTTP ステータスとパスは `AppTraces` の `event=request.end` 側で見る**。`ResultCode` を成否の判定に使わない (常に `0` = 「成功」に見える)
 
 - [ ] **下流ホップが記録されている** — BFF → ai-agent / VOICEVOX / Cosmos が「呼んだ / 返った / 何 ms / ステータス」として残る (App Insights が自動計測する)
 
@@ -146,7 +148,7 @@ q() { az monitor log-analytics query -w "$LAW_CUSTOMER_ID" --analytics-query "$1
   | summarize count() by Category, Level
   ```
 
-- [ ] **機微データが漏れていない** — `dropped=` は「許可されていないフィールドを載せようとして、テレメトリ層が落とした」痕跡。0 件が正常、出ていたらそのコードを直す (落とされてはいるが、書いた人の意図はズレている)
+- [ ] **機微データが漏れていない (アプリ側)** — `dropped=` は「許可されていないフィールドを載せようとして、テレメトリ層が落とした」痕跡。0 件が正常、出ていたらそのコードを直す (落とされてはいるが、書いた人の意図はズレている)
 
   ```kusto
   AppTraces
@@ -154,6 +156,26 @@ q() { az monitor log-analytics query -w "$LAW_CUSTOMER_ID" --analytics-query "$1
   | where Message has "dropped="
   | extend dropped = extract(@"dropped=(\S+)", 1, Message)
   | summarize count() by dropped
+  ```
+
+- [ ] **機微データが漏れていない (ホスト側) — 漏洩点検** — `AppRequests.Url` に**受信 URL が入っていないこと**。tRPC の query 入力は `?input={"id":"…"}` として URL に載るので、ここが埋まっていたら相談本文が 30 日残っている。**`host.json` の設定が効いているかを実測で確かめる唯一の場所**で、自動テストでは代替できない
+
+  ```kusto
+  AppRequests
+  | where TimeGenerated > ago(24h)
+  | where isnotempty(Url)
+  | project TimeGenerated, Name, Url
+  | take 20
+  ```
+
+  - **0 行が正常。** 1 行でも出たら、`apps/bff/host.json` の `httpAutoCollectionOptions.enableHttpTriggerExtendedInfoCollection: false` が実環境に届いていない (デプロイ漏れ / `AzureFunctionsJobHost__logging__applicationInsights__httpAutoCollectionOptions__…` による appSettings 側の上書き)
+  - **ただし 0 行は「テレメトリが死んでいる」でも起きる。** 上の「無音と正常を取り違えていない」の union で `AppRequests` に行が来ていることを先に確認してから読む (来ていないなら**未検証**であって「漏れていない」ではない)
+
+  ```kusto
+  // 同じ窓で AppRequests が何行来ているか (0 なら上の点検は未検証)
+  AppRequests
+  | where TimeGenerated > ago(24h)
+  | summarize total = count(), withUrl = countif(isnotempty(Url))
   ```
 
 - [ ] **コストが宣言の内側にいる** — 日次上限 0.15 GB/日 (`lawDailyQuotaGb`) に対する実測
@@ -176,7 +198,8 @@ q() { az monitor log-analytics query -w "$LAW_CUSTOMER_ID" --analytics-query "$1
 | 個人の識別子    | `userId` (Cosmos のパーティションキー)                                                         | **生では載せない**。出口が `userHash=<ハッシュ>` に変える (呼び出し側はハッシュしない)                                      |
 | 相関用の ID     | `sessionId`                                                                                    | **生では載せない**。出口が `sessionHash=<ハッシュ>` に変える (理由は下記「相関 ID は…」)                                    |
 | 経路と結果      | route / method / status / outcome / 所要 ms / 下流の target・operation                         | 載せる。**これが無いと障害を追えない**                                                                                      |
-| URL             | 下流の呼び先                                                                                   | `origin + pathname` だけ。**クエリ文字列は自動で落ちる**                                                                    |
+| URL (下流)      | BFF が呼ぶ先 (`AppDependencies` / `event=dependency.*`)                                        | `origin + pathname` だけ。**クエリ文字列は自動で落ちる**                                                                    |
+| URL (受信)      | ブラウザ → BFF のリクエスト URL (`AppRequests.Url`)                                            | **記録しない**。ホストの自動収集を `host.json` で切る (下記「ホストの自動収集は…」)                                         |
 | 認証情報        | Authorization ヘッダ / MI トークン / App Insights 接続文字列                                   | **一切載せない**。接続文字列は bicep の output にもしない                                                                   |
 | 例外            | 種別 (`errorType`) と文面 (`errorMessage`)                                                     | 載せる。ただし**文面に payload を連結しない** — zod の失敗は `schemaIssues.ts` の `summarizeIssues` (場所と種別だけ) を通す |
 | tRPC の失敗     | `trpc.error` の `errorType` / `reason`                                                         | **`TRPCError.message` は出さない** — 入力値を埋め込む経路が 2 つあるため (下記)                                             |
@@ -209,6 +232,55 @@ q() { az monitor log-analytics query -w "$LAW_CUSTOMER_ID" --analytics-query "$1
 - **呼び出し側でハッシュしない** — その作法に戻すと、次に足す人が素で渡した瞬間に漏れ、漏れたことは誰にも見えない
 
 > KQL を書くときは `sessionId=` ではなく `sessionHash=` で引く (この Runbook の Verification の例も同様)。
+
+### ホストの自動収集は `telemetry.ts` を通らない — 受信 URL はホスト側で切る
+
+**`ALLOWED_FIELDS` も `HASHED_FIELDS` も、アプリが自分で書いた行にしか効かない。**
+`APPLICATIONINSIGHTS_CONNECTION_STRING` が配られると、Functions ホストはアプリのコードを
+一切通さずに `AppRequests` を作り、そこへ**受信 URL をそのまま**入れる。
+
+これが効く経路が実際にあった (PR #413 の Codex 指摘):
+
+- フロントの tRPC クライアントは既定の `httpBatchLink` を使う → **query は GET** で、入力は
+  `?input={"0":{"json":{"id":"…"}}}` として **URL に載る**
+- `id` は `z.string().min(1).max(MAX_ID_LENGTH)` = 長さしか見ない自由文字列 → 相談の本文をそのまま入れられる
+- つまり `trpc.error` から本文を消しても、**同じ値が `AppRequests.Url` に 30 日残る**
+
+対処は **`apps/bff/host.json` でホストの HTTP 拡張情報収集を切る**:
+
+```json
+"httpAutoCollectionOptions": { "enableHttpTriggerExtendedInfoCollection": false }
+```
+
+既定は `true`。`false` にすると request telemetry は**関数の実行そのもの**だけになり、
+`Url` は入らない (Microsoft の実装リポジトリのテストが `Assert.Null(functionRequest.Url)` で
+固定している — [azure-webjobs-sdk の E2E テスト](https://github.com/Azure/azure-webjobs-sdk/blob/dev/test/Microsoft.Azure.WebJobs.Host.EndToEndTests/ApplicationInsights/ApplicationInsightsEndToEndTests.cs) /
+[host.json リファレンス](https://learn.microsoft.com/azure/azure-functions/functions-host-json#applicationinsightshttpautocollectionoptions))。
+
+**代わりに失うもの** (承知のうえで払う):
+
+| 失うもの                                                                                 | 代替                                                                                                                                                                      |
+| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AppRequests.Url` / HTTP メソッド                                                        | `AppTraces` の `event=request.start` / `request.end` (`route=` / `method=` は**アプリが組み立てた固定文字列**で、入力を含まない)                                          |
+| `AppRequests.ResultCode` (常に `0`)                                                      | 同上の `status=` / `outcome=`。**`ResultCode` を成否の判定に使わない**                                                                                                    |
+| クライアントから来る W3C 相関ヘッダ                                                      | サーバ内の `OperationId` 相関は残る (下流依存の相関は `enableW3CDistributedTracing` が引き続き効く)。ブラウザ側 SDK は未導入なので実害なし                                |
+| **関数に到達しなかったリクエスト** (認証拒否 / 未知のルート) が `AppRequests` から消える | `FunctionAppLogs` の `Executing HTTP request` / `Executed HTTP request` 行。**こちらは元からパスだけでクエリ文字列を含まない** (ホストが `Request.Path` を出しているため) |
+
+**採らなかった案**:
+
+- **tRPC を POST に寄せる** (`httpBatchLink({ methodOverride: "POST" })`) — URL に入力を載せない方向としては筋がよく、
+  **併用する価値はある**が、これ単独では守りにならない。フロントを直しても、他のクライアント・手動の curl・
+  将来足す GET エンドポイントが同じ穴を開け直せて、**開け直したことは誰にも見えない**。しかも直す場所が
+  `apps/frontend/` になり、この防壁が BFF の外に出る (境界としては提案止まり)
+- **Log Analytics の workspace transformation DCR で `Url` を潰す** — 収集は許して取り込み時に列を書き換える案。
+  ワークスペースに 1 個しか置けない特異点を新設することになり、KQL を間違えると
+  **`AppRequests` が丸ごと落ちる**沈黙を作る。得られるのは `ResultCode` の温存だけで、割に合わない
+- **収集そのものを止める** (`enableAppInsights=false`) — 本文は残らないが #307 の目的が消える
+
+> **この設定は静かに失われる。** `host.json` は zip に同梱されて配られるので (`deploy-backend.sh`)、
+> デプロイ漏れや appSettings 側の `AzureFunctionsJobHost__…` 上書きで効かなくなりうる。
+> 宣言が消えていないことは `apps/bff/src/observability/hostTelemetry.test.ts` が見るが、
+> **実環境で効いているかは Verification の「漏洩点検」の KQL でしか分からない**。
 
 ## Rollback
 
@@ -248,6 +320,12 @@ q() { az monitor log-analytics query -w "$LAW_CUSTOMER_ID" --analytics-query "$1
 - 原因: `apps/bff/local.settings.json` に `APPLICATIONINSIGHTS_CONNECTION_STRING` を手で入れている
 - 対処: 空にする。**ローカルは空が既定** — 空ならホストは何も送らず、ログは端末に出るだけ
 
+### `AppRequests` の `ResultCode` が全部 `0` / `Name` が関数名しか出ない / `Url` が空
+
+- 原因: **意図どおり。** `host.json` でホストの HTTP 拡張情報収集を切っているため (受信 URL に相談本文が載る経路を塞ぐ / 上記「ホストの自動収集は…」)
+- 対処: HTTP ステータスとパスは `AppTraces` の `event=request.end` 側 (`route=` / `status=` / `outcome=`) で見る。**`ResultCode == 0` を「成功」と読まない** — 成否は `Success` 列 (関数が例外を投げたか) と `event=request.end` の `status=` で判断する
+- 逆に `Url` が**埋まっていたら**それは事故。Verification の「漏洩点検」に従って設定の配布状況を確認する
+
 ### `AppRequests` の SSE の所要時間が短すぎる / 長すぎる
 
 - 原因: `/api/chat/stream` は**ストリームを開いた時点で return する**。BFF 側の `event=request.end` は `outcome=stream-opened` であって「流し切った」ではない
@@ -258,5 +336,5 @@ q() { az monitor log-analytics query -w "$LAW_CUSTOMER_ID" --analytics-query "$1
 - Issue: [#307](https://github.com/yomote/mind-inbox/issues/307) (この配線) / [#293](https://github.com/yomote/mind-inbox/issues/293) (観測性が無くて丸一日溶かした実例) / [#303](https://github.com/yomote/mind-inbox/issues/303) (設定を宣言に一本化)
 - ADR: [ADR 0055 BFF のテレメトリ基盤](../adr/0055-bff-telemetry-on-workspace-based-app-insights.md) (**この配線の判断記録** — 保持・コスト・機微データの境界) / [ADR 0013 常設・低コスト dev](../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) / [ADR 0046 環境は宣言から再構築できる](../adr/0046-environment-rebuildable-from-declaration.md) / [ADR 0030 Cosmos 永続化](../adr/0030-persistence-on-cosmos-db-single-store-behind-bff.md)
 - 関連 Runbook: [`ops-inspect.md`](ops-inspect.md) (サンドボックスから Azure の実態を取る) / [`cosmos-persistence.md`](cosmos-persistence.md)
-- コード: `apps/bff/src/observability/telemetry.ts` (テレメトリの唯一の出口) / `apps/bff/host.json` (サンプリング)
+- コード: `apps/bff/src/observability/telemetry.ts` (アプリが出す行の唯一の出口) / `apps/bff/host.json` (サンプリング + **ホストの自動収集の境界**) / `apps/bff/src/observability/hostTelemetry.test.ts` (その宣言が消えていないことを見る)
 - IaC: `cicd/modules/bootstrap-core.bicep` (`appInsights` / `diagFunctionApp`) / `cicd/iac/main-bootstrap.bicep` (output の re-export)

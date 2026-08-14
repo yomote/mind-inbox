@@ -797,6 +797,14 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
             // テレメトリの送信先 (#307)。**アプリのコードはこの値を読まない** —
             // Functions ホストが読んで requests / dependencies / exceptions / traces を送る。
             // az で後付けしない (appSettings は全置換なので次の bicep 適用で消える)。
+            //
+            // **この 1 行はアプリの許可リストを迂回する経路も開く**: ホストは
+            // `telemetry.ts` を通さずに `AppRequests` を作り、受信 URL をそのまま入れる。
+            // tRPC の query は `?input={"id":"…"}` として URL に載るので、そのままでは
+            // 相談本文が 30 日残る (#413 の Codex 指摘)。境界は `apps/bff/host.json` の
+            // `httpAutoCollectionOptions.enableHttpTriggerExtendedInfoCollection: false` が持つ
+            // (ADR 0055 / `docs/runbooks/bff-telemetry.md`)。**ここを有効にするなら、あちらが
+            // 効いていることを漏洩点検の KQL で確かめてから**。
             enableAppInsights
               ? [
                   {
