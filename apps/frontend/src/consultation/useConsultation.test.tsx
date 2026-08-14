@@ -832,4 +832,19 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
     expect(result.current.pendingApproval).toBeNull();
     expect(respondToApproval).not.toHaveBeenCalled();
   });
+
+  it("次の発話の送信が失敗した往復では要求を消さない", async () => {
+    // 無いと: 送信失敗時は会話も入力欄も送信前に巻き戻るのに、承認カードだけが消える
+    //         実装が通る。ユーザーは押していないのに承認待ちが画面から見えなくなり、
+    //         「実行されたのか、取り消されたのか」が分からなくなる。
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await startAndAskForApproval();
+
+    vi.mocked(sendMessage).mockRejectedValue(new Error("boom"));
+    act(() => result.current.setDraftMessage("もう一言"));
+    await act(async () => await result.current.sendDraftMessage());
+
+    expect(result.current.actionError).not.toBeNull();
+    expect(result.current.pendingApproval?.id).toBe("appr-1");
+  });
 });

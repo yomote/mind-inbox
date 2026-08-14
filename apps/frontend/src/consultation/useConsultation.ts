@@ -315,9 +315,6 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     };
 
     setDraftMessage("");
-    // 承認せずに会話を続けたら要求は破棄する (§5.9 / 既定は「実行しない」)。
-    // 押していない = 実行されていない、なのでカードを畳んでも副作用は起きない。
-    setPendingApproval(null);
     // 最初のユーザー発話でタイトルを内容から自動生成 (開始時は聞かない)。
     const isFirstUserMessage = !session.messages.some((m) => m.role === "user");
     const nextTitle = isFirstUserMessage ? deriveSessionTitle(userMessage.text) : session.title;
@@ -340,6 +337,11 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     );
     // 承認要求は応答と同じ往復で届く (#82)。ここで拾わないと、サーバは承認待ちのまま
     // 画面には普通の返事だけが出て「止まっているのに止まって見えない」状態になる。
+    //
+    // **成功したときだけ差し替える** (§5.9): 承認せずに会話を続けたら前の要求は破棄される
+    // (押していない = 実行されていない側に倒れる) が、送信が失敗した往復では会話も入力も
+    // 巻き戻すので、承認カードだけが消えると「押していないのにどうなったか分からない」状態
+    // になる。送信中はカードのボタンが loading で無効なので、残っていても押せない。
     setPendingApproval(outcome.value.approval);
 
     // ユーザー発話 2 往復ごとに下書きプレビューを自動更新する (#187 / ADR 0039 D2)。
