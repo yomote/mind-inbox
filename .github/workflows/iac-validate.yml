@@ -62,8 +62,18 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --quiet pytest
-          out="$(python3 -m pytest cicd/scripts/env/test_mgmt_layer_tag_contract.py -q -rs 2>&1)"
+
+          # **`out="$(pytest …)"` を裸で書かない。** `set -e` の下では pytest が非ゼロで
+          # 落ちた時点で代入ごと失敗し、後続の `echo "$out"` に到達しない = 本命の
+          # 「タグがズレている」検出だけが**出力 0 行の無言の赤**になる (skip 経路は
+          # ::error が出るのに、こちらは何も残らない)。失敗しても出力をログに残す。
+          if ! out="$(python3 -m pytest cicd/scripts/env/test_mgmt_layer_tag_contract.py -q -rs 2>&1)"; then
+            echo "$out"
+            echo "::error title=層タグ照合が失敗::main-mgmt.bicep の層タグと persistent_layer_guard.py の定数がズレています"
+            exit 1
+          fi
           echo "$out"
+
           # bicep のあるこの job で skip されたら「未検証のまま緑」になる。落とす。
           if grep -qi 'skipped' <<<"$out"; then
             echo "::error title=層タグ照合が skip された::bicep が見えていないため ARM 照合が未検証のまま緑になりました"

@@ -194,7 +194,7 @@ az rest --method get --url "https://management.azure.com/subscriptions/$(az acco
 
 ## Related
 
-- ADR: [0056 管理系 / アプリ系とバックアップによるデータ保護](../adr/0056-management-and-app-layers-with-backup-based-data-protection.md) (**層の定義の正典**) / [0046 環境は宣言から再構築できる](../adr/0046-environment-rebuildable-from-declaration.md) D6/D9 (D1 は 0056 が supersede) / ADR 0045 D5 (E2E artifact は既定で秘密 — 未マージ / PR #332) / [0003 2 フェーズ Bicep](../adr/0003-two-phase-bicep.md)
+- ADR: [0056 管理系 / アプリ系とバックアップによるデータ保護](../adr/0056-management-and-app-layers-with-backup-based-data-protection.md) (**層の定義の正典**。Proposed — Status を動かすのは PO) / [0046 環境は宣言から再構築できる](../adr/0046-environment-rebuildable-from-declaration.md) D6/D9 (D1 は 0056 が Accept され次第 supersede) / ADR 0045 D5 (E2E artifact は既定で秘密 — 未マージ / PR #332) / [0003 2 フェーズ Bicep](../adr/0003-two-phase-bicep.md)
 - 関連 Runbook: [`claude-web-azure-access.md`](claude-web-azure-access.md) / [`cosmos-persistence.md`](cosmos-persistence.md)
 - 宣言とパラメータの説明: [`cicd/iac/README.md`](../../cicd/iac/README.md#1-5-管理系レイヤrg-mgmt-mindbox--一度きり)
 - 撤収ガード: `cicd/scripts/env/` ([README](../../cicd/scripts/env/README.md))
