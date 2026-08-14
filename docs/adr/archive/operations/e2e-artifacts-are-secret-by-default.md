@@ -18,12 +18,12 @@
 >
 > **現行の正典はここではありません**:
 >
-> | 何                                      | どこ                                                                                                                                  |
-> | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-> | 層の分け方 / 鍵をどの RG に置くか       | [ADR 0056](../../0056-management-and-app-layers-with-backup-based-data-protection.md) D1 (管理系 RG `rg-mgmt-mindbox` / **Proposed**) |
-> | 鍵の実体 (非エクスポート / 鍵長 / 権限) | [`cicd/iac/main-mgmt.bicep`](../../../../cicd/iac/main-mgmt.bicep) の `e2eTraceKey`                                                   |
-> | 適用手順                                | [`docs/runbooks/mgmt-layer-apply.md`](../../../runbooks/mgmt-layer-apply.md)                                                          |
-> | 鍵の運用 (復号 / ローテーション / 失効) | [`cicd/keys/README.md`](../../../../cicd/keys/README.md)                                                                              |
+> | 何                                      | どこ                                                                                                                                                     |
+> | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | 層の分け方 / 鍵をどの RG に置くか       | [ADR 0056](../../0056-management-and-app-layers-with-backup-based-data-protection.md) D1 (管理系 RG `rg-mgmt-mindbox` / **Proposed**)                    |
+> | 鍵の実体 (非エクスポート / 鍵長 / 権限) | [`cicd/iac/main-mgmt.bicep`](../../../../cicd/iac/main-mgmt.bicep) の `e2eTraceKey`                                                                      |
+> | 適用手順                                | [`docs/runbooks/mgmt-layer-apply.md`](../../../runbooks/mgmt-layer-apply.md)                                                                             |
+> | 鍵の運用 (復号 / ローテーション / 失効) | [`docs/runbooks/e2e-trace-keys.md`](../../../runbooks/e2e-trace-keys.md) (鍵ファイルの置き場は [`cicd/keys/README.md`](../../../../cicd/keys/README.md)) |
 >
 > 以下の本文で「持続層 RG」と読める箇所は、[#419](https://github.com/yomote/mind-inbox/pull/419) 以降
 > **管理系 RG (`rg-mgmt-mindbox`)** に読み替えてあります。
@@ -101,23 +101,26 @@ Chosen option: **"Option D"**。
   - **環境変数を選ばない理由**: [ADR 0031](agent-reaches-outside-via-github-actions.md) の「サンドボックスに長期クレデンシャルを置かない」に反する。加えて Claude Code の公式ドキュメントが「**cloud environments have no dedicated secrets store, so don't add API keys or other credentials**」と明示している ([Configure cloud environments](https://code.claude.com/docs/en/cloud-environments))
   - **置き場所は管理系 RG (`rg-mgmt-mindbox`)** — 環境 (`rg-{env}-mind-inbox`) の中に置くと `cleanup-env.sh` の RG 削除に巻き込まれる ([#302](https://github.com/yomote/mind-inbox/issues/302))。**層の定義の正典は [ADR 0056](../../0056-management-and-app-layers-with-backup-based-data-protection.md) D1** (Proposed / 2026-08-14 の PO 裁定。[ADR 0046](../../0046-environment-rebuildable-from-declaration.md) D1 の「持続層」を置き換える)
   - **管理系 RG に適用が済むまでの暫定**: それまでは秘密鍵を PO の手元に置き、**復号は PO のみ**。2026-08-12 の debrief で「Key Vault だけ先に作る」案は**採らない**と PO が判断したため、**エージェント復号が使えるようになるのは管理系 RG が立ってから**。宣言 (`main-mgmt.bicep` の `e2eTraceKey` / 非エクスポート) は [#419](https://github.com/yomote/mind-inbox/pull/419) で main に入っており、残るのは [Runbook](../../../runbooks/mgmt-layer-apply.md) の一度きりの手動適用
-  - **移行**: 既に GPG 形式で残っている artifact (例: `e2e-live-trace-31571455835`) は**現行の GPG 鍵で PO が復号する**。封筒暗号への切り替えは新規分から。切り替え時は **D7 の許可拡張子 (`.gpg` → `.enc`) と `deploy.yml` の upload path を同じ PR で替える** (片方だけだと成果物が上がらない)
+  - **移行**: 既に GPG 形式で残っている artifact (例: `e2e-live-trace-31571455835`) は**現行の GPG 鍵で PO が復号する**。封筒暗号への切り替えは新規分から。切り替え時は **D7 の許可拡張子 (`.gpg` → `.enc`) と、`encrypt-e2e-traces.sh` を呼ぶ「全 workflow」の upload glob・`PUBKEY` を同じ PR で替える** (取り残すと、その workflow の成果物だけが無言で上がらなくなる。詳細は D7)
 - **D6 公開鍵が無い間は trace を残さず、warning を出して続行する** — 鍵の準備前に平文で上がる事故を構造的に防ぐ (fail closed)。「鍵が無いから黙って何もしない」ではなく**必ず 1 行喋る**
 - **D7 暗号化の結果を機械で検証する** — 出力ディレクトリに**許可された拡張子以外のファイルが 1 つでもあれば run を落とす**。「暗号化したつもり」で平文が混ざる事故を、成功パスの中で潰す
   - **封筒暗号でも成果物は 1 ファイルに束ねる** (2026-08-12 の Codex P2 指摘で明確化) — wrapped AES 鍵・nonce・暗号文を**単一の `*.enc` に含める**。別ファイルに分けると (a) upload の glob から漏れて復号不能になる (b) 許可拡張子を増やして D7 の検査が緩む、のどちらかが起きる
-  - したがって**許可拡張子は移行前が `.gpg`、移行後が `.enc` の 1 種類だけ**。`deploy.yml` の upload path (`e2e-trace-enc/**/*.gpg`) も同時に `.enc` へ替える。**片方だけ替えると成果物が上がらない**
+  - したがって**許可拡張子は移行前が `.gpg`、移行後が `.enc` の 1 種類だけ**。
+  - **替える対象は `deploy.yml` だけではない。** `cicd/scripts/deploy/encrypt-e2e-traces.sh` を呼ぶ**全 workflow**の (a) upload の `hashFiles(...)` 条件 (b) `upload-artifact` の `path:` glob (c) `PUBKEY` の 3 つを、スクリプトと**同じ PR で**替える。2026-08-14 時点の呼び元は **`deploy.yml` と `golden-path-monitor.yml` の 2 つ**で、`.gpg` が 4 行・`PUBKEY` が 2 行ある
+  - **取り残すと「赤くならずに証拠が消える」** — upload の条件が `hashFiles('e2e-trace-enc/**/*.gpg') != ''` なので、スクリプトだけ `.enc` にすると条件が偽になり、**ステップはスキップされて run は緑のまま**になる。`golden-path-monitor.yml` は毎朝回るので、**気づかないまま日次の trace を失い続ける**
+  - **文面では防げないので機械で押さえる** — `cicd/scripts/deploy/test_encrypt_e2e_traces.py` に、**スクリプトの許可拡張子と、スクリプトを呼ぶ全 workflow の glob 拡張子が一致すること**を突き合わせるテストを置いた。片方だけ替えた PR はここで落ちる (2026-08-14 追加。#300 で同型の「片方だけ替える」事故を踏んでいる)
 - **D8 `sources: false` で spec を trace に同梱しない** — 実測で trace は**テストのソースコードを含んでいた**。spec にハードコードされた秘密がそれだけで載るため、live 設定では落とす
 - **D9 データ暗号は認証付き (AEAD) に限る — 改ざん・破損を復号時に必ず検出する** (2026-08-12 の Codex P2 指摘で追加)。gpg は署名なしでも MDC で完全性を見ていたが、封筒暗号を自前で組む以上、**認証を明示的に契約として書かないと落ちる**
   - **アルゴリズムは `AES-256-GCM` に固定する**。CBC / CTR 等の非認証モードを選んではいけない — 暗号文を書き換えても復号が「成功」してしまい、**壊れた trace を本物として読む**ことになる
   - **AES 鍵の wrap は `RSA-OAEP` (Key Vault の `RSA-OAEP-256`)**。`az keyvault key decrypt --algorithm RSA-OAEP-256` と対になる
   - **直列化形式に認証タグを含める** — `.enc` は次の 4 要素をこの順で持つ (バージョン付きヘッダ + 各要素の長さを前置し、実装は既存のライブラリで読み書きする):
 
-    | 要素             | 内容                                                                                                                                                  |
-    | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-    | version          | 形式のバージョン (将来の鍵/方式変更を壊さず入れるため)                                                                                                |
-    | wrapped key      | RSA-OAEP-256 で wrap した AES-256 鍵 + **どの Key Vault 鍵バージョンで wrap したか** (鍵ローテーション後も過去分を開けるため / `cicd/keys/README.md`) |
-    | nonce            | GCM の 96-bit nonce (鍵ごとに再利用しない)                                                                                                            |
-    | ciphertext + tag | AES-256-GCM の暗号文と 128-bit 認証タグ                                                                                                               |
+    | 要素             | 内容                                                                                                                                                              |
+    | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+    | version          | 形式のバージョン (将来の鍵/方式変更を壊さず入れるため)                                                                                                            |
+    | wrapped key      | RSA-OAEP-256 で wrap した AES-256 鍵 + **どの Key Vault 鍵バージョンで wrap したか** (鍵ローテーション後も過去分を開けるため / `docs/runbooks/e2e-trace-keys.md`) |
+    | nonce            | GCM の 96-bit nonce (鍵ごとに再利用しない)                                                                                                                        |
+    | ciphertext + tag | AES-256-GCM の暗号文と 128-bit 認証タグ                                                                                                                           |
 
   - **復号時の認証失敗は hard error** — タグ検証に失敗したら、平文を 1 バイトも出力せず非ゼロで終了する。「一部だけ読めた」で先に進まない
   - **`openssl enc` は使わない** — GCM を安全に扱えない (タグの取り回しがコマンドラインに無い)。CI 側は python の `cryptography` (`AESGCM`) を使う。**「ランナーに同梱」という初版の選定理由はここで失効している**
@@ -199,6 +202,6 @@ Chosen option: **"Option D"**。
 
 - Issue: [#293](https://github.com/yomote/mind-inbox/issues/293) (誤った仮説で 1 日空転した実例) / [#262](https://github.com/yomote/mind-inbox/issues/262) / [#301](https://github.com/yomote/mind-inbox/issues/301) (封筒暗号への組み替え作業リスト) / [#302](https://github.com/yomote/mind-inbox/issues/302) (管理系 RG)
 - PR: [#299](https://github.com/yomote/mind-inbox/pull/299) (スクリーンショット + error-context の artifact 化 — 本 ADR の前段) / [#326](https://github.com/yomote/mind-inbox/pull/326) (Accept) / [#332](https://github.com/yomote/mind-inbox/pull/332) (D5 改訂 = この記録) / [#385](https://github.com/yomote/mind-inbox/pull/385) (ADR 棚から退避) / [#419](https://github.com/yomote/mind-inbox/pull/419) (管理系 RG と非エクスポート鍵の宣言)
-- **現行の正典**: [ADR 0056](../../0056-management-and-app-layers-with-backup-based-data-protection.md) D1 (層) / [`cicd/iac/main-mgmt.bicep`](../../../../cicd/iac/main-mgmt.bicep) (鍵の宣言) / [`docs/runbooks/mgmt-layer-apply.md`](../../../runbooks/mgmt-layer-apply.md) (適用) / [`cicd/keys/README.md`](../../../../cicd/keys/README.md) (鍵の運用手順)
+- **現行の正典**: [ADR 0056](../../0056-management-and-app-layers-with-backup-based-data-protection.md) D1 (層) / [`cicd/iac/main-mgmt.bicep`](../../../../cicd/iac/main-mgmt.bicep) (鍵の宣言) / [`docs/runbooks/mgmt-layer-apply.md`](../../../runbooks/mgmt-layer-apply.md) (適用) / [`docs/runbooks/e2e-trace-keys.md`](../../../runbooks/e2e-trace-keys.md) (鍵の運用手順) / [`cicd/keys/README.md`](../../../../cicd/keys/README.md) (鍵ファイルの置き場)
 - Playwright: [#19992](https://github.com/microsoft/playwright/issues/19992) / [#31728](https://github.com/microsoft/playwright/issues/31728) / [#38673](https://github.com/microsoft/playwright/issues/38673) (組み込みリダクションが 3 年越しで未実装であることの根拠)
 - GitHub Docs: [Downloading workflow artifacts](https://docs.github.com/en/actions/managing-workflow-runs/downloading-workflow-artifacts) (public リポジトリの artifact は署名済みユーザーなら誰でも取得できる)

@@ -85,7 +85,8 @@
 > [ADR 0056](../adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D1 (管理系 RG) /
 > [`cicd/iac/main-mgmt.bicep`](../../cicd/iac/main-mgmt.bicep) /
 > [`docs/runbooks/mgmt-layer-apply.md`](../runbooks/mgmt-layer-apply.md) /
-> [`cicd/keys/README.md`](../../cicd/keys/README.md)。
+> [`docs/runbooks/e2e-trace-keys.md`](../runbooks/e2e-trace-keys.md) (鍵の運用手順) /
+> [`cicd/keys/README.md`](../../cicd/keys/README.md) (鍵ファイルの置き場)。
 
 - **対象**: 未裁定 ADR の裁定。あわせて #293 の「trace 復号」と [#46](https://github.com/yomote/mind-inbox/issues/46) (OIDC ロール最小化) を PO 向けに解説
 - **決定**:
