@@ -49,6 +49,27 @@ class Settings(BaseSettings):
     llm_stream_idle_timeout_seconds: float = 45.0
     cosmos_request_timeout_seconds: int = 20
 
+    # ── LLM に見せるツール (#320 / #82 design-gate の PO 裁定 2) ───────────────
+    #
+    # **既定は空 = LLM に 1 本もツールを見せない**。tools.py の題材は SK 時代の
+    # 受信箱デモのままで、#321 (ツール題材の再定義) の裁定が出るまで実運用の会話に
+    # 出すものではない。配管 (#320) と題材 (#321) の着地時期を切り離すためのフラグ。
+    #
+    # 値の書式 (`LLM_EXPOSED_TOOLS`):
+    #   ""            — 1 本も見せない (既定)
+    #   "*"           — registry の全ツール
+    #   "a,b"         — registry のうち名前が一致するものだけ
+    # **未知の名前はエラーにする** — 黙って無視すると「フラグを立てたのに何も起きない」
+    # が正常系と区別できなくなる (綴り間違いが静かに通る)。
+    llm_exposed_tools: str = ""
+
+    # 1 リクエストで許すツール実行の総回数 / モデル往復の上限。
+    # MAF の既定は max_function_calls=None (**無制限**) / max_iterations=40 なので、
+    # モデルが暴走したときにトークンと外向き I/O を止めるものが無い。ここで明示する。
+    # 上限に達すると MAF は tool_choice="none" に落として応答テキストを作らせる。
+    llm_max_function_calls: int = 4
+    llm_max_tool_iterations: int = 4
+
     # Cosmos DB (ADR 0030 / #188) — 会話セッション・承認レコード・MAF checkpoint の永続化。
     # **cosmos_endpoint の有無が分岐点**: 未設定なら従来どおり in-memory で動く
     # (ローカル / テストの既定 = BFF の COSMOS_ENDPOINT と同じ流儀 / ADR 0030 D7)。

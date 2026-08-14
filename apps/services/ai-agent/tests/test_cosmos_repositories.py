@@ -145,7 +145,6 @@ class TestCosmosApprovalRepository:
                 tool_args={"to": "a@example.com"},
                 is_side_effecting=True,
             ),
-            rag_context="ctx",
             checkpoint_id="cp-1",
         )
 

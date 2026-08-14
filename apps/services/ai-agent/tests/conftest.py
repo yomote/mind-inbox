@@ -96,6 +96,23 @@ def cosmos_mode(monkeypatch, fake_cosmos_container):
 
 
 @pytest.fixture
+def tools_enabled(monkeypatch):
+    """registry の全ツールを LLM に見せる構成 (`LLM_EXPOSED_TOOLS="*"`)。
+
+    **既定は空 = 1 本も見せない** (#82 design-gate の PO 裁定 2: 題材がスタブのままなので
+    #321 の裁定まで実運用の会話に出さない)。ツールが絡む挙動を見るテストはこの
+    fixture で明示的に開ける — 「既定でどうなるか」と「開けたらどうなるか」を
+    テストの側で取り違えないようにするため。
+    """
+    from app.config import get_settings
+
+    monkeypatch.setenv("LLM_EXPOSED_TOOLS", "*")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture
 def make_client():
     """MAF chat client mock の factory。get_response が任意のテキストを返すように構成する。
 
