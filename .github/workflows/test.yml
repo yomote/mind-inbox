@@ -52,7 +52,7 @@ jobs:
         run: npm ci
 
       - name: Install bff deps
-        run: npm --prefix apps/bff ci
+        run: pnpm --dir apps/bff install --frozen-lockfile
 
       - name: Install frontend deps
         run: pnpm --dir apps/frontend install --frozen-lockfile
@@ -176,7 +176,7 @@ jobs:
         run: npm ci
 
       - name: Install bff deps
-        run: npm --prefix apps/bff ci
+        run: pnpm --dir apps/bff install --frozen-lockfile
 
       - name: Install frontend deps
         run: pnpm --dir apps/frontend install --frozen-lockfile
@@ -193,7 +193,7 @@ jobs:
       - name: Typecheck + build BFF (tsc)
         id: build_bff
         continue-on-error: true
-        run: npm --prefix apps/bff run build
+        run: pnpm --dir apps/bff run build
 
       - name: Typecheck + build Frontend (tsc + vite)
         id: build_frontend
@@ -238,7 +238,7 @@ jobs:
             echo "| カテゴリ | Status | コマンド |"
             echo "| --- | --- | --- |"
             echo "| Lint (BFF / Frontend / Python / Markdown) | $(fmt ${{ steps.lint.outcome }}) | \`npm run lint\` |"
-            echo "| Build BFF (tsc)                            | $(fmt ${{ steps.build_bff.outcome }}) | \`npm --prefix apps/bff run build\` |"
+            echo "| Build BFF (tsc)                            | $(fmt ${{ steps.build_bff.outcome }}) | \`pnpm --dir apps/bff run build\` |"
             echo "| Build Frontend (tsc + vite)                | $(fmt ${{ steps.build_frontend.outcome }}) | \`pnpm --dir apps/frontend run build\` |"
             echo "| OpenAPI (BFF) 再生成 + diff                 | $(fmt ${{ steps.openapi_bff.outcome }}) | \`npm run docs:openapi:bff\` |"
             echo "| OpenAPI (ai-agent) 再生成 + diff            | $(fmt ${{ steps.openapi_ai_agent.outcome }}) | \`npm run docs:openapi:ai-agent\` |"

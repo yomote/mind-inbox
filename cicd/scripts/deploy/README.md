@@ -35,8 +35,18 @@ cd cicd
 RG=<your-rg> DEPLOYMENT=<deployment-name> ./scripts/deploy/deploy-backend.sh
 ```
 
-- `backend/` をビルドし、production dependencies のみ残した zip を作成して
+- `apps/bff` をビルドし、production dependencies のみ残した zip を作成して
   `az functionapp deployment source config-zip` で反映します。
+- zip の生成は `scripts/deploy/lib/build-bff-package.sh` に切り出してあり、
+  **az 無しで単体実行できる**。BFF は pnpm 管理 (#420) で既定の node_modules は
+  symlink 構造 = Functions の zip deploy で壊れるため、このスクリプトが
+  `--node-linker=hoisted` で実体ツリーを作り、symlink が 1 本も無いことを
+  確認してから zip する。依存を足したときはローカルでこれを回して中身を見る:
+
+  ```bash
+  ./cicd/scripts/deploy/lib/build-bff-package.sh
+  unzip -l .local/functionapp.zip | head
+  ```
 
 ## Container Apps (ai-agent / voicevox-wrapper)
 

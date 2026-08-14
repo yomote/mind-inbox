@@ -5,13 +5,14 @@
   "description": "BFF for mind-inbox — Azure Functions v4 + tRPC",
   "main": "dist/src/functions/*.js",
   "scripts": {
+    "preinstall": "node scripts/only-pnpm.mjs",
     "build": "tsc --project tsconfig.json",
     "build:watch": "tsc --project tsconfig.json --watch",
-    "start": "npm run build && func start",
-    "dev": "concurrently \"npm run build:watch\" \"func start --port 7071\"",
+    "start": "pnpm run build && func start",
+    "dev": "concurrently \"pnpm run build:watch\" \"func start --port 7071\"",
     "lint": "eslint src",
     "clean": "rimraf dist",
-    "docs:openapi": "npm run build && node scripts/generate-openapi.mjs",
+    "docs:openapi": "pnpm run build && node scripts/generate-openapi.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },

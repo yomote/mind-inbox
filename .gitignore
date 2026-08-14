@@ -13,6 +13,12 @@ cicd/modules/*.json
 node_modules
 dist
 
+# apps/bff は pnpm 管理 (#420)。preinstall guard が `npm install` を弾くが、
+# **npm はガードが落ちても package-lock.json を書いてしまう** — 生えた lock が
+# commit されると pnpm-lock.yaml と二重管理になり、CI かデプロイで初めて壊れる。
+# commit される側だけはここで止める (root の package-lock.json は npm 管理なので追跡対象)。
+apps/bff/package-lock.json
+
 __pycache__
 
 .local
