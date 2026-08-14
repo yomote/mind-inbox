@@ -36,6 +36,12 @@
       "expect": "必要なときだけ (手動)"
     },
     {
+      "id": "github-terraform-check.yml",
+      "name": "GitHub 設定の Terraform 宣言の検証 (fmt / validate)",
+      "what": "cicd/github/terraform/ の宣言を PR で fmt / init / validate する (#390 A-1)。**terraform plan は実行していない** — トークンの置き場が未決定 (needs-human) のため、この run は「宣言と現実が一致している」ことを何も言っていない。plan が回るまで、現実の点検は github-settings.yml が担い続ける",
+      "expect": "PR ごと"
+    },
+    {
       "id": "debt-check.yml",
       "name": "週次の技術負債チェック",
       "what": "docs の壊れたリンク・placeholder テスト等を機械検出して Issue に積む (カバー外領域は本文に明示)",
