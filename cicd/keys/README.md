@@ -88,7 +88,7 @@ gpg --armor --export-secret-keys "mind-inbox e2e artifacts"
   API keys or other credentials」と明示している
 
 **置き場所は管理系 RG (`rg-mgmt-mindbox`) の Key Vault** (ADR 0045 D5 /
-[ADR 0046](../../docs/adr/0046-environment-rebuildable-from-declaration.md) D1 が層の実体を定義)。
+[ADR 0056](../../docs/adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D1 が層を定義)。
 環境の RG に置くと `cleanup-env.sh` の RG 削除に巻き込まれる
 ([#302](https://github.com/yomote/mind-inbox/issues/302))。
 

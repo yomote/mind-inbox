@@ -18,12 +18,12 @@
 - **持ち越し**: {未消化の項目・次回に回した判断。無ければ「なし」}
 ```
 
-## 2026-08-14 — PO 裁定 (ADR 0046 D1 の層の定義)
+## 2026-08-14 — PO 裁定 (層の定義 / ADR 0056)
 
 - **対象**: [ADR 0046](../adr/0046-environment-rebuildable-from-declaration.md) D1 / [#302](https://github.com/yomote/mind-inbox/issues/302) / [PR #412](https://github.com/yomote/mind-inbox/pull/412) (マージ済み)
-- **決定**: **D1 初版の「持続層 = Cosmos / OpenAI / Speech 込み」は誤り。** 正は [#302 の 2026-08-12 コメント](https://github.com/yomote/mind-inbox/issues/302#issuecomment-5263080034) に記録された PO の設計 — 層の軸は「消えると困るか」ではなく「**運用のためのものか / アプリそのものか**」。**管理系 RG (`rg-mgmt-mindbox`)** = Key Vault / Log Analytics / バックアップ Storage / 予算、**アプリ系 RG** = Cosmos / OpenAI / Speech / CA / Functions / SWA。Cosmos は「守る」のではなく「**戻せる**」ようにする (管理系の非公開 Storage へバックアップ / **public リポなので git データブランチは禁止** / 「復元を 1 回通すまで完遂ではない」= ADR 0018)。D1 と依存記述を改訂し、`main-shared.bicep` を `main-mgmt.bicep` に正した。**Azure には何も apply されていないため移行コストはゼロ**
+- **決定**: **D1 初版の「持続層 = Cosmos / OpenAI / Speech 込み」は誤り。** 正は [#302 の 2026-08-12 コメント](https://github.com/yomote/mind-inbox/issues/302#issuecomment-5263080034) に記録された PO の設計 — 層の軸は「消えると困るか」ではなく「**運用のためのものか / アプリそのものか**」。**管理系 RG (`rg-mgmt-mindbox`)** = Key Vault / Log Analytics / バックアップ Storage / 予算、**アプリ系 RG** = Cosmos / OpenAI / Speech / CA / Functions / SWA。Cosmos は「守る」のではなく「**戻せる**」ようにする (管理系の非公開 Storage へバックアップ / **public リポなので git データブランチは禁止** / 「復元を 1 回通すまで完遂ではない」= ADR 0018)。記録は **[ADR 0056](../adr/0056-management-and-app-layers-with-backup-based-data-protection.md) を新規に起こして 0046 D1 を supersede** する形にし (Accepted ADR の本文は書き換えない / `/adr` skill)、`main-shared.bicep` を `main-mgmt.bicep` に正した。**Azure には何も apply されていないため移行コストはゼロ**
 - **学びメモ**: 「消えると困るもの」は**層の軸ではなく、バックアップの対象を決める軸**だった。困るものを別 RG へ逃がすと「使い捨てにできる環境」が手に入らず、逃がさずに戻せるようにして初めて手に入る。撤収ガードも同じ整理で 2 種類に割った — **管理系 = 恒久の拒否 / Cosmos = 復元実証までの暫定の拒否** (判定コードを分けてあり、緩めてよいのは後者だけ)
-- **特記**: **実装報告に「Issue のコメントと ADR が食い違っているので、後で Accepted になった ADR を正とした」と書かれていたのに、そのまま流れた。** 食い違いに気づけていたのだから、そこで止めて PO に上げるべき事案だった。**教訓: 実装報告で「Issue と ADR (あるいは設計と規約) が食い違う」と申告されたら、実装者の裁量で片方を採らせず、PO 案件として上げる。** どちらが正かは実装の外側で決まる
+- **特記**: **実装報告に「Issue のコメントと ADR が食い違っているので、後で Accepted になった ADR を正とした」と書かれていたのに、そのまま流れた。** 食い違いに気づけていたのだから、そこで止めて PO に上げるべき事案だった。**教訓: 実装報告で「Issue と ADR (あるいは設計と規約) が食い違う」と申告されたら、実装者の裁量で片方を採らせず、PO 案件として上げる。** どちらが正かは実装の外側で決まる。**もう 1 件**: 裁定の反映で **Accepted の ADR 0046 本文 (D1/D9/Consequences) を直接書き換えた** PR を出し、Codex の P1 で捕まった (`docs/adr/README.md` /`/adr` skill「過去 ADR の本文は書き換えない」)。**裁定が過去 ADR の判断を覆すときは、本文改変ではなく新規 ADR で supersede する** — 本文を書き換えると「いつ何が変わったか」が消え、ADR が不変記録でなくなる
 - **持ち越し**: **バックアップ / 復元の実装 (ADR 0046 D9)** — 往復を 1 回通すまで「アプリ系は使い捨て」は宣言でしかない。通ったら撤収ガードの `data-restore-unproven` を**バックアップ鮮度の確認に差し替える** (差し替えないと週次プロビジョンテストが毎回 override を要求し、逃げ道が常用になってガードが死ぬ)。Cosmos 無料枠 / Speech F0 を作り直しで取り直せるかは**未検証**
 
 ## 2026-08-14 — debrief

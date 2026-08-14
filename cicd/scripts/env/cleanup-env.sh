@@ -13,7 +13,7 @@ PURGE_DELETED_KEYVAULTS="${PURGE_DELETED_KEYVAULTS:-false}"
 PURGE_DELETED_COGNITIVE_SERVICES="${PURGE_DELETED_COGNITIVE_SERVICES:-false}"
 FORCE_DELETE_LOG_ANALYTICS="${FORCE_DELETE_LOG_ANALYTICS:-false}"
 PURGE_WAIT_SECONDS="${PURGE_WAIT_SECONDS:-1800}"
-# 管理系 RG (ADR 0046 D1 / #302)。撤収の対象はアプリ系だけで、ここは**削除できない**。
+# 管理系 RG (ADR 0056 D1 / #302)。撤収の対象はアプリ系だけで、ここは**削除できない**。
 # 判定は persistent_layer_guard.py が持つ (このスクリプトは材料を集めるだけ)。
 MGMT_RG="${MGMT_RG:-rg-mgmt-mindbox}"
 ALLOW_PROTECTED_DELETE="${ALLOW_PROTECTED_DELETE:-false}"
@@ -58,7 +58,7 @@ Environment variables:
 This script refuses to run when the target RG is the management layer, when the
 target RG still holds management resources, when it holds data whose restore has
 never been proven, or when either the RG's existence or its contents could not be
-determined (ADR 0046 D1 / #302). "Could not check" is treated as "do not delete"
+determined (ADR 0056 D1 / #302). "Could not check" is treated as "do not delete"
 -- not as "nothing to protect".
 
 Soft-deleted resources do NOT show up in "az resource list", so when a purge flag
@@ -71,7 +71,7 @@ in PROTECTED_RESOURCE_NAMES. Key Vault, Storage and Log Analytics exist in BOTH
 layers, so type alone does not make them management -- they need the tag or the
 name. Untagged ones are reported before deletion.
 
-Cosmos DB is app-layer by design (PO ruling on #302) but is still refused for now:
+Cosmos DB is app-layer by design (ADR 0056 D1 / PO ruling on #302) but is refused for now:
 the backup/restore round-trip (ADR 0046 D9) has never been run, and "a backup you
 have never restored is not a backup" (ADR 0018). Once the restore is proven, that
 blanket refusal is replaced by a backup-freshness check -- see

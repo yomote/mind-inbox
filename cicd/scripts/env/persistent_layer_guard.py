@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """撤収 (cleanup-env.sh) が「消してはいけないもの」に触れないようにするための判定。
 
-ADR 0046 D1 / Issue #302。**ファイル名 (`persistent_layer_guard.py`) は初版の
+ADR 0056 / Issue #302 (層の定義は ADR 0046 D1 を supersede)。
+**ファイル名 (`persistent_layer_guard.py`) は初版の
 「持続層」という呼び方が残ったもの**で、中身は下の 2 種類を守るガード。名前を
 変えると呼び出し側 (cleanup-env.sh) と Runbook の参照が同時に動くので据え置いてある。
 
@@ -87,7 +88,7 @@ DATA_BEARING_RESOURCE_TYPES: dict[str, str] = {
 LAYER_AMBIGUOUS_TYPES: dict[str, str] = {
     "microsoft.keyvault/vaults": "Key Vault — E2E trace の復号鍵 (非エクスポート / ADR 0045 D5)",
     "microsoft.storage/storageaccounts": "Storage — Cosmos バックアップの保管先 (ADR 0046 D9)",
-    "microsoft.operationalinsights/workspaces": "Log Analytics — 監査ログの履歴 (ADR 0046 D1)",
+    "microsoft.operationalinsights/workspaces": "Log Analytics — 監査ログの履歴 (ADR 0056 D1)",
 }
 
 # **アプリ系と判断して撤収を止めない型**。止めないが黙りもしない — 撤収で何を
@@ -307,7 +308,7 @@ def _decide_for_current_state(
             code="target-is-management-rg",
             reason=(
                 f"{target_rg} は管理系の RG です。撤収の対象はアプリ系だけで、"
-                "管理系はどのフラグでも削除できません (ADR 0046 D1)。"
+                "管理系はどのフラグでも削除できません (ADR 0056 D1)。"
             ),
         )
 

@@ -60,6 +60,6 @@
 - [`docs/design/basic_design.md`](docs/design/basic_design.md) — 構成と責務
 - [`docs/testing/strategy.md`](docs/testing/strategy.md) — 4 層のテスト階層 / 書く・書かない判断基準
 - [`docs/documentation/strategy.md`](docs/documentation/strategy.md) — 真実の所在マトリクス / 生成物 commit ルール
-- [`docs/adr/README.md`](docs/adr/README.md) — アーキテクチャ判断の不変記録 (22 本)。**運用・プロセスの決め事は ADR ではない** — 過去に ADR として書かれた 30 本 (運用・プロセス系 29 本 + 開発設備 1 本) は [`docs/adr/archive/`](docs/adr/archive/README.md) にあり、現行ルールではない
+- [`docs/adr/README.md`](docs/adr/README.md) — アーキテクチャ判断の不変記録 (23 本)。**運用・プロセスの決め事は ADR ではない** — 過去に ADR として書かれた 30 本 (運用・プロセス系 29 本 + 開発設備 1 本) は [`docs/adr/archive/`](docs/adr/archive/README.md) にあり、現行ルールではない
 - [`docs/runbooks/`](docs/runbooks/README.md) — 運用手順 (README や CLAUDE.md には書かない)
 - [`docs/debrief/journal.md`](docs/debrief/journal.md) — セッション記録

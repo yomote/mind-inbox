@@ -93,7 +93,7 @@ az bicep version
 ## 1-5. 管理系レイヤ（rg-mgmt-mindbox / 一度きり）
 
 **システムを運用するためのものを、アプリ系とは別の RG に置きます**
-（[ADR 0046](../../docs/adr/0046-environment-rebuildable-from-declaration.md) D1 /
+（[ADR 0056](../../docs/adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D1 /
 [#302](https://github.com/yomote/mind-inbox/issues/302)）。宣言は
 [main-mgmt.bicep](main-mgmt.bicep)、値は [main-mgmt.parameters.json](main-mgmt.parameters.json)。
 
@@ -107,7 +107,7 @@ az bicep version
 
 **Cosmos / OpenAI / Speech はアプリ系に残します。** アプリそのものであって運用の道具ではないためです。
 消えると困る Cosmos のデータは、**RG を移して守るのではなくバックアップで戻せるようにします** —
-管理系 RG の非公開 Storage へ自前エクスポート（[ADR 0046](../../docs/adr/0046-environment-rebuildable-from-declaration.md) D9）。
+管理系 RG の非公開 Storage へ自前エクスポート（[ADR 0056](../../docs/adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D2 / 経路の実装は [ADR 0046](../../docs/adr/0046-environment-rebuildable-from-declaration.md) D9）。
 これで「アプリ系 RG は使い捨て」を貫けます。**このリポジトリは public なので、ユーザーデータを
 git データブランチには出しません**（[#302](https://github.com/yomote/mind-inbox/issues/302) コメント）。
 
@@ -134,11 +134,11 @@ Key Vault に **secret ではなく「鍵オブジェクト」を非エクスポ
 
 `cleanup-env.sh` は**管理系 RG を削除できません**（どのフラグでも通りません）。
 またアプリ系 RG の中に管理系のリソースが残っている間も、**何も消さずに拒否**します。
-詳細は [`../scripts/env/README.md`](../scripts/env/README.md#層ガード--何も消さずに拒否する条件-adr-0046-d1--302)。
+詳細は [`../scripts/env/README.md`](../scripts/env/README.md#層ガード--何も消さずに拒否する条件-adr-0056--302)。
 
 このテンプレートが作るリソースには**層タグ `mindInboxLayer=management`（`managementLayerTags`）が刻まれ**、撤収ガードはそれを見て層を判定します。Key Vault / Storage / Log Analytics はアプリ系にも同じ型が居るため、**型ではなくタグが根拠**です。ここにリソースを足すときは `tags: managementLayerTags` も付けてください — 付け忘れると、そのリソースはアプリ系と見なされて撤収で消えます。
 
-**Cosmos が居るアプリ系 RG の撤収も、当面は拒否されます**（判定コード `data-restore-unproven`）。これは「Cosmos の置き場所が間違っている」という意味ではなく、**バックアップからの復元をまだ 1 回も通していない**ための暫定措置です（[ADR 0018](../../docs/adr/archive/operations/runtime-verification-in-the-loop.md)）。復元を通したら、この一律拒否はバックアップ鮮度の確認に差し替えます（[runbook](../../docs/runbooks/mgmt-layer-apply.md#撤収ガードとの関係-いま暫定なのはどこか)）。
+**Cosmos が居るアプリ系 RG の撤収も、当面は拒否されます**（判定コード `data-restore-unproven`）。これは「Cosmos の置き場所が間違っている」という意味ではなく、**バックアップからの復元をまだ 1 回も通していない**ための暫定措置です（[ADR 0056](../../docs/adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D3 / [ADR 0018](../../docs/adr/archive/operations/runtime-verification-in-the-loop.md)）。復元を通したら、この一律拒否はバックアップ鮮度の確認に差し替えます（[runbook](../../docs/runbooks/mgmt-layer-apply.md#撤収ガードとの関係-いま暫定なのはどこか)）。
 
 ---
 
@@ -307,14 +307,14 @@ RG=<rg-name> ./scripts/env/cleanup-env.sh
 
 - **管理系 RG (`rg-mgmt-mindbox`) は削除できない**（どのフラグでも通らない）
 - **アプリ系 RG に管理系のリソースが残っている間は、何も消さずに拒否する**（[#302](https://github.com/yomote/mind-inbox/issues/302)）
-- **Cosmos が居る RG も当面は拒否する**（復元を 1 回通すまでの暫定 / ADR 0046 D9）
+- **Cosmos が居る RG も当面は拒否する**（復元を 1 回通すまでの暫定 / ADR 0056 D3）
 - RG を削除する
 - **soft-delete の purge は既定で行わない**（Key Vault / Cognitive Services の救済を残す）
 - **Entra アプリ登録も既定で削除しない**（テナントのオブジェクトであり RG の持ち物ではない）
 - 手動指定した既存 Entra アプリと共有 UAMI は削除しない
 
 破壊系の既定が off である理由は [ADR 0046](../../docs/adr/0046-environment-rebuildable-from-declaration.md) D5/D6、
-層ガードは同 D1（判定は [`../scripts/env/persistent_layer_guard.py`](../scripts/env/persistent_layer_guard.py)）。
+層ガードは [ADR 0056](../../docs/adr/0056-management-and-app-layers-with-backup-based-data-protection.md)（判定は [`../scripts/env/persistent_layer_guard.py`](../scripts/env/persistent_layer_guard.py)）。
 
 オプション:
 

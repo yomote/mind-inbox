@@ -1,20 +1,12 @@
 # 0046. 環境を「宣言から作り直せるもの」にする — ライフサイクル 3 層分断 / Entra の Graph Bicep 宣言 / 週次プロビジョンテスト
 
-- Status: Accepted (2026-08-12, design-gate にて PO 承認) / **D1 を 2026-08-14 に改訂**
-- Date: 2026-08-12 (D1 改訂: 2026-08-14)
+- Status: Accepted (2026-08-12, design-gate にて PO 承認) / **D1 は [ADR 0056](0056-management-and-app-layers-with-backup-based-data-protection.md) により supersede (2026-08-14 PO 裁定)。D2〜D8 / D10 は現行**
+- Date: 2026-08-12
 - Deciders: omoteforlab
 - Consulted: —
 - Informed: —
 
-> **D1 改訂の理由 (2026-08-14 / PO 裁定)**
->
-> D1 初版は層を「**持続層 = 消えると困るもの (Cosmos / OpenAI / Speech / Log Analytics / Key Vault / バックアップ)**」と定義していた。これは**誤り**で、正は [#302 の 2026-08-12 コメント](https://github.com/yomote/mind-inbox/issues/302#issuecomment-5263080034) に記録された PO の設計 —— 分ける軸は「消えると困るか」ではなく「**運用のためのものか / アプリそのものか**」である。D1 初版はその対話を取り込み損ねたまま design-gate を通過した。
->
-> **Cosmos は「守る」のではなく「戻せる」ようにする**（管理系 RG の非公開 Storage へバックアップ）。これで「アプリ系 RG は使い捨て」を貫ける、というのが PO 発案の核。
->
-> 実装 ([PR #412](https://github.com/yomote/mind-inbox/pull/412)) は D1 初版に従って `main-shared.bicep` に Cosmos / OpenAI / Speech を宣言していたため、[#302](https://github.com/yomote/mind-inbox/issues/302) の後続 PR で `main-mgmt.bicep` に正した。**Azure には何も apply されていない**（宣言だけ）ため、移行コストはゼロ。
->
-> 改訂したのは **D1 と、それに依存する記述 (D9 / Consequences / 受け入れる穴) だけ**。D2〜D8 / D10 は影響を受けない。
+> **D1（層の分け方）だけが置き換わっています。** 以下の本文の「持続層 / 環境層」という呼び方と、Cosmos / OpenAI / Speech を持続層に置くという記述は**現行ではありません** — 正は [ADR 0056](0056-management-and-app-layers-with-backup-based-data-protection.md)（管理系 / アプリ系 + バックアップによるデータ保護）。D9 の「バックアップ取得 → 破壊 → 再構築 → 復元」の流れと、D2〜D8 / D10 はそのまま生きています。
 
 関連: [ADR 0013](0013-standing-low-cost-dev-env-with-auto-deploy.md)（「常設」の解釈を**追補**する / supersede しない）/ [ADR 0003](0003-two-phase-bicep.md)（2-phase Bicep — 本 ADR はこの構造の上に乗る）/ [ADR 0025](0025-deploy-container-images-by-immutable-sha-tag.md)（image は不変 sha）/ [ADR 0045](archive/operations/e2e-artifacts-are-secret-by-default.md)（「管理系 RG」の初出。本 ADR がその実体を定義する）/ [ADR 0018](archive/operations/runtime-verification-in-the-loop.md)（動作検証）/ [ADR 0006](0006-azure-access-via-device-code.md)
 
@@ -55,7 +47,7 @@
 
 ## Considered Options
 
-- **Option A: 管理系 / アプリ系 / デプロイに分け、Entra を Graph Bicep で宣言し、週次で作り直して検証する**（本 ADR の採用案）
+- **Option A: 3 層に分け、Entra を Graph Bicep で宣言し、週次で作り直して検証する**（本 ADR の採用案）
 - **Option B: 安全弁だけ入れて現状維持** — `cleanup-env.sh` の purge を止めるだけ。層は分けず、宣言化も進めない
 - **Option C: 全部を 1 つの RG のまま宣言化する** — 層は分けないが設定は全部 bicep へ。撤収は「やらない運用」で守る
 - **Option D: 環境を完全に使い捨てにする** — Cosmos も含めて毎回作り直し、データは毎回捨てる
@@ -64,43 +56,21 @@
 
 Chosen option: **Option A**。
 
-### D1 — リソースを「管理系 / アプリ系 / デプロイ」に分け、データはバックアップで戻す（**2026-08-14 改訂**）
+### D1 — リソースをライフサイクルで 3 層に分ける
 
-**分ける軸は「消えると困るか」ではなく、「システムを運用するためのものか / アプリそのものか」。**
+| 層             | 置き場所                                                                                                               | 中身（`cicd/modules/bootstrap-core.bicep` の行）                                                                                                                                                                                  | 撤収の対象            |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| **持続層**     | `rg-shared-mindbox`（[ADR 0045](archive/operations/e2e-artifacts-are-secret-by-default.md) が言う「管理系 RG」の実体） | Cosmos `:1250`（ユーザーデータ）/ Azure OpenAI `:912`（アカウント + デプロイ = クォータ）/ **Speech `:952`（F0 = 1 サブスクに 1 つ）** / Log Analytics `:398`（履歴）/ **Key Vault（新設）** / バックアップ保管ストレージ（新設） | ❌ **触らない**       |
+| **環境層**     | `rg-dev-mind-inbox`                                                                                                    | SWA `:1426` / Function App `:661` + Plan `:632` + Storage `:615` / Container Apps `:851,:1039,:1080` + managed environment `:834`                                                                                                 | ✅ **壊して作り直す** |
+| **デプロイ層** | （リソースを作らない）                                                                                                 | image の sha 差し替え / zip deploy / 静的配信                                                                                                                                                                                     | —                     |
 
-| 層 | 置き場所 | 中身（`cicd/modules/bootstrap-core.bicep` の行） | 撤収の対象 |
-| --- | --- | --- | --- |
-| **管理系** | `rg-mgmt-mindbox`（[ADR 0045](archive/operations/e2e-artifacts-are-secret-by-default.md) が言う「管理系 RG」の実体） | **Key Vault（新設）** / **バックアップ保管ストレージ（新設）** / Log Analytics `:398`（履歴）/ 予算 | ❌ **触らない** |
-| **アプリ系** | `rg-{env}-mind-inbox` | Cosmos `:1250` / Azure OpenAI `:912` / Speech `:952` / SWA `:1426` / Function App `:661` + Plan `:632` + Storage `:615` / Container Apps `:851,:1039,:1080` + managed environment `:834` | ✅ **壊して作り直す** |
-| **デプロイ層** | （リソースを作らない） | image の sha 差し替え / zip deploy / 静的配信 | — |
+**Speech を持続層に置くことで、#306 の「Speech を検証対象に含めるか」は構造的に解ける** — F0 は 1 サブスクに 1 つなので、環境層に置くと再作成のたびに枠の取り合いになる。持続層なら壊さないので競合しない。**含めない**が答えになる。
 
-**Cosmos / OpenAI / Speech はアプリ系に残す。** これらは「アプリそのもの」であって運用の道具ではない。初版はこの 3 つを持続層へ逃がそうとしたが、それは**「消えると困るもの」を層の軸にした結果**であって、ライフサイクルの分断ではなかった。
+**Key Vault は現在 dev に存在しない** — `sqlAdminKeyVault` は `if (enableSql)` 条件つきで（`bootstrap-core.bicep:495`）、dev は `enableSql=false` なので作られていない。[ADR 0045](archive/operations/e2e-artifacts-are-secret-by-default.md) D5 が秘密鍵の置き場所として要求している Key Vault は、**持続層で新規に宣言する**（これが [#301](https://github.com/yomote/mind-inbox/issues/301) の前提）。VNet / Private Endpoint も同様に dev では未作成（`:418` `if (vnetEnabled)`）。
 
-#### データは「守る」のではなく「戻せる」ようにする（PO 発案）
+**Entra のアプリ登録はどの RG にも属さない**（テナントのオブジェクト）。ライフサイクルとしては**持続層と同じ扱い**にする（D5）。
 
-消えて困る Cosmos のデータを撤収から**守る**のではなく、**管理系 RG のストレージへバックアップして復元可能にする**。これで「アプリ系 RG は使い捨て」を貫ける。
-
-| 方式 | 評価 |
-| --- | --- |
-| Cosmos 継続バックアップ（PITR） | Azure 標準。保持期間内なら削除済みアカウントも復元可だが、Cosmos の機能に依存 |
-| 定期バックアップ（既定） | **復元にサポート問い合わせが要る**。実質使えない |
-| **管理系 RG の Storage へ自前エクスポート** | **採用**。完全に独立し、何を消しても残る（D9 が実装する経路） |
-
-⚠️ **ユーザーデータを git データブランチに出さない。** [ADR 0041](0041-ux-observations-on-git-data-branch.md) の前例があるので同じ手を使いたくなるが、**このリポジトリは public** で、Problem / Mention は PO 個人の悩みそのもの。公開した時点で取り返しがつかない。**バックアップ先は管理系 RG の非公開 Storage に限定する。**
-
-⚠️ **復元したことのないバックアップはバックアップではない**（[ADR 0018](archive/operations/runtime-verification-in-the-loop.md)）。エクスポートを作ったら、**実際に空の Cosmos へ復元して Problem が戻ることを 1 回通す**まで完遂としない。**それが済むまでの暫定措置として、撤収ガードは「Cosmos が居る RG の撤収」を拒否する**（判定コード `data-restore-unproven`）。これは置き場所が間違っているという意味ではなく、データを裸で消さないための足場。**復元を通したら、この一律拒否をバックアップ鮮度の確認に差し替える**（差し替えないと D9 第 3 段階の週次テストが毎回 override を要求し、逃げ道が常用になってガードが死ぬ）。
-
-#### 層の中身についての補足
-
-**Key Vault は現在 dev に存在しない** — `sqlAdminKeyVault` は `if (enableSql)` 条件つきで（`bootstrap-core.bicep:495`）、dev は `enableSql=false` なので作られていない。[ADR 0045](archive/operations/e2e-artifacts-are-secret-by-default.md) D5 が秘密鍵の置き場所として要求している Key Vault は、**管理系で新規に宣言する**（これが [#301](https://github.com/yomote/mind-inbox/issues/301) の前提）。VNet / Private Endpoint も同様に dev では未作成（`:418` `if (vnetEnabled)`）。
-
-**Speech F0 と Cosmos の無料枠は 1 サブスクに 1 つ**なので、アプリ系に置いた以上、作り直すたびに枠を取り直せるかという問題が残る。**#306 の「Speech を検証対象に含めるか」は、初版のように「持続層に逃がして解く」のではなく、D9 の第 1 段階で「取り直せるか」を実測して決める**（`ops-inspect` の `cosmos-free-tier` で確認できる / [#302](https://github.com/yomote/mind-inbox/issues/302) の未確定事項）。
-
-**Entra のアプリ登録はどの RG にも属さない**（テナントのオブジェクト）。ライフサイクルとしては**管理系と同じ扱い**にする（D5）。
-
-**管理系 RG は 1 つだが、リソース名は環境ごとに分ける。** 「環境をまたいで共有」ではない — 共有するとユーザーデータが混ざる（[#302](https://github.com/yomote/mind-inbox/issues/302) コメント）。
-
-アプリ系から管理系への参照はパラメータ渡しにする（既存 bicep が output 経由で組み立てている構造をそのまま外側へ広げるだけ）。
+環境層から持続層への参照はパラメータ渡しにする（既存 bicep が output 経由で組み立てている構造をそのまま外側へ広げるだけ）。
 
 ### D2 — 層の境界は「**名前が決定的か**」で引く
 
@@ -113,7 +83,7 @@ Chosen option: **Option A**。
 | **Container Apps**       | `ca-dev-mindbox-ai-agent.<生成 ID>.<region>.azurecontainerapps.io` — **managed environment の既定ドメインが生成物**。CAE を作り直すと変わる | BFF の `AI_AGENT_BASE_URL` / `VOICEVOX_BASE_URL` |
 | Cosmos / OpenAI / Speech | 決定的だが**中身・クォータが戻らない**                                                                                                      | —                                                |
 
-名前が生成物であるリソースをアプリ系に置くと、**それを参照している設定が全部追従を要求される**。
+名前が生成物であるリソースを環境層に置くと、**それを参照している設定が全部追従を要求される**。
 
 **そして現状、その追従は宣言でなく命令で行われている。** 調査で判明した実態:
 
@@ -124,7 +94,7 @@ Chosen option: **Option A**。
 
 したがって D7（スクリプトから設定を撤去する）は整理ではなく **#306 を成立させるための必須条件**になる。撤去と同時に、**bicep 側をハードコードから `containerApp.properties.configuration.ingress.fqdn` の参照に変える**必要がある。
 
-**「名前が生成物なら、参照側を宣言で追従させる」**——これが D3 / D7 に共通する設計原理。SWA と CAE を管理系へ逃がす案もあったが、両者は #306 で最も検証したい「bicep から作り直せるか」の対象なので、逃がさず追従させる方を選ぶ。
+**「名前が生成物なら、参照側を宣言で追従させる」**——これが D3 / D7 に共通する設計原理。SWA と CAE を持続層へ逃がす案もあったが、両者は #306 で最も検証したい「bicep から作り直せるか」の対象なので、逃がさず追従させる方を選ぶ。
 
 ### D3 — Entra アプリ登録は Microsoft Graph Bicep 拡張で宣言する
 
@@ -200,7 +170,7 @@ Graph リソースを bootstrap に混ぜると **bootstrap 全体が what-if �
 
 purge が要るのは「同名で作り直すために soft-delete を退かす」場合だけなので、**必要になった時に明示的に `true` で呼ぶ**形にする。
 
-`FORCE_DELETE_LOG_ANALYTICS`（`:11`、既定 `true`）も同様に既定 `false` にする（Log Analytics は管理系 = 履歴を消さない）。
+`FORCE_DELETE_LOG_ANALYTICS`（`:11`、既定 `true`）も同様に既定 `false` にする（Log Analytics は持続層 = 履歴を消さない）。
 
 ### D7 — デプロイスクリプトは「成果物を置く」だけにする
 
@@ -236,10 +206,10 @@ purge が要るのは「同名で作り直すために soft-delete を退かす�
 ### D9 — 週次プロビジョンテストで宣言性を検証する（#306）
 
 ```text
-バックアップ取得（管理系へ）
-  → cleanup-env.sh（アプリ系のみ破壊）
+バックアップ取得（持続層へ）
+  → cleanup-env.sh（環境層のみ破壊）
   → provision.sh（bicep で再構築）
-  → データ復元（管理系から）
+  → データ復元（持続層から）
   → smoke-test.sh / e2e-live
 ```
 
@@ -251,11 +221,9 @@ purge が要るのは「同名で作り直すために soft-delete を退かす�
 
 **第 3 段階まで行けないならこの自動化は作らない**（CLAUDE.md）。
 
-**Cosmos のバックアップは Azure の復元機能に頼らず、管理系のストレージへ export → import する自前方式**にする。理由は (1) 毎週テストされる、(2) 壊れたら CI の赤として出る、(3) Azure の periodic backup 復元はサポート経由の経路があり自動化に向かない。
+**Cosmos のバックアップは Azure の復元機能に頼らず、持続層のストレージへ export → import する自前方式**にする。理由は (1) 毎週テストされる、(2) 壊れたら CI の赤として出る、(3) Azure の periodic backup 復元はサポート経由の経路があり自動化に向かない。
 
-**D1 改訂により、この D9 は「あると良いもの」から「アプリ系を使い捨てにするための前提」に格上げされた。** 撤収ガードが Cosmos の居る RG を暫定的に拒否しているのは、D9 の往復が 1 回も通っていないからで、**D9 が通るまで「使い捨て」は宣言でしかない**。
-
-現状の確認（調査で判明）: **`backupPolicy` はどこにも宣言されていない**（`grep -rn backupPolicy cicd/` → 0 件）ので ARM の既定 periodic backup に委ねられており、**アカウント削除と一緒にバックアップも消える**。また Cosmos は **provisioned + `enableCosmosFreeTier: true`**（`bootstrap-core.bicep:1267`）で、無料枠は **1 サブスクに 1 つ**。Speech F0 と同じ制約なので、**アプリ系を作り直すと枠を取り直せるかが問題になる**——これは第 1 段階で実測する（D1 の補足）。
+現状の確認（調査で判明）: **`backupPolicy` はどこにも宣言されていない**（`grep -rn backupPolicy cicd/` → 0 件）ので ARM の既定 periodic backup に委ねられており、**アカウント削除と一緒にバックアップも消える**。また Cosmos は **provisioned + `enableCosmosFreeTier: true`**（`bootstrap-core.bicep:1267`）で、無料枠は **1 サブスクに 1 つ**。Speech F0 と同じ制約であり、**環境層に置いて作り直すと枠の取り合いが起きる**——これも Cosmos を持続層に置く理由になる。
 
 ### D10 — [ADR 0013](0013-standing-low-cost-dev-env-with-auto-deploy.md)「常設」の解釈を追補する
 
@@ -269,11 +237,11 @@ ADR 0013 は「オンデマンド teardown をやめて常設にする」と決�
 - **失敗は通常の CI 赤より強く報せる**
 - **途中失敗からの再実行が冪等であること**を第 1 段階で実測する
 
-### 受け入れる穴 — 管理系の「再構築」は検証されない
+### 受け入れる穴 — 持続層の「再構築」は検証されない
 
-管理系を壊さないと決めた結果、**管理系の bicep だけが検証されない部分として残る**。しかもそこには**バックアップと E2E trace の復号鍵**（[ADR 0045](archive/operations/e2e-artifacts-are-secret-by-default.md) D5）が置かれる——**腐っていたことに気づくのが、いちばん困っているとき**という構造になる。
+持続層を壊さないと決めた結果、**持続層の bicep だけが検証されない部分として残る**。しかもそこには**バックアップと GPG 秘密鍵**（[ADR 0045](archive/operations/e2e-artifacts-are-secret-by-default.md) D5）が置かれる——**腐っていたことに気づくのが、いちばん困っているとき**という構造になる。
 
-ただし穴は見た目ほど大きくない: **週次の復元が管理系の「中身」（バックアップが読める / Key Vault に届く）を毎週使う**ので、検証されないのは「**管理系を作り直せるか**」だけ。
+ただし穴は見た目ほど大きくない: **週次の復元が持続層の「中身」（バックアップが読める / Key Vault に届く）を毎週使う**ので、検証されないのは「**持続層を作り直せるか**」だけ。
 
 **キリがないので今は先送りする、という明示的な判断**として記録する。将来やるなら別 Issue。
 
@@ -281,7 +249,7 @@ ADR 0013 は「オンデマンド teardown をやめて常設にする」と決�
 
 ### Positive
 
-- **撤収がユーザーデータを失わせない** — Cosmos はアプリ系のまま（＝使い捨てを貫ける）で、データは管理系のバックアップから戻せる。戻せると実証するまでは撤収ガードが暫定的に止める
+- **撤収がユーザーデータとクォータを巻き込まない** — Cosmos と OpenAI が持続層にあり、`cleanup-env.sh` の射程外
 - **週次で作り直してもログインが壊れない** — `uniqueName` でクライアント ID が固定、redirect URI は SWA の output に自動追従（D3）
 - **「宣言できている」が毎週機械で確かめられる** — 主張ではなく赤/緑になる（D9）
 - **「成功 run = デプロイ済みではない」が消える** — 変数欠落が静かな skip ではなく赤になる（D8）
@@ -290,20 +258,20 @@ ADR 0013 は「オンデマンド teardown をやめて常設にする」と決�
 
 ### Negative
 
-- **バックアップ / 復元を作るまで「使い捨て」は成立しない** — D9 が通るまで、アプリ系 RG の撤収は暫定的に拒否され続ける
-- **管理系の再構築が検証されない**（上記「受け入れる穴」）
+- **移行コストが大きい** — Cosmos と OpenAI の RG 間移動はダウンタイムと再結線を伴う。一息にはやらない
+- **持続層の再構築が検証されない**（上記「受け入れる穴」）
 - **再構築の失敗が dev の不在に直結する**（D10）— 0013 が消したはずの「待たされる」が部分的に戻る
 - **Graph 部分に what-if が効かない** — config フェーズの変更は事前確認の網から外れる。レビューと第 1 段階の実測で補う
 - **RG が 1 つ増える** — 管理対象と、参照のパラメータ渡しが増える
 
 ## Pros and Cons of the Options
 
-### Option A: 管理系 / アプリ系の分断 + Graph Bicep 宣言 + 週次検証（採用）
+### Option A: 3 層 + Graph Bicep 宣言 + 週次検証（採用）
 
 - Good, because 3 つの穴すべてに構造で答える
 - Good, because 宣言性が**検証される**（他の案はどれも「宣言したつもり」を残す）
 - Good, because 既存の 2 フェーズ構造（[ADR 0003](0003-two-phase-bicep.md)）の上に乗り、新しい機構を発明しない
-- Bad, because バックアップ / 復元が動くまで「使い捨て」が成立せず、段階を踏む必要がある
+- Bad, because 移行コストが大きく、段階を踏む必要がある
 - Bad, because 再構築失敗時に dev が不在になる
 
 ### Option B: 安全弁だけ入れて現状維持
@@ -315,13 +283,13 @@ ADR 0013 は「オンデマンド teardown をやめて常設にする」と決�
 ### Option C: 1 つの RG のまま全部宣言化する
 
 - Good, because 層の移行コストが要らない
-- Bad, because **撤収が依然としてユーザーデータを消す**（バックアップも復元も無いまま）。「やらない運用」で守るのは宣言的でない
+- Bad, because **撤収が依然としてユーザーデータを消す**。「やらない運用」で守るのは宣言的でない
 - Bad, because **#306 が実行できない** — 壊すと本物のデータが消えるので、検証手段が手に入らない
 
 ### Option D: 環境を完全に使い捨て（Cosmos も毎回作り直し）
 
 - Good, because 最も単純。層が 1 つで済む
-- Bad, because **蓄積がプロダクトの中核**（Problem 中心 2 層モデル / [ADR 0007](0007-problem-centric-two-layer-domain-model.md)）。毎週データが消える環境では、蓄積から出る挙動（#102 / #244）を確認できない。D1 が採ったのは「毎回作り直すが**毎回戻す**」で、Option D の「毎回捨てる」とは別物
+- Bad, because **蓄積がプロダクトの中核**（Problem 中心 2 層モデル / [ADR 0007](0007-problem-centric-two-layer-domain-model.md)）。毎週データが消える環境では、蓄積から出る挙動（#102 / #244）を確認できない
 - Bad, because OpenAI のクォータ再取得が毎週要る
 
 ## 動作検証（実装後に何を叩くか / [ADR 0018](archive/operations/runtime-verification-in-the-loop.md)）
@@ -330,10 +298,9 @@ ADR 0013 は「オンデマンド teardown をやめて常設にする」と決�
 
 | 判断                    | 確かめ方                                                                           | 何が言えたら緑か                                                                              |
 | ----------------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| D3 Entra 宣言           | アプリ系を壊して `provision.sh` → **ブラウザで dev にログイン**                    | ログインが通り、`/api/trpc/*` が 200。**手作業をゼロ回**挟んでいる                            |
+| D3 Entra 宣言           | 環境層を壊して `provision.sh` → **ブラウザで dev にログイン**                      | ログインが通り、`/api/trpc/*` が 200。**手作業をゼロ回**挟んでいる                            |
 | D3 クライアント ID 固定 | 再構築の前後で `appId` を比較                                                      | **同一**。redirect URI は新 SWA ホスト名に更新されている                                      |
 | D5 アプリ登録が消えない | 再構築後に `az ad app show --id <appId>`                                           | 存在する                                                                                      |
-| D1 撤収ガード（暫定）   | Cosmos が居る RG で `cleanup-env.sh` を実行                                        | **exit 3 で何も消えない**（`data-restore-unproven`）。復元実証後は同じ操作が通ること          |
 | D6 purge 安全弁         | `cleanup-env.sh` を既定で実行し、Key Vault の soft-delete を確認                   | **soft-delete が残っている**（purge されていない）                                            |
 | D7 宣言だけで結線       | bicep 適用**だけ**を行い、deploy スクリプトを**通さずに** `/api/health` 相当を叩く | ai-agent / VOICEVOX の FQDN が入っており応答する                                              |
 | D2 CAE 再作成後の追従   | CAE を作り直した後、BFF の `AI_AGENT_BASE_URL` を読む                              | **新しい生成ドメイン**が入っている（parameters.json の古い FQDN ではない）                    |
@@ -343,7 +310,7 @@ ADR 0013 は「オンデマンド teardown をやめて常設にする」と決�
 
 ## Links
 
-- Issue: [#302](https://github.com/yomote/mind-inbox/issues/302) / [#303](https://github.com/yomote/mind-inbox/issues/303) / [#306](https://github.com/yomote/mind-inbox/issues/306) / 関連: [#301](https://github.com/yomote/mind-inbox/issues/301)（鍵の設置 — D1 の管理系が前提）/ [#308](https://github.com/yomote/mind-inbox/issues/308)（what-if — D4 が関係）/ [#305](https://github.com/yomote/mind-inbox/issues/305)（deploy の job 分割）
+- Issue: [#302](https://github.com/yomote/mind-inbox/issues/302) / [#303](https://github.com/yomote/mind-inbox/issues/303) / [#306](https://github.com/yomote/mind-inbox/issues/306) / 関連: [#301](https://github.com/yomote/mind-inbox/issues/301)（鍵の設置 — D1 の持続層が前提）/ [#308](https://github.com/yomote/mind-inbox/issues/308)（what-if — D4 が関係）/ [#305](https://github.com/yomote/mind-inbox/issues/305)（deploy の job 分割）
 - PR: [#292](https://github.com/yomote/mind-inbox/pull/292)（D7 のロール割り当て部分の本治療）
 - 一次ソース: [Graph Bicep v1.0 リファレンス](https://learn.microsoft.com/en-us/graph/templates/reference/overview) / [Graph Bicep の制約](https://learn.microsoft.com/en-us/graph/templates/bicep/limitations) / [Microsoft.Graph/applications](https://learn.microsoft.com/en-us/graph/templates/reference/applications)
 - 関連 ADR: [0013](0013-standing-low-cost-dev-env-with-auto-deploy.md)（D10 で追補）/ [0003](0003-two-phase-bicep.md) / [0025](0025-deploy-container-images-by-immutable-sha-tag.md) / [0045](archive/operations/e2e-artifacts-are-secret-by-default.md) / [0018](archive/operations/runtime-verification-in-the-loop.md) / [0007](0007-problem-centric-two-layer-domain-model.md)

@@ -2,11 +2,11 @@
 
 ## Trigger
 
-**システムを運用するためのもの** (Key Vault + E2E trace 復号鍵 / バックアップ Storage / Log Analytics / 予算) を、アプリ系とは別の RG に作るとき。**一度きりの手動オペ**で、`provision.sh` にも `deploy.yml` にも入っていません ([ADR 0046](../adr/0046-environment-rebuildable-from-declaration.md) D1 / [#302](https://github.com/yomote/mind-inbox/issues/302))。
+**システムを運用するためのもの** (Key Vault + E2E trace 復号鍵 / バックアップ Storage / Log Analytics / 予算) を、アプリ系とは別の RG に作るとき。**一度きりの手動オペ**で、`provision.sh` にも `deploy.yml` にも入っていません ([ADR 0056](../adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D1 / [#302](https://github.com/yomote/mind-inbox/issues/302))。
 
 移行後に `enableLogAnalytics` を切り替えて流し直すときも、同じ手順です。
 
-> **Cosmos / OpenAI / Speech はここには来ません。** これらは「アプリそのもの」なのでアプリ系 RG (`rg-dev-mind-inbox`) に残します (2026-08-12 / 2026-08-14 の PO 裁定)。Cosmos のデータは RG を移して守るのではなく、**この RG の非公開 Storage へバックアップして戻せるようにします** (ADR 0046 D9)。
+> **Cosmos / OpenAI / Speech はここには来ません。** これらは「アプリそのもの」なのでアプリ系 RG (`rg-dev-mind-inbox`) に残します (2026-08-12 / 2026-08-14 の PO 裁定)。Cosmos のデータは RG を移して守るのではなく、**この RG の非公開 Storage へバックアップして戻せるようにします** (ADR 0056 D2 / 経路の実装は ADR 0046 D9)。
 
 ## Prerequisites
 
@@ -191,7 +191,7 @@ az rest --method get --url "https://management.azure.com/subscriptions/$(az acco
 
 ## Related
 
-- ADR: [0046 環境は宣言から再構築できる](../adr/0046-environment-rebuildable-from-declaration.md) D1/D6/D9 / ADR 0045 D5 (E2E artifact は既定で秘密 — 未マージ / PR #332) / [0003 2 フェーズ Bicep](../adr/0003-two-phase-bicep.md)
+- ADR: [0056 管理系 / アプリ系とバックアップによるデータ保護](../adr/0056-management-and-app-layers-with-backup-based-data-protection.md) (**層の定義の正典**) / [0046 環境は宣言から再構築できる](../adr/0046-environment-rebuildable-from-declaration.md) D6/D9 (D1 は 0056 が supersede) / ADR 0045 D5 (E2E artifact は既定で秘密 — 未マージ / PR #332) / [0003 2 フェーズ Bicep](../adr/0003-two-phase-bicep.md)
 - 関連 Runbook: [`claude-web-azure-access.md`](claude-web-azure-access.md) / [`cosmos-persistence.md`](cosmos-persistence.md)
 - 宣言とパラメータの説明: [`cicd/iac/README.md`](../../cicd/iac/README.md#1-5-管理系レイヤrg-mgmt-mindbox--一度きり)
 - 撤収ガード: `cicd/scripts/env/` ([README](../../cicd/scripts/env/README.md))

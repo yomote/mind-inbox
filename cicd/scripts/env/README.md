@@ -11,7 +11,7 @@ RG=<your-rg> ./scripts/env/cleanup-env.sh
 
 **既定ではリソースグループを削除するだけ**で、soft-delete による救済は残します ([ADR 0046](../../../docs/adr/0046-environment-rebuildable-from-declaration.md) D5/D6)。再 deploy 時の同名衝突を退けたいときだけ、**衝突した種類の purge を明示的に有効化**します。
 
-### 層ガード — 何も消さずに拒否する条件 ([ADR 0046](../../../docs/adr/0046-environment-rebuildable-from-declaration.md) D1 / [#302](https://github.com/yomote/mind-inbox/issues/302))
+### 層ガード — 何も消さずに拒否する条件 ([ADR 0056](../../../docs/adr/0056-management-and-app-layers-with-backup-based-data-protection.md) / [#302](https://github.com/yomote/mind-inbox/issues/302))
 
 **撤収の対象はアプリ系だけです。** 破壊系の処理に入る前に [`persistent_layer_guard.py`](persistent_layer_guard.py) が判定し、次のいずれかなら**1 つも消さずに exit 3** で止まります (ファイル名は初版の「持続層」という呼び方が残ったもので、中身は下の 2 種類を守るガードです)。
 

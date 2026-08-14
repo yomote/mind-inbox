@@ -88,7 +88,7 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 
 エージェントが過去判断を覆さないよう、CLAUDE.md からこのディレクトリにリンクする (#13 で実施)。
 
-## 既存 ADR (22 本)
+## 既存 ADR (23 本)
 
 無印 = Accepted。それ以外は末尾に Status を明記する。
 **番号順ではなくテーマ順**に並べている (番号は ID であって順序ではない — 欠番の理由は [`archive/`](archive/README.md))。
@@ -126,7 +126,8 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0013](0013-standing-low-cost-dev-env-with-auto-deploy.md) — dev 環境は「常設・待機最小コスト + main マージ自動デプロイ」にする
 - [0017](0017-container-apps-access-via-auth-gate.md) — Container Apps の「第二の扉」は認証の門で閉じる (組み込み認証 + Managed Identity / voicevox は internal ingress)
 - [0025](0025-deploy-container-images-by-immutable-sha-tag.md) — コンテナ image のデプロイは :latest ではなく不変 sha タグの解決 + 稼働検証で行う (#107)
-- [0046](0046-environment-rebuildable-from-declaration.md) — 環境を「宣言から作り直せるもの」にする — ライフサイクル 3 層分断 / Entra の Graph Bicep 宣言 / 週次プロビジョンテスト (0013 の「常設」を追補)
+- [0046](0046-environment-rebuildable-from-declaration.md) — 環境を「宣言から作り直せるもの」にする — ライフサイクル 3 層分断 / Entra の Graph Bicep 宣言 / 週次プロビジョンテスト (0013 の「常設」を追補) — **D1 (層の分け方) のみ 0056 が supersede。D2〜D8 / D10 は現行**
+- [0056](0056-management-and-app-layers-with-backup-based-data-protection.md) — 層は「管理系 / アプリ系」で分け、データは RG 移動ではなくバックアップ + 復元実証で守る (0046 D1 を supersede)
 - [0055](0055-bff-telemetry-on-workspace-based-app-insights.md) — BFF のサーバ側観測性を workspace-based Application Insights で持つ (保持 30 日 / 日次上限つき / 本文は名前と値の両面で落とす) — **Proposed**
 - [0009](0009-on-demand-cd-via-github-actions-oidc.md) — デプロイは GitHub Actions のオンデマンド CD（手動 up/down + 夜間 teardown, OIDC）で行う — **Superseded by 0013**
 
