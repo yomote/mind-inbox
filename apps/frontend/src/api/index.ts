@@ -1,4 +1,5 @@
 export {
+  ApprovalExpired,
   ApprovalRequestUnusable,
   startNewConsultation,
   sendMessage,

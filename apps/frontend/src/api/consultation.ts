@@ -5,6 +5,7 @@ import { chatStreamFetch, ttsPrefetchFetch, useMock } from "./http";
 import { parseSseJsonStream } from "./sse";
 import { appendStreamingReply, beginStreamingReply, clearStreamingReply } from "./streamingReply";
 import { reportStubbedResponse, resetStubbedResponse } from "./stubStatus";
+import { isNotFound } from "./trpcError";
 
 const voicevoxSpeaker = Number(import.meta.env.VITE_VOICEVOX_SPEAKER || "3");
 
@@ -129,6 +130,22 @@ export class ApprovalRequestUnusable extends Error {
 }
 
 /**
+ * 承認要求がもう存在しない (#82 / PR #416 judge major-1)。
+ *
+ * ai-agent の承認レコードは TTL 1 時間で失効し、in-memory 構成では再起動でも消える。
+ * BFF はこれを `NOT_FOUND` で返す。**通信失敗と同じ扱いにしない** — 再試行しても
+ * 永久に成功しないので、「再試行してください」を出し続けると承認カードが閉じられず
+ * 会話が二度と進まなくなる (404 デッドロック)。UI 側はこれを受けてカードを閉じ、
+ * 次の発話を送れる状態に戻す。
+ */
+export class ApprovalExpired extends Error {
+  constructor() {
+    super("approval request no longer exists (expired or released)");
+    this.name = "ApprovalExpired";
+  }
+}
+
+/**
  * 応答の承認フラグを UI の承認要求へ写す (#82 / G1 / dialogue-session.mdx §5.9)。
  */
 function toApprovalRequest(
@@ -249,6 +266,9 @@ export async function sendMessage(sessionId: string, text: string): Promise<Assi
  * (#82 / G1 / dialogue-session.mdx §5.9)。
  *
  * **却下も送る**: 送らないとサーバ側の承認待ち (checkpoint) が宙に浮いたままになる。
+ *
+ * @throws {ApprovalExpired} 承認レコードが失効している (BFF の `NOT_FOUND`)。
+ *         再試行では回復しないので、通信失敗と区別して投げる。
  */
 export async function respondToApproval(
   approvalRequestId: string,
@@ -256,7 +276,16 @@ export async function respondToApproval(
 ): Promise<ChatMessage> {
   if (useMock) return mock.respondToApproval(approvalRequestId, approved);
 
-  const res = await trpc.consultation.approve.mutate({ approvalRequestId, approved });
+  let res: { reply: string };
+  try {
+    res = await trpc.consultation.approve.mutate({ approvalRequestId, approved });
+  } catch (err) {
+    // 期限切れ (TTL 1h) / ai-agent 再起動で承認レコードが消えている。
+    // ここで種別を立てないと UI は「通信失敗 → 再試行」しか出せず、
+    // 何度押しても同じ 404 に当たり続ける (#82 / PR #416 judge major-1)。
+    if (isNotFound(err)) throw new ApprovalExpired();
+    throw err;
+  }
   return {
     id: crypto.randomUUID(),
     role: "assistant",

@@ -64,6 +64,23 @@ export function isStubMode(): boolean {
   return !config.aiAgentBaseUrl;
 }
 
+/**
+ * 承認レコードがもう無い (#82 / PR #416 judge major-1)。
+ *
+ * ai-agent の `ApprovalRecord` は TTL 1 時間で失効し、in-memory 構成ではプロセス
+ * 再起動でも消える (`app/repositories.py`)。**「通信が失敗した」と同じ扱いにしない** —
+ * 取り直しても永久に成功しないので、汎用エラーのまま返すとフロントは
+ * 「通信状況を確認して再試行」を出し続け、承認カードが閉じられず**会話が二度と
+ * 進まなくなる** (404 デッドロック)。router がこれを `NOT_FOUND` に写し、フロントは
+ * 「期限切れ = カードを閉じて続行」に落とす。
+ */
+export class ApprovalNotFoundError extends Error {
+  constructor(approvalRequestId: string) {
+    super(`aiAgentClient: approval not found — ${approvalRequestId}`);
+    this.name = "ApprovalNotFoundError";
+  }
+}
+
 export class ExtractError extends Error {
   // パラメータプロパティ短縮記法は erasableSyntaxOnly で使えないため明示代入する。
   readonly kind: ExtractFailureKind;
@@ -251,6 +268,13 @@ export async function approve(req: ApproveRequest): Promise<ApproveResponse> {
       approved: req.approved,
     }),
   });
+
+  // 404 は「承認レコードがもう無い」(TTL 失効 / ai-agent 再起動 / 消費済み)。
+  // 種別を保って上げる — 呼び出し側 (router) が NOT_FOUND に翻訳し、フロントが
+  // 「期限切れ」として扱えるようにする。ここで潰すと再試行地獄に戻る。
+  if (res.status === 404) {
+    throw new ApprovalNotFoundError(req.approvalRequestId);
+  }
 
   if (!res.ok) {
     throw new Error(`aiAgentClient: POST /approve failed — ${res.status} ${res.statusText}`);

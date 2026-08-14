@@ -59,6 +59,9 @@ describe("[単体] SessionScreen — 副作用ツールの承認カード", () =
     // 吹き出しを遡らないと分からない承認カードにしない (§5.9)
     expect(card.textContent).toContain("send_reply");
     expect(card.textContent).toContain("承認が必要です");
+    // 注記は MDX §5.9 の文言そのもの (ADR 0005: MDX が真実)。片方だけ書き換えると
+    // 「押すまで実行されない」という約束の言い回しが仕様と画面でずれる。
+    expect(card.textContent).toContain("承認するまで、この操作は行われません。");
   });
 
   it("「承認して実行」は true、「却下する」は false を送る", async () => {

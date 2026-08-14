@@ -5,6 +5,7 @@ import type { ConversationMessage } from "../clients/aiAgentContracts";
 import { z } from "zod";
 import type { TrpcContext } from "./context";
 import {
+  ApprovalNotFoundError,
   approve as approveAiAgent,
   createPlan as createPlanAiAgent,
   ExtractError,
@@ -699,10 +700,24 @@ const consultationRouter = router({
       console.log(
         `[consultation.approve] approvalRequestId=${input.approvalRequestId} approved=${input.approved}`,
       );
-      return await approveAiAgent({
-        approvalRequestId: input.approvalRequestId,
-        approved: input.approved,
-      });
+      try {
+        return await approveAiAgent({
+          approvalRequestId: input.approvalRequestId,
+          approved: input.approved,
+        });
+      } catch (err) {
+        // 承認レコードがもう無い (TTL 1h 失効 / ai-agent 再起動 / 消費済み) は
+        // **回復不能な失敗として区別する** (#82 / PR #416 judge major-1)。汎用エラーで
+        // 返すとフロントは「再試行してください」を出し続け、承認カードが閉じられない
+        // まま会話が永久に詰む (再試行は決して成功しない)。
+        if (err instanceof ApprovalNotFoundError) {
+          console.error(`[consultation.approve] ${err.message}`);
+          // message は機械可読な token に固定する (フロントは code を見るが、
+          // ログ・監視で「期限切れ」と「上流障害」を混ぜないため)。
+          throw new TRPCError({ code: "NOT_FOUND", message: "approval-not-found" });
+        }
+        throw err;
+      }
     }),
 });
 

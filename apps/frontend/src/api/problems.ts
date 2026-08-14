@@ -6,6 +6,7 @@ import { trpc } from "../trpc/client";
 import type { AppRouter } from "../trpc/client";
 import { useMock } from "./http";
 import { reportStubbedResponse } from "./stubStatus";
+import { isNotFound } from "./trpcError";
 
 /**
  * Problem / Mention の api 層（Phase C で mock→real を結線）。
@@ -46,10 +47,6 @@ function toBffTriageInput(input: TriageInput): BffTriageInput {
       // resolve / shelve / reopen / dismiss
       return { action: input.action, problemId: input.problemId };
   }
-}
-
-function isNotFound(err: unknown): boolean {
-  return err instanceof TRPCClientError && err.data?.code === "NOT_FOUND";
 }
 
 /**

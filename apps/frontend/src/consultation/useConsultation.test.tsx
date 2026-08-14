@@ -40,6 +40,7 @@ vi.mock("../api", async (importOriginal) => ({
 }));
 
 import {
+  ApprovalExpired,
   ApprovalRequestUnusable,
   ExtractFailed,
   commitPreview,
@@ -811,10 +812,117 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
     const result = await startAndAskForApproval();
     vi.mocked(respondToApproval).mockRejectedValue(new Error("boom"));
 
-    await act(async () => await result.current.respondToPendingApproval(true));
+    await act(async () => await result.current.respondToPendingApproval(false));
 
     expect(result.current.pendingApproval?.id).toBe("appr-1");
     expect(result.current.actionError).toContain("実行されていません");
+  });
+
+  it("承認の ack を失ったときは「実行されていない」と断定しない", async () => {
+    // 無いと: 承認 (approved=true) の応答が返らなかっただけで「操作はまだ実行されて
+    //         いません」と断定する文面が出る。`/approve` は冪等ではないので、サーバが
+    //         実行してから ack が落ちた場合と区別できない — 断定すると、実際には送信
+    //         済みのメールをユーザーがもう一度送る判断をしうる (PR #416 judge major-2)。
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await startAndAskForApproval();
+    vi.mocked(respondToApproval).mockRejectedValue(new Error("boom"));
+
+    await act(async () => await result.current.respondToPendingApproval(true));
+
+    expect(result.current.pendingApproval?.id).toBe("appr-1"); // 押し直せる
+    expect(result.current.actionError).toContain("実行されたか確認できませんでした");
+    expect(result.current.actionError).not.toContain("まだ実行されていません");
+  });
+
+  it("期限切れ (ApprovalExpired) はカードを閉じ、期限切れとして伝える", async () => {
+    // 無いと: 失効した承認 (ai-agent の TTL 1h / 再起動) を押しても「通信状況を確認して
+    //         再試行」が出続け、再試行は決して成功しないのでカードが閉じられない。
+    //         承認も却下もできず、次の発話も送れない行き止まりになる (judge major-1)。
+    const result = await startAndAskForApproval();
+    vi.mocked(respondToApproval).mockRejectedValue(new ApprovalExpired());
+
+    await act(async () => await result.current.respondToPendingApproval(true));
+
+    expect(result.current.pendingApproval).toBeNull();
+    expect(result.current.actionError).toContain("期限切れ");
+  });
+
+  it("期限切れの承認を抱えたまま次の発話を送ると、カードが閉じて発話が送信される", async () => {
+    // 無いと: 却下が 404 (期限切れ) で失敗するたびに「発話を送らずカードを残す」経路に
+    //         落ち、その会話は二度と先へ進めなくなる。期限切れは**サーバが何も実行せずに
+    //         解放された状態**なので、止める理由が無い (judge major-1 の機械化文)。
+    const result = await startAndAskForApproval();
+    expect(result.current.pendingApproval).not.toBeNull();
+
+    vi.mocked(respondToApproval).mockRejectedValue(new ApprovalExpired());
+    vi.mocked(sendMessage).mockResolvedValue({
+      message: { id: "a-3", role: "assistant", text: "受け止めました", createdAt: "2026-01-01" },
+      approval: null,
+    });
+    act(() => result.current.setDraftMessage("やっぱり別の話をしたい"));
+    await act(async () => await result.current.sendDraftMessage());
+
+    expect(result.current.pendingApproval).toBeNull();
+    expect(sendMessage).toHaveBeenLastCalledWith("s1", "やっぱり別の話をしたい");
+    expect(result.current.actionError).toContain("期限切れ");
+    expect(result.current.session?.messages.map((m) => m.text)).toEqual(
+      expect.arrayContaining(["やっぱり別の話をしたい", "受け止めました"]),
+    );
+    expect(result.current.draftMessage).toBe("");
+  });
+
+  it("新規相談で承認要求を捨てるときも、サーバへ却下を送る", async () => {
+    // 無いと: 画面から消すだけになり、ai-agent 側の ApprovalRecord / checkpoint が
+    //         pending のまま残る (in-memory 構成には TTL が無い / judge minor-3)。
+    //         画面上は新しい相談が始まるので、無いと気づけない。
+    const result = await startAndAskForApproval();
+    vi.mocked(respondToApproval).mockResolvedValue({
+      id: "a-cancel",
+      role: "assistant",
+      text: "操作はキャンセルされました。他にご用件はありますか？",
+      createdAt: "2026-01-01",
+    });
+    vi.mocked(startNewConsultation).mockResolvedValue(session({ id: "s2" }));
+
+    await act(async () => await result.current.startConsultation());
+
+    expect(respondToApproval).toHaveBeenCalledWith("appr-1", false);
+    expect(result.current.pendingApproval).toBeNull();
+    // 捨てた却下の応答は**新しい相談には出さない** (別の会話の結果を持ち込まない)
+    expect(result.current.session?.id).toBe("s2");
+    expect(result.current.session?.messages.map((m) => m.text)).not.toContain(
+      "操作はキャンセルされました。他にご用件はありますか？",
+    );
+  });
+
+  it("却下が届かなくても新規相談は始まる (fire-and-forget)", async () => {
+    // 無いと: 却下の通信失敗が新規相談を巻き込んで止める。捨てる側の通信は
+    //         ユーザーの操作 (新しい相談を始める) を人質に取ってはいけない。
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await startAndAskForApproval();
+    vi.mocked(respondToApproval).mockRejectedValue(new Error("boom"));
+    vi.mocked(startNewConsultation).mockResolvedValue(session({ id: "s2" }));
+
+    await act(async () => await result.current.startConsultation());
+
+    expect(result.current.session?.id).toBe("s2");
+    expect(result.current.pendingApproval).toBeNull();
+  });
+
+  it("reset (ログアウト) で承認要求を捨てるときも、サーバへ却下を送る", async () => {
+    // 無いと: ログアウト経路だけ却下が漏れ、承認待ちがサーバに残り続ける (judge minor-3)。
+    const result = await startAndAskForApproval();
+    vi.mocked(respondToApproval).mockResolvedValue({
+      id: "a-cancel",
+      role: "assistant",
+      text: "操作はキャンセルされました。",
+      createdAt: "2026-01-01",
+    });
+
+    act(() => result.current.reset());
+
+    expect(respondToApproval).toHaveBeenCalledWith("appr-1", false);
+    expect(result.current.pendingApproval).toBeNull();
   });
 
   it("承認せずに次の発話を送ると、サーバへも却下を送ってから送信する", async () => {
