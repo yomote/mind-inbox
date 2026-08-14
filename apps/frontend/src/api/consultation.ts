@@ -114,17 +114,30 @@ function createSentencePrefetcher() {
 }
 
 /**
- * 応答の承認フラグを UI の承認要求へ写す (#82 / G1 / dialogue-session.mdx §5.9)。
+ * 「承認が要る」と言われたのに承認 ID が無い応答 (#82 / PR #416 Codex P2)。
  *
- * `requiresApproval` が立っていても id が無ければ承認要求を作らない — 承認 API を
- * 呼べない要求カードは「押しても何も起きないボタン」にしかならないため。
+ * BFF の `ChatReplySchema` はこの組み合わせを禁止していない (`approvalRequestId` は
+ * nullable) ため、上流の不整合でも SSE はそのまま素通しする。**承認不要と同じ扱いに
+ * しない** — 承認 API を呼ぶ手段が無いので、承認カードを出しても押せず、黙って
+ * 通常応答にするとサーバだけが承認待ちで止まったまま画面に何も出ない。
+ */
+export class ApprovalRequestUnusable extends Error {
+  constructor() {
+    super("chat response requires approval but has no approvalRequestId");
+    this.name = "ApprovalRequestUnusable";
+  }
+}
+
+/**
+ * 応答の承認フラグを UI の承認要求へ写す (#82 / G1 / dialogue-session.mdx §5.9)。
  */
 function toApprovalRequest(
   requiresApproval: boolean | undefined,
   approvalRequestId: string | null | undefined,
   reply: string,
 ): ApprovalRequest | null {
-  if (requiresApproval !== true || !approvalRequestId) return null;
+  if (requiresApproval !== true) return null;
+  if (!approvalRequestId) throw new ApprovalRequestUnusable();
   return { id: approvalRequestId, description: reply };
 }
 
@@ -201,6 +214,12 @@ export async function sendMessage(sessionId: string, text: string): Promise<Assi
   try {
     return await sendMessageStreaming(sessionId, text, messageId);
   } catch (err) {
+    if (err instanceof ApprovalRequestUnusable) {
+      // 上流の契約違反は**転送の失敗ではない** — 取り直しても同じものが返るだけなので
+      // フォールバックで隠さず、そのまま UI のエラー表示へ流す (承認不要と区別する)。
+      clearStreamingReply();
+      throw err;
+    }
     // ストリーミングは強化であって依存にしない (ADR 0024) — 失敗したら従来の
     // tRPC mutation で全文を取り直す。途中経過バブルはここで消す。
     console.warn("[sendMessage] streaming failed — falling back to tRPC mutation", err);

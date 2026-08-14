@@ -1,4 +1,9 @@
-export { startNewConsultation, sendMessage, respondToApproval } from "./consultation";
+export {
+  ApprovalRequestUnusable,
+  startNewConsultation,
+  sendMessage,
+  respondToApproval,
+} from "./consultation";
 
 export {
   ExtractFailed,

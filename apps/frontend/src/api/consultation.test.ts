@@ -29,7 +29,12 @@ vi.mock("./http", () => ({
 
 import { trpc } from "../trpc/client";
 import { chatStreamFetch, ttsPrefetchFetch } from "./http";
-import { respondToApproval, sendMessage, startNewConsultation } from "./consultation";
+import {
+  ApprovalRequestUnusable,
+  respondToApproval,
+  sendMessage,
+  startNewConsultation,
+} from "./consultation";
 import { clearStreamingReply, getStreamingReply } from "./streamingReply";
 import { getStubbedResponse, reportStubbedResponse, resetStubbedResponse } from "./stubStatus";
 
@@ -236,9 +241,11 @@ describe("[単体] 副作用ツールの承認要求 (#82 / G1)", () => {
     });
   });
 
-  it("approval_request_id が無ければ承認要求を作らない", async () => {
-    // 無いと: approve に渡す ID が無いまま承認カードだけが出て、押しても何も起きない
-    // ボタン (2026-08-09 に踏んだ「押しても無反応」と同じ形) を作る。
+  it("approval_request_id が無い応答はエラーにする (承認不要と混同しない)", async () => {
+    // 無いと: 承認 ID の無い「承認が要る」応答を**普通の返事**として表示してしまう。
+    // 承認 API を呼ぶ手段が無いので画面には何の要求も出ず、サーバだけが承認待ちで
+    // 止まったままになる (BFF の zod もこの組み合わせを禁止していないので実際に届きうる)。
+    // ここが null 返しに戻ると、カードもエラーも出ないまま静かに通る。
     vi.mocked(chatStreamFetch).mockResolvedValue(
       sseResponse([
         {
@@ -248,9 +255,11 @@ describe("[単体] 副作用ツールの承認要求 (#82 / G1)", () => {
       ]),
     );
 
-    const { approval } = await sendMessage("s1", "m");
-
-    expect(approval).toBeNull();
+    await expect(sendMessage("s1", "m")).rejects.toBeInstanceOf(ApprovalRequestUnusable);
+    // 契約違反は転送の失敗ではないので、tRPC で取り直して隠さない
+    expect(trpc.consultation.sendMessage.mutate).not.toHaveBeenCalled();
+    // 途中経過バブルは残さない
+    expect(getStreamingReply()).toBeNull();
   });
 
   it("tRPC フォールバック経路でも承認要求を落とさない", async () => {

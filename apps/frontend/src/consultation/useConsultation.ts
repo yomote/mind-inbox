@@ -11,6 +11,7 @@
 
 import * as React from "react";
 import {
+  ApprovalRequestUnusable,
   ExtractFailed,
   commitPreview,
   createProblemPlan,
@@ -119,6 +120,20 @@ function extractFailureMessage(err: unknown): string {
     default:
       return FAILURE_MESSAGE.extract;
   }
+}
+
+/**
+ * 送信の失敗は原因で案内を変える (#82 / PR #416 Codex P2)。
+ *
+ * 「承認が要ると言われたのに承認できない応答」は通信の問題ではないので、
+ * 「もう一度お試しください」だけだと何度やっても同じところで止まる。
+ * **承認不要 (普通の返事) と同じ扱いにしない**のがこの分岐の目的。
+ */
+function sendMessageFailureMessage(err: unknown): string {
+  if (err instanceof ApprovalRequestUnusable) {
+    return "AI が操作の承認を求めましたが、承認できない応答が返りました。実行はされていません。もう一度お試しください。";
+  }
+  return FAILURE_MESSAGE.sendMessage;
 }
 
 /** runAction の結果。失敗しても throw せず、呼び出し側が後続処理を止められるようにする。 */
@@ -314,20 +329,44 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
       createdAt: new Date().toISOString(),
     };
 
+    // 承認待ちのまま会話を続ける = **却下** (§5.9 / PR #416 Codex P2)。
+    //
+    // ローカル state を消すだけにすると、ai-agent 側の `ApprovalRecord` と checkpoint は
+    // pending のまま残る (in-memory 構成の `_pending_run_storages` には TTL が無いので、
+    // 繰り返すほど保持領域が増える)。「実行しない」はサーバにも伝える。
+    // 却下が届かなかったら**発話を送らずここで止める** — 入力もカードも残るので、
+    // やり直すか承認/却下ボタンを押し直せる (握り潰して次へ進まない / ADR 0018)。
+    let baseSession = session;
+    if (pendingApproval) {
+      const discarded = await runAction(FAILURE_MESSAGE.approval, () =>
+        respondToApproval(pendingApproval.id, false),
+      );
+      if (!discarded.ok) return;
+
+      baseSession = { ...baseSession, messages: [...baseSession.messages, discarded.value] };
+      setPendingApproval(null);
+      setSession(baseSession);
+    }
+
     setDraftMessage("");
     // 最初のユーザー発話でタイトルを内容から自動生成 (開始時は聞かない)。
-    const isFirstUserMessage = !session.messages.some((m) => m.role === "user");
-    const nextTitle = isFirstUserMessage ? deriveSessionTitle(userMessage.text) : session.title;
-    setSession({ ...session, title: nextTitle, messages: [...session.messages, userMessage] });
+    const isFirstUserMessage = !baseSession.messages.some((m) => m.role === "user");
+    const nextTitle = isFirstUserMessage ? deriveSessionTitle(userMessage.text) : baseSession.title;
+    setSession({
+      ...baseSession,
+      title: nextTitle,
+      messages: [...baseSession.messages, userMessage],
+    });
 
-    const outcome = await runAction(FAILURE_MESSAGE.sendMessage, () =>
-      sendMessage(session.id, userMessage.text),
+    const outcome = await runAction(sendMessageFailureMessage, () =>
+      sendMessage(baseSession.id, userMessage.text),
     );
 
     if (!outcome.ok) {
       // 楽観更新を巻き戻して送信前の状態に戻す。返事が来ないまま自分の発話だけが
       // 残る状態は「送れたのに無視された」と読めてしまい、かつ入力し直しを強いる。
-      setSession(session);
+      // (却下は既に成立しているので、その結果は残したまま戻す)
+      setSession(baseSession);
       setDraftMessage(userMessage.text);
       return;
     }
@@ -337,21 +376,16 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     );
     // 承認要求は応答と同じ往復で届く (#82)。ここで拾わないと、サーバは承認待ちのまま
     // 画面には普通の返事だけが出て「止まっているのに止まって見えない」状態になる。
-    //
-    // **成功したときだけ差し替える** (§5.9): 承認せずに会話を続けたら前の要求は破棄される
-    // (押していない = 実行されていない側に倒れる) が、送信が失敗した往復では会話も入力も
-    // 巻き戻すので、承認カードだけが消えると「押していないのにどうなったか分からない」状態
-    // になる。送信中はカードのボタンが loading で無効なので、残っていても押せない。
     setPendingApproval(outcome.value.approval);
 
     // ユーザー発話 2 往復ごとに下書きプレビューを自動更新する (#187 / ADR 0039 D2)。
     // 毎ターンは LLM 呼び出しが倍増するため間引く。fire-and-forget — 会話を待たせない。
-    const messagesAfterReply = [...session.messages, userMessage, outcome.value.message];
+    const messagesAfterReply = [...baseSession.messages, userMessage, outcome.value.message];
     const userTurnCount = messagesAfterReply.filter((m) => m.role === "user").length;
     if (userTurnCount > 0 && userTurnCount % 2 === 0) {
-      void runPreview(session.id, messagesAfterReply);
+      void runPreview(baseSession.id, messagesAfterReply);
     }
-  }, [draftMessage, runAction, runPreview, session]);
+  }, [draftMessage, pendingApproval, runAction, runPreview, session]);
 
   /**
    * 承認 / 却下をサーバへ返す (#82 / G1 / §5.9)。
