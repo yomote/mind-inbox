@@ -49,8 +49,9 @@
 #   }
 #
 #   # ⚠️ bypass_actors を **書き漏らすと現状より強く**なり、書きすぎると門が抜けます。
-#   #    docs/team.md:117 は「main のブランチ保護は Bypass list を空にする」と
-#   #    書いていますが、それが現実かどうかは未取得 (#387 の争点)。**実物を写すこと**。
+#   #    docs/team.md の「規律は破られ、機構は守られる」節は「main のブランチ保護は
+#   #    Bypass list を空にする」と書いていますが、それが現実かどうかは未取得
+#   #    (#387 の争点)。**実物を写すこと**。
 #   # bypass_actors {
 #   #   actor_id    = 0
 #   #   actor_type  = "RepositoryRole" # Integration / OrganizationAdmin / RepositoryRole / Team / DeployKey

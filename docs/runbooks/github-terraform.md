@@ -12,7 +12,8 @@
 
 - **PO 本人**の GitHub アカウント (リポジトリ admin)。エージェントは管理系 API に届きません (実測 2026-08-14: `gh api repos/yomote/mind-inbox` → `403 "GitHub access is not enabled for this session."`)
 - `gh` CLI にログイン済みであること、または `github-settings` workflow の device-code 認証
-- Terraform 1.5 以上 (`import` ブロックのため)。エージェント環境では `registry.terraform.io` が egress ポリシーで 403 なので **provider を取れません** — Terraform を回すのは PO のローカルか GitHub runner
+- Terraform 1.5 以上 (`import` ブロックのため)。`registry.terraform.io` は通るので、**`init` / `validate` / `providers lock` はエージェント環境でも回せます** (実測 2026-08-14 / Terraform 1.9.8。同日朝までは egress ポリシーで 403 でしたが、開通しました)
+- **`plan` だけは回せません。** トークンが要り (Step 3 が未決定)、エージェントのトークンでは provider の設定段階で 403 になります (実測 2026-08-14。Common Issues 参照)。plan を回すのは PO のローカルか、トークンの置き場が決まったあとの GitHub runner
 
 ## Steps
 
@@ -70,15 +71,32 @@ gh api --paginate "repos/$REPO/labels" --jq '.[] | {name, color, description}'
 
 現在は **D**。決めるのは #390 (needs-human)。A と B は排他ではなく、「PR ごとは D、節目は A」も取れます。
 
-### 4. CI を回す
+### 4. ロックファイルをローカルで作って commit する
 
-`.github/workflows/github-terraform-check.yml` が PR で自動的に走ります (`cicd/github/terraform/**` を触ったとき)。やることは **fmt / init / validate まで**で、**plan は実行しません** (3 が未決定のため)。run サマリに「plan: 未実行」と理由が毎回出ます。
+**`.terraform.lock.hcl` は CI が作ってくれません。** provider を足した / 版を上げたときは、自分で生成して commit します。
 
-初回の run で `.terraform.lock.hcl` が生成されます。**サマリに出た内容を `cicd/github/terraform/.terraform.lock.hcl` として commit してください** — これが commit されるまで provider はハッシュで固定されていません。
+```bash
+terraform -chdir=cicd/github/terraform providers lock \
+  -platform=linux_amd64 -platform=linux_arm64 \
+  -platform=darwin_amd64 -platform=darwin_arm64
+```
+
+(これは CI の `tf-lock` ステップがエラー時に出すのと同じコマンドです。4 platform を並べるのは、runner の `linux_amd64` だけだと PO のローカル (darwin) がハッシュ検証なしで provider を入れられてしまうため。)
+
+commit していないと CI は次のように落ちます — **どちらも「黙って生成して緑」にはなりません**:
+
+- ロックファイルが git に未登録なら、`tf-lock` ステップが **`init` より前に exit 1** する
+- `init` は `-lockfile=readonly` で走るので、ロックファイルが無くても生成せずに落ちる (実測 2026-08-14 / Terraform 1.9.8: `Error: Provider dependency changes detected ... the lock file is read-only`)
+- commit 済みの内容が同じ版から再生成される内容と 1 バイトでも違えば、`tf-lock-complete` ステップが差分を出して落とす
+
+### 5. CI を回す
+
+`.github/workflows/github-terraform-check.yml` が PR で自動的に走ります (`cicd/github/terraform/**` を触ったとき)。やることは **fmt / ロックファイルの確認 / init / validate まで**で、**plan は実行しません** (3 が未決定のため)。run サマリに「plan: 未実行」と理由が毎回出ます。
 
 ## Verification
 
 - [ ] `terraform fmt -check -recursive` が通る (ローカルでも通せる。provider 取得が要らない)
+- [ ] `cicd/github/terraform/.terraform.lock.hcl` が commit されていて、Step 4 のコマンドを回しても差分が出ない
 - [ ] `github-terraform-check` の run が緑で、`terraform validate` のステップが成功している
 - [ ] run サマリに「terraform plan: **未実行**」と理由が出ている (= 回していないものを緑と誤読させていない)
 - [ ] `cicd/github/terraform/README.md` の「未取得」表が、実際に埋めた項目の分だけ減っている
@@ -98,8 +116,13 @@ gh api --paginate "repos/$REPO/labels" --jq '.[] | {name, color, description}'
 
 ### `could not connect to registry.terraform.io: ... Forbidden`
 
-- 原因: エージェント環境の egress ポリシーが `registry.terraform.io:443` を 403 で塞いでいる (実測 2026-08-14。`curl -sS http://127.0.0.1:34121/__agentproxy/status` の `recentRelayFailures` に残る)。`releases.hashicorp.com` (terraform 本体) は通る
-- 対処: **迂回しない**。GitHub runner (プロキシ外) で回す。ローカル検証は `terraform fmt` までに限る
+- **2026-08-14 朝までの症状で、現在は解消しています。** 当時はエージェント環境の egress ポリシーが `registry.terraform.io:443` を 403 で塞いでいました (`curl -sS "$HTTPS_PROXY/__agentproxy/status"` の `recentRelayFailures` に残る)。同日中に開通し、エージェント環境でも `init` / `validate` / 4 platform の `providers lock` が通ることを実測しています (2026-08-14 / Terraform 1.9.8)
+- 再発したときの対処: **迂回しない**。GitHub runner (プロキシ外) で回す。手元の検証は `terraform fmt` までに限る
+
+### `terraform plan` が `403 ... sessions are bound to their configured repositories` で落ちる
+
+- 原因: provider が `owner` を解決するために `GET /orgs/{owner}` を叩くが、エージェントのトークンは管理系 API に届かない (実測 2026-08-14: `failed to lookup organization "yomote"`)。**plan 用のトークンが未決定** (Step 3 / #390) なので、これは想定内の停止
+- 対処: PO 本人の権限で回すか、#390 が決まるまで plan を回さない。**「plan が落ちた」を「宣言が壊れている」と読み替えないこと** — 逆に「plan を回していない」を「宣言と現実が一致している」と読み替えるのも禁止。今言えているのは fmt / validate までです
 
 ### `terraform plan` が import ブロックでエラーになる
 
