@@ -6,13 +6,26 @@ Azure Functions v4 + tRPC (単一エントリ `/api/trpc/*`)。起動・テス�
 
 ```bash
 cd apps/bff
-npm install          # ここは npm (frontend だけ pnpm)
-npm run dev          # build:watch + func start (:7071)
-npm run build        # tsc のみ
-npm test             # vitest
-npm run lint
-npm run docs:openapi  # OpenAPI 再生成 (手書きしない)
+pnpm install          # Node 側は frontend も BFF も pnpm (#420)
+pnpm run dev          # build:watch + func start (:7071)
+pnpm run build        # tsc のみ
+pnpm test             # vitest
+pnpm run lint
+pnpm run docs:openapi  # OpenAPI 再生成 (手書きしない)
 ```
+
+**ここで `npm install` / `npm ci` を打たない。** 打っても*その場では*何も壊れず、
+`package-lock.json` が生えて `pnpm-lock.yaml` と二重管理になり、CI の
+`--frozen-lockfile` かデプロイの node_modules で初めて壊れる。`preinstall`
+([`scripts/only-pnpm.mjs`](scripts/only-pnpm.mjs)) が npm を弾くが、**npm は
+preinstall が落ちても `package-lock.json` を書く** — 生えていたら消す
+(`.gitignore` で commit だけは止めている)。
+
+デプロイ用の node_modules は開発用と作りが違う: Azure Functions の zip deploy は
+symlink を復元しないので、[`cicd/scripts/deploy/lib/build-bff-package.sh`](../../cicd/scripts/deploy/lib/build-bff-package.sh)
+が `--node-linker=hoisted` で実体のツリーを作り、symlink が 1 本も無いことを
+確認してから zip する。**依存の追加でここが壊れていないかは、az 無しでこの
+スクリプトを単体実行すれば確かめられる。**
 
 ## BFF は chat の素通しではない
 
@@ -47,7 +60,7 @@ AI Agent への薄いプロキシではなく、**アーティファクト生成
 
 ## 型は zod が真実、OpenAPI は生成物
 
-- tRPC ルータの zod スキーマが API の正典。**`docs/api/` の OpenAPI は手書きしない** — `npm run docs:openapi` で再生成する。
+- tRPC ルータの zod スキーマが API の正典。**`docs/api/` の OpenAPI は手書きしない** — `pnpm run docs:openapi` (root からは `npm run docs:openapi:bff`) で再生成する。
 - 契約チェックは root の `npm run test:contract` (`scripts/contract-check.mjs`)。フロントと共有する型を変えたらここが落ちる。
 - BFF は zod v3、frontend は zod v4 が入っている。バージョン差を跨ぐスキーマを共有ファイルに置かない。
 

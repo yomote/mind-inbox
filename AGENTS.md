@@ -37,8 +37,8 @@ npm test            # test:contract → test:fast → test:e2e
 アプリ別:
 
 ```bash
-npm --prefix apps/bff run build                 # BFF は npm
-pnpm --dir apps/frontend install                # フロントは **pnpm** (npm ではない)
+pnpm --dir apps/bff run build                   # Node のアプリは **pnpm** (npm ではない)
+pnpm --dir apps/frontend install                # 同上。root だけ npm
 pnpm --dir apps/frontend test
 uv run --directory apps/services/ai-agent pytest   # Python は uv
 ```
@@ -111,19 +111,23 @@ uv run --directory apps/services/ai-agent pytest   # Python は uv
 本文は次の見出しを埋める。
 
 ```markdown
-## Summary        目的 / 変更 / 影響 / リスク / 結論
-## Changes        何を変えたか
-## Verification   下の表
-## Review focus   特に見てほしい点
-## Known limitations  未検証・未対応を正直に
+## Summary 目的 / 変更 / 影響 / リスク / 結論
+
+## Changes 何を変えたか
+
+## Verification 下の表
+
+## Review focus 特に見てほしい点
+
+## Known limitations 未検証・未対応を正直に
 ```
 
 `## Verification` は**「設定した」ではなく「振る舞い」**で書く。
 
-| Check | Result |
-| --- | --- |
-| Unit / contract | 実行したコマンドと結果 |
-| E2E | 同上 / 対象外なら「対象外」 |
+| Check             | Result                                                   |
+| ----------------- | -------------------------------------------------------- |
+| Unit / contract   | 実行したコマンドと結果                                   |
+| E2E               | 同上 / 対象外なら「対象外」                              |
 | Live verification | 実環境で叩いた結果。**やっていないなら「未検証」と書く** |
 
 **回していないものを PASS と書かない。** 未検証は未検証と書けば通る。

@@ -9,8 +9,8 @@ description: ローカルで Mind Inbox を起動して動かす・ブラウザ�
 
 ## 最初に踏む地雷
 
-- **frontend は pnpm、BFF は npm** (取り違えると lock が壊れる)。frontend に `npm install` を打たない。
-- **リポジトリ root は npm** (`package.json` / `package-lock.json`)。root の script が各アプリへ委譲する。
+- **アプリ (frontend / BFF) は pnpm、リポジトリ root だけ npm** (`package.json` / `package-lock.json`)。root の script が各アプリへ委譲する。
+- **`apps/frontend` `apps/bff` に `npm install` を打たない** (取り違えると lock が二重になる)。BFF は preinstall で弾くが、npm は弾かれても `package-lock.json` を書くので、生えていたら消す (#420)。
 - **Python は uv が正典** (`apps/services/ai-agent/uv.lock`)。
 
 ## 最短で動かす (BFF も認証も Azure も不要)
@@ -29,12 +29,12 @@ VITE_USE_MOCK=true pnpm --dir apps/frontend dev   # → http://localhost:5173/
 | サービス          | ポート  | 起動                                                                                                        |
 | ----------------- | ------- | ----------------------------------------------------------------------------------------------------------- |
 | frontend (Vite)   | `5173`  | `pnpm --dir apps/frontend dev` (実 BFF を叩くなら `VITE_USE_MOCK=false`)                                    |
-| BFF (Functions)   | `7071`  | `cd apps/bff && npm install && npm run dev` (build:watch + `func start`)                                    |
+| BFF (Functions)   | `7071`  | `cd apps/bff && pnpm install && pnpm run dev` (build:watch + `func start`)                                  |
 | AI Agent          | `8000`  | `cd apps/services/ai-agent && pip install -e . && uvicorn app.main:app --reload --port 8000`                |
 | VOICEVOX wrapper  | `8001`  | `cd apps/services/voicevox && pip install -r requirements.txt && uvicorn app.main:app --reload --port 8001` |
 | VOICEVOX エンジン | `50021` | `cicd/scripts/local-voicevox/start-voicevox.sh` (Docker / 停止は `stop-voicevox.sh`)                        |
 
-- BFF は `func` (Azure Functions Core Tools v4) が要る。**入れずに済ませたい**なら `npm run build` 後に `node scripts/local-server.mjs` で同じハンドラを配信できる (ホットリロード無し + CORS 開放の差分のみ)。
+- BFF は `func` (Azure Functions Core Tools v4) が要る。**入れずに済ませたい**なら `pnpm --dir apps/bff run build` 後に `node scripts/local-server.mjs` で同じハンドラを配信できる (ホットリロード無し + CORS 開放の差分のみ)。
 - BFF の設定は `apps/bff/local.settings.json` (`local.settings.json.example` を `cp`)。**未設定の外部サービスは stub にフォールバックする**ので、声だけ見たいなら `VOICEVOX_BASE_URL` だけ入れれば足りる (詳細は `apps/bff/CLAUDE.md`)。
 - **声 (読み上げ) は VOICEVOX、マイク入力はブラウザの Web Speech** — マイクは **PC の Chrome** で開かないと動かない (Safari / Firefox は非対応)。
 

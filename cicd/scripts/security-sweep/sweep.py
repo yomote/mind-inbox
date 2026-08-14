@@ -145,7 +145,7 @@ def parse_gitleaks(data: object) -> list[dict]:
 # (ファイル名, tool_id, 表示名, パーサ)。workflow 側の出力ファイル名と 1:1。
 TOOLS = [
     ("npm-root.json", "npm-audit-root", "npm audit (root)", parse_npm_audit),
-    ("npm-bff.json", "npm-audit-bff", "npm audit (apps/bff)", parse_npm_audit),
+    ("pnpm-bff.json", "pnpm-audit-bff", "pnpm audit (apps/bff)", parse_pnpm_audit),
     (
         "pnpm-frontend.json",
         "pnpm-audit-frontend",
