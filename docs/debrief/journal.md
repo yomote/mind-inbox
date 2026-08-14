@@ -18,6 +18,13 @@
 - **持ち越し**: {未消化の項目・次回に回した判断。無ければ「なし」}
 ```
 
+## 2026-08-14 — design-gate (v2 M1 のスコープ確定)
+
+- **対象**: [#82](https://github.com/yomote/mind-inbox/issues/82) (v2 M1) / [#320](https://github.com/yomote/mind-inbox/issues/320) (MAF ネイティブ function calling)。SK 除去は達成済みで、残件は「検証の穴」+ #320 の配管という調査結果を受けた裁定
+- **決定**: PO 裁定 4 件 — 承認 UI を M1 に含める / スタブ題材のツールは feature flag で既定オフ (開けるのは #321 の裁定後) / `docs/api/ai-agent.yaml` 生成 + CI diff 金網を含める / 順序は #320 (配管) → #321 (題材)。決定の全文は [#82 の 2026-08-14 コメント](https://github.com/yomote/mind-inbox/issues/82#issuecomment-5289806206)
+- **学びメモ**: (このエントリは実装側セッションからの追記。理解確認の対話は窓口 PM セッションの記録を参照)
+- **持ち越し**: 承認 UI + e2e (段⑤) は並行の別セッション。#321 (ツール題材の再定義) は flag を開ける前提条件
+
 ## 2026-08-12 — design-gate (合成ユーザー探索 PoC)
 
 - **対象**: [ADR 0053](../adr/archive/operations/synthetic-user-exploration-poc.md) (合成ユーザー探索 PoC の設計 / [#304](https://github.com/yomote/mind-inbox/issues/304) の次段階)。発端は PO の問い「PM セッションが二つになってしまい、窓口一本化が動かない」で、その追跡の副産物として、spend limit で中身ゼロのまま死んでいた `合成ユーザーでのUX探索` セッションの仕事が未消化だと判明したこと
