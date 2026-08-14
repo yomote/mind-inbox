@@ -47,12 +47,17 @@ create_session(
   prompt:           <起票パケット。下の「プロンプトに必ず書くこと」を参照>,
   source_url:       "https://github.com/yomote/mind-inbox",
   source_revision:  "main"  または作業ブランチ,
+  model:            "claude-opus-5",
   tags:             ["<まとめて探せる名前>"]
 )
 ```
 
 **`source_url` / `source_revision` は必須。** 環境 (`environment_id`) は継承されるが
 **リポジトリは継承されない** — 省略すると子は空の作業ディレクトリで起動し「repo が無い」と言って止まる。
+
+**`model` も書く。** 分配先は Opus 5 (2026-08-14 PO 裁定 — 窓口 = Fable 5 / 分配先 = Opus 5)。
+省略すると親の Fable 5 を継承し、物量の作業で窓口のトークンを食い潰す
+(規約は [`dispatch` skill](../../.claude/skills/dispatch/SKILL.md) の Step 2)。
 
 起動には 1〜3 分かかる (`SESSION_STATUS_PENDING` → `RUNNING`)。
 
