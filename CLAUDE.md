@@ -43,7 +43,7 @@
 | `/adr` | ADR を書く / 採番する / Status を動かす |
 | `/dispatch` | 作業を分ける / 子セッション・subagent を起こす (**窓口 PM は 1 行でも自分で書かない**) |
 | `/merge` | PR を出したあと / マージしてよいかを判断する |
-| `/design-gate` | 新機能・Phase 着手・ADR 級判断の**実装を始める前** |
+| `/design-gate` | 新機能・Phase 着手・ADR 級判断・**自作の機構を新規に立ち上げる**実装を始める前 (既存機構への追記は対象外 — ただし**新機能・ADR 級判断を含む追記は起動が優先**) |
 | `/debrief` `/briefing` | マージや Proposed ADR が溜まった / リリース級の節目 |
 | `/release-gate` | リリース PR (`main → release`) の Go/No-Go |
 | `/status` `/explain` `/po-feedback` | 戦況図 / 「あれなんだっけ」 / 指示の出し方の講評 |
