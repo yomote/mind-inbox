@@ -12,10 +12,17 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Sequence
 
-from agent_framework import BaseChatClient, Message
+from agent_framework import (
+    BaseChatClient,
+    ChatResponse,
+    ChatResponseUpdate,
+    FunctionTool,
+    Message,
+)
 from agent_framework.openai import OpenAIChatClient, OpenAIChatOptions
 
 from .config import get_settings
+from .tools import function_invocation_limits, identity_arg_guard
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +33,40 @@ _client: BaseChatClient | None = None
 _REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
 
 
-def _options_for_model(model: str | None) -> OpenAIChatOptions:
-    """モデル名に応じた既定オプション。推論モデルは temperature / max_tokens 非対応のため付けない。"""
+def _options_for_model(
+    model: str | None, tools: Sequence[FunctionTool] = ()
+) -> OpenAIChatOptions:
+    """モデル名に応じた既定オプション。推論モデルは temperature / max_tokens 非対応のため付けない。
+
+    `tools` が空でなければ MAF ネイティブの function calling を有効にする (#320)。
+    渡す中身は tools.py の registry から導出されたものだけ — ここでツール一覧を
+    書き足す余地を作らない (真実源を 1 つに保つ)。
+    """
     if model and model.lower().startswith(_REASONING_MODEL_PREFIXES):
-        return OpenAIChatOptions()
-    return OpenAIChatOptions(temperature=0.7, max_tokens=1024)
+        options = OpenAIChatOptions()
+    else:
+        options = OpenAIChatOptions(temperature=0.7, max_tokens=1024)
+    if tools:
+        options["tools"] = list(tools)
+    return options
+
+
+def _apply_function_invocation_limits(client: BaseChatClient) -> None:
+    """ツール実行の上限を chat client に載せる (MAF の既定は max_function_calls=None = 無制限)。
+
+    per-call のオプションでは渡せないので client 側の設定を書き換える。冪等なので
+    毎回呼んでよい。**属性が無い client (= function invocation loop を持たない実装) は
+    黙って素通りさせない** — 上限が効いていないことに気づけなくなるため警告を残す。
+    """
+    configuration = getattr(client, "function_invocation_configuration", None)
+    if configuration is None:
+        logger.warning(
+            "Chat client (%s) has no function_invocation_configuration — "
+            "ツール実行の上限が効きません",
+            type(client).__name__,
+        )
+        return
+    configuration.update(function_invocation_limits())
 
 
 def _current_model() -> str | None:
@@ -121,27 +157,50 @@ async def complete(client: BaseChatClient, prompt: str) -> str:
     return response.text
 
 
-async def chat(client: BaseChatClient, messages: Sequence[Message]) -> str:
-    """会話履歴 (Message 列) → 応答テキスト (workflow の RESPOND / 非ストリーミング)。"""
+async def chat(
+    client: BaseChatClient,
+    messages: Sequence[Message],
+    *,
+    tools: Sequence[FunctionTool] = (),
+) -> ChatResponse:
+    """会話履歴 (Message 列) → ChatResponse (workflow の会話ターン / 非ストリーミング)。
+
+    **テキストではなく ChatResponse を返す**のは、ツールを載せた呼び出しの戻りに
+    「実行されたツールの結果」と「承認待ちの function_approval_request」が
+    メッセージとして含まれるため。呼び出し側はそれを見て履歴と API 契約に写す。
+    """
+    _apply_function_invocation_limits(client)
     async with asyncio.timeout(get_settings().llm_total_timeout_seconds):
-        response = await client.get_response(
-            list(messages), options=_options_for_model(_current_model())
+        return await client.get_response(
+            list(messages),
+            options=_options_for_model(_current_model(), tools),
+            middleware=[identity_arg_guard],
         )
-    return response.text
 
 
 async def chat_stream(
-    client: BaseChatClient, messages: Sequence[Message]
-) -> AsyncIterator[str]:
-    """chat のストリーミング版。トークン (チャンク) 文字列を逐次 yield する。
+    client: BaseChatClient,
+    messages: Sequence[Message],
+    *,
+    tools: Sequence[FunctionTool] = (),
+) -> AsyncIterator[ChatResponseUpdate]:
+    """chat のストリーミング版。update を逐次 yield する (テキスト差分は `update.text`)。
+
+    テキストだけでなく update そのものを流すのは、ツール呼び出し・承認要求が
+    text 以外の content として届くため。呼び出し側が `ChatResponse.from_updates`
+    で最終形に畳む。
 
     上限は総時間ではなく**チャンク間の無音時間**で測る (Issue #313):
     長い応答を正常に流し切れる一方、上流が黙り込んだ接続は必ず切れる。
     総時間で切ると「正常に長い応答」を途中で殺してしまう。
     """
+    _apply_function_invocation_limits(client)
     idle_timeout = get_settings().llm_stream_idle_timeout_seconds
     updates = client.get_response(
-        list(messages), stream=True, options=_options_for_model(_current_model())
+        list(messages),
+        stream=True,
+        options=_options_for_model(_current_model(), tools),
+        middleware=[identity_arg_guard],
     ).__aiter__()
     while True:
         # timeout は __anext__ の待ちだけに掛ける (消費側の処理時間は含めない)
@@ -150,6 +209,4 @@ async def chat_stream(
                 update = await updates.__anext__()
             except StopAsyncIteration:
                 return
-        text = update.text or ""
-        if text:
-            yield text
+        yield update

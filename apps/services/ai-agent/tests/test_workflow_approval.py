@@ -10,9 +10,13 @@
 ここで test しないこと:
 - SSE / HTTP の枠組み (それは L2 /chat 系)
 - MAF の checkpoint 実装自体 (フレームワークの領域)
-"""
 
-import json
+fixture 置き換え (#320): 承認は自前の `is_side_effecting` 判定ではなく
+`@tool(approval_mode="always_require")` を読む **MAF の function invocation loop** が
+起こすようになった。したがって fake は「get_response をまるごと差し替えたもの」では
+意味がなく、MAF の層を本物のまま通す `tests/fakes.ScriptedChatClient` を使う。
+検証意図 (承認の中断 / 再開 / 却下 / 掃除) は不変。
+"""
 
 import pytest
 
@@ -22,65 +26,25 @@ from app.workflow import (
     resume_after_approval,
     run_workflow,
 )
+from tests.fakes import ScriptedChatClient, text_step, tool_call_step
 
-APPROVAL_CLASSIFICATION = {
-    "needs_retrieval": False,
-    "needs_tool": True,
-    "tool_name": "send_reply",
-    "tool_args": {"to": "a@example.com", "body": "hi"},
-}
+pytestmark = pytest.mark.usefixtures("tools_enabled")
 
-NO_TOOL_CLASSIFICATION = {
-    "needs_retrieval": False,
-    "needs_tool": False,
-    "tool_name": None,
-    "tool_args": {},
-}
+APPROVAL_ARGS = {"to": "a@example.com", "body": "hi"}
 
 
-class _FakeResponse:
-    """MAF ChatResponse / ChatResponseUpdate の最小 fake (.text だけ使う)。"""
-
-    def __init__(self, text: str):
-        self.text = text
-
-
-class RoutedChatClient:
-    """classify (JSON) と respond (応答文) を呼び出し内容で振り分ける fake MAF chat client。
-
-    fixture 置き換え (M1-5 / #82): 旧 fake は SK の kernel.get_service("chat") +
-    ChatHistory インターフェース (FakeKernel + RoutedChatService) を模していた。
-    SK 依存除去に伴い、同じ振り分けロジックを MAF BaseChatClient の
-    get_response(messages, stream=..., options=...) の形で提供する。
-    検証意図 (分類プロンプトには JSON、応答生成には応答文を返す) は不変。
-    """
-
-    CLASSIFY_MARKER = "Respond with this exact JSON structure"
-
-    def __init__(self, classification: dict, reply: str = "対応しました。"):
-        self._classification = classification
-        self._reply = reply
-
-    def get_response(self, messages, *, stream=False, options=None, **kwargs):
-        if stream:
-            return self._stream()
-        return self._respond(messages)
-
-    async def _respond(self, messages) -> _FakeResponse:
-        is_classify = any(self.CLASSIFY_MARKER in (m.text or "") for m in messages)
-        return _FakeResponse(
-            json.dumps(self._classification) if is_classify else self._reply
-        )
-
-    async def _stream(self):
-        yield _FakeResponse(self._reply)
+def approval_script(reply: str = "対応しました。") -> ScriptedChatClient:
+    """副作用ツールを呼ぶ → (承認後) 応答テキスト、の 2 往復ぶんの台本。"""
+    return ScriptedChatClient(
+        [tool_call_step("send_reply", APPROVAL_ARGS), text_step(reply)]
+    )
 
 
 class TestApprovalCheckpointMapping:
     async def test_l1_approval_request_id_maps_to_maf_checkpoint(
         self, session_repo, approval_repo
     ):
-        client = RoutedChatClient(APPROVAL_CLASSIFICATION)
+        client = approval_script()
 
         res = await run_workflow(
             "s-map", "返信して", session_repo, approval_repo, client
@@ -99,12 +63,28 @@ class TestApprovalCheckpointMapping:
         checkpoint = await storage.load(record.checkpoint_id)
         assert res.approval_request_id in checkpoint.pending_request_info_events
 
+    async def test_l1_approval_plan_carries_model_supplied_tool_call(
+        self, session_repo, approval_repo
+    ):
+        # 無いと: 承認 UI に「何を実行しようとしているか」が渡らず、
+        # 中身を見ずに承認させる画面になる (G1 が形骸化する)
+        client = approval_script()
+
+        res = await run_workflow(
+            "s-plan", "返信して", session_repo, approval_repo, client
+        )
+
+        record = await approval_repo.get(res.approval_request_id)
+        assert record.plan.tool_name == "send_reply"
+        assert record.plan.tool_args == APPROVAL_ARGS
+        assert record.plan.is_side_effecting is True
+
 
 class TestResumeAfterApproval:
     async def test_l1_approved_resume_executes_tool_and_responds(
         self, session_repo, approval_repo
     ):
-        client = RoutedChatClient(APPROVAL_CLASSIFICATION)
+        client = approval_script()
 
         res = await run_workflow(
             "s-ok", "返信して", session_repo, approval_repo, client
@@ -127,7 +107,7 @@ class TestResumeAfterApproval:
     async def test_l1_rejected_resume_cancels_without_tool(
         self, session_repo, approval_repo
     ):
-        client = RoutedChatClient(APPROVAL_CLASSIFICATION)
+        client = approval_script()
 
         res = await run_workflow(
             "s-ng", "返信して", session_repo, approval_repo, client
@@ -147,10 +127,27 @@ class TestResumeAfterApproval:
         assert history.messages[-1].role == "assistant"
         assert contents[-1] == reply
 
+    async def test_l1_rejection_costs_no_llm_roundtrip(
+        self, session_repo, approval_repo
+    ):
+        # 無いと: 却下でも応答生成のために LLM を叩く実装に戻り、
+        # 「キャンセルしただけなのにトークンを燃やす」に静かに退行する
+        client = approval_script()
+
+        res = await run_workflow(
+            "s-ng-cost", "返信して", session_repo, approval_repo, client
+        )
+        calls_before = client.inner_calls
+        await resume_after_approval(
+            res.approval_request_id, False, session_repo, approval_repo, client
+        )
+
+        assert client.inner_calls == calls_before
+
     async def test_l1_resolved_approval_releases_checkpoint_storage(
         self, session_repo, approval_repo
     ):
-        client = RoutedChatClient(APPROVAL_CLASSIFICATION)
+        client = approval_script()
 
         res = await run_workflow(
             "s-release", "返信して", session_repo, approval_repo, client
@@ -164,7 +161,7 @@ class TestResumeAfterApproval:
         assert get_pending_checkpoint_storage(res.approval_request_id) is None
 
     async def test_l1_resume_unknown_id_raises(self, session_repo, approval_repo):
-        client = RoutedChatClient(APPROVAL_CLASSIFICATION)
+        client = approval_script()
 
         with pytest.raises(ValueError, match="Approval not found"):
             await resume_after_approval(
@@ -174,7 +171,7 @@ class TestResumeAfterApproval:
     async def test_l1_resume_twice_raises_already_processed(
         self, session_repo, approval_repo
     ):
-        client = RoutedChatClient(APPROVAL_CLASSIFICATION)
+        client = approval_script()
 
         res = await run_workflow(
             "s-twice", "返信して", session_repo, approval_repo, client
@@ -193,7 +190,7 @@ class TestCheckpointCleanup:
     async def test_l1_completed_run_without_approval_retains_no_checkpoints(
         self, session_repo, approval_repo
     ):
-        client = RoutedChatClient(NO_TOOL_CLASSIFICATION)
+        client = ScriptedChatClient([text_step("こんにちは。")])
         before = dict(_pending_run_storages)
 
         res = await run_workflow(

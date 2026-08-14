@@ -57,7 +57,12 @@ class HealthResponse(BaseModel):
 
 
 class Plan(BaseModel):
-    needs_retrieval: bool = False
+    """承認 UI に見せる「これから実行しようとしているツール呼び出し」。
+
+    中身は LLM が function calling で生成した呼び出しをそのまま写したもの
+    (#320 以降、自前の分類プロンプトは無い)。
+    """
+
     tool_name: Optional[str] = None
     tool_args: dict = {}
     is_side_effecting: bool = False
@@ -67,7 +72,6 @@ class ApprovalRecord(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     session_id: str
     plan: Plan
-    rag_context: str = ""
     status: Literal["pending", "approved", "rejected"] = "pending"
     # approvalRequestId (= id) → MAF checkpoint への写像 (ADR 0016 M1-3)。
     # /approve はこの checkpoint から workflow を再開する。

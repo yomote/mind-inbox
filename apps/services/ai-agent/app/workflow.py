@@ -1,24 +1,27 @@
 """
 /chat・/approve のオーケストレーション — Microsoft Agent Framework (MAF) graph Workflow。
 
-v1 の自前 7 状態 FSM (RECEIVE→CLASSIFY→RETRIEVE_IF_NEEDED→PLAN→APPROVAL_IF_NEEDED
-→EXECUTE_TOOL→RESPOND) を MAF の graph Workflow に写した (ADR 0016 / M1-3)。
+v1 の自前 7 状態 FSM を MAF の graph Workflow に写し (ADR 0016 / M1-3)、
+さらに **ツール選択・実行・承認を MAF ネイティブの function calling に載せた** (#320)。
 
 グラフ (エッジ配送は MAF の型付きメッセージルーティング):
 
-    receive → classify → retrieve → plan ─┬→ execute_tool → respond → finish
-                                          └────────────────────────→ finish
-                                            (却下時: FinalReply 直行)
+    receive → converse → finish
 
-- **HITL 承認**: plan executor が MAF 標準の request-response 機構
-  (`ctx.request_info` + `@response_handler`) で中断する。中断時点の全状態は
-  MAF checkpoint (superstep 境界で自動保存) が保持する。
-- **approvalRequestId は checkpoint 参照への写像**: FastAPI 境界の薄いアダプタ
-  (`run_workflow` / `resume_after_approval`) が request_id → checkpoint_id の
-  対応を `ApprovalRecord` に記録し、API 契約 (requiresApproval /
-  approvalRequestId) を v1 と不変に保つ。/approve は checkpoint から
-  `workflow.run(responses=..., checkpoint_id=...)` で再開する。
-- **ストリーミング**: respond executor がトークンを intermediate output として
+- **ツールは chat client の `options["tools"]` に載る**。どのツールを呼ぶか・引数は
+  何かを決めるのは LLM の function calling で、実行も MAF の invocation loop が行う。
+  自前の分類プロンプト (CLASSIFY) と自前のツール実行 (EXECUTE_TOOL) は廃止した。
+  結果、**ツールを使わない通常ターンの LLM 往復は 2 回 (分類 + 応答) から 1 回**になる。
+- **HITL 承認は `@tool(approval_mode="always_require")` が起点**。MAF は副作用ツールの
+  呼び出しを実行せず `function_approval_request` として返す。converse executor が
+  それを MAF 標準の request-response 機構 (`ctx.request_info` + `@response_handler`)
+  に載せ替えて中断する。中断時点の全状態は MAF checkpoint が保持する。
+- **approvalRequestId は checkpoint 参照への写像** (v1 から不変): FastAPI 境界の薄い
+  アダプタ (`run_workflow` / `resume_after_approval`) が request_id → checkpoint_id の
+  対応を `ApprovalRecord` に記録し、API 契約 (requiresApproval / approvalRequestId) を
+  不変に保つ。/approve は checkpoint から `workflow.run(responses=..., checkpoint_id=...)`
+  で再開し、承認は `to_function_approval_response` として会話に差し戻される。
+- **ストリーミング**: converse executor がトークンを intermediate output として
   yield し、アダプタが ChatStreamDelta へ写す (契約は #120 / ADR 0024 のまま)。
 """
 
@@ -26,15 +29,15 @@ v1 の自前 7 状態 FSM (RECEIVE→CLASSIFY→RETRIEVE_IF_NEEDED→PLAN→APPR
 # @response_handler はデコレート時に実型の annotation を検査するため、
 # PEP 563 の文字列 annotation では登録に失敗する。
 
-import json
 import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Never, Optional, Union
 
 from agent_framework import (
     BaseChatClient,
     CheckpointStorage,
+    Content,
     Executor,
     InMemoryCheckpointStorage,
     Message,
@@ -45,15 +48,15 @@ from agent_framework import (
     handler,
     response_handler,
 )
+from agent_framework import ChatResponse as MafChatResponse
 from agent_framework_azure_cosmos import CosmosCheckpointStorage
 from pydantic import BaseModel
 
-from .agents import chat, chat_stream, complete, get_chat_client
+from .agents import chat, chat_stream, get_chat_client
 from .config import get_settings
 from .history import ChatHistory
-from .observability import exception_frames, exception_kind, fingerprint, new_ref
+from .observability import fingerprint, new_ref
 from .prompts import CHAT_SYSTEM_PROMPT
-from .rag import retrieve
 from .repositories import ApprovalRepository, SessionRepository
 from .schemas import (
     ApprovalRecord,
@@ -62,7 +65,12 @@ from .schemas import (
     ChatStreamDone,
     Plan,
 )
-from .tools import ToolContext, execute_tool, is_side_effecting
+from .tools import (
+    ToolContext,
+    exposed_tools,
+    report_identity_arg_attempts,
+    use_tool_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,23 +78,24 @@ _WORKFLOW_NAME = "mind-inbox-chat-turn"
 
 _REJECTION_REPLY = "操作はキャンセルされました。他にご用件はありますか？"
 
-
 # checkpoint に入り得るアプリの pydantic 型 (edge を流れるメッセージ + HITL payload)。
 # CosmosCheckpointStorage の復元は許可リスト式 (JSON + pickle ハイブリッド) なので、
 # ここに登録が無い型は **保存は通るのに復元 (= /approve の再開) だけが落ちる**。
 # executor 間のメッセージ型を増やしたら必ずここにも足すこと
-# (test_workflow_checkpoint_storage.py が fake ストアで encode → decode を通して pin する)。
+# (test_workflow_checkpoint_storage.py が fake ストア経由で encode → decode を通して pin する)。
+#
+# **MAF の Content / Message 型はここに要らない** (実測 / #320): 許可リストの判定は
+# pickle の**トップレベルの型**に対して行われ、許可された型の内部に入れ子になった
+# オブジェクトは一緒に運ばれる。加えて `ApprovalRequest.pending_messages` は
+# `Message.to_dict()` で dict に落として持つので、checkpoint の payload に MAF の
+# クラスが現れること自体が無い。
 _APP_CHECKPOINT_TYPES = [
     "app.schemas:ChatResponse",
     "app.schemas:Plan",
     "app.workflow:ApprovalDecision",
     "app.workflow:ApprovalRequest",
     "app.workflow:ChatTurn",
-    "app.workflow:ClassifiedTurn",
     "app.workflow:FinalReply",
-    "app.workflow:PlannedTurn",
-    "app.workflow:RespondRequest",
-    "app.workflow:ToolInvocation",
 ]
 
 
@@ -173,7 +182,7 @@ async def _append_user_message_once(
 ) -> None:
     """ユーザー発言を履歴に 1 回だけ積む (#120 / ストリーミング失敗の再試行に対する冪等化)。
 
-    ストリーミング (`run_workflow_stream`) が RESPOND 中に落ちると、ユーザー発言は
+    ストリーミング (`run_workflow_stream`) が応答生成中に落ちると、ユーザー発言は
     保存済みなのに assistant 応答が無い状態で終わる。フロントはそれを検知して同じ
     sessionId / message で非ストリーミング `/chat` に自動フォールバックするため、
     素朴に add_user_message すると「assistant を挟まない同一 user ターンの重複」が
@@ -190,7 +199,7 @@ async def _append_user_message_once(
     await session_repo.save(session_id, history)
 
 
-# ── LLM helpers (v1 から不変: 分類プロンプト / 壊れた JSON → 安全側 no-op) ────
+# ── LLM helpers ───────────────────────────────────────────────────────────────
 
 
 def _resolve_client(client: Optional[BaseChatClient]) -> BaseChatClient:
@@ -198,88 +207,69 @@ def _resolve_client(client: Optional[BaseChatClient]) -> BaseChatClient:
 
     未注入 (None = 本番経路) なら LLM を実際に呼ぶこの時点で初めて構築する。
     資格情報なしでも起動・RECEIVE (履歴保存)・/approve の ID 検証までは動き、
-    失敗は LLM 呼び出し (CLASSIFY / RESPOND) で表面化する — SK kernel の
-    「構築は成功し get_service で落ちる」と同じ失敗面。テストは fake を注入する。
+    失敗は LLM 呼び出しで表面化する — SK kernel の「構築は成功し get_service で
+    落ちる」と同じ失敗面。テストは fake を注入する。
     """
     return client if client is not None else get_chat_client()
 
 
-async def _classify(message: str, client: Optional[BaseChatClient]) -> dict:
-    """LLM でメッセージを分類し、必要なツール・RAG 検索を判定する。"""
-    prompt = f"""Analyze the user message and respond with JSON only. No markdown.
+def _contents(response: MafChatResponse) -> list[Content]:
+    return [content for msg in response.messages for content in msg.contents]
 
-User message: "{message}"
 
-Available tools:
-- search_faq(query: str)           — read-only: search FAQ
-- get_inbox_stats()                — read-only: inbox stats for the current user
-                                     (no arguments — the server decides the user)
-- send_reply(to: str, body: str)   — SIDE-EFFECTING: send a reply
-- archive_message(message_id: str) — SIDE-EFFECTING: archive a message
+def _function_calls(response: MafChatResponse) -> list[Content]:
+    return [c for c in _contents(response) if c.type == "function_call"]
 
-Never put a user, account, or session identifier in tool_args — the server supplies
-the acting user; identifier arguments are rejected.
 
-Respond with this exact JSON structure:
-{{
-  "needs_retrieval": <true|false>,
-  "needs_tool": <true|false>,
-  "tool_name": <"tool_name" or null>,
-  "tool_args": <dict or {{}}>
-}}"""
+def _approval_requests(response: MafChatResponse) -> list[Content]:
+    """MAF が承認待ちで返した function_approval_request (= user_input_requests)。"""
+    return [c for c in _contents(response) if c.type == "function_approval_request"]
 
-    llm_response = (await complete(_resolve_client(client), prompt)).strip()
-    parts = llm_response.split("```")
-    if len(parts) >= 3:
-        llm_response = parts[1].removeprefix("json").strip()
 
-    try:
-        return json.loads(llm_response)
-    except json.JSONDecodeError:
-        # LLM の生出力にはユーザーの発話が写り込む。本文ではなく指紋だけ残す
-        # (同じ壊れ方の再発は指紋の一致で追える / Issue #313)
-        logger.warning(
-            "Classification JSON parse failed: %s", fingerprint(llm_response)
+def _tool_names_by_call_id(messages: Sequence[Message]) -> dict[str, str]:
+    return {
+        content.call_id: content.name
+        for msg in messages
+        for content in msg.contents
+        if content.type == "function_call" and content.call_id and content.name
+    }
+
+
+def _record_tool_outcomes(
+    history: ChatHistory,
+    response: MafChatResponse,
+    call_names: Optional[dict[str, str]] = None,
+) -> None:
+    """MAF が実行したツールの結果 / 失敗を履歴に写す。
+
+    v1 の EXECUTE_TOOL が担っていた「結果は履歴に、詳細はログに」を、MAF の
+    function_result content に対して行う。
+
+    例外文・引数の値は履歴に入れない — 履歴はそのまま LLM へ再送され、最終的に
+    ユーザーの画面まで届きうる出口 (上流のエンドポイント名等が漏れる)。詳細は
+    サーバのログにだけ残し、ref で突き合わせる (Issue #313)。
+    """
+    # 承認再開のターンでは function_call は checkpoint 側 (pending_messages) にあり、
+    # 応答には function_result しか来ない。呼び出し側が名前の手がかりを渡す。
+    names = {**(call_names or {}), **_tool_names_by_call_id(response.messages)}
+    for content in _contents(response):
+        if content.type != "function_result":
+            continue
+        name = names.get(content.call_id or "", "?")
+        result = content.result
+        if content.exception is None:
+            history.add_system_message(f"Tool result ({name}): {result}")
+            continue
+        ref = new_ref()
+        logger.error(
+            "Tool execution failed ref=%s tool=%s detail=%s",
+            ref,
+            name,
+            fingerprint(str(content.exception)),
         )
-        return {
-            "needs_retrieval": False,
-            "needs_tool": False,
-            "tool_name": None,
-            "tool_args": {},
-        }
-
-
-def _build_call_messages(history: ChatHistory, rag_context: str) -> list[Message]:
-    """RAG コンテキストがある場合だけ system メッセージを足した呼び出し用メッセージ列を作る。"""
-    if not rag_context:
-        return list(history.messages)
-    return [
-        *history.messages,
-        Message(role="system", contents=[f"Relevant context:\n{rag_context}"]),
-    ]
-
-
-async def _respond(
-    history: ChatHistory,
-    client: Optional[BaseChatClient],
-    rag_context: str = "",
-) -> str:
-    """最終的なアシスタント返答を生成する。"""
-    return await chat(
-        _resolve_client(client), _build_call_messages(history, rag_context)
-    )
-
-
-async def _respond_stream(
-    history: ChatHistory,
-    client: Optional[BaseChatClient],
-    rag_context: str = "",
-) -> AsyncIterator[str]:
-    """_respond のストリーミング版。トークン (チャンク) 文字列を逐次 yield する。"""
-    async for token in chat_stream(
-        _resolve_client(client), _build_call_messages(history, rag_context)
-    ):
-        yield token
+        history.add_system_message(
+            f"Tool error ({name}): 実行に失敗しました (ref: {ref})"
+        )
 
 
 # ── Workflow messages (executor 間で流れる型 = エッジ配送のルーティングキー) ──
@@ -292,31 +282,19 @@ class ChatTurn(BaseModel):
     message: str
 
 
-class ClassifiedTurn(BaseModel):
-    session_id: str
-    message: str
-    needs_retrieval: bool = False
-    needs_tool: bool = False
-    tool_name: Optional[str] = None
-    tool_args: dict = {}
-
-
-class PlannedTurn(BaseModel):
-    session_id: str
-    needs_retrieval: bool = False
-    needs_tool: bool = False
-    tool_name: Optional[str] = None
-    tool_args: dict = {}
-    rag_context: str = ""
-    citations: list[str] = []
-
-
 class ApprovalRequest(BaseModel):
-    """HITL request_info の payload。checkpoint に pending として保存される。"""
+    """HITL request_info の payload。checkpoint に pending として保存される。
+
+    `pending_messages` は MAF が承認待ちで返したメッセージ列を `Message.to_dict()`
+    で dict に落としたもの。**MAF のクラスを直接持たない**のは checkpoint の
+    復元許可リスト (`_APP_CHECKPOINT_TYPES`) をアプリの型だけに保つため。
+    再開時はここから `Message.from_dict` で戻し、承認応答を付けて会話に差し戻す。
+    """
 
     session_id: str
     plan: Plan
-    rag_context: str = ""
+    approval_content_id: str
+    pending_messages: list[dict] = []
     citations: list[str] = []
 
 
@@ -326,27 +304,13 @@ class ApprovalDecision(BaseModel):
     approved: bool
 
 
-class ToolInvocation(BaseModel):
-    session_id: str
-    tool_name: Optional[str] = None
-    tool_args: dict = {}
-    rag_context: str = ""
-    citations: list[str] = []
-
-
-class RespondRequest(BaseModel):
-    session_id: str
-    rag_context: str = ""
-    citations: list[str] = []
-
-
 class FinalReply(BaseModel):
     session_id: str
     reply: str
     citations: list[str] = []
 
 
-# ── Executors (旧 FSM の各状態を 1 executor に写す) ───────────────────────────
+# ── Executors ─────────────────────────────────────────────────────────────────
 
 
 class ReceiveExecutor(Executor):
@@ -366,115 +330,160 @@ class ReceiveExecutor(Executor):
         await ctx.send_message(turn)
 
 
-class ClassifyExecutor(Executor):
-    """CLASSIFY: LLM でツール・RAG 要否を判定。"""
+class ConverseExecutor(Executor):
+    """CONVERSE: ツール付きで LLM を 1 回呼び、承認が要れば中断する。
 
-    def __init__(self, client: Optional[BaseChatClient]):
-        super().__init__(id="classify")
-        self._client = client
-
-    @handler
-    async def classify(
-        self, turn: ChatTurn, ctx: WorkflowContext[ClassifiedTurn]
-    ) -> None:
-        logger.info("Workflow[CLASSIFY]")
-        classification = await _classify(turn.message, self._client)
-        tool_name = classification.get("tool_name")
-        await ctx.send_message(
-            ClassifiedTurn(
-                session_id=turn.session_id,
-                message=turn.message,
-                needs_retrieval=bool(classification.get("needs_retrieval")),
-                needs_tool=bool(classification.get("needs_tool") and tool_name),
-                tool_name=tool_name,
-                tool_args=classification.get("tool_args") or {},
-            )
-        )
-
-
-class RetrieveExecutor(Executor):
-    """RETRIEVE_IF_NEEDED: 必要なら RAG 検索してコンテキストを付与。"""
-
-    def __init__(self):
-        super().__init__(id="retrieve")
-
-    @handler
-    async def retrieve_if_needed(
-        self, turn: ClassifiedTurn, ctx: WorkflowContext[PlannedTurn]
-    ) -> None:
-        rag_context = ""
-        citations: list[str] = []
-        if turn.needs_retrieval:
-            logger.info("Workflow[RETRIEVE_IF_NEEDED]")
-            results = await retrieve(turn.message)
-            rag_context = "\n".join(r.content for r in results)
-            citations = [r.source for r in results]
-        await ctx.send_message(
-            PlannedTurn(
-                session_id=turn.session_id,
-                needs_retrieval=turn.needs_retrieval,
-                needs_tool=turn.needs_tool,
-                tool_name=turn.tool_name,
-                tool_args=turn.tool_args,
-                rag_context=rag_context,
-                citations=citations,
-            )
-        )
-
-
-class PlanExecutor(Executor):
-    """PLAN + APPROVAL_IF_NEEDED: 副作用ツールは MAF の request-response で中断する。
-
-    `ctx.request_info` が pending request として checkpoint に残り、workflow は
-    IDLE_WITH_PENDING_REQUESTS で停止する。応答 (`ApprovalDecision`) は /approve
-    経由で `workflow.run(responses=...)` により `on_approval_decision` へ届く。
+    v1 の CLASSIFY / RETRIEVE / PLAN / EXECUTE_TOOL / RESPOND がここに畳まれた。
+    ツールを使わない通常ターンは **LLM 往復 1 回**で終わる (v1 は分類 + 応答で 2 回)。
     """
 
-    def __init__(self, session_repo: SessionRepository):
-        super().__init__(id="plan")
+    def __init__(
+        self,
+        session_repo: SessionRepository,
+        client: Optional[BaseChatClient],
+        *,
+        stream: bool,
+    ):
+        super().__init__(id="converse")
         self._session_repo = session_repo
+        self._client = client
+        self._stream = stream
+
+    async def _call_llm(
+        self,
+        session_id: str,
+        messages: Sequence[Message],
+        ctx: WorkflowContext,
+        *,
+        stream: bool,
+        updates: list,
+    ) -> tuple[MafChatResponse, ToolContext]:
+        """ツールを載せて LLM を 1 回呼ぶ。stream 時はテキスト差分を intermediate output へ。
+
+        `updates` は呼び出し側が持つ受け皿。**途中で落ちてもそこまでの update が
+        残る**ようにしてある — ツールは既に実行済みかもしれず、その事実を握り潰すと
+        「実行されたのに履歴に無い」が生まれる。
+        """
+        tool_context = ToolContext(session_id=session_id)
+        tools = exposed_tools()
+        client = _resolve_client(self._client)
+        logger.info(
+            "Workflow[CONVERSE] session=%s tools=%s%s",
+            session_id,
+            [t.name for t in tools],
+            " streaming" if stream else "",
+        )
+        # ToolContext は ContextVar。MAF の invocation loop は chat client の内側で
+        # 回るので、**呼び出し全体をこのスコープで囲む**のが唯一の渡し方になる
+        # (並列に走るツールにも copy_context 経由で同じ context が見える)。
+        with use_tool_context(tool_context):
+            if not stream:
+                return await chat(client, messages, tools=tools), tool_context
+            async for update in chat_stream(client, messages, tools=tools):
+                updates.append(update)
+                if update.text:
+                    await ctx.yield_output(update.text)
+            return MafChatResponse.from_updates(updates), tool_context
+
+    async def _flush_partial_tool_outcomes(
+        self, session_id: str, updates: list
+    ) -> None:
+        """LLM 呼び出しが途中で落ちたとき、そこまでに実行されたツールの結果を履歴へ残す。
+
+        無いと: ストリーミングが応答生成中に落ちたターンで、**ツールは実行済みなのに
+        履歴には何も残らない**。フロントは非ストリーミングへ自動フォールバックするので、
+        同じツールがもう一度呼ばれうる (副作用ツールなら二重実行)。
+        """
+        if not updates:
+            return
+        history = await _get_or_create_session(session_id, self._session_repo)
+        _record_tool_outcomes(history, MafChatResponse.from_updates(updates))
+        await self._session_repo.save(session_id, history)
+
+    async def _finish_turn(
+        self,
+        session_id: str,
+        response: MafChatResponse,
+        tool_context: ToolContext,
+        ctx: WorkflowContext,
+        call_names: Optional[dict[str, str]] = None,
+    ) -> None:
+        """ツール結果と assistant 応答を履歴へ積み、FinalReply を送る。"""
+        history = await _get_or_create_session(session_id, self._session_repo)
+        _record_tool_outcomes(history, response, call_names)
+        reply = response.text
+        history.add_assistant_message(reply)
+        await self._session_repo.save(session_id, history)
+        await ctx.send_message(
+            FinalReply(
+                session_id=session_id,
+                reply=reply,
+                citations=list(tool_context.citations),
+            )
+        )
 
     @handler
-    async def plan(
-        self, turn: PlannedTurn, ctx: WorkflowContext[ToolInvocation]
+    async def converse(
+        self, turn: ChatTurn, ctx: WorkflowContext[FinalReply, str]
     ) -> None:
-        logger.info("Workflow[PLAN]")
-        if turn.needs_tool and is_side_effecting(turn.tool_name):
-            logger.info("Workflow[APPROVAL_IF_NEEDED] tool=%s", turn.tool_name)
+        history = await _get_or_create_session(turn.session_id, self._session_repo)
+        updates: list = []
+        try:
+            response, tool_context = await self._call_llm(
+                turn.session_id,
+                list(history.messages),
+                ctx,
+                stream=self._stream,
+                updates=updates,
+            )
+        except Exception:
+            await self._flush_partial_tool_outcomes(turn.session_id, updates)
+            raise
+        report_identity_arg_attempts(_function_calls(response))
+
+        pending = _approval_requests(response)
+        if pending:
+            request = pending[0]
+            call = request.function_call
+            logger.info(
+                "Workflow[APPROVAL_IF_NEEDED] tool=%s", call.name if call else None
+            )
+            if len(pending) > 1:
+                # 1 ターンに複数の副作用ツールが並ぶのは今の題材では起こらないが、
+                # 黙って 1 本目だけ承認して残りを捨てると「承認したつもりのない実行」に
+                # なりうる。起きたことが分かるようにログに残す (#321 で題材を決めるまでの暫定)。
+                logger.warning(
+                    "Workflow[APPROVAL_IF_NEEDED] 承認要求が %d 件届いた — 先頭のみを扱う",
+                    len(pending),
+                )
             await ctx.request_info(
                 ApprovalRequest(
                     session_id=turn.session_id,
                     plan=Plan(
-                        needs_retrieval=turn.needs_retrieval,
-                        tool_name=turn.tool_name,
-                        tool_args=turn.tool_args,
+                        tool_name=call.name if call else None,
+                        tool_args=(call.parse_arguments() or {}) if call else {},
                         is_side_effecting=True,
                     ),
-                    rag_context=turn.rag_context,
-                    citations=turn.citations,
+                    approval_content_id=request.id or "",
+                    pending_messages=[m.to_dict() for m in response.messages],
+                    citations=list(tool_context.citations),
                 ),
                 ApprovalDecision,
                 request_id=str(uuid.uuid4()),
             )
             return
-        await ctx.send_message(
-            ToolInvocation(
-                session_id=turn.session_id,
-                tool_name=turn.tool_name if turn.needs_tool else None,
-                tool_args=turn.tool_args,
-                rag_context=turn.rag_context,
-                citations=turn.citations,
-            )
-        )
+
+        await self._finish_turn(turn.session_id, response, tool_context, ctx)
 
     @response_handler
     async def on_approval_decision(
         self,
         request: ApprovalRequest,
         decision: ApprovalDecision,
-        ctx: WorkflowContext[ToolInvocation | FinalReply],
+        ctx: WorkflowContext[FinalReply, str],
     ) -> None:
         if not decision.approved:
+            # 却下は LLM を呼ばずに固定文言で閉じる (v1 と同一の文面・往復 0 回)。
             logger.info("Workflow[APPROVAL_IF_NEEDED] rejected")
             history = await _get_or_create_session(
                 request.session_id, self._session_repo
@@ -485,105 +494,51 @@ class PlanExecutor(Executor):
                 FinalReply(session_id=request.session_id, reply=_REJECTION_REPLY)
             )
             return
+
         logger.info(
             "Workflow[APPROVAL_IF_NEEDED] approved tool=%s", request.plan.tool_name
         )
-        await ctx.send_message(
-            ToolInvocation(
-                session_id=request.session_id,
-                tool_name=request.plan.tool_name,
-                tool_args=request.plan.tool_args,
-                rag_context=request.rag_context,
-                citations=request.citations,
+        history = await _get_or_create_session(request.session_id, self._session_repo)
+        pending = [Message.from_dict(m) for m in request.pending_messages]
+        approval_content = _find_approval_request(pending, request.approval_content_id)
+        if approval_content is None:
+            # 承認レコードは pending なのに、再開に要る承認要求が checkpoint から
+            # 復元できない = 再開できない。握り潰すと「承認したのに何も起きない」
+            raise RuntimeError(
+                f"Approval content not found in checkpoint: {request.approval_content_id!r}"
             )
+        messages = [
+            *history.messages,
+            *pending,
+            Message(
+                role="user",
+                contents=[
+                    approval_content.to_function_approval_response(approved=True)
+                ],
+            ),
+        ]
+        # 再開は常に非ストリーミング (/approve は SSE ではない)
+        response, tool_context = await self._call_llm(
+            request.session_id, messages, ctx, stream=False, updates=[]
+        )
+        tool_context.citations.extend(request.citations)
+        await self._finish_turn(
+            request.session_id,
+            response,
+            tool_context,
+            ctx,
+            _tool_names_by_call_id(pending),
         )
 
 
-class ExecuteToolExecutor(Executor):
-    """EXECUTE_TOOL: ツール実行 (無ければ素通し)。結果/失敗は履歴に残す。"""
-
-    def __init__(self, session_repo: SessionRepository):
-        super().__init__(id="execute_tool")
-        self._session_repo = session_repo
-
-    @handler
-    async def execute_tool_if_needed(
-        self, invocation: ToolInvocation, ctx: WorkflowContext[RespondRequest]
-    ) -> None:
-        if invocation.tool_name:
-            logger.info("Workflow[EXECUTE_TOOL] tool=%s", invocation.tool_name)
-            history = await _get_or_create_session(
-                invocation.session_id, self._session_repo
-            )
-            try:
-                tool_result = await execute_tool(
-                    invocation.tool_name,
-                    invocation.tool_args,
-                    # 主体はモデル出力ではなく実行コンテキストから (Issue #313)
-                    ToolContext(session_id=invocation.session_id),
-                )
-                history.add_system_message(
-                    f"Tool result ({invocation.tool_name}): {tool_result}"
-                )
-            except Exception as exc:
-                # 例外文は履歴に入れない — 履歴はそのまま LLM へ再送され、最終的に
-                # ユーザーの画面まで届きうる出口 (上流のエンドポイント名等が漏れる)。
-                # 詳細はサーバのログにだけ残し、ref で突き合わせる (Issue #313)。
-                ref = new_ref()
-                logger.error(
-                    "Tool execution failed ref=%s tool=%s kind=%s at=%s",
-                    ref,
-                    invocation.tool_name,
-                    exception_kind(exc),
-                    exception_frames(exc),
-                )
-                history.add_system_message(
-                    f"Tool error ({invocation.tool_name}): "
-                    f"実行に失敗しました (ref: {ref})"
-                )
-            await self._session_repo.save(invocation.session_id, history)
-        await ctx.send_message(
-            RespondRequest(
-                session_id=invocation.session_id,
-                rag_context=invocation.rag_context,
-                citations=invocation.citations,
-            )
-        )
-
-
-class RespondExecutor(Executor):
-    """RESPOND: 最終応答を生成。stream 時はトークンを intermediate output で流す。"""
-
-    def __init__(
-        self,
-        session_repo: SessionRepository,
-        client: Optional[BaseChatClient],
-        stream: bool,
-    ):
-        super().__init__(id="respond")
-        self._session_repo = session_repo
-        self._client = client
-        self._stream = stream
-
-    @handler
-    async def respond(
-        self, req: RespondRequest, ctx: WorkflowContext[FinalReply, str]
-    ) -> None:
-        logger.info("Workflow[RESPOND]%s", " streaming" if self._stream else "")
-        history = await _get_or_create_session(req.session_id, self._session_repo)
-        if self._stream:
-            parts: list[str] = []
-            async for token in _respond_stream(history, self._client, req.rag_context):
-                parts.append(token)
-                await ctx.yield_output(token)
-            reply = "".join(parts)
-        else:
-            reply = await _respond(history, self._client, req.rag_context)
-        history.add_assistant_message(reply)
-        await self._session_repo.save(req.session_id, history)
-        await ctx.send_message(
-            FinalReply(session_id=req.session_id, reply=reply, citations=req.citations)
-        )
+def _find_approval_request(
+    messages: Sequence[Message], content_id: str
+) -> Optional[Content]:
+    for msg in messages:
+        for content in msg.contents:
+            if content.type == "function_approval_request" and content.id == content_id:
+                return content
+    return None
 
 
 class FinishExecutor(Executor):
@@ -608,16 +563,12 @@ def _build_chat_workflow(
 ) -> Workflow:
     """1 ターン分の chat workflow を組む。
 
-    stream フラグは respond executor の LLM 呼び出し方 (一括/逐次) だけを変え、
+    stream フラグは converse executor の LLM 呼び出し方 (一括/逐次) だけを変え、
     グラフ構造 (= checkpoint の graph signature) は同一に保つ — /chat で中断した
     checkpoint を /approve (非 stream) で再開できるのはこのため。
     """
     receive = ReceiveExecutor(session_repo)
-    classify = ClassifyExecutor(client)
-    retrieve_exec = RetrieveExecutor()
-    plan = PlanExecutor(session_repo)
-    execute = ExecuteToolExecutor(session_repo)
-    respond = RespondExecutor(session_repo, client, stream=stream)
+    converse = ConverseExecutor(session_repo, client, stream=stream)
     finish = FinishExecutor()
     return (
         WorkflowBuilder(
@@ -625,15 +576,10 @@ def _build_chat_workflow(
             start_executor=receive,
             checkpoint_storage=checkpoint_storage,
             output_from=[finish],
-            intermediate_output_from=[respond],
+            intermediate_output_from=[converse],
         )
-        .add_edge(receive, classify)
-        .add_edge(classify, retrieve_exec)
-        .add_edge(retrieve_exec, plan)
-        .add_edge(plan, execute)
-        .add_edge(plan, finish)  # 却下時: FinalReply が finish へ直行
-        .add_edge(execute, respond)
-        .add_edge(respond, finish)
+        .add_edge(receive, converse)
+        .add_edge(converse, finish)
         .build()
     )
 
@@ -666,7 +612,6 @@ async def _record_approval_request(
         id=event.request_id,
         session_id=request.session_id,
         plan=request.plan,
-        rag_context=request.rag_context,
         checkpoint_id=await _find_checkpoint_id(storage, event.request_id),
     )
     await approval_repo.save(record)
@@ -716,9 +661,10 @@ async def run_workflow_stream(
 ) -> AsyncIterator[Union[ChatStreamDelta, ChatStreamDone]]:
     """run_workflow のストリーミング版 (#120 / ADR 0024)。
 
-    RESPOND のトークン (intermediate output) を ChatStreamDelta として逐次 yield
-    し、完了時に従来 /chat と同一形の ChatResponse を ChatStreamDone で返す。
-    承認が要るターンは逐次配信するものが無いので done のみを返す。
+    応答トークン (intermediate output) を ChatStreamDelta として逐次 yield し、
+    完了時に従来 /chat と同一形の ChatResponse を ChatStreamDone で返す。
+    承認が要るターンは、モデルがツール呼び出しの前にテキストを出さない限り
+    逐次配信するものが無いので done のみを返す。
     """
     storage = _new_checkpoint_storage()
     workflow = _build_chat_workflow(

@@ -27,10 +27,9 @@ from app.workflow import (
     resume_after_approval,
     run_workflow,
 )
-from tests.test_workflow_approval import (
-    APPROVAL_CLASSIFICATION,
-    RoutedChatClient,
-)
+from tests.test_workflow_approval import approval_script
+
+pytestmark = pytest.mark.usefixtures("tools_enabled")
 
 
 class TestCheckpointStorageSelection:
@@ -57,7 +56,7 @@ class TestCosmosModeApprovalLifecycle:
         self, cosmos_mode, session_repo, approval_repo
     ):
         """共有ストア構成では registry を経由しない = 再起動を跨いでも再開できる形。"""
-        client = RoutedChatClient(APPROVAL_CLASSIFICATION)
+        client = approval_script()
 
         res = await run_workflow(
             "s-cosmos", "返信して", session_repo, approval_repo, client
@@ -77,10 +76,38 @@ class TestCosmosModeApprovalLifecycle:
         record = await approval_repo.get(res.approval_request_id)
         assert record.status == "approved"
 
+    async def test_l1_承認_payload_は_maf_の_クラスを持ち込まない(
+        self, cosmos_mode, session_repo, approval_repo
+    ):
+        # 無いと: 承認待ちの会話 (function_call / function_approval_request) を
+        # MAF の Message / Content のまま checkpoint に入れる実装に戻り、
+        # `_APP_CHECKPOINT_TYPES` の許可リスト管理が MAF の型にまで広がる。
+        # dict に落としてある限り、許可リストはアプリの型だけで閉じる (#320)。
+        client = approval_script()
+
+        res = await run_workflow(
+            "s-cosmos-payload", "返信して", session_repo, approval_repo, client
+        )
+
+        storage = _new_checkpoint_storage()
+        record = await approval_repo.get(res.approval_request_id)
+        checkpoint = await storage.load(record.checkpoint_id)
+        event = checkpoint.pending_request_info_events[res.approval_request_id]
+        pending_messages = event.data.pending_messages
+
+        assert pending_messages, "承認要求のメッセージが checkpoint に残っていない"
+        assert all(isinstance(m, dict) for m in pending_messages)
+        # 復元に要る形 (function_approval_request) が dict の中に保たれている
+        assert any(
+            content.get("type") == "function_approval_request"
+            for message in pending_messages
+            for content in message.get("contents", [])
+        )
+
     async def test_l1_resolve_deletes_pending_checkpoint(
         self, cosmos_mode, session_repo, approval_repo
     ):
-        client = RoutedChatClient(APPROVAL_CLASSIFICATION)
+        client = approval_script()
 
         res = await run_workflow(
             "s-cosmos-del", "返信して", session_repo, approval_repo, client
@@ -105,7 +132,7 @@ class TestCosmosModeApprovalLifecycle:
         self, cosmos_mode, session_repo, approval_repo
     ):
         """TTL 失効相当 (checkpoint 文書だけ消えた) は 404 系 (ValueError) に写る。"""
-        client = RoutedChatClient(APPROVAL_CLASSIFICATION)
+        client = approval_script()
 
         res = await run_workflow(
             "s-cosmos-ttl", "返信して", session_repo, approval_repo, client

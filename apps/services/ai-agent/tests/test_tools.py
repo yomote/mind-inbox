@@ -1,10 +1,12 @@
-"""[L1] tool registry — read-only / side-effecting 区分のメタデータを pin する (M1-4 / #82)。
+"""[L1] tool registry — 承認要否のメタデータと、LLM に見せるツールの導出を pin する (#320 / #82)。
 
 無いと何が静かに通るか:
 - @ai_function (@tool) 化で approval_mode の付け間違い / 付け忘れが静かに通り、
   副作用ツール (send_reply / archive_message) が**承認なしで実行される** (G1 崩壊)、
   または read-only ツールまで承認要求で止まる退行
-- 未知ツール名の実行が例外にならず素通りする退行 (workflow の "Tool error" 経路が死ぬ)
+- registry に足したツールが LLM に渡らない / 逆に既定オフのはずのツールが
+  勝手に見えている退行 (#82 design-gate の PO 裁定 2)
+- ツール引数から主体 (user_id 等) を受け取る設計の復活 (IDOR / Issue #313)
 
 Issue #313 で「ツール権限の不変条件」を機械検査する `TestToolPermissionInvariants`
 を追加した (LLM を採点者にしない決定的テスト / 判定は「機構が何をしたか」に寄せる)。
@@ -12,18 +14,24 @@ Issue #313 で「ツール権限の不変条件」を機械検査する `TestToo
 ここで test しないこと:
 - ツールの中身 (M3-5 で実体化するまでスタブ)
 - 承認フローの通し挙動 (test_workflow_approval.py が pin 済み)
+- MAF の loop に載せた配線 (test_workflow_tools.py が実ループを通して pin 済み)
 """
 
 import pytest
+from agent_framework import Content, tool
 
 from app.tools import (
     _REGISTRY,
     IDENTITY_ARG_NAMES,
     ToolContext,
     ToolContextUnavailable,
-    execute_tool,
+    UnknownExposedTool,
+    exposed_tools,
+    function_invocation_limits,
     get_inbox_stats,
     is_side_effecting,
+    report_identity_arg_attempts,
+    use_tool_context,
 )
 
 CTX = ToolContext(session_id="s-test")
@@ -39,26 +47,81 @@ class TestSideEffectMetadata:
         assert is_side_effecting("archive_message") is True
 
     def test_l1_unknown_or_missing_tool_is_not_side_effecting(self):
-        # v1 と同一: 未知 / None は False (workflow の needs_tool 判定に委ねる)
         assert is_side_effecting("no-such-tool") is False
         assert is_side_effecting(None) is False
 
     def test_l1_every_registered_tool_declares_approval_mode(self):
         # 登録ツールを増やしたとき approval_mode 未指定 (None) だと、
-        # is_side_effecting が False に倒れて副作用ツールが承認を素通りする
+        # MAF の invocation loop が承認要求を出さず**そのまま実行**してしまう
         for name, entry in _REGISTRY.items():
             assert entry.approval_mode in ("never_require", "always_require"), name
 
 
-class TestExecuteTool:
-    async def test_l1_executes_registered_tool_and_returns_str(self):
-        result = await execute_tool("get_inbox_stats", {}, CTX)
-        assert isinstance(result, str)
-        assert "[stub]" in result
+# ── LLM に見せるツールの導出 (#320 / PO 裁定 2) ───────────────────────────────
 
-    async def test_l1_unknown_tool_raises_value_error(self):
-        with pytest.raises(ValueError, match="Unknown tool"):
-            await execute_tool("no-such-tool", {}, CTX)
+
+class TestExposedTools:
+    def test_l1_既定では_llm_に_1_本も見せない(self, monkeypatch):
+        # 無いと: #321 (題材の再定義) の裁定前に、SK 時代のスタブ題材が
+        # 実運用の会話へ出る
+        from app.config import get_settings
+
+        monkeypatch.delenv("LLM_EXPOSED_TOOLS", raising=False)
+        get_settings.cache_clear()
+        try:
+            assert exposed_tools() == ()
+        finally:
+            get_settings.cache_clear()
+
+    def test_l1_registry_に足したツールは_見せる設定なら自動で増える(
+        self, tools_enabled, monkeypatch
+    ):
+        # 無いと: LLM に渡すツール一覧が registry とは別の場所に書かれ、
+        # 足しても LLM からは一生呼ばれない二重管理に戻る (#320 の中核)
+        @tool(name="probe_tool", description="probe", approval_mode="never_require")
+        async def probe_tool(x: str) -> str:  # pragma: no cover - 呼ばれない
+            return x
+
+        before = {t.name for t in exposed_tools()}
+        monkeypatch.setitem(_REGISTRY, "probe_tool", probe_tool)
+
+        after = {t.name for t in exposed_tools()}
+        assert after == before | {"probe_tool"}
+
+    def test_l1_名前を列挙すればその分だけ見せる(self, monkeypatch):
+        from app.config import get_settings
+
+        monkeypatch.setenv("LLM_EXPOSED_TOOLS", "search_faq, get_inbox_stats")
+        get_settings.cache_clear()
+        try:
+            assert [t.name for t in exposed_tools()] == [
+                "search_faq",
+                "get_inbox_stats",
+            ]
+        finally:
+            get_settings.cache_clear()
+
+    def test_l1_未知のツール名は握り潰さず失敗する(self, monkeypatch):
+        # 無いと: 綴り間違いが「フラグを立てたのに何も起きない」に化け、
+        # 正常系 (既定オフ) と区別できない
+        from app.config import get_settings
+
+        monkeypatch.setenv("LLM_EXPOSED_TOOLS", "send_reply,no_such_tool")
+        get_settings.cache_clear()
+        try:
+            with pytest.raises(UnknownExposedTool, match="no_such_tool"):
+                exposed_tools()
+        finally:
+            get_settings.cache_clear()
+
+
+class TestFunctionInvocationLimits:
+    def test_l1_ツール実行の上限が明示されている(self):
+        # 無いと: MAF の既定 (max_function_calls=None = 無制限) のまま本番に出て、
+        # 暴走したモデルがトークンと外向き I/O を止めどなく使う
+        limits = function_invocation_limits()
+        assert limits["max_function_calls"] >= 1
+        assert limits["max_iterations"] >= 1
 
 
 # ── ツール権限の不変条件 (Issue #313) ─────────────────────────────────────────
@@ -81,7 +144,7 @@ DECLARED_APPROVAL_MODE = {
 class TestToolPermissionInvariants:
     def test_単体_登録ツールの承認要否は宣言表と一致する(self):
         # 無いと: 新しいツールが承認要否を決めないまま registry に載り、
-        # approval_mode 未指定 → is_side_effecting=False → **承認なしで実行**される
+        # approval_mode 未指定 → MAF が承認要求を出さず **承認なしで実行**される
         assert set(_REGISTRY) == set(DECLARED_APPROVAL_MODE)
         for name, entry in _REGISTRY.items():
             assert entry.approval_mode == DECLARED_APPROVAL_MODE[name], name
@@ -102,16 +165,32 @@ class TestToolPermissionInvariants:
             leaked = {p for p in declared if p.lower() in IDENTITY_ARG_NAMES}
             assert not leaked, f"{name} がモデル出力から主体を受け取っている: {leaked}"
 
-    async def test_単体_モデルが送った主体識別子は実行前に捨てられる(self):
-        # 無いと: ツール側が受け取らなくても「引数エラーで落ちた」に化けるだけで、
-        # 注入の試行が握り潰される (二重防御が効いているか自体が見えなくなる)
-        result = await execute_tool(
-            "get_inbox_stats", {"user_id": "victim-oid-0000"}, CTX
-        )
-        assert "[stub]" in result
+    def test_単体_モデルが送った主体識別子は痕跡を残して弾かれる(self):
+        # 無いと: MAF の引数バリデーションが未宣言の引数を黙って捨てるので、
+        # プロンプト注入の**試行が痕跡なく消える** (攻撃に気づけない)
+        calls = [
+            Content.from_function_call(
+                call_id="c1",
+                name="get_inbox_stats",
+                arguments={"user_id": "victim-oid-0000"},
+            ),
+            Content.from_function_call(
+                call_id="c2", name="search_faq", arguments={"query": "退職"}
+            ),
+        ]
+
+        assert report_identity_arg_attempts(calls) == ["get_inbox_stats"]
 
     async def test_単体_実行コンテキスト無しでは主体依存ツールを実行できない(self):
         # 無いと: 主体が「既定値」から来る設計 (旧 user_id="default") に戻り、
         # 誰として実行しているのか分からないまま実体化できてしまう
+        with pytest.raises(ToolContextUnavailable):
+            await get_inbox_stats()
+
+    async def test_単体_実行コンテキストのスコープを抜けたら見えなくなる(self):
+        # 無いと: ContextVar を立てっぱなしにする実装に戻り、
+        # 別のリクエストのツールが前のリクエストの主体で走りうる
+        with use_tool_context(CTX):
+            assert await get_inbox_stats()
         with pytest.raises(ToolContextUnavailable):
             await get_inbox_stats()
