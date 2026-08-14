@@ -8,8 +8,11 @@ IaC (Bicep) / デプロイスクリプト / 運用スクリプト。運用手順
 
 [ADR 0003](../docs/adr/0003-two-phase-bicep.md)。順序を入れ替えない (config は bootstrap の出力に依存する)。
 
+0. **shared (持続層)** — `cicd/iac/main-shared.bicep`: **別 RG (`rg-shared-mindbox`) に一度きり**。Key Vault (E2E trace の非エクスポート鍵) / バックアップ Storage / Cosmos / OpenAI / Speech / Log Analytics ([ADR 0046](../docs/adr/0046-environment-rebuildable-from-declaration.md) D1)
 1. **bootstrap** — `cicd/iac/main-bootstrap.bicep`: SWA / Function App / Key Vault / Log Analytics / Container App environment を作る (SQL 一式は `enableSql=true` のときだけ。ACR は無い)
 2. **config** — `cicd/iac/main-config.bicep`: Entra ID 認証とシークレットを配線する (bootstrap の後に流す)
+
+**持続層と環境層は RG をまたぐ resource 参照をしない** — 持続層の output を環境層の parameter に渡す。**撤収 (`cleanup-env.sh`) の対象は環境層だけ**で、持続層 RG は削除できない (判定は `cicd/scripts/env/persistent_layer_guard.py`)。
 
 **リソース命名**: `{resourcetype}-{env}-{appname}` — 例 `func-dev-mindbox` / `swa-dev-mindbox`。環境は `dev` / `stg` / `prod`、既定の appName は `mind-box`。
 

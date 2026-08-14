@@ -11,6 +11,19 @@ RG=<your-rg> ./scripts/env/cleanup-env.sh
 
 **既定ではリソースグループを削除するだけ**で、soft-delete による救済は残します ([ADR 0046](../../../docs/adr/0046-environment-rebuildable-from-declaration.md) D5/D6)。再 deploy 時の同名衝突を退けたいときだけ、**衝突した種類の purge を明示的に有効化**します。
 
+### 持続層ガード — 何も消さずに拒否する条件 ([ADR 0046](../../../docs/adr/0046-environment-rebuildable-from-declaration.md) D1 / [#302](https://github.com/yomote/mind-inbox/issues/302))
+
+**撤収の対象は環境層だけです。** 破壊系の処理に入る前に [`persistent_layer_guard.py`](persistent_layer_guard.py) が判定し、次のいずれかなら**1 つも消さずに exit 3** で止まります。
+
+| 状況                                                                                    | 挙動                                  | 逃げ道                                                 |
+| --------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------ |
+| `RG` が持続層 RG (`PERSISTENT_RG` / 既定 `rg-shared-mindbox`)                           | **拒否**                              | **無い** (どのフラグでも消せない — これが層分断の実体) |
+| `RG` の中に持続層のリソースが居る (Cosmos / Cognitive Services / Key Vault)             | 拒否                                  | `ALLOW_PERSISTENT_DELETE=true`                         |
+| `RG` の中身を**確かめられなかった** (未ログイン / 権限不足で `az resource list` が失敗) | 拒否 (「持続層は無い」と読み替えない) | `ALLOW_PERSISTENT_DELETE=true`                         |
+| `RG` が存在しない                                                                       | 許可 (消すものが無い / 冪等)          | —                                                      |
+
+> ⚠️ **移行が済むまで、`rg-dev-mind-inbox` の撤収は既定で拒否されます。** 現在この RG には Cosmos (ユーザーデータ) と OpenAI / Speech が同居しているためで、これは意図した振る舞いです ([#302](https://github.com/yomote/mind-inbox/issues/302))。どうしても畳むなら `ALLOW_PERSISTENT_DELETE=true` を明示してください — **消えたユーザーデータは戻りません。**
+
 ### 削除対象の流れ
 
 | #   | 対象                                                                     | 既定       | 有効化する変数                          |
@@ -34,6 +47,8 @@ purge を有効化した場合、Key Vault と Cognitive Services は RG が既�
 | `PURGE_DELETED_COGNITIVE_SERVICES` | `false`             | Cognitive Services / OpenAI の soft-delete を purge |
 | `NO_WAIT`                          | `true`              | `az group delete --no-wait` で非同期削除            |
 | `PURGE_WAIT_SECONDS`               | `1800`              | RG 削除や soft-delete 状態の最大待機秒              |
+| `PERSISTENT_RG`                    | `rg-shared-mindbox` | 持続層 RG。**この RG は撤収できない**               |
+| `ALLOW_PERSISTENT_DELETE`          | `false`             | 持続層のリソースが居ても撤収を続行する (不可逆)     |
 
 > **破壊系の既定は off** ([ADR 0046](../../../docs/adr/0046-environment-rebuildable-from-declaration.md) D5/D6)。
 > purge は **soft-delete という唯一の復旧手段を消す**ので、明示的に頼まれた時だけ行う。

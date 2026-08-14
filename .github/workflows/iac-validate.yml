@@ -41,7 +41,7 @@ jobs:
       - name: Build all bicep entrypoints
         run: |
           set -euo pipefail
-          for f in cicd/iac/main-bootstrap.bicep cicd/iac/main-config.bicep cicd/iac/main-entra.bicep; do
+          for f in cicd/iac/main-shared.bicep cicd/iac/main-bootstrap.bicep cicd/iac/main-config.bicep cicd/iac/main-entra.bicep; do
             echo "==> az bicep build $f"
             az bicep build --file "$f" --stdout > /dev/null
           done

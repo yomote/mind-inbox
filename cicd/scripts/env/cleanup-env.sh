@@ -13,6 +13,12 @@ PURGE_DELETED_KEYVAULTS="${PURGE_DELETED_KEYVAULTS:-false}"
 PURGE_DELETED_COGNITIVE_SERVICES="${PURGE_DELETED_COGNITIVE_SERVICES:-false}"
 FORCE_DELETE_LOG_ANALYTICS="${FORCE_DELETE_LOG_ANALYTICS:-false}"
 PURGE_WAIT_SECONDS="${PURGE_WAIT_SECONDS:-1800}"
+# 持続層 RG (ADR 0046 D1 / #302)。撤収の対象は環境層だけで、ここは**削除できない**。
+# 判定は persistent_layer_guard.py が持つ (このスクリプトは材料を集めるだけ)。
+PERSISTENT_RG="${PERSISTENT_RG:-rg-shared-mindbox}"
+ALLOW_PERSISTENT_DELETE="${ALLOW_PERSISTENT_DELETE:-false}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 declare -a KEYVAULT_TARGETS=()
 declare -a COGNITIVE_TARGETS=()
@@ -42,6 +48,13 @@ Environment variables:
   PURGE_DELETED_KEYVAULTS         true|false. Purge soft-deleted Key Vaults after RG deletion (default: false)
   PURGE_DELETED_COGNITIVE_SERVICES true|false. Purge soft-deleted CS / OpenAI accounts after RG deletion (default: false)
   PURGE_WAIT_SECONDS              Max seconds to wait for RG deletion / soft-deleted state (default: 1800)
+  PERSISTENT_RG                   Persistent-layer RG that must never be torn down (default: rg-shared-mindbox)
+  ALLOW_PERSISTENT_DELETE         true|false. Proceed even though persistent resources are in the target RG (default: false)
+
+This script refuses to run when the target RG is the persistent layer, when the
+target RG still holds persistent resources (Cosmos / Cognitive Services / Key
+Vault), or when their presence could not be determined (ADR 0046 D1 / #302).
+"Could not check" is treated as "do not delete" -- not as "nothing to protect".
 
 Destructive options default to OFF (ADR 0046 D5/D6). Purging soft-deleted resources
 removes the only recovery path, so it must be asked for explicitly. Turn it on when
@@ -74,10 +87,54 @@ if ! command -v az >/dev/null 2>&1; then
   exit 1
 fi
 
+# 持続層ガードの判定は python の純粋関数が持つ (pytest で押さえてある)。
+# 無いと判定できない = 削除に進めない、なので存在チェックは必須扱いにする。
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "ERROR: python3 command not found (needed by persistent_layer_guard.py)" >&2
+  exit 1
+fi
+
 az account show >/dev/null
 
 rg_exists() {
   [[ "$(az group exists -n "$RG" -o tsv)" == "true" ]]
+}
+
+# 撤収してよい RG かを判定する。判定そのものは持たず、材料 (RG の中身) を集めて
+# persistent_layer_guard.py に渡すだけ。拒否されたら**何も消さずに**終了する。
+assert_target_is_not_persistent_layer() {
+  local guard="${SCRIPT_DIR}/persistent_layer_guard.py"
+  local -a guard_args=(--target-rg "$RG" --persistent-rg "$PERSISTENT_RG")
+  local inventory err_file
+
+  if [[ "$ALLOW_PERSISTENT_DELETE" == "true" ]]; then
+    guard_args+=(--allow-persistent)
+  fi
+
+  if ! rg_exists; then
+    guard_args+=(--rg-missing)
+  else
+    err_file="$(mktemp)"
+    # az の失敗を握り潰さない: 失敗したら「持続層は無い」ではなく
+    # 「確かめられなかった」として渡す (guard 側が拒否する)。
+    # stderr は捨てずに下で表示する — 権限不足かログイン切れかを見えるようにするため。
+    if inventory="$(az resource list -g "$RG" --query "[].type" -o json 2>"$err_file")"; then
+      guard_args+=(--inventory "$inventory")
+    else
+      echo "WARN: could not list resources in ${RG}. az said:" >&2
+      cat "$err_file" >&2
+      guard_args+=(--inventory-unavailable)
+    fi
+    rm -f "$err_file"
+  fi
+
+  if ! python3 "$guard" "${guard_args[@]}"; then
+    echo "" >&2
+    echo "Nothing was deleted. Move the persistent resources to ${PERSISTENT_RG} first" >&2
+    echo "(Issue #302), or re-run with ALLOW_PERSISTENT_DELETE=true if you really mean" >&2
+    echo "to destroy them -- they do not come back." >&2
+    exit 3
+  fi
 }
 
 get_output_value() {
@@ -342,6 +399,9 @@ purge_deleted_cognitive_services() {
 }
 
 # ---- main flow ----
+
+# **破壊系より前**に置く。ここを通らないと 1 つも消えない。
+assert_target_is_not_persistent_layer
 
 if [[ "$DELETE_ENTRA_APP" == "true" ]]; then
   delete_auto_created_entra_app
