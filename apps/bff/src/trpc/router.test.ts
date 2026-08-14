@@ -31,6 +31,7 @@ vi.mock("../clients/aiAgentClient", async (importOriginal) => ({
 }));
 
 import {
+  ApprovalNotFoundError,
   ExtractError,
   approve as approveAiAgent,
   createPlan as createPlanAiAgent,
@@ -46,7 +47,9 @@ import {
   type Problem,
 } from "./domain";
 import { InMemoryProblemRepository } from "../repositories/problemRepository";
+import { runWithLogger } from "../observability/telemetry";
 import type { TrpcContext } from "./context";
+import { APPROVAL_NOT_FOUND_TOKEN } from "./errorTokens";
 import { appRouter } from "./router";
 
 // ---- helpers ---------------------------------------------------------------
@@ -282,6 +285,44 @@ describe("[L2] consultation.approve", () => {
       approvalRequestId: "appr-1",
       approved,
     });
+  });
+
+  it("承認レコードが無い (ApprovalNotFoundError) は NOT_FOUND に写す", async () => {
+    // 無いと: 期限切れ (TTL 1h) / ai-agent 再起動後の承認応答が汎用エラーとして
+    // フロントに届き、UI は「通信状況を確認して再試行」しか出せない。再試行は
+    // 決して成功しないので承認カードが閉じられず、その会話は永久に進まなくなる
+    // (404 デッドロック / PR #416 judge major-1)。
+    //
+    // **code だけでは足りない** (Codex 4 巡目 P2): tRPC は procedure 未配備でも
+    // NOT_FOUND を返すので、フロントは code + token の一致で判定する。つまり
+    // **token が message に載っていること**もこの写しの本体。
+    vi.mocked(approveAiAgent).mockRejectedValue(new ApprovalNotFoundError("appr-1"));
+
+    const err = await makeCaller()
+      .consultation.approve({ approvalRequestId: "appr-1", approved: true })
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+
+    expect(err).toBeInstanceOf(TRPCError);
+    expect((err as TRPCError).code).toBe("NOT_FOUND");
+    expect((err as TRPCError).message).toBe(APPROVAL_NOT_FOUND_TOKEN);
+  });
+
+  it("上流障害はそのまま失敗させる (NOT_FOUND に丸めない)", async () => {
+    // 無いと: 再試行で直る障害まで「期限切れ」に化け、フロントが承認カードを閉じて
+    // しまう。サーバには承認待ちが残ったまま、画面からは消える。
+    vi.mocked(approveAiAgent).mockRejectedValue(new Error("upstream 503"));
+
+    const err = await makeCaller()
+      .consultation.approve({ approvalRequestId: "appr-1", approved: true })
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+
+    expect((err as TRPCError).code).not.toBe("NOT_FOUND");
   });
 });
 
@@ -1488,5 +1529,47 @@ describe("[L2] consultation.extract — 失敗の伝え方 (#183)", () => {
     const caller = makeCaller();
 
     await expect(caller.consultation.extract({ sessionId: "s1" })).rejects.toThrow("想定外");
+  });
+});
+
+/**
+ * [単体] tRPC の `procedure` ログに sessionId を生のまま載せないことを固定する。
+ *
+ * Codex (#413) が名指しした 3 手続き (sendMessage / preview / extract) を、caller から
+ * 実際に叩いて確かめる。`IdInputSchema` は長さしか見ていないので、クライアントは
+ * 相談の本文をそのまま sessionId に入れられる。
+ */
+describe("[単体] consultation の procedure ログ — sessionId を生のまま記録しない", () => {
+  /** クライアントが sessionId に詰め込んだ相談の本文。行に現れたら事故。 */
+  const SECRET = "会社を辞めたいと誰にも言えていない";
+
+  it.each(["sendMessage", "preview", "extract"] as const)("consultation.%s", async (procedure) => {
+    // 無いと何が静かに通るか: 出口のハッシュ化を戻すと、手続きを 1 回呼ぶたびに
+    // `sessionId=<本文>` が AppTraces に 30 日残る。画面は何も変わらないので気づけない。
+    vi.mocked(sendChatMessage).mockResolvedValue({
+      reply: "ふむ",
+      requiresApproval: false,
+      approvalRequestId: null,
+      citations: [],
+    });
+    vi.mocked(extractAiAgent).mockResolvedValue(newExtraction());
+    const lines: string[] = [];
+    const log = { log: (m: string) => lines.push(m), error: (m: string) => lines.push(m) };
+    const caller = makeCaller();
+
+    await runWithLogger(log, async () => {
+      if (procedure === "sendMessage") {
+        await caller.consultation.sendMessage({ sessionId: SECRET, message: "つらい" });
+      } else if (procedure === "preview") {
+        await caller.consultation.preview({ sessionId: SECRET, messages: [] });
+      } else {
+        await caller.consultation.extract({ sessionId: SECRET });
+      }
+    });
+
+    const procedureLine = lines.find((l) => l.includes("event=procedure"));
+    expect(procedureLine).toBeDefined();
+    expect(procedureLine).toContain("sessionHash=");
+    for (const line of lines) expect(line).not.toContain(SECRET);
   });
 });

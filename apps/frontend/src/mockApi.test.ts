@@ -19,6 +19,7 @@ import {
   loadProblem,
   loadProblems,
   previewExtraction,
+  respondToApproval,
   sendMessage,
   triageProblem,
 } from "./mockApi";
@@ -318,8 +319,33 @@ describe("[L1] mockApi.sendMessage 応答長分岐", () => {
     const short = await sendMessage("s", "短いメッセージ");
     const long = await sendMessage("s", "あ".repeat(60));
 
-    expect(short.text).toContain("日常へどんな影響");
-    expect(long.text).toContain("特に気持ちが動いた場面");
-    expect(short.text).not.toBe(long.text);
+    expect(short.message.text).toContain("日常へどんな影響");
+    expect(long.message.text).toContain("特に気持ちが動いた場面");
+    expect(short.message.text).not.toBe(long.message.text);
+  });
+});
+
+describe("[単体] mockApi の承認要求フィクスチャ (#82 / dialogue-session.mdx §5.9)", () => {
+  // 無いと何が静かに通るか: mock ビルド (デモ / 単体テスト) から承認 UI へ至る唯一の
+  // 経路がこのトリガなので、消えても mock は普通に返事を返し続ける。承認カードに
+  // 一度も到達できないまま「mock は緑」になる。
+  it("トリガ語を含む発話にだけ承認要求を付ける", async () => {
+    const withApproval = await sendMessage("s", "この件、返信しておいて");
+    const withoutApproval = await sendMessage("s", "最近よく眠れない");
+
+    expect(withApproval.approval?.id).toBeTruthy();
+    // カード単体で「何を実行しようとしているか」が読めること (§5.9)
+    expect(withApproval.approval?.description).toContain("send_reply");
+    expect(withoutApproval.approval).toBeNull();
+  });
+
+  // 無いと何が静かに通るか: 承認と却下で同じ応答を返す実装になっても、どちらも
+  // 「返事が返る」ので画面上は区別が付かない (真偽反転が見えない)。
+  it("承認と却下で別の応答を返す (却下はキャンセルと言う)", async () => {
+    const approved = await respondToApproval("appr-1", true);
+    const rejected = await respondToApproval("appr-1", false);
+
+    expect(approved.text).not.toBe(rejected.text);
+    expect(rejected.text).toContain("キャンセル");
   });
 });

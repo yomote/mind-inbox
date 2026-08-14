@@ -14,11 +14,14 @@ gpg 本体は検証しない (それは gpg の仕事)。ここで固定する�
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent / "encrypt-e2e-traces.sh"
+REPO_ROOT = SCRIPT.resolve().parents[3]
+WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 
 # gpg スタブの雛形。MODE で振る舞いを切り替える。
 # --with-colons --import-options show-only --import は指紋を返す経路なので、
@@ -252,3 +255,95 @@ def test_単体_スクリプトは実行可能ビットを持つ(tmp_path: Path)
     """
     assert shutil.which("bash"), "前提: bash がある"
     assert os.access(SCRIPT, os.X_OK), f"{SCRIPT} に実行権がない"
+
+
+# ---------------------------------------------------------------------------
+# スクリプトと workflow の突き合わせ
+#
+# ここから下は gpg の振る舞いではなく **「片方だけ替える」事故** を止めるためのテスト。
+# ---------------------------------------------------------------------------
+
+
+def _script_allowed_extension() -> str:
+    """encrypt-e2e-traces.sh が出力し、D7 の検査で許す拡張子を 1 つ取り出す。
+
+    根拠にするのは D7 の検査行 (`! -name '*.gpg'`)。出力ファイル名の組み立て
+    (`${name}.gpg`) と一致していることも同時に確かめる — ここがズレていると
+    スクリプトは自分の出力を「平文が混ざっている」として毎回落ちる。
+    """
+    text = SCRIPT.read_text(encoding="utf-8")
+
+    guard = set(re.findall(r"!\s*-name\s*'\*(\.[A-Za-z0-9]+)'", text))
+    assert len(guard) == 1, f"D7 の許可拡張子が 1 種類に決まらない: {sorted(guard)}"
+
+    produced = set(re.findall(r'out="\$OUT_DIR/\$\{name\}(\.[A-Za-z0-9]+)"', text))
+    assert produced == guard, f"出力する拡張子 {sorted(produced)} と D7 の検査 {sorted(guard)} が食い違う"
+
+    return guard.pop()
+
+
+def _workflows_calling_script() -> dict[str, str]:
+    """encrypt-e2e-traces.sh を呼んでいる workflow を {ファイル名: 本文} で返す。"""
+    found = {}
+    for p in sorted(WORKFLOW_DIR.glob("*.yml")):
+        body = p.read_text(encoding="utf-8")
+        if "encrypt-e2e-traces.sh" in body:
+            found[p.name] = body
+    # 呼び元 0 件でも「全件一致」は真になってしまう (空集合の全称命題)。
+    # スクリプトのパスが変わって検出できなくなった状態を、緑と区別する。
+    assert found, "encrypt-e2e-traces.sh を呼ぶ workflow が 1 つも見つからない (パスが変わった?)"
+    return found
+
+
+def test_単体_スクリプトの許可拡張子と_workflow_の_glob_が一致する():
+    """無いと何が静かに通るか: **証拠が赤くならずに消える。**
+
+    `.gpg` → `.enc` へ方式を替えるとき、スクリプトだけ替えて workflow の
+    `hashFiles('e2e-trace-enc/**/*.gpg')` と `path:` を取り残すと、upload の条件が
+    **偽**になる。ステップは「スキップ」として扱われ、**run は緑のまま trace が
+    1 件も上がらない**。`golden-path-monitor.yml` は毎朝回るので、気づかないまま
+    日次の証拠を失い続ける (#300 で同型の「片方だけ替える」事故を踏んでいる)。
+
+    仕様: 裁定記録 (旧 ADR 0045) D7 —「許可拡張子は 1 種類だけ」「スクリプトを呼ぶ
+    全 workflow の upload glob を同じ PR で替える」。
+    """
+    ext = _script_allowed_extension()
+
+    for name, body in _workflows_calling_script().items():
+        globs = re.findall(r"e2e-trace-enc/\*\*/\*(\.[A-Za-z0-9]+)", body)
+        assert globs, f"{name}: encrypt-e2e-traces.sh を呼んでいるのに upload の glob が無い"
+        mismatched = sorted({g for g in globs if g != ext})
+        assert not mismatched, (
+            f"{name}: スクリプトの許可拡張子 {ext} に対して glob が {mismatched}。"
+            " 片方だけ替えると upload の条件が偽になり、run は緑のまま trace が消える"
+        )
+
+
+def test_単体_呼び元の_workflow_は_upload_条件と_path_の両方に_glob_を持つ():
+    """無いと何が静かに通るか: `hashFiles(...)` の条件だけ替えて `path:` を取り残すと、
+    **条件は真になるのにアップロード対象が 0 件**になる。`if-no-files-found: error`
+    で赤くはなるが、原因が「拡張子の取り残し」だと分かるのは調べた後。逆に `path:`
+    だけ替えると条件が偽で**緑のまま消える**。2 箇所あることをテストで固定する。
+    """
+    for name, body in _workflows_calling_script().items():
+        assert re.search(r"hashFiles\('e2e-trace-enc/\*\*/\*\.[A-Za-z0-9]+'\)", body), (
+            f"{name}: upload の `hashFiles` 条件が見つからない"
+        )
+        assert re.search(r"path:\s*e2e-trace-enc/\*\*/\*\.[A-Za-z0-9]+", body), (
+            f"{name}: `upload-artifact` の path が見つからない"
+        )
+
+
+def test_単体_呼び元の_workflow_は_PUBKEY_を同じファイルで指す():
+    """無いと何が静かに通るか: 公開鍵ファイルを `*.pub.asc` → `*.pub.json` に替えるとき
+    片方の workflow だけ取り残すと、そちらは**古い鍵で暗号化し続ける** (成功パスは緑)。
+    気づくのは復号しようとした時 (最大 14 日後)。
+
+    仕様: 裁定記録 D4 / D7 —「`PUBKEY` はスクリプトを呼ぶ全 workflow で同じ」。
+    """
+    pubkeys: set[str] = set()
+    for name, body in _workflows_calling_script().items():
+        found = re.findall(r"PUBKEY:\s*(\S+)", body)
+        assert found, f"{name}: encrypt-e2e-traces.sh を呼んでいるのに PUBKEY が無い"
+        pubkeys.update(found)
+    assert len(pubkeys) == 1, f"workflow ごとに違う公開鍵を使っている: {sorted(pubkeys)}"

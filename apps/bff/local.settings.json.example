@@ -23,6 +23,9 @@
 
     "// COSMOS_DATABASE / COSMOS_*_CONTAINER": "器の名前。既定値がコード側にあるので通常は空でよい (mindinbox / problems)",
     "COSMOS_DATABASE": "",
-    "COSMOS_PROBLEMS_CONTAINER": ""
+    "COSMOS_PROBLEMS_CONTAINER": "",
+
+    "// APPLICATIONINSIGHTS_CONNECTION_STRING": "テレメトリの送信先 (#307)。**アプリのコードは読まない** — Functions ホストが読んで requests / dependencies / exceptions / traces を送る。ローカルでは空のまま (空ならホストは何も送らず、ログは端末に出るだけ)。Azure 上でのみ bicep が値を配線する (cicd/modules/bootstrap-core.bicep)。**ここに手で値を入れると、ローカルの相談内容が実環境のワークスペースに送られる**",
+    "APPLICATIONINSIGHTS_CONNECTION_STRING": ""
   }
 }

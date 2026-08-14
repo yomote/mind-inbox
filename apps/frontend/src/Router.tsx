@@ -2,7 +2,13 @@ import * as React from "react";
 import { Button, Stack, Typography } from "@mui/material";
 import { Navigate, Route, Routes } from "react-router-dom";
 import type { PaletteMode } from "@mui/material";
-import type { ConsultationSession, ExtractionResult, Problem, TriageInput } from "./api";
+import type {
+  ApprovalRequest,
+  ConsultationSession,
+  ExtractionResult,
+  Problem,
+  TriageInput,
+} from "./api";
 import type { TtsStatus } from "./voice/useTextToSpeech";
 import { SessionScreen } from "./components/session/SessionScreen";
 import { OnboardingScreen } from "./components/screens/OnboardingScreen";
@@ -51,6 +57,9 @@ type AppRouterProps = {
   preview: ExtractionResult | null;
   previewStatus: "idle" | "updating" | "error";
   handleRefreshPreview: () => void;
+  /** 副作用ツールの承認待ち (#82 / G1 / dialogue-session.mdx §5.9)。 */
+  pendingApproval: ApprovalRequest | null;
+  handleRespondToApproval: (approved: boolean) => void;
   themeMode: PaletteMode;
   onToggleTheme: () => void;
   transition: (next: AppRoute) => void;
@@ -117,6 +126,8 @@ export function AppRouter({
   preview,
   previewStatus,
   handleRefreshPreview,
+  pendingApproval,
+  handleRespondToApproval,
   themeMode,
   onToggleTheme,
   transition,
@@ -199,6 +210,8 @@ export function AppRouter({
                 preview={preview}
                 previewStatus={previewStatus}
                 onRefreshPreview={handleRefreshPreview}
+                pendingApproval={pendingApproval}
+                onRespondToApproval={handleRespondToApproval}
                 onDraftMessageChange={setDraftMessage}
                 onSendMessage={handleSendMessage}
                 onToggleTtsEnabled={toggleTtsEnabled}

@@ -41,9 +41,9 @@
 | --- | --- |
 | `/dev` | ローカルで起動する / ブラウザで確かめる / テスト・lint を回す |
 | `/adr` | ADR を書く / 採番する / Status を動かす |
-| `/dispatch` | 作業を分ける / 子セッション・subagent を起こす |
+| `/dispatch` | 作業を分ける / 子セッション・subagent を起こす (**窓口 PM は 1 行でも自分で書かない**) |
 | `/merge` | PR を出したあと / マージしてよいかを判断する |
-| `/design-gate` | 新機能・Phase 着手・ADR 級判断の**実装を始める前** |
+| `/design-gate` | 新機能・Phase 着手・ADR 級判断・**自作の機構を新規に立ち上げる**実装を始める前 (既存機構への追記は対象外 — ただし**新機能・ADR 級判断を含む追記は起動が優先**) |
 | `/debrief` `/briefing` | マージや Proposed ADR が溜まった / リリース級の節目 |
 | `/release-gate` | リリース PR (`main → release`) の Go/No-Go |
 | `/status` `/explain` `/po-feedback` | 戦況図 / 「あれなんだっけ」 / 指示の出し方の講評 |
@@ -60,6 +60,6 @@
 - [`docs/design/basic_design.md`](docs/design/basic_design.md) — 構成と責務
 - [`docs/testing/strategy.md`](docs/testing/strategy.md) — 4 層のテスト階層 / 書く・書かない判断基準
 - [`docs/documentation/strategy.md`](docs/documentation/strategy.md) — 真実の所在マトリクス / 生成物 commit ルール
-- [`docs/adr/README.md`](docs/adr/README.md) — アーキテクチャ判断の不変記録 (21 本)。**運用・プロセスの決め事は ADR ではない** — 過去に ADR として書かれた 29 本は [`docs/adr/archive/`](docs/adr/archive/README.md) にあり、現行ルールではない
+- [`docs/adr/README.md`](docs/adr/README.md) — アーキテクチャ判断の不変記録 (23 本)。**運用・プロセスの決め事は ADR ではない** — 過去に ADR として書かれた 30 本 (運用・プロセス系 29 本 + 開発設備 1 本) は [`docs/adr/archive/`](docs/adr/archive/README.md) にあり、現行ルールではない
 - [`docs/runbooks/`](docs/runbooks/README.md) — 運用手順 (README や CLAUDE.md には書かない)
 - [`docs/debrief/journal.md`](docs/debrief/journal.md) — セッション記録

@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { config } from "../config";
+import { logErrorEvent, logEvent, trackDependency } from "../observability/telemetry";
 import { summarizeIssues } from "../schemaIssues";
 import { serviceHeaders } from "./serviceToken";
 import { ExtractionResultSchema, type ExtractionResult } from "../trpc/domain";
+import { APPROVAL_GONE_DETAIL } from "./aiAgentContracts";
+import type { ExtractFailureToken } from "../trpc/errorTokens";
 import type {
   ApproveRequest,
   ApproveResponse,
@@ -29,14 +32,11 @@ export type {
 /**
  * `/extract` が失敗した理由。**フロントが文面と復帰導線を出し分けるための機械可読な種別**
  * (#183)。以前は理由が失われ、画面には何も出なかった。
+ *
+ * 値の真実は `trpc/errorTokens.ts` (フロントも同じものを import する)。ここで書き写すと
+ * BFF 側だけ改名したときにフロントの照合が黙って外れる (PR #416 judge minor-2)。
  */
-export type ExtractFailureKind =
-  /** 会話が手に入らない (404)。会話を送れば解消する。 */
-  | "session-missing"
-  /** LLM の応答を解釈できなかった (502)。「0 件」とは別物。 */
-  | "llm-parse-failed"
-  /** それ以外の上流失敗 (5xx / ネットワーク断)。 */
-  | "upstream-failed";
+export type ExtractFailureKind = ExtractFailureToken;
 
 /**
  * stub フォールバック応答の機械判別フラグ (#146 / ADR 0039 D6)。
@@ -64,6 +64,40 @@ export function isStubMode(): boolean {
   return !config.aiAgentBaseUrl;
 }
 
+/**
+ * 承認レコードがもう無い (#82 / PR #416 judge major-1)。
+ *
+ * ai-agent の `ApprovalRecord` は TTL 1 時間で失効し、in-memory 構成ではプロセス
+ * 再起動でも消える (`app/repositories.py`)。**「通信が失敗した」と同じ扱いにしない** —
+ * 取り直しても永久に成功しないので、汎用エラーのまま返すとフロントは
+ * 「通信状況を確認して再試行」を出し続け、承認カードが閉じられず**会話が二度と
+ * 進まなくなる** (404 デッドロック)。router がこれを `NOT_FOUND` に写し、フロントは
+ * 「期限切れ = カードを閉じて続行」に落とす。
+ */
+export class ApprovalNotFoundError extends Error {
+  constructor(approvalRequestId: string) {
+    super(`aiAgentClient: approval not found — ${approvalRequestId}`);
+    this.name = "ApprovalNotFoundError";
+  }
+}
+
+/**
+ * エラー応答の `detail` (FastAPI の HTTPException が返す形) を読む。読めなければ null。
+ *
+ * 握り潰す範囲: 本文が JSON でない / `detail` が文字列でない場合の理由は捨てる。
+ * 捨てても見えなくなるものは無い — どちらも「ai-agent が承認について返した 404」では
+ * ないので、呼び出し側の扱い (上流障害) は同じになる。**読んだ本文は例外文にも
+ * ログにも載せない** (上流本文の転記は #313 B-3 で塞いだ経路)。
+ */
+async function readErrorDetail(res: Response): Promise<string | null> {
+  try {
+    const body = (await res.json()) as { detail?: unknown };
+    return typeof body?.detail === "string" ? body.detail : null;
+  } catch {
+    return null;
+  }
+}
+
 export class ExtractError extends Error {
   // パラメータプロパティ短縮記法は erasableSyntaxOnly で使えないため明示代入する。
   readonly kind: ExtractFailureKind;
@@ -81,38 +115,48 @@ export class ExtractError extends Error {
  */
 export async function sendChatMessage(req: ChatRequest): Promise<StubMarked<ChatResponse>> {
   if (!config.aiAgentBaseUrl) {
-    console.log("[aiAgentClient] AI_AGENT_BASE_URL not set — using stub response");
+    logEvent("dependency.skipped", {
+      target: "ai-agent",
+      operation: "POST /chat",
+      reason: "base-url-unset",
+    });
     return stubChatResponse(req);
   }
 
   const url = `${config.aiAgentBaseUrl}/chat`;
-  console.log(`[aiAgentClient] POST ${url}`);
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: await serviceHeaders(config.aiAgentAudience, {
-      "Content-Type": "application/json",
-    }),
-    body: JSON.stringify({ session_id: req.sessionId, message: req.message }),
-  });
+  // **応答本文 (reply) はログに出さない** — 出すのは長さと承認要否だけ (#307)。
+  return await trackDependency(
+    { target: "ai-agent", operation: "POST /chat", url, sessionId: req.sessionId },
+    async () => {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: await serviceHeaders(config.aiAgentAudience, {
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({ session_id: req.sessionId, message: req.message }),
+      });
 
-  if (!res.ok) {
-    throw new Error(`aiAgentClient: POST /chat failed — ${res.status} ${res.statusText}`);
-  }
+      if (!res.ok) {
+        throw new Error(`aiAgentClient: POST /chat failed — ${res.status} ${res.statusText}`);
+      }
 
-  const json = (await res.json()) as {
-    reply: string;
-    requires_approval?: boolean;
-    approval_request_id?: string | null;
-    citations?: string[];
-  };
+      const json = (await res.json()) as {
+        reply: string;
+        requires_approval?: boolean;
+        approval_request_id?: string | null;
+        citations?: string[];
+      };
 
-  return {
-    reply: json.reply,
-    requiresApproval: Boolean(json.requires_approval),
-    approvalRequestId: json.approval_request_id ?? null,
-    citations: json.citations ?? [],
-  };
+      return {
+        reply: json.reply,
+        requiresApproval: Boolean(json.requires_approval),
+        approvalRequestId: json.approval_request_id ?? null,
+        citations: json.citations ?? [],
+      };
+    },
+    (result) => ({ chars: result.reply.length, kind: result.requiresApproval ? "approval" : "ok" }),
+  );
 }
 
 /**
@@ -121,13 +165,26 @@ export async function sendChatMessage(req: ChatRequest): Promise<StubMarked<Chat
  */
 export async function extract(req: ExtractRequest): Promise<StubMarked<ExtractionResult>> {
   if (!config.aiAgentBaseUrl) {
-    console.log("[aiAgentClient] AI_AGENT_BASE_URL not set — using stub /extract");
+    logEvent("dependency.skipped", {
+      target: "ai-agent",
+      operation: "POST /extract",
+      reason: "base-url-unset",
+    });
     return stubExtractResponse(req);
   }
 
   const url = `${config.aiAgentBaseUrl}/extract`;
-  console.log(`[aiAgentClient] POST ${url}`);
 
+  // **抽出結果は相談本文そのもの**。ログに残すのは件数と失敗の種別だけ (#307)。
+  return await trackDependency(
+    { target: "ai-agent", operation: "POST /extract", url, sessionId: req.sessionId },
+    () => extractOnce(url, req),
+    (result) => ({ count: result.items.length }),
+  );
+}
+
+/** `/extract` 1 回ぶんの本体。テレメトリの計測は呼び出し側 (`extract`) が挟む。 */
+async function extractOnce(url: string, req: ExtractRequest): Promise<ExtractionResult> {
   let res: Response;
   try {
     res = await fetch(url, {
@@ -202,61 +259,109 @@ export async function extract(req: ExtractRequest): Promise<StubMarked<Extractio
 
 export async function createPlan(req: PlanRequest): Promise<PlanResponse> {
   if (!config.aiAgentBaseUrl) {
-    console.log("[aiAgentClient] AI_AGENT_BASE_URL not set — using stub /plan");
+    logEvent("dependency.skipped", {
+      target: "ai-agent",
+      operation: "POST /plan",
+      reason: "base-url-unset",
+    });
     return stubPlanResponse();
   }
 
   const url = `${config.aiAgentBaseUrl}/plan`;
-  console.log(`[aiAgentClient] POST ${url}`);
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: await serviceHeaders(config.aiAgentAudience, {
-      "Content-Type": "application/json",
-    }),
-    body: JSON.stringify({
-      summary: req.summary,
-      emotions: req.emotions,
-      priorities: req.priorities,
-    }),
-  });
+  // summary / emotions は相談の中身。**ログに出すのはステップ数だけ** (#307)。
+  return await trackDependency(
+    { target: "ai-agent", operation: "POST /plan", url },
+    async () => {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: await serviceHeaders(config.aiAgentAudience, {
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({
+          summary: req.summary,
+          emotions: req.emotions,
+          priorities: req.priorities,
+        }),
+      });
 
-  if (!res.ok) {
-    throw new Error(`aiAgentClient: POST /plan failed — ${res.status} ${res.statusText}`);
-  }
+      if (!res.ok) {
+        throw new Error(`aiAgentClient: POST /plan failed — ${res.status} ${res.statusText}`);
+      }
 
-  const json = (await res.json()) as PlanResponse;
-  return {
-    title: json.title ?? "アクションプラン",
-    steps: json.steps ?? [],
-  };
+      const json = (await res.json()) as PlanResponse;
+      return {
+        title: json.title ?? "アクションプラン",
+        steps: json.steps ?? [],
+      };
+    },
+    (result) => ({ count: result.steps.length }),
+  );
 }
 
 export async function approve(req: ApproveRequest): Promise<ApproveResponse> {
   if (!config.aiAgentBaseUrl) {
-    console.log("[aiAgentClient] AI_AGENT_BASE_URL not set — using stub /approve");
+    logEvent("dependency.skipped", {
+      target: "ai-agent",
+      operation: "POST /approve",
+      reason: "base-url-unset",
+    });
     return stubApproveResponse(req.approved);
   }
 
   const url = `${config.aiAgentBaseUrl}/approve`;
-  console.log(`[aiAgentClient] POST ${url}`);
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: await serviceHeaders(config.aiAgentAudience, {
-      "Content-Type": "application/json",
-    }),
-    body: JSON.stringify({
-      approval_request_id: req.approvalRequestId,
-      approved: req.approved,
-    }),
-  });
+  // 承認は副作用を伴うツール実行の門 (apps/bff/CLAUDE.md)。**通ったこと自体**を残す。
+  return await trackDependency(
+    { target: "ai-agent", operation: "POST /approve", url },
+    async () => {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: await serviceHeaders(config.aiAgentAudience, {
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({
+          approval_request_id: req.approvalRequestId,
+          approved: req.approved,
+        }),
+      });
 
-  if (!res.ok) {
-    throw new Error(`aiAgentClient: POST /approve failed — ${res.status} ${res.statusText}`);
-  }
+      // 404 のうち **ai-agent が承認レコードについて返したもの** だけを「もう無い」
+      // (TTL 失効 / ai-agent 再起動 / 消費済み) として上げる。種別を保つのは、呼び出し側
+      // (router) が NOT_FOUND に翻訳し、フロントが「カードを閉じて続行」に落とすため。
+      //
+      // **すべての 404 を変換しない** (PR #416 Codex 3 巡目 P2): ルート未配備・リバース
+      // プロキシの経路不整合・ベース URL 違いでも 404 は返る。それを「処理済み」に写すと、
+      // 生きている checkpoint を持つ承認カードが閉じられ、承認も却下も再試行もできなくなる
+      // (サーバは承認待ちのまま、画面からは消える)。
+      if (res.status === 404) {
+        const detail = await readErrorDetail(res);
+        if (detail !== null && APPROVAL_GONE_DETAIL.test(detail)) {
+          throw new ApprovalNotFoundError(req.approvalRequestId);
+        }
+        // 承認レコードについて何も言っていない 404 = 上流障害。汎用エラーとして上げる
+        // (フロントはカードを残して再試行できる)。**detail 本文はテレメトリにも例外文にも
+        // 載せない** — 上流本文の転記は #313 B-3 で塞いだ経路で、ここは「一致しなかった」
+        // という事実だけを残す (運用は「承認の 404 なのか配線事故なのか」を切り分けられる)。
+        logErrorEvent("approve.unmatched-404", {
+          target: "ai-agent",
+          operation: "POST /approve",
+          upstreamStatus: res.status,
+          reason: "detail-unmatched",
+        });
+        throw new Error(
+          `aiAgentClient: POST /approve failed — ${res.status} ${res.statusText} (承認レコード由来ではない 404)`,
+        );
+      }
 
-  return (await res.json()) as ApproveResponse;
+      if (!res.ok) {
+        throw new Error(`aiAgentClient: POST /approve failed — ${res.status} ${res.statusText}`);
+      }
+
+      return (await res.json()) as ApproveResponse;
+    },
+    () => ({ kind: req.approved ? "approved" : "rejected" }),
+  );
 }
 
 function stubChatResponse(req: ChatRequest): StubMarked<ChatResponse> {

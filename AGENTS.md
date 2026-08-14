@@ -37,8 +37,8 @@ npm test            # test:contract → test:fast → test:e2e
 アプリ別:
 
 ```bash
-npm --prefix apps/bff run build                 # BFF は npm
-pnpm --dir apps/frontend install                # フロントは **pnpm** (npm ではない)
+pnpm --dir apps/bff run build                   # Node のアプリは **pnpm** (npm ではない)
+pnpm --dir apps/frontend install                # 同上。root だけ npm
 pnpm --dir apps/frontend test
 uv run --directory apps/services/ai-agent pytest   # Python は uv
 ```
@@ -84,7 +84,8 @@ uv run --directory apps/services/ai-agent pytest   # Python は uv
   エージェント起案は `Status: Proposed` で入れる (`Accepted` にできるのは user だけ)
 - **運用・プロセスの決め事は ADR ではない** — レビュー体制 / セッションの回し方 / CI の
   運転ルールなどは数日で改訂されるので不変記録に載せない。置き場は `CLAUDE.md` と `.claude/skills/`。
-  過去に ADR として書かれた 29 本は `docs/adr/archive/` にあり、**現行ルールではない**
+  過去に ADR として書かれた 30 本 (運用・プロセス系 29 本 + 開発設備 1 本) は
+  `docs/adr/archive/` にあり、**現行ルールではない**
 - **採番は `origin/main` の最大番号 +1。欠番は埋めない** — 退避で 0008 / 0011 / 0014 …
   が飛んでいる。退役番号は `docs/adr/archive/retired-numbers.txt` にあり、
   実ファイルと合算して最大を取る (`adr-number-guard` が再利用を赤にする)
@@ -110,19 +111,23 @@ uv run --directory apps/services/ai-agent pytest   # Python は uv
 本文は次の見出しを埋める。
 
 ```markdown
-## Summary        目的 / 変更 / 影響 / リスク / 結論
-## Changes        何を変えたか
-## Verification   下の表
-## Review focus   特に見てほしい点
-## Known limitations  未検証・未対応を正直に
+## Summary 目的 / 変更 / 影響 / リスク / 結論
+
+## Changes 何を変えたか
+
+## Verification 下の表
+
+## Review focus 特に見てほしい点
+
+## Known limitations 未検証・未対応を正直に
 ```
 
 `## Verification` は**「設定した」ではなく「振る舞い」**で書く。
 
-| Check | Result |
-| --- | --- |
-| Unit / contract | 実行したコマンドと結果 |
-| E2E | 同上 / 対象外なら「対象外」 |
+| Check             | Result                                                   |
+| ----------------- | -------------------------------------------------------- |
+| Unit / contract   | 実行したコマンドと結果                                   |
+| E2E               | 同上 / 対象外なら「対象外」                              |
 | Live verification | 実環境で叩いた結果。**やっていないなら「未検証」と書く** |
 
 **回していないものを PASS と書かない。** 未検証は未検証と書けば通る。

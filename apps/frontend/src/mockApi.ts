@@ -2,6 +2,7 @@
 // このファイルは mock 実装専業 — 型を export しない (ADR 0004 の「真実」はデータと挙動)。
 import type {
   ActionPlan,
+  AssistantReply,
   ChatMessage,
   ConsultationSession,
   ExtractionResult,
@@ -31,8 +32,33 @@ export async function startNewConsultation(concern: string): Promise<Consultatio
   };
 }
 
-export async function sendMessage(_sessionId: string, text: string): Promise<ChatMessage> {
+/**
+ * 承認要求 (G1 / dialogue-session.mdx §5.9) を mock で決定的に踏むためのトリガ語。
+ *
+ * real では ai-agent が副作用ツール (`send_reply` 等 / `approval_mode="always_require"`)
+ * を選んだときに立つ。mock は BFF も LLM も呼ばないので、この語を含む発話で代用する
+ * (mock はデモ兼 fixture — ADR 0004)。ここが無いと mock ビルドでは承認 UI に一度も
+ * 到達できず、デモでも単体テストでも承認の画面を確かめられない。
+ */
+const APPROVAL_TRIGGER = "返信";
+
+/** ai-agent の確認文と同じ形にする (実物を見たときに別物に見えないように)。 */
+const APPROVAL_DESCRIPTION = "「send_reply」を実行するには承認が必要です。実行してよろしいですか？";
+
+export async function sendMessage(_sessionId: string, text: string): Promise<AssistantReply> {
   await wait(300);
+
+  if (text.includes(APPROVAL_TRIGGER)) {
+    return {
+      message: {
+        id: uid(),
+        role: "assistant",
+        text: APPROVAL_DESCRIPTION,
+        createdAt: nowText(),
+      },
+      approval: { id: `appr-${uid()}`, description: APPROVAL_DESCRIPTION },
+    };
+  }
 
   const reply =
     text.length > 45
@@ -40,9 +66,29 @@ export async function sendMessage(_sessionId: string, text: string): Promise<Cha
       : "受け止めました。次に、そのことが日常へどんな影響を与えているか教えてください。";
 
   return {
+    message: {
+      id: uid(),
+      role: "assistant",
+      text: reply,
+      createdAt: nowText(),
+    },
+    approval: null,
+  };
+}
+
+/** 承認 / 却下の応答 (§5.9)。却下の文面は ai-agent の `_REJECTION_REPLY` に合わせる。 */
+export async function respondToApproval(
+  _approvalRequestId: string,
+  approved: boolean,
+): Promise<ChatMessage> {
+  await wait(300);
+
+  return {
     id: uid(),
     role: "assistant",
-    text: reply,
+    text: approved
+      ? "「send_reply」を実行しました。他にご用件はありますか？"
+      : "操作はキャンセルされました。他にご用件はありますか？",
     createdAt: nowText(),
   };
 }

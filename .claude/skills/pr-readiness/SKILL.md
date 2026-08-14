@@ -48,7 +48,7 @@ git status --short
 | パターン (変更検出) | 指摘内容 (Test) | 指摘内容 (Docs) |
 | --- | --- | --- |
 | `apps/bff/local.settings.json.example` 変更, または `process.env.*` の追加 | — | `apps/bff/CLAUDE.md` の環境変数表 (未設定時の挙動まで) / `documentation/strategy.md` §2 (環境変数) |
-| `apps/bff/src/trpc/router.ts` または `apps/bff/src/trpc/routers/**` の追加・I/O 変更 | 契約 (ai-agent とまたぐ I/O 変更なら) + 入場条件 (strategy.md §2.2「壊れても例外が出ず、データが静かに間違う」) を満たすドメインルール変更なら単体 (プロパティ優先) — `apps/bff/**/*.{test,spec}.ts` を grep。**受け渡し・ルーティングだけならテスト不要 — 代わりに Verification 欄の実測を確認** | `docs/api/bff-trpc.yaml` 再生成 (`npm run docs:openapi` — 手書きしない) / `apps/bff/CLAUDE.md` (zod が真実 / 承認の門) |
+| `apps/bff/src/trpc/router.ts` または `apps/bff/src/trpc/routers/**` の追加・I/O 変更 | 契約 (ai-agent とまたぐ I/O 変更なら) + 入場条件 (strategy.md §2.2「壊れても例外が出ず、データが静かに間違う」) を満たすドメインルール変更なら単体 (プロパティ優先) — `apps/bff/**/*.{test,spec}.ts` を grep。**受け渡し・ルーティングだけならテスト不要 — 代わりに Verification 欄の実測を確認** | `docs/api/bff-trpc.yaml` 再生成 (root から `npm run docs:openapi:bff` — 手書きしない) / `apps/bff/CLAUDE.md` (zod が真実 / 承認の門) |
 | `apps/services/ai-agent/**/*.py` の endpoint 追加・I/O 変更 (FastAPI route) | 契約 + 入場条件を満たすロジック (パース等) なら単体 — `apps/services/ai-agent/**/test_*.py` または `tests/` を grep。受け渡しだけならテスト不要 (Verification 実測) | `docs/api/ai-agent.yaml` 再生成 |
 | `apps/services/voicevox/**/*.py` の endpoint 変更 | 入場条件を満たすロジックのみ単体 (placeholder 解消は #2) | `docs/api/voicevox.yaml` 再生成 |
 | `apps/frontend/src/components/screens/**` の新規/挙動変更 | 異常系スモーク (`apps/frontend/e2e-uc/`) / 実環境 E2E の hop に影響しないか確認。**廃止方針の旧 L3 mock (`apps/frontend/e2e/`) に新規シナリオを足さない** (strategy.md §6.3。E2E の本数も増やさない) | `docs/frontend/ui_specs/*.mdx` の対応 spec / `apps/frontend/src/spec/previews/` |

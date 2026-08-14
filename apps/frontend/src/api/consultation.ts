@@ -1,10 +1,11 @@
 import * as mock from "../mockApi";
-import type { ChatMessage, ConsultationSession } from "./types";
+import type { ApprovalRequest, AssistantReply, ChatMessage, ConsultationSession } from "./types";
 import { trpc } from "../trpc/client";
 import { chatStreamFetch, ttsPrefetchFetch, useMock } from "./http";
 import { parseSseJsonStream } from "./sse";
 import { appendStreamingReply, beginStreamingReply, clearStreamingReply } from "./streamingReply";
 import { reportStubbedResponse, resetStubbedResponse } from "./stubStatus";
+import { isApprovalNotFound } from "./trpcError";
 
 const voicevoxSpeaker = Number(import.meta.env.VITE_VOICEVOX_SPEAKER || "3");
 
@@ -113,11 +114,61 @@ function createSentencePrefetcher() {
   };
 }
 
+/**
+ * 「承認が要る」と言われたのに承認 ID が無い応答 (#82 / PR #416 Codex P2)。
+ *
+ * BFF の `ChatReplySchema` はこの組み合わせを禁止していない (`approvalRequestId` は
+ * nullable) ため、上流の不整合でも SSE はそのまま素通しする。**承認不要と同じ扱いに
+ * しない** — 承認 API を呼ぶ手段が無いので、承認カードを出しても押せず、黙って
+ * 通常応答にするとサーバだけが承認待ちで止まったまま画面に何も出ない。
+ */
+export class ApprovalRequestUnusable extends Error {
+  constructor() {
+    super("chat response requires approval but has no approvalRequestId");
+    this.name = "ApprovalRequestUnusable";
+  }
+}
+
+/**
+ * 承認要求がもう受け付けられない (#82 / PR #416 judge major-1)。
+ *
+ * ai-agent の承認レコードは TTL 1 時間で失効し、in-memory 構成では再起動でも消える。
+ * BFF はこれを `NOT_FOUND` で返す。**通信失敗と同じ扱いにしない** — 再試行しても
+ * 永久に成功しないので、「再試行してください」を出し続けると承認カードが閉じられず
+ * 会話が二度と進まなくなる (404 デッドロック)。UI 側はこれを受けてカードを閉じ、
+ * 次の発話を送れる状態に戻す。
+ *
+ * **クラス名の "Expired" は「もう受け付けられない」の略で、「期限切れ」の断定ではない**
+ * (PR #416 judge / Codex P1)。ai-agent は approved / rejected 済みの ID にも同じ 404 を
+ * 返す (`Approval already processed`) ため、**この例外から「操作は実行されていない」は
+ * 導けない**。ユーザーに出す文面で断定しないこと (`FAILURE_MESSAGE.approvalExpired`)。
+ * 区別できるようにするには契約側の冪等化 (409 + status 返却) が要る → #82 に選択肢を記録。
+ */
+export class ApprovalExpired extends Error {
+  constructor() {
+    super("approval request no longer accepted (expired, released, or already processed)");
+    this.name = "ApprovalExpired";
+  }
+}
+
+/**
+ * 応答の承認フラグを UI の承認要求へ写す (#82 / G1 / dialogue-session.mdx §5.9)。
+ */
+function toApprovalRequest(
+  requiresApproval: boolean | undefined,
+  approvalRequestId: string | null | undefined,
+  reply: string,
+): ApprovalRequest | null {
+  if (requiresApproval !== true) return null;
+  if (!approvalRequestId) throw new ApprovalRequestUnusable();
+  return { id: approvalRequestId, description: reply };
+}
+
 async function sendMessageStreaming(
   sessionId: string,
   text: string,
   messageId: string,
-): Promise<ChatMessage> {
+): Promise<AssistantReply> {
   const res = await chatStreamFetch(sessionId, text);
   if (!res.ok || !res.body) {
     throw new Error(`chat stream unavailable: HTTP ${res.status}`);
@@ -128,6 +179,7 @@ async function sendMessageStreaming(
   let accumulated = "";
   const prefetchSentences = createSentencePrefetcher();
   let finalReply: string | null = null;
+  let approval: ApprovalRequest | null = null;
 
   for await (const raw of parseSseJsonStream(res.body)) {
     const event = asChatStreamEvent(raw);
@@ -138,6 +190,11 @@ async function sendMessageStreaming(
       prefetchSentences(accumulated);
     } else if (event.type === "done") {
       finalReply = event.response.reply;
+      approval = toApprovalRequest(
+        event.response.requires_approval,
+        event.response.approval_request_id,
+        event.response.reply,
+      );
       // stub 応答の可視化 (#146): 実応答 (フラグ無し) なら下ろす。
       reportStubbedResponse(event.response.stubbed);
     } else {
@@ -151,32 +208,41 @@ async function sendMessageStreaming(
   }
 
   return {
-    id: messageId,
-    role: "assistant",
-    text: finalReply,
-    createdAt: new Date().toISOString(),
+    message: {
+      id: messageId,
+      role: "assistant",
+      text: finalReply,
+      createdAt: new Date().toISOString(),
+    },
+    approval,
   };
 }
 
 /** mock でもストリーミングの体感 (伸びるバブル) を再現する (ADR 0004: データの真実は mock 側)。 */
-async function streamMockReply(sessionId: string, text: string): Promise<ChatMessage> {
-  const message = await mock.sendMessage(sessionId, text);
-  beginStreamingReply(message.id);
+async function streamMockReply(sessionId: string, text: string): Promise<AssistantReply> {
+  const reply = await mock.sendMessage(sessionId, text);
+  beginStreamingReply(reply.message.id);
   const step = 4;
-  for (let i = 0; i < message.text.length; i += step) {
-    appendStreamingReply(message.text.slice(i, i + step));
+  for (let i = 0; i < reply.message.text.length; i += step) {
+    appendStreamingReply(reply.message.text.slice(i, i + step));
     await new Promise((resolve) => setTimeout(resolve, 45));
   }
-  return message;
+  return reply;
 }
 
-export async function sendMessage(sessionId: string, text: string): Promise<ChatMessage> {
+export async function sendMessage(sessionId: string, text: string): Promise<AssistantReply> {
   if (useMock) return streamMockReply(sessionId, text);
 
   const messageId = crypto.randomUUID();
   try {
     return await sendMessageStreaming(sessionId, text, messageId);
   } catch (err) {
+    if (err instanceof ApprovalRequestUnusable) {
+      // 上流の契約違反は**転送の失敗ではない** — 取り直しても同じものが返るだけなので
+      // フォールバックで隠さず、そのまま UI のエラー表示へ流す (承認不要と区別する)。
+      clearStreamingReply();
+      throw err;
+    }
     // ストリーミングは強化であって依存にしない (ADR 0024) — 失敗したら従来の
     // tRPC mutation で全文を取り直す。途中経過バブルはここで消す。
     console.warn("[sendMessage] streaming failed — falling back to tRPC mutation", err);
@@ -188,10 +254,54 @@ export async function sendMessage(sessionId: string, text: string): Promise<Chat
     // stub 応答の可視化 (#146)。ストリーミング不能時のフォールバック経路でも見落とさない。
     reportStubbedResponse(res.stubbed);
     return {
-      id: messageId,
-      role: "assistant",
-      text: res.reply,
-      createdAt: new Date().toISOString(),
+      message: {
+        id: messageId,
+        role: "assistant",
+        text: res.reply,
+        createdAt: new Date().toISOString(),
+      },
+      // フォールバック経路でも承認要求は落とさない (#82)。ここを落とすと
+      // 「ストリーミングが死んでいる環境でだけ副作用ツールが承認なしに見える」になる。
+      approval: toApprovalRequest(res.requiresApproval, res.approvalRequestId, res.reply),
     };
   }
+}
+
+/**
+ * 承認要求への応答 (承認 = 実行 / 却下 = キャンセル) を返し、続きの応答を受け取る
+ * (#82 / G1 / dialogue-session.mdx §5.9)。
+ *
+ * **却下も送る**: 送らないとサーバ側の承認待ち (checkpoint) が宙に浮いたままになる。
+ *
+ * @throws {ApprovalExpired} 承認レコードがもう無い (BFF の `NOT_FOUND` +
+ *         `approval-not-found` token)。再試行では回復しないので、通信失敗と区別して投げる。
+ */
+export async function respondToApproval(
+  approvalRequestId: string,
+  approved: boolean,
+): Promise<ChatMessage> {
+  if (useMock) return mock.respondToApproval(approvalRequestId, approved);
+
+  let res: { reply: string };
+  try {
+    res = await trpc.consultation.approve.mutate({ approvalRequestId, approved });
+  } catch (err) {
+    // 承認レコードがもう受け付けられない: 期限切れ (TTL 1h) / ai-agent 再起動で消えた、
+    // または**すでに approved / rejected 済み**。ai-agent はこの 3 つを区別せず 404 を返す。
+    // ここで種別を立てないと UI は「通信失敗 → 再試行」しか出せず、
+    // 何度押しても同じ 404 に当たり続ける (#82 / PR #416 judge major-1)。
+    //
+    // **code だけで判定しない** (Codex 4 巡目 P2): tRPC は procedure 未配備でも
+    // NOT_FOUND を返すので、版ずれ・配備事故の NOT_FOUND まで「もう受け付けられない」に
+    // 化けると、生きている checkpoint のカードを閉じてしまう。BFF がこのケースにだけ
+    // 載せる token との一致まで見る (isApprovalNotFound)。
+    if (isApprovalNotFound(err)) throw new ApprovalExpired();
+    throw err;
+  }
+  return {
+    id: crypto.randomUUID(),
+    role: "assistant",
+    text: res.reply,
+    createdAt: new Date().toISOString(),
+  };
 }

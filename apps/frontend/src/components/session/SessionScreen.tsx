@@ -1,7 +1,8 @@
 import * as React from "react";
 import { Badge, Box, Paper, Stack, Tab, Tabs, Typography } from "@mui/material";
-import type { ConsultationSession, ExtractionResult } from "../../api";
+import type { ApprovalRequest, ConsultationSession, ExtractionResult } from "../../api";
 import type { TtsStatus } from "../../voice/useTextToSpeech";
+import { ApprovalRequestCard } from "./ApprovalRequestCard";
 import { deriveMascotState } from "./mascotState";
 import { LivePreviewPane } from "./LivePreviewPane";
 import type { PreviewStatus } from "./LivePreviewPane";
@@ -28,6 +29,9 @@ type SessionScreenProps = {
   preview?: ExtractionResult | null;
   previewStatus?: PreviewStatus;
   onRefreshPreview?: () => void;
+  /** 副作用ツールの承認待ち (#82 / G1 / §5.9)。null なら承認カードを出さない。 */
+  pendingApproval?: ApprovalRequest | null;
+  onRespondToApproval?: (approved: boolean) => void;
   onDraftMessageChange: (value: string) => void;
   onSendMessage: () => void;
   onToggleTtsEnabled: () => void;
@@ -49,6 +53,8 @@ export function SessionScreen({
   preview = null,
   previewStatus = "idle",
   onRefreshPreview,
+  pendingApproval = null,
+  onRespondToApproval,
   onDraftMessageChange,
   onSendMessage,
   onToggleTtsEnabled,
@@ -74,6 +80,22 @@ export function SessionScreen({
     if (activeTab === "preview") setSeenPreview(preview);
   }, [activeTab, preview]);
 
+  // 承認要求が届いたら対話タブへ引き戻す (§5.9 / PR #416 Codex P2)。
+  //
+  // 承認カードは対話ペインの中にしか無い。md 未満で「整理中」タブを見ている間に
+  // 要求が届くと、カードは display:none の裏に出るだけで**画面には何も出ない** —
+  // サーバ (ai-agent) は承認待ちで止まっているのに、ユーザーには止まっていることも
+  // 押すべきボタンがあることも伝わらない (G1 が静かに無効化される)。
+  //
+  // 引き戻すのは**到着した瞬間だけ** (id が変わった時)。pending の間ずっと対話タブに
+  // 固定すると、承認を保留したまま下書きを見に行くことができなくなる。
+  const arrivedApprovalId = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    const id = pendingApproval?.id ?? null;
+    if (id !== null && id !== arrivedApprovalId.current) setActiveTab("dialogue");
+    arrivedApprovalId.current = id;
+  }, [pendingApproval]);
+
   const handleTabChange = (_: React.SyntheticEvent, next: "dialogue" | "preview") => {
     setActiveTab(next);
     if (next === "preview") setSeenPreview(preview);
@@ -88,6 +110,16 @@ export function SessionScreen({
           messages={session.messages}
           mascotState={deriveMascotState(loading, ttsStatus)}
         />
+
+        {/* 承認要求 (#82 / §5.9) は会話の直下・入力欄の上に出す。会話の続きを
+            打つ前に「実行してよいか」を目に入れる位置に置く。 */}
+        {pendingApproval && (
+          <ApprovalRequestCard
+            request={pendingApproval}
+            loading={loading}
+            onRespond={onRespondToApproval ?? (() => {})}
+          />
+        )}
 
         <SessionComposer
           value={draftMessage}

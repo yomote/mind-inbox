@@ -16,6 +16,7 @@ import type { Container } from "@azure/cosmos";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CosmosProblemRepository, isNotFound } from "./cosmosProblemRepository";
+import { runWithLogger } from "../observability/telemetry";
 import type { Mention, Problem } from "../trpc/domain";
 
 // ---- テストダブル ----------------------------------------------------------
@@ -226,7 +227,7 @@ describe("[単体] 契約に反する 1 件が一覧全体を落とさない", (
   });
 
   it("壊れた doc は落とし、残りの正常な doc は位置に関わらず全件返す", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
 
     await fc.assert(
       fc.asyncProperty(
@@ -257,7 +258,7 @@ describe("[単体] 契約に反する 1 件が一覧全体を落とさない", (
   });
 
   it("get も壊れた doc を「無い」として返す (list から消えたのに詳細だけ 500 にしない)", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
     const broken = asStoredDocument({ ...makeProblem(), mentions: [] }, "user-a");
     const fake = makeFakeContainer({ readResource: broken });
     const repo = new CosmosProblemRepository(fake.container, "user-a");
@@ -268,7 +269,7 @@ describe("[単体] 契約に反する 1 件が一覧全体を落とさない", (
   it("警告ログに相談本文 (title / summary / mentions) を載せない", async () => {
     // 無いと: 復旧のための警告ログが、そのまま Application Insights への機微データ漏洩に
     // なる (監査 E-2 / 観点 S3)。出してよいのは id と「どこがどう壊れたか」だけ。
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const lines: string[] = [];
     const secret = "会社を辞めたいと毎晩考えている";
     const broken = asStoredDocument(
       {
@@ -278,12 +279,16 @@ describe("[単体] 契約に反する 1 件が一覧全体を落とさない", (
       "user-a",
     );
 
-    await new CosmosProblemRepository(
-      makeFakeContainer({ queryResults: [broken] }).container,
-      "user-a",
-    ).list();
+    // テレメトリの出口を丸ごと捕まえる (#307)。依存呼び出しのログもここに入るので、
+    // 「警告行だけ安全」で他の行から漏れる、という穴が残らない。
+    await runWithLogger({ log: (m) => lines.push(m), error: (m) => lines.push(m) }, () =>
+      new CosmosProblemRepository(
+        makeFakeContainer({ queryResults: [broken] }).container,
+        "user-a",
+      ).list(),
+    );
 
-    const logged = warn.mock.calls.flat().join(" ");
+    const logged = lines.join(" ");
     expect(logged).toContain("prob-1"); // どの doc かは分かる
     expect(logged).toContain("theme"); // どこが壊れたかも分かる
     expect(logged).not.toContain(secret);

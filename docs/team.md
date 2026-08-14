@@ -10,9 +10,9 @@ Mind Inbox は **1 人の PO (人間) と、複数種類のエージェント / 
 ```mermaid
 flowchart TB
   PO["PO (人間)<br/>裁定・承認・不可逆な判断"]
-  PM["窓口 PM セッション (1 本)<br/>対話・分配・受け入れ"]
+  PM["窓口 PM セッション (1 本)<br/>回答・判断・分配 (書かない)"]
   DUTY["当番 PM (Routine)<br/>1 日 1 回の巡回・執行"]
-  SUB["subagent<br/>調査・実装 (worktree 隔離)"]
+  SUB["subagent<br/>調査・実装・push (worktree 隔離)"]
   CHILD["子セッション<br/>言い切れる作業を PR まで"]
   JUDGE["judge (.claude/agents/)<br/>新品の文脈で審査"]
   GHA["GitHub Actions<br/>CI / review-gate / 定期監視"]
@@ -24,6 +24,7 @@ flowchart TB
   PM --> JUDGE
   DUTY --> GH
   SUB --> PM
+  SUB --> GH
   CHILD --> GH
   JUDGE --> PM
   GHA --> GH
@@ -43,11 +44,13 @@ flowchart TB
 
 ## 2. 窓口 PM セッション
 
-user の対話窓口。**常に 1 本**で、使い捨てローテーションする。
+user の対話窓口。**常に 1 本**で、使い捨てローテーションする。**守る資源は窓口の可用性** — PO の時間が一番高いので、窓口は **PO の問いにいつでも答えられる状態**を保つ。
 
-- **担う** — GitHub のライブ状態 (open PR / `needs-human` / Proposed ADR / 自動起票 Issue) の復元と「🙋 あなたの番」付きの報告 / design-gate の実施 / 作業の分配と起票パケットの作成 / PR の受け入れレビュー (`[pm-accept]` + 現 head SHA + 判定理由) / PR 追従とマージ / `stream:*` レーンの整備 / 旧窓口の退役
-- **担わない** — 技術レビュー (judge が担う) / リリース PR の merge・deploy / design-gate 対象の設計判断を子や subagent へ分配すること / 不可逆な判断を無人で進めること
+- **担う** — 3 つだけ: **user への回答** (答えるための調査を含む) / **判断** (どの案を採るか / マージしてよいか / 何が本丸か / design-gate の実施) / **分配** (起票パケットの作成と実行者の起動)。その現れとして、GitHub のライブ状態 (open PR / `needs-human` / Proposed ADR / 自動起票 Issue) の復元と「🙋 あなたの番」付きの報告 / PR の受け入れレビュー (`[pm-accept]` + 現 head SHA + 判定理由) / PR 追従とマージ / `stream:*` レーンの整備 / 旧窓口の退役
+- **担わない** — **実装・修正・コミット・push** (**サイズを問わず** subagent か子セッションに出す。1 行でも出す。窓口が手を動かしている間 PO が待たされるので、判断軸は作業の大きさではなく「PO を待たせるか」) / **分配先の差分をまとめてコミットすること** (窓口が統合のボトルネックに戻る) / 技術レビュー (judge が担う) / リリース PR の merge・deploy / design-gate 対象の設計判断を子や subagent へ分配すること / 不可逆な判断を無人で進めること
+- **手を動かしてよい例外は 2 つだけ** — user の質問に答えるための調査 (grep / read / 実行して確かめる。回答そのものだから) / 分配先が詰まって user に判断を返すための状況確認 (`get_session` / PR・Issue の確認)
 - **名乗りと退役** — 自分に `[PM] Mind Inbox ハブ (YYYY-MM-DD〜)` を `set_session_title` で付け、旧窓口を `[PM-retired] <元タイトル>` にリネームして `archive_session` する。**これを行えるのは新しく開かれた対話セッションだけ** (当番 Routine・子・subagent は退役操作をしない)。実行中の窓口は退役させず、archive の前に in-flight を GitHub へ書き出す
+- **モデルは Fable 5** (2026-08-14 PO 裁定) — 窓口が使うのは判断の質。物量は Opus 5 の分配先に出すことで、全部を Fable で回して上限を先に使い切るのを防ぐ
 - **着工の排他** — **機構は無い** (claim ref は設計だけで未実装 — 下の「未定 / 未検証」)。**本数の上限も無い** — 並列化が既定 ([`dispatch` skill](../.claude/skills/dispatch/SKILL.md))。今あるのは起票パケットの**ファイル境界**と、着手前の open PR / ブランチ確認だけ
 - **痕跡** — 対話そのもの / PR の `[pm-accept]` コメント / Issue / PM ハブ Issue の引き継ぎ宣言 / journal
 
@@ -59,9 +62,10 @@ user の対話窓口。**常に 1 本**で、使い捨てローテーション�
 
 `create_session` で起こす独立コンテナのセッション。**起票パケットを渡されて動く**。
 
-- **担う** — 指示を一度で言い切れて、長時間かかり、成果が PR / Issue に残る作業。自分で PR を出し CI を追える
+- **担う** — 指示を一度で言い切れて、長時間かかり、成果が PR / Issue に残る作業。**コミットと push、PR 作成と CI 追従まで自分で完遂する** (親は統合しない)
 - **担わない** — user への直接報告 / 短い往復を要する作業 / 窓口の退役操作
-- **起こし方** — `source_url` と `source_revision` は**必須** (環境は継承されるがリポジトリは継承されない)。起票パケットは 6 点: 対象 Issue / 完遂条件 / **触ってはいけないファイル境界** / CLAUDE.md 参照 / 詰まったら Issue にコメントして終了 / 報告先。使い終わったら `archive_session` する
+- **起こし方** — `source_url` と `source_revision` は**必須** (環境は継承されるがリポジトリは継承されない)。起票パケットは 7 点: 対象 Issue / 完遂条件 / **触ってはいけないファイル境界** / CLAUDE.md 参照 / **コミットと push まで完遂すること** / 詰まったら Issue にコメントして終了 / 報告先。使い終わったら `archive_session` する
+- **モデルは Opus 5** (2026-08-14 PO 裁定) — `create_session` に `model: "claude-opus-5"` を明示する。**省略すると親 (Fable 5) を継承する**
 - **会話は片道 約 1 分** — `send_message` / `list_events` はこの環境に無く、メッセージは `create_trigger` + `run_once_at` を相手セッションに bind して届ける。**往復が 1 回増えるごとに 1 分待つ**ので、短い往復を繰り返す作業は子に出さず subagent にする
 - **止まったら** — `get_session` の `status_category` が `need_input` なら権限待ち。`needs_action` のツール名を `.claude/settings.json` の `allow` に足して**子を起こし直す** (起動済みの子には設定が効かない)。ただし `deny` のツールは足さず、commit + PR に切り替えさせる
 - **痕跡** — PR / 対象 Issue へのコメント (子 → 親の報告は Issue コメントが既定)
@@ -70,11 +74,13 @@ user の対話窓口。**常に 1 本**で、使い捨てローテーション�
 
 `Agent` ツールで起こす、親と同じセッション内の別コンテキスト (`isolation: "worktree"` で作業ファイルを隔離する)。
 
-- **担う** — 複数ファイルにまたがる実装 / 調査を伴う作業 / 途中で判断が要る作業 / 結果を読んで次を決める作業。judge もこの形で動く
-- **担わない** — user との対話 / PR の管理 (PR の面倒は親が引き受ける) / 窓口の退役操作
-- **出す理由は独立性ではなく、親のコンテキストの経済** — 実装者とレビュアーの分離はレビュー側の judge が担う
-- **指示文は子と同じ起票パケット** (対象 Issue / 完遂条件 / ファイル境界 / CLAUDE.md 参照) を満たし、成果 PR の本文にも残す
-- **痕跡** — 親が受け取って PR / Issue に残す (subagent 自身は投稿しない)
+- **担う** — **窓口が書かない実装のすべて** (サイズを問わない。1 行の修正・設定変更も含む) / 調査を伴う作業 / 途中で判断が要る作業 / 結果を読んで次を決める作業。**コミットと push まで担う**。judge もこの形で動く
+- **担わない** — user との対話 / PR の受け入れ判定とマージ (判断は窓口) / 窓口の退役操作
+- **モデルは Opus 5** (2026-08-14 PO 裁定) — `Agent` 呼び出しに `model: "opus"` を明示する。**省略すると親 (Fable 5) を継承する**。judge など判断の質そのものが成果物の呼び出しだけ、窓口が都度 Fable 5 に上げてよい
+- **出す理由は独立性ではなく、窓口の可用性** — 窓口が手を動かしている間 PO が待たされる。実装者とレビュアーの分離はレビュー側の judge が担う
+- **指示文は子と同じ起票パケット** (対象 Issue / 完遂条件 / ファイル境界 / CLAUDE.md 参照 / コミットと push まで完遂) を満たし、成果 PR の本文にも残す
+- **同一セッション内の subagent どうしは `SendMessage` で直接やり取りできる** (親を経由しなくてよい) — ただし **subagent は `ListAgents` を持たないので相手を発見できず、親が相手の名前を渡さないと宛先を書けない**。**セッションを跨いだピアは依然として見えない** (`No reachable agents`) ので、跨ぎの連絡は Issue コメント / Routine のまま (2026-08-13 実測)
+- **痕跡** — 自分で push したブランチ / PR (投稿が要る場合は親が代わりに残す)
 
 ## 5. judge (`.claude/agents/`)
 
@@ -93,14 +99,15 @@ user の対話窓口。**常に 1 本**で、使い捨てローテーション�
 - **共通の規律** — 審査基準は `.github/claude/*-rubric.md` (+ 共通規約 `_common.md`) が正典 (rubric-as-truth)。**judge はコードを変更せず、投稿もしない** (投稿は呼び出し元の責務)。`qa-reviewer` だけがテストコードに限って書ける
 - **機構で縛ってある** — judge に渡してあるのは**読み取り専用の GitHub MCP ツール**だけで、コメント投稿・resolve・merge・issue 更新は渡していない。`ToolSearch` も渡していない (後から書き込みツールを読み込めるため)。付与先は `code-reviewer` / `qa-reviewer` / `release-judge` の 3 体に限っている
 - **痕跡** — PR コメント (代役レビューは `<!-- standin-review -->` + 現 head SHA 付き) / release-gate のレポート / status ページの Routine 行
-- **今の状態: Codex が利用上限で停止しており、PR の技術レビューは代役の `code-reviewer` が担っている** ([#345](https://github.com/yomote/mind-inbox/issues/345))。**代役は Claude なので独立性は回復していない** — 実装もレビューも同じモデルで、同じ盲点を共有する。これは Codex が戻るまで目隠しを薄くする措置であって、代替ではない
+- **今の状態: Codex は 2026-08-13 に PR [#388](https://github.com/yomote/mind-inbox/pull/388) で 2 回動いた** — 03:58 UTC に `.claude/skills/dispatch/SKILL.md` へ P2 指摘を投稿し ([discussion_r3772284108](https://github.com/yomote/mind-inbox/pull/388#discussion_r3772284108))、13:00 UTC に `6d618d8` を再レビューして `Didn't find any major issues` を投稿した ([issuecomment-5280750928](https://github.com/yomote/mind-inbox/pull/388#issuecomment-5280750928)。後者は 12:58 の `@codex review` コメントで明示的に起こしたもの)。よって「Codex が利用上限で停止しているので代役の `code-reviewer` が技術レビューを担う」([#345](https://github.com/yomote/mind-inbox/issues/345)) は、**少なくとも 2026-08-13 時点では成り立たない**。ただし確認できたのは**この日に 2 回投稿できたという事実だけ**で、利用上限が恒久的に解けたかは **未検証** (残量は GitHub から読めない) — 下の「未定 / 未検証」を見ること
+- **代役 `code-reviewer` に回すときの前提は変わらない** — **代役は Claude なので独立性は回復しない**。実装もレビューも同じ系統のモデルで、同じ盲点を共有する (モデル名を分けても系統は同じ)。代役は Codex が沈黙している間だけ目隠しを薄くする措置であって、代替ではない
 - **今の状態: 代役 judge を自動起動する経路がまだ無い。** PR レビュー Routine は web UI での登録が必要で未登録のため、status ページのその行は**恒常 🔴 が正しい状態** (「登録されていない」という事実を出している)。それまで judge は PM が手で呼ぶ — **呼び忘れれば沈黙する**
 
 ## 6. GitHub Actions
 
 **規律ではなく機構で守る層**。セッションの生死に依存せず、run 履歴が必ず残る。
 
-- **PR ごとの門** — `test` (4 層テスト + lint/build) / `codeql` / `iac-validate` / `adr-number-guard` (ADR 採番の衝突) / `auto-improve-guard` (自動改変の範囲)
+- **PR ごとの門** — `test` (4 層テスト + lint/build) / `CodeQL` (**GitHub の default setup**。自前 workflow だった `codeql.yml` は 2026-08-14 の PO 裁定で退役 — [#408](https://github.com/yomote/mind-inbox/issues/408)) / `iac-validate` / `adr-number-guard` (ADR 採番の衝突) / `auto-improve-guard` (自動改変の範囲)
 - **マージの門** — `review-gate` が commit status を貼る。緑になる条件は 3 つ: (1) `[pm-accept]` + 現 head SHA の受け入れコメント、(2) レビュースレッドが全解決、(3) コード PR なら**独立レビューが 1 本** (担い手は Codex でも代役 judge でもよい)。**push で受け入れは失効する** (実装差分が不変の main 追随だけは引き継ぐ)。さらに 30 分毎の sweep が advisory・マージ執行・ストール検知を回す
 - **配る** — `deploy` (main → dev) / `build-images` (ghcr へ事前ビルド)
 - **見張る** — `golden-path-monitor` (毎朝の実環境チェック) / `ux-eval` (UX 機械計測) / `debt-check` / `security-sweep` / `refresh-infra-diagram` / `status-page`
@@ -121,7 +128,7 @@ user の対話窓口。**常に 1 本**で、使い捨てローテーション�
 
 ## 役割はセッションの起こされ方で決まる
 
-同じモデルが、**どう起こされたか**で別の役割になる。名乗りではなく起動条件で決まる。
+役割は **どう起こされたか**で決まる。名乗りでもモデルでもない (モデルは役割に付いてくる — 各節の「モデルは〜」を見ること)。
 
 | 起こされ方 | 役割 |
 | --- | --- |
@@ -151,5 +158,5 @@ user の対話窓口。**常に 1 本**で、使い捨てローテーション�
 - **`fire_trigger` による即時 poke が配送されない理由** — 未特定 ([#353](https://github.com/yomote/mind-inbox/issues/353))
 - **judge の frontmatter `tools:` が MCP ツール名を受け付けるか** — 未検証。次に judge を回したとき、GitHub の読み取りが実際に通ったかを確認する
 - **`REVIEW_GATE_REQUIRE_CODEX` の現在値** — 2026-08-12 時点の実測では `false` で、独立レビュー必須の条件が効いていない。`true` に戻すのは PO の web UI 操作。以後変わったかはリポジトリから読めない (**未確認**)
-- **Codex の復帰時期** — 未定。復帰したら指摘者を Codex に戻し、代役 Routine を退役させて watchers.json から 1 行消す
+- **Codex が継続して動くか (恒久復帰か)** — **未検証**。2026-08-13 に PR [#388](https://github.com/yomote/mind-inbox/pull/388) で 2 回投稿したのは実測 (5 章) だが、これは「その日は叩けた」という 1 日分の観測でしかなく、利用上限が恒久的に解けた証拠ではない。**「復帰した」と断定しない** — 判断材料は次の数本のコード PR で Codex が実際に指摘を出しているか。恒久的に動くと確認できたときに初めて、指摘者を Codex に戻し、代役 Routine を退役させて watchers.json から 1 行消す
 - **merge queue** — workflow 側は `merge_group` を報告する形になっているが、**queue の有効化自体は未完了** ([#269](https://github.com/yomote/mind-inbox/issues/269) の `needs-human`)

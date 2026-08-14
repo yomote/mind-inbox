@@ -270,6 +270,118 @@ az role assignment list --all --assignee "$CLIENT_ID" \
 > 「過去の障害はそこでしか追えない」ので、実用上の損失は小さい。失敗しても
 > `(未検証: 理由)` として可視化される設計になっている。
 
+## read-only の識別を足す (#209 / ops-inspect 用)
+
+**なぜ**: 上のデプロイ用 SP は `main` 限定のフェデレーション資格情報しか持たない。
+そのため **Azure を「読む」だけの確認にも main へのマージが必要**だった
+(2026-08-10 の 1 セッションで 6 往復)。読むだけの用途を、書き込み権を持つ SP から切り離す。
+
+**ワイルドカードは使えない**。標準のフェデレーション資格情報はサブジェクトの完全一致なので、
+`claude/*` のような指定は通らない。そこで **`ops/inspect` という専用ブランチ 1 本に寄せる**
+(エージェントは調査のたびにこのブランチへ push して dispatch する)。
+
+### 手順
+
+1. **アプリ登録を作る** — 例 `gha-oidc-readonly-mind-inbox`。リダイレクト URI は空
+2. **フェデレーション資格情報を 1 本**追加する
+   - シナリオ: 「GitHub Actions が Azure リソースをデプロイする」
+   - 組織 `yomote` / リポジトリ `mind-inbox`
+   - エンティティ型: **ブランチ** / ブランチ名: `ops/inspect`
+   - 生成されるサブジェクト: `repo:yomote/mind-inbox:ref:refs/heads/ops/inspect`
+3. **ロールを 3 つ**割り当てる (サブスクリプション スコープ / **書き込み系は付けない**)
+   - 閲覧者 / Cost Management 閲覧者 / Log Analytics 閲覧者
+4. GitHub の **Actions Variables** に `AZURE_CLIENT_ID_RO` = アプリ登録のクライアント ID
+
+テナントとサブスクリプションは既存の `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` を流用する。
+
+上の 1〜4 は `ro.sh` が冪等にやる。Azure Cloud Shell (Bash) から、**必ず commit sha で固定して**実行する:
+
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/yomote/mind-inbox/<commit-sha>/ro.sh)
+```
+
+sha は GitHub の `ro.sh` のページで `y` を押す (Copy permalink) と URL に入る。
+
+> **ブランチ名 (`ops/inspect`) で取ってはいけない。** このスクリプトは PO 自身の Azure 権限
+> ([ADR 0006](../adr/0006-azure-access-via-device-code.md) の device-code ログイン) の下で走る一方、
+> `ops/inspect` は調査のたびに直 push する運用のため**ブランチ保護が無い**。ブランチ名で
+> always-latest を取ると、このブランチに push できる者が中身を差し替えた瞬間、次の実行で
+> read-only の枠を超えて PO の全権限で任意コマンドが走る。
+
+**失敗したら client ID を登録しない**。`ro.sh` はどこか 1 ステップでも失敗すると、末尾に
+「❌ 未完了のステップがあります」と失敗一覧を出して**非ゼロで終了し、登録案内を出さない**。
+資格情報やロールが欠けたまま `AZURE_CLIENT_ID_RO` を登録すると、次の `ops-inspect` が
+Azure login やクエリで落ちるまで不完全な構成に気づけないため。原因を直してそのまま再実行してよい
+(全ステップ冪等)。
+
+### この構成のトレードオフ
+
+`ops/inspect` に保護を掛けると「調査のたびに直 push して dispatch する」という用途が成立しないため、
+**保護なしのまま受容している**。つまり**このリポジトリに push できる主体は、read-only の Azure
+資格情報 (Reader / Cost Management Reader / Log Analytics Reader) を実質的に取得できる**。
+Log Analytics には相談ログや例外詳細が載りうるので、「read-only だから無害」ではない。
+
+**恒久解は [#405](https://github.com/yomote/mind-inbox/issues/405)** — フェデレーション資格情報の
+サブジェクトを `environment:` 型にすると、ブランチ名への依存 (= この構図の原因) が消える。
+移行が終わるまでは下の 4 条件で受容する。
+
+### read-only 識別の受容条件 (正典)
+
+> **ここがこの 4 条件の正典。** 元は ADR 0054 に書かれていたが、2026-08-14 の debrief で
+> 「これはシステムアーキテクチャではなく**開発設備 (CI 資格情報) の運用判断**なので ADR ではない」と
+> 裁定され、記録は [`docs/adr/archive/operations/readonly-investigation-identity-on-unprotected-branch.md`](../adr/archive/operations/readonly-investigation-identity-on-unprotected-branch.md)
+> へ退避した (Status の変更ではなく分類の退避)。**条件を外す・広げるときは、退避した記録ではなくこの節を直すこと。**
+> 判断の経緯 (却下した選択肢とその理由) は退避先に残してある。
+
+1. **この識別には書き込み系のロールを一切付けない** — `ro.sh` が付けるのは Reader /
+   Cost Management Reader / Log Analytics Reader の 3 つだけ。**増やすならこの節を先に改訂する**
+2. **`ops-inspect` workflow は状態を変える操作をしない** — `az` は show / list のみ、`curl` は GET のみ、
+   入力は `env:` 経由でのみ参照する (workflow 冒頭に明記されている)。
+   **例外は Cost Management の query API 1 つだけ** (下の 2-a)
+
+   **2-a. 例外: Cost Management の query API への POST は「読み取り」として許す**
+
+   `cost-summary` は `az rest --method post` で
+   `https://management.azure.com/subscriptions/{sub}/providers/Microsoft.CostManagement/query`
+   を叩く。HTTP メソッドは POST だが、**これは書き込みではない**:
+
+   - **なぜ POST なのか** — この API は集計の条件 (期間 `timeframe` / 粒度 `granularity` /
+     グルーピング `grouping`) を body で渡す設計であり、クエリを URL に載せないため POST になる。
+     **サブスクリプションのリソース・構成・課金設定は何も変わらない**。読めるのは
+     Cost Management Reader の範囲の請求データだけで、必要な権限も Reader 系のみ (条件 1 のロールで足りる)
+   - **なぜ GET で代替できないのか** — GET の `az consumption usage list` は、このサブスクリプションでは
+     `pretaxCost` が文字列 `"None"` で返り実額が取れなかった (2026-08-10 実測 / 89 件すべて。
+     Cost Management Reader を付けても変わらず、権限ではなく API の問題)。
+     「予算 ¥3,000 に対して今いくらか」を読むという `cost-summary` の目的そのものが GET では果たせない
+   - **例外の範囲はこの 1 URI に閉じる** — `Microsoft.CostManagement/query` 以外への POST、および
+     PUT / PATCH / DELETE は一切許さない。**「読み取りに必要なら POST してよい」という一般則にはしない**
+     (それを許すと条件 2 が実質的に空文になる)。増やすならこの節を先に改訂する。
+     機械的な検査は無く、**2 つ目の POST が増えていないかはレビューで見るしかない**
+
+3. **人間が実行するスクリプトはブランチ名で取らない** — `ro.sh` は PO 自身の Azure 権限
+   (device-code ログイン / [ADR 0006](../adr/0006-azure-access-via-device-code.md)) の下で走るため、
+   **commit sha で固定して取得する** (上の手順のとおり)。ブランチ名で取ると、このブランチに
+   push できる者が中身を差し替えた瞬間に read-only の枠を超えて PO の全権限で任意コマンドが走る
+   (この経路が唯一の「壊せる」穴)。**機械的に強制されていない運用規律**なので、
+   `ro.sh` をブランチ名で取る運用に戻すと穴が開く
+4. **リポジトリの write 権限を持つ主体が増えたら再判断する** — 現状は PO 1 人 +
+   その委任で動くエージェントセッションのみ。共同作業者が増えた時点でこの受容は前提を失う
+
+### どう使われるか
+
+`ops-inspect.yml` の guard が ref を見て使い分ける。
+
+| ref | ログインに使う識別 |
+| --- | --- |
+| `main` | 従来のデプロイ SP (`AZURE_CLIENT_ID`) |
+| それ以外 | **read-only ID** (`AZURE_CLIENT_ID_RO`) |
+
+### 動作検証
+
+`ops/inspect` ブランチから `ops-inspect` を dispatch し、`check: azure-resources` が
+🟢 になること。ログの guard ステップに `ログインに使う識別: read-only ID (ops/inspect)`
+が出ていれば、read-only 側で通っている。
+
 ## Verification
 
 - [ ] `setup-oidc.sh` が ID を出力し、GitHub Variables に登録済み
@@ -353,6 +465,11 @@ federated credential の subject は `environment:<name>` にもできるが、*
 将来 Environment を導入するなら「承認者なし・deployment branch を `main` に限定」の
 Environment を作り、4 本すべてに `environment:` を宣言してから subject を差し替えること。
 
+**ただし read-only 識別 (`ops-inspect` 用) だけは事情が違う** — あちらは
+「ブランチ名の完全一致しか書けない」制約が保護なしブランチを生んでいるので、Environment の
+deployment branch policy (ワイルドカード可) で解ける。移行は
+[#405](https://github.com/yomote/mind-inbox/issues/405) が持つ。
+
 ### 連続でマージしたときのデプロイ順
 
 - 同一 concurrency group + `cancel-in-progress: false` で直列化される。走行中のデプロイは中断されず、後続はキューイングされて順に流れる（中途半端な状態を残さないため意図的にこの設定）。
@@ -365,7 +482,7 @@ Environment を作り、4 本すべてに `environment:` を宣言してから s
 
 ## Related
 
-- Issue: [#46 OIDC CD の SP ロールスコープ最小化](https://github.com/yomote/mind-inbox/issues/46)
+- Issue: [#46 OIDC CD の SP ロールスコープ最小化](https://github.com/yomote/mind-inbox/issues/46) / [#405 read-only 識別を GitHub Environments ベースへ移行](https://github.com/yomote/mind-inbox/issues/405)
 - ADR: [0009 オンデマンド CD](../adr/0009-on-demand-cd-via-github-actions-oidc.md) / [0013 常設 dev](../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md) / [0006 device-code](../adr/0006-azure-access-via-device-code.md) / [0018 動作検証](../adr/archive/operations/runtime-verification-in-the-loop.md)
 - ワークフロー: `.github/workflows/deploy.yml`
 - スクリプト: `cicd/scripts/cloud-env/setup-oidc.sh` / `cicd/scripts/deploy/provision.sh` / `cicd/scripts/env/cleanup-env.sh`

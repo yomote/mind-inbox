@@ -21,13 +21,13 @@ LLM の目視だけに頼らない。**環境で使えるスキャナは全部�
 
 ### 静的スキャン (SAST / SCA / secrets)
 
-| 対象                              | ツール (利用可能なものを使う)                                                                            | 見るもの                                                 |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| npm 依存 (bff / frontend)         | `npm audit --json` / `osv-scanner` (lockfile があるディレクトリで)                                       | 既知 CVE。**到達可能性を判定**してから severity を付ける |
-| Python 依存 (ai-agent / voicevox) | `pip-audit` / `osv-scanner` / 無ければ `pip list` + アドバイザリ照合                                     | 同上                                                     |
-| 秘密情報                          | `gitleaks detect` / `trufflehog` / 無ければ git grep パターン (`AKIA`, `-----BEGIN`, `client_secret` 等) | コミット済み秘密 (S1)                                    |
-| コードパターン (SAST)             | `semgrep --config auto` / Python は `bandit`                                                             | injection / SSRF / 危険 API 系の機械検出 (S2)            |
-| コンテナ / IaC                    | `trivy fs` / `trivy config` / `checkov` (Dockerfile・Bicep・workflow に差分がある時)                     | ベースイメージ CVE・設定ミス (S6)                        |
+| 対象                                      | ツール (利用可能なものを使う)                                                                            | 見るもの                                                 |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Node 依存 (root=npm / bff・frontend=pnpm) | `npm audit --json` / `pnpm audit --json` / `osv-scanner` (lockfile があるディレクトリで)                 | 既知 CVE。**到達可能性を判定**してから severity を付ける |
+| Python 依存 (ai-agent / voicevox)         | `pip-audit` / `osv-scanner` / 無ければ `pip list` + アドバイザリ照合                                     | 同上                                                     |
+| 秘密情報                                  | `gitleaks detect` / `trufflehog` / 無ければ git grep パターン (`AKIA`, `-----BEGIN`, `client_secret` 等) | コミット済み秘密 (S1)                                    |
+| コードパターン (SAST)                     | `semgrep --config auto` / Python は `bandit`                                                             | injection / SSRF / 危険 API 系の機械検出 (S2)            |
+| コンテナ / IaC                            | `trivy fs` / `trivy config` / `checkov` (Dockerfile・Bicep・workflow に差分がある時)                     | ベースイメージ CVE・設定ミス (S6)                        |
 
 ### 動的チェック (アプリが起動できる場合)
 

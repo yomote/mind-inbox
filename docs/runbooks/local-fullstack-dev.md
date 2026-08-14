@@ -13,7 +13,7 @@ GitHub Pages のモック（フロントのみ）では **声の UX が評価で
 ## Prerequisites
 
 - **Docker**（VOICEVOX エンジン用）
-- **Node 22** + **pnpm 9** + **Azure Functions Core Tools v4**（`func`）
+- **Node 22** + **pnpm 9**（frontend / BFF の両方。root だけ npm） + **Azure Functions Core Tools v4**（`func`）
 - **Python 3.11**（VOICEVOX wrapper 用。`pip` か `uv`）
 - ポート空き: `50021`(エンジン) / `8001`(wrapper) / `7071`(BFF) / `5173`(frontend)
 - Azure OpenAI のキーは**不要**（未設定なら BFF が chat をスタブ応答で返す。読み上げ＝VOICEVOX は本物のまま）
@@ -48,8 +48,8 @@ GitHub Pages のモック（フロントのみ）では **声の UX が評価で
    # local.settings.json の Values を編集:
    #   "VOICEVOX_BASE_URL": "http://localhost:8001"
    #   "AI_AGENT_BASE_URL": ""   ← 空のまま = chat はスタブ応答（OpenAIキー不要）
-   npm install
-   npm run dev    # build:watch + func start（:7071）
+   pnpm install
+   pnpm run dev   # build:watch + func start（:7071）
    ```
 
    > **`func` を入れたくない / 声を評価しない場合**は、Azure Functions Core Tools を使わずに
@@ -58,13 +58,13 @@ GitHub Pages のモック（フロントのみ）では **声の UX が評価で
    >
    > ```bash
    > cd apps/bff
-   > npm install && npm run build          # dist を読むので build が要る
+   > pnpm install && pnpm run build       # dist を読むので build が要る
    > VOICEVOX_BASE_URL=http://localhost:8001 node scripts/local-server.mjs   # :7071
    > ```
    >
-   > 差分は 2 点だけ: **ホットリロードが無い**（`npm run build` を都度叩く）ことと、
+   > 差分は 2 点だけ: **ホットリロードが無い**（`pnpm run build` を都度叩く）ことと、
    > フロントが別ポートに居るため **CORS を開けている**こと。声の UX を通しで見るなら
-   > `npm run dev`（`func start`）のままが楽。
+   > `pnpm run dev`（`func start`）のままが楽。
 
 4. **フロントエンド**（Vite, :5173 — 実 BFF を叩く）
 

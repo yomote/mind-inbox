@@ -14,6 +14,7 @@
 import { isConfigured, synthesize } from "../clients/voicevoxClient";
 import { splitTtsSentences } from "../domain/sentences";
 import { concatWavs } from "../audio/wav";
+import { describeError, logErrorEvent } from "../observability/telemetry";
 
 const CACHE_TTL_MS = 5 * 60_000;
 const CACHE_MAX_ENTRIES = 64;
@@ -167,10 +168,10 @@ export async function synthesizeTts(req: TtsSynthesisRequest): Promise<ArrayBuff
     if (wavs.some((w) => w === null)) return null; // stub
     return concatWavs(wavs as ArrayBuffer[]);
   } catch (err) {
-    // 分割合成 (結合含む) の失敗で TTS 全体を落とさない — 全文一括で 1 回だけ再試行
-    console.warn(
-      `[ttsService] split synthesis failed — falling back to single-shot: ${(err as Error).message}`,
-    );
+    // 分割合成 (結合含む) の失敗で TTS 全体を落とさない — 全文一括で 1 回だけ再試行。
+    // **縮退したことを黙らせない**: 成功して返るので、この行が無いと「分割合成が
+    // 毎回落ちている」が正常運転と区別できなくなる。
+    logErrorEvent("tts.split-fallback", { count: sentences.length, ...describeError(err) });
     return await synthesize({ text: req.text, speakerId: req.speakerId });
   }
 }

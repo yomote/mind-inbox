@@ -146,12 +146,15 @@ jobs:
         with:
           version: 9
 
-      - name: Install deploy tooling (swa CLI, zip)
+      - name: Install deploy tooling (swa CLI, zip, unzip)
         if: steps.guard.outputs.run == 'true' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'up') || (github.event_name == 'push' && steps.autodeploy.outputs.run == 'true'))
         run: |
           npm install -g @azure/static-web-apps-cli
-          # zip は ubuntu-latest に入っている想定。無い時だけ apt（毎回の update ~30-60s を回避）。
+          # zip / zipinfo は ubuntu-latest に入っている想定。無い時だけ apt（毎回の update ~30-60s を回避）。
+          # zipinfo は unzip パッケージ同梱。BFF の zip に symlink が混ざっていないかの検査に使い、
+          # 無いと deploy-backend.sh が「検査できない」として落ちる（#420）。
           command -v zip >/dev/null || { sudo apt-get update && sudo apt-get install -y zip; }
+          command -v zipinfo >/dev/null || { sudo apt-get update && sudo apt-get install -y unzip; }
 
       # :latest 差し替えは ARM 的にテンプレート変更なし → 新 revision を作らない no-op (#107)。
       # ghcr 側で latest の実体が進んでいても Container Apps は据え置きのままになるため、
@@ -301,7 +304,7 @@ jobs:
       # 外科的な除去は列挙漏れで**静かに漏れる** (失敗が公開側に倒れる)。暗号化は
       # 中身の形に依存しないので、その失敗モードが存在しない。
       #
-      # 鍵の準備・復号手順は cicd/keys/README.md。
+      # 鍵の準備・復号手順は docs/runbooks/e2e-trace-keys.md (鍵ファイルの置き場は cicd/keys/README.md)。
       - name: E2E の trace を公開鍵で暗号化して残す
         id: encrypt_trace
         if: always() && steps.e2e.conclusion == 'failure'

@@ -70,7 +70,8 @@ updates:
         applies-to: version-updates
         patterns: ["*"]
 
-  # ── npm (apps/bff — Azure Functions + tRPC / package-lock.json) ───────
+  # ── pnpm (apps/bff — Azure Functions + tRPC / pnpm-lock.yaml) ─────────
+  # frontend と同じく、pnpm-lock.yaml は npm ecosystem が読む (専用の ecosystem 名は無い)。
   - package-ecosystem: "npm"
     directory: "/apps/bff"
     schedule:
