@@ -1,11 +1,14 @@
 # Infra 運用手順（Bootstrap / Config 分離）
 
-このディレクトリでは、次の 2 つのエントリで Azure インフラを管理します。
+このディレクトリでは、次のエントリで Azure インフラを管理します。
 
-- [main-bootstrap.bicep](main-bootstrap.bicep): 初回構築と基盤更新
+- [main-mgmt.bicep](main-mgmt.bicep): **管理系**（運用のためのもの / 別 RG に一度きり）
+- [main-bootstrap.bicep](main-bootstrap.bicep): 初回構築と基盤更新（**アプリ系**）
 - [main-config.bicep](main-config.bicep): 認証など後追い設定
 
-対象スコープは resource group です。
+対象スコープはいずれも resource group です。**適用順は mgmt → bootstrap → config**
+（[ADR 0003](../../docs/adr/0003-two-phase-bicep.md) の 2 フェーズはアプリ系の中の話で、
+その前段に管理系が 1 つ増えた形。順序を入れ替えない）。
 
 ## 目次
 
@@ -13,6 +16,7 @@
   - [目次](#目次)
   - [0. 最短ルート（初回）](#0-最短ルート初回)
   - [1. 前提](#1-前提)
+  - [1-5. 管理系レイヤ（rg-mgmt-mindbox / 一度きり）](#1-5-管理系レイヤrg-mgmt-mindbox--一度きり)
   - [2. Bootstrap（基盤作成 / 更新）](#2-bootstrap基盤作成--更新)
     - [命名規則（既定値）](#命名規則既定値)
     - [2-1. 事前確認（build + what-if）](#2-1-事前確認build--what-if)
@@ -83,6 +87,58 @@ az login
 az account set --subscription "<subscription-name-or-id>"
 az bicep version
 ```
+
+---
+
+## 1-5. 管理系レイヤ（rg-mgmt-mindbox / 一度きり）
+
+**システムを運用するためのものを、アプリ系とは別の RG に置きます**
+（[ADR 0056](../../docs/adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D1 /
+[#302](https://github.com/yomote/mind-inbox/issues/302)）。宣言は
+[main-mgmt.bicep](main-mgmt.bicep)、値は [main-mgmt.parameters.json](main-mgmt.parameters.json)。
+
+**分ける軸は「消えると困るか」ではなく「運用のためか / アプリそのものか」です。**
+
+| 層             | RG                     | 中身                                                                                  | 撤収              |
+| -------------- | ---------------------- | ------------------------------------------------------------------------------------- | ----------------- |
+| **管理系**     | `rg-mgmt-mindbox`      | Key Vault（+ E2E trace 復号鍵）/ バックアップ Storage / Log Analytics / 予算          | ❌ **触らない**   |
+| **アプリ系**   | `rg-dev-mind-inbox`    | Cosmos / OpenAI / Speech / Container Apps / Functions / SWA                           | ✅ 壊して作り直す |
+| **デプロイ層** | （リソースを作らない） | image の sha 差し替え / zip deploy / 静的配信                                         | —                 |
+
+**Cosmos / OpenAI / Speech はアプリ系に残します。** アプリそのものであって運用の道具ではないためです。
+消えると困る Cosmos のデータは、**RG を移して守るのではなくバックアップで戻せるようにします** —
+管理系 RG の非公開 Storage へ自前エクスポート（[ADR 0056](../../docs/adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D2 / 経路の実装は [ADR 0046](../../docs/adr/0046-environment-rebuildable-from-declaration.md) D9）。
+これで「アプリ系 RG は使い捨て」を貫けます。**このリポジトリは public なので、ユーザーデータを
+git データブランチには出しません**（[#302](https://github.com/yomote/mind-inbox/issues/302) コメント）。
+
+**適用手順は [`docs/runbooks/mgmt-layer-apply.md`](../../docs/runbooks/mgmt-layer-apply.md)**（一度きりの手動オペ。管理系の RG は `provision.sh` / `cleanup-env.sh` のどちらも触りません）。ここには構成と `enable*` の考え方だけを置きます。
+
+### 段階適用（`enable*` の既定がなぜこうなっているか）
+
+**既定で作るのは「まだどこにも無いもの」だけ**（Key Vault + 鍵 + バックアップ Storage）。
+`enableLogAnalytics` は**既定 `false`** です — ops workspace が現在 `rg-dev-mind-inbox` に
+実在しており、移行が済むまで二重に作らないためです。
+**RG 間の移動そのものは本テンプレートの担当ではありません**（[#302](https://github.com/yomote/mind-inbox/issues/302) の「段階的に切り出す」）。
+
+### E2E trace の復号鍵（[#301](https://github.com/yomote/mind-inbox/issues/301) / ADR 0045 D5）
+
+Key Vault に **secret ではなく「鍵オブジェクト」を非エクスポートで**宣言しています
+（`attributes.exportable: false`）。復号は `az keyvault key decrypt` で **Key Vault の中**で
+行い、秘密鍵は一度も外に出ません。鍵を使う人には
+**Key Vault Crypto User** だけを与えます（`keyVaultCryptoUserPrincipalIds` に object ID を渡す）。
+**封筒暗号のスクリプト実装は別 PR**です（ここは器だけ）。
+
+鍵の URI（kid）の取り出し方は [runbook](../../docs/runbooks/mgmt-layer-apply.md#steps) にあります（output `e2eTraceKeyUri`）。
+
+### 撤収との関係
+
+`cleanup-env.sh` は**管理系 RG を削除できません**（どのフラグでも通りません）。
+またアプリ系 RG の中に管理系のリソースが残っている間も、**何も消さずに拒否**します。
+詳細は [`../scripts/env/README.md`](../scripts/env/README.md#層ガード--何も消さずに拒否する条件-adr-0056--302)。
+
+このテンプレートが作るリソースには**層タグ `mindInboxLayer=management`（`managementLayerTags`）が刻まれ**、撤収ガードはそれを見て層を判定します。Key Vault / Storage / Log Analytics はアプリ系にも同じ型が居るため、**型ではなくタグが根拠**です。ここにリソースを足すときは `tags: managementLayerTags` も付けてください — 付け忘れると、そのリソースはアプリ系と見なされて撤収で消えます。
+
+**Cosmos が居るアプリ系 RG の撤収も、当面は拒否されます**（判定コード `data-restore-unproven`）。これは「Cosmos の置き場所が間違っている」という意味ではなく、**バックアップからの復元をまだ 1 回も通していない**ための暫定措置です（[ADR 0056](../../docs/adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D3 / [ADR 0018](../../docs/adr/archive/operations/runtime-verification-in-the-loop.md)）。復元を通したら、この一律拒否はバックアップ鮮度の確認に差し替えます（[runbook](../../docs/runbooks/mgmt-layer-apply.md#撤収ガードとの関係-いま暫定なのはどこか)）。
 
 ---
 
@@ -249,12 +305,16 @@ cd cicd
 RG=<rg-name> ./scripts/env/cleanup-env.sh
 ```
 
+- **管理系 RG (`rg-mgmt-mindbox`) は削除できない**（どのフラグでも通らない）
+- **アプリ系 RG に管理系のリソースが残っている間は、何も消さずに拒否する**（[#302](https://github.com/yomote/mind-inbox/issues/302)）
+- **Cosmos が居る RG も当面は拒否する**（復元を 1 回通すまでの暫定 / ADR 0056 D3）
 - RG を削除する
 - **soft-delete の purge は既定で行わない**（Key Vault / Cognitive Services の救済を残す）
 - **Entra アプリ登録も既定で削除しない**（テナントのオブジェクトであり RG の持ち物ではない）
 - 手動指定した既存 Entra アプリと共有 UAMI は削除しない
 
-破壊系の既定が off である理由は [ADR 0046](../../docs/adr/0046-environment-rebuildable-from-declaration.md) D5/D6。
+破壊系の既定が off である理由は [ADR 0046](../../docs/adr/0046-environment-rebuildable-from-declaration.md) D5/D6、
+層ガードは [ADR 0056](../../docs/adr/0056-management-and-app-layers-with-backup-based-data-protection.md)（判定は [`../scripts/env/persistent_layer_guard.py`](../scripts/env/persistent_layer_guard.py)）。
 
 オプション:
 
@@ -364,11 +424,11 @@ gh secret list -R yomote/mind-inbox   # GITHUB_TOKEN は表示されない（自
 
 **現状ここが宣言の外にあるため、bicep から環境を作り直しても、デプロイが走るまで設定が入りません。**
 
-| スクリプト | 何を設定しているか | 持ち主 |
-| --- | --- | --- |
-| `cicd/scripts/deploy/deploy-ai-agent.sh` | Container App の環境変数（`--set-env-vars`） | **シェルのみ**（宣言の外） |
-| `cicd/scripts/deploy/deploy-voicevox-wrapper.sh` | Container App の環境変数 | **シェルのみ**（宣言の外） |
-| `cicd/scripts/deploy/deploy-backend.sh` | Function App の appsettings（`az functionapp config appsettings set`） | **シェルのみ**（宣言の外） |
+| スクリプト                                       | 何を設定しているか                                                     | 持ち主                     |
+| ------------------------------------------------ | ---------------------------------------------------------------------- | -------------------------- |
+| `cicd/scripts/deploy/deploy-ai-agent.sh`         | Container App の環境変数（`--set-env-vars`）                           | **シェルのみ**（宣言の外） |
+| `cicd/scripts/deploy/deploy-voicevox-wrapper.sh` | Container App の環境変数                                               | **シェルのみ**（宣言の外） |
+| `cicd/scripts/deploy/deploy-backend.sh`          | Function App の appsettings（`az functionapp config appsettings set`） | **シェルのみ**（宣言の外） |
 
 > **⚠️ 認証ゲート（[ADR 0017](../../docs/adr/0017-container-apps-access-via-auth-gate.md)）はこの表に入りません — 宣言の外ではなく「二重管理」です。**
 > `bootstrap-core.bicep:1133-1187` の `aiAgentAuthConfig` / `voicevoxWrapperAuthConfig` が

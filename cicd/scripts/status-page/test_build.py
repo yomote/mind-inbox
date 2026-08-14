@@ -316,7 +316,16 @@ def test_L1_定義ファイルが読める():
     # build.py が defs["routines"] を直接読むので必須)
     assert isinstance(defs["routines"], list)
     for w in defs["workflows"]:
-        assert w.get("id", "").endswith(".yml"), w
+        wid = w.get("id", "")
+        # id は `actions/workflows/{id}/runs` にそのまま入る。通るのは 2 形だけ:
+        #   - 自前 workflow のファイル名 (`foo.yml`)
+        #   - **数値の workflow id** — GitHub が管理する dynamic workflow
+        #     (CodeQL default setup / Dependabot) は path 文字列を渡すと 404 で、
+        #     数値でしか run 履歴を引けない (2026-08-14 実測 / Issue #408)
+        # 無いと何が静かに通るか: `dynamic/github-code-scanning/codeql` のような
+        # 「見た目は正しいが API が 404 を返す id」を書いても気づけず、その行は
+        # 恒久的に「未検証」のまま表に居座る (赤ではないので見過ごされる)。
+        assert wid.endswith(".yml") or wid.isdigit(), w
 
 
 def test_l1_型を偽装したmech行でもトレンド描画が落ちない() -> None:

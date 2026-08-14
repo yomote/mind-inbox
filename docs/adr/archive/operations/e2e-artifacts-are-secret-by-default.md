@@ -1,9 +1,32 @@
 # 0045. 実環境 E2E の成果物は既定で秘密扱いにし、trace は公開鍵で暗号化して残す
 
-- Status: Accepted (2026-08-12, debrief にて PO 裁定。D5 は裁定の場で「エージェント復号を認める / 非エクスポート方式で」へ改訂)
+- Status: Accepted (2026-08-12, debrief にて PO 承認)
 - Date: 2026-08-12
 - Deciders: PO (yomote) / 窓口 PM セッション
 - Related: [ADR 0018](runtime-verification-in-the-loop.md) (動作検証をループに組み込む — 証拠が残らないと検証が成立しない) / [ADR 0031](agent-reaches-outside-via-github-actions.md) (外の事実は Actions 経由) / [ADR 0017](../../0017-container-apps-access-via-auth-gate.md) (実環境は認証の門で閉じる — 門が本物だから実トークンが要る)
+
+> **この文書は ADR ではありません。** [#385](https://github.com/yomote/mind-inbox/pull/385) で
+> 「運用・プロセスの決め事は ADR ではない」が正典化され、当時の ADR 0045 はここへ退避しました
+> (番号も退役 / [archive の README](../README.md))。**上の `Status:` 行は退避時点のまま凍結**してあり、
+> 以後 Accept / Reject の対象にはなりません。**ここを直して運用を変えないでください。**
+>
+> **2026-08-12 の debrief で PO が下した裁定の記録**として、本文には次の 2 つが入っています
+> (当時は ADR の Status 遷移として扱ったものです):
+>
+> 1. 本文全体を **Accept** (この時点で `Status:` が Proposed から Accepted になった / [PR #326](https://github.com/yomote/mind-inbox/pull/326))
+> 2. **D5 を改訂** — 「エージェント復号は当面おこなわない」を撤回し、**エージェントは復号してよい。ただし秘密鍵は一度も Key Vault の外に出さない**（非エクスポートの鍵オブジェクト + `az keyvault key decrypt`）へ。暗号方式も gpg → 封筒暗号 (AES-256-GCM + RSA-OAEP-256) に変更 ([PR #332](https://github.com/yomote/mind-inbox/pull/332) = この記録)
+>
+> **現行の正典はここではありません**:
+>
+> | 何                                      | どこ                                                                                                                                  |
+> | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+> | 層の分け方 / 鍵をどの RG に置くか       | [ADR 0056](../../0056-management-and-app-layers-with-backup-based-data-protection.md) D1 (管理系 RG `rg-mgmt-mindbox` / **Proposed**) |
+> | 鍵の実体 (非エクスポート / 鍵長 / 権限) | [`cicd/iac/main-mgmt.bicep`](../../../../cicd/iac/main-mgmt.bicep) の `e2eTraceKey`                                                   |
+> | 適用手順                                | [`docs/runbooks/mgmt-layer-apply.md`](../../../runbooks/mgmt-layer-apply.md)                                                          |
+> | 鍵の運用 (復号 / ローテーション / 失効) | [`cicd/keys/README.md`](../../../../cicd/keys/README.md)                                                                              |
+>
+> 以下の本文で「持続層 RG」と読める箇所は、[#419](https://github.com/yomote/mind-inbox/pull/419) 以降
+> **管理系 RG (`rg-mgmt-mindbox`)** に読み替えてあります。
 
 Technical Story: 2026-08-12、[#293](https://github.com/yomote/mind-inbox/issues/293) の調査が丸一日「実環境の SSE がハングする」という**誤った仮説のまま**動けなかった。原因は `deploy.yml` が `upload-artifact` を 1 つも持たず、Playwright の失敗証拠が runner ごと消えていたこと。PR #299 でスクリーンショットと `error-context.md` を残せるようにしたところ、**その初回の artifact で原因が判明した** (入力欄が空・送信ボタンが disabled で、SSE は呼ばれてすらいなかった)。同時に「では trace も上げたい」が自然な要求として出たが、trace には実アクセストークンが入る。
 
@@ -41,7 +64,7 @@ Technical Story: 2026-08-12、[#293](https://github.com/yomote/mind-inbox/issues
 - **Option A: 何も上げない (現状復帰)** — 安全だが、1 日空転した状態に戻る
 - **Option B: スクラブしてから平文で上げる** — 組み込みが無いため一般的な回避策だが、失敗が公開側に倒れる
 - **Option C: artifact のアクセスを制限する** — 業界標準だが **public リポジトリでは選べない**
-- **Option D: 公開鍵で暗号化して上げ、秘密鍵は持続層 RG の Key Vault に非エクスポートで置き、復号は Key Vault の中で行う** (採用 / 2026-08-12 の debrief で「鍵を取り出して手元で復号」から改訂)
+- **Option D: 公開鍵で暗号化して上げ、秘密鍵は管理系 RG の Key Vault に非エクスポートで置き、復号は Key Vault の中で行う** (採用 / 2026-08-12 の debrief で「鍵を取り出して手元で復号」から改訂)
 - **Option E: 対称鍵 (GitHub Secrets のパスフレーズ)** — GitHub Secrets は**入れた値を画面から読み出せない**ため、控えを失うと過去の artifact が永久に開けない
 
 ## Decision Outcome
@@ -61,7 +84,7 @@ Chosen option: **"Option D"**。
     1. **JSON 全体を 1 つの Azure 応答から生成するスクリプトで作る** — 人が 2 つのコマンド結果を貼り合わせない。手順書ではなくコードで固定する
     2. **ローテーション時に「記載したバージョンで wrap → decrypt できる」ことを実測する** — 公開鍵で試しに wrap し、`keyVersion` を指定した `az keyvault key decrypt` で開け、元に戻ることを確かめる。**これが通らない JSON を commit しない**
   - **CI はこのファイルを読めなければ暗号化せず落とす** — バージョンが取れないまま暗号化すると、**開けない artifact ができる** (壊れていることが 14 日後まで分からない)。D6 の fail closed をここにも適用する
-- **D5 秘密鍵は持続層 RG の Key Vault に「鍵オブジェクト」として非エクスポートで置き、復号は Key Vault の中で行う** (2026-08-12 の debrief で PO 裁定により改訂)。**エージェントは復号してよい。ただし鍵そのものは一度も Key Vault の外に出ない。**
+- **D5 秘密鍵は管理系 RG の Key Vault に「鍵オブジェクト」として非エクスポートで置き、復号は Key Vault の中で行う** (2026-08-12 の debrief で PO 裁定により改訂)。**エージェントは復号してよい。ただし鍵そのものは一度も Key Vault の外に出ない。**
   - **やり方**: artifact に添えた wrap 済み AES 鍵を `az keyvault key decrypt` で Key Vault に開かせ、返ってきた AES 鍵で手元のデータを復号する。認証は [ADR 0006](../../0006-azure-access-via-device-code.md) の device-code (短命トークン)
   - **なぜ「鍵を取り出して手元で復号」にしないか**: `gpg --import` 相当をやると秘密鍵がサンドボックスのディスクに落ち、以降そのセッションの任意コードが読める。**一度読み出せばセッションの外へ持ち出せる**ため、鍵を交換するまでの**全 artifact** が復号可能になる。「サンドボックスは使い捨てだから被害は限定的」は成り立たない
   - **非エクスポート方式で消える穴 / 消えない穴** (2026-08-12 の Codex 指摘で **4 度訂正**。**毎回「この方式で防げる範囲」を広く見積もりすぎていた**)
@@ -76,8 +99,8 @@ Chosen option: **"Option D"**。
     - **時間が自動で閉じてくれる部分は無い。** 閉じるのは**人が revoke したとき**だけ。だから上の失効手順が「あれば良いもの」ではなく契約になる
   - **GitHub Secrets を選ばない理由**: workflow が復号できても、**public リポジトリでは Actions のログが公開**なので復号結果の出力先が無い
   - **環境変数を選ばない理由**: [ADR 0031](agent-reaches-outside-via-github-actions.md) の「サンドボックスに長期クレデンシャルを置かない」に反する。加えて Claude Code の公式ドキュメントが「**cloud environments have no dedicated secrets store, so don't add API keys or other credentials**」と明示している ([Configure cloud environments](https://code.claude.com/docs/en/cloud-environments))
-  - **置き場所は持続層 RG** — 環境 (`rg-{env}-mind-inbox`) の中に置くと `cleanup-env.sh` の RG 削除に巻き込まれる ([#302](https://github.com/yomote/mind-inbox/issues/302) / [ADR 0046](../../0046-environment-rebuildable-from-declaration.md) D1 が層の実体を定義)
-  - **#302 が完了するまでの暫定**: 持続層 RG がまだ無いため、それまでは秘密鍵を PO の手元に置き、**復号は PO のみ**。2026-08-12 の debrief で「Key Vault だけ先に作る」案は**採らない**と PO が判断したため、**エージェント復号が使えるようになるのは #302 の完了時**
+  - **置き場所は管理系 RG (`rg-mgmt-mindbox`)** — 環境 (`rg-{env}-mind-inbox`) の中に置くと `cleanup-env.sh` の RG 削除に巻き込まれる ([#302](https://github.com/yomote/mind-inbox/issues/302))。**層の定義の正典は [ADR 0056](../../0056-management-and-app-layers-with-backup-based-data-protection.md) D1** (Proposed / 2026-08-14 の PO 裁定。[ADR 0046](../../0046-environment-rebuildable-from-declaration.md) D1 の「持続層」を置き換える)
+  - **管理系 RG に適用が済むまでの暫定**: それまでは秘密鍵を PO の手元に置き、**復号は PO のみ**。2026-08-12 の debrief で「Key Vault だけ先に作る」案は**採らない**と PO が判断したため、**エージェント復号が使えるようになるのは管理系 RG が立ってから**。宣言 (`main-mgmt.bicep` の `e2eTraceKey` / 非エクスポート) は [#419](https://github.com/yomote/mind-inbox/pull/419) で main に入っており、残るのは [Runbook](../../../runbooks/mgmt-layer-apply.md) の一度きりの手動適用
   - **移行**: 既に GPG 形式で残っている artifact (例: `e2e-live-trace-31571455835`) は**現行の GPG 鍵で PO が復号する**。封筒暗号への切り替えは新規分から。切り替え時は **D7 の許可拡張子 (`.gpg` → `.enc`) と `deploy.yml` の upload path を同じ PR で替える** (片方だけだと成果物が上がらない)
 - **D6 公開鍵が無い間は trace を残さず、warning を出して続行する** — 鍵の準備前に平文で上がる事故を構造的に防ぐ (fail closed)。「鍵が無いから黙って何もしない」ではなく**必ず 1 行喋る**
 - **D7 暗号化の結果を機械で検証する** — 出力ディレクトリに**許可された拡張子以外のファイルが 1 つでもあれば run を落とす**。「暗号化したつもり」で平文が混ざる事故を、成功パスの中で潰す
@@ -133,7 +156,7 @@ Chosen option: **"Option D"**。
 
 ### 残る前提
 
-- **持続層 RG がまだ存在しない** ([#302](https://github.com/yomote/mind-inbox/issues/302))。それまでは暫定で PO の手元に置く
+- **管理系 RG (`rg-mgmt-mindbox`) にまだ適用していない** ([#302](https://github.com/yomote/mind-inbox/issues/302) / 宣言は #419 で着地済み)。それまでは暫定で PO の手元に置く
 - 暫定期間中は復号が PO 経由になる。**エージェント復号が効くのは #302 の完了時**。2026-08-12 の debrief で「Key Vault だけ先に作る」案は採らないと判断されたため、**この暫定は #302 と同じ長さ続く**
 
 ## Consequences
@@ -174,7 +197,8 @@ Chosen option: **"Option D"**。
 
 ## Links
 
-- Issue: [#293](https://github.com/yomote/mind-inbox/issues/293) (誤った仮説で 1 日空転した実例) / [#262](https://github.com/yomote/mind-inbox/issues/262)
-- PR: [#299](https://github.com/yomote/mind-inbox/pull/299) (スクリーンショット + error-context の artifact 化 — 本 ADR の前段)
+- Issue: [#293](https://github.com/yomote/mind-inbox/issues/293) (誤った仮説で 1 日空転した実例) / [#262](https://github.com/yomote/mind-inbox/issues/262) / [#301](https://github.com/yomote/mind-inbox/issues/301) (封筒暗号への組み替え作業リスト) / [#302](https://github.com/yomote/mind-inbox/issues/302) (管理系 RG)
+- PR: [#299](https://github.com/yomote/mind-inbox/pull/299) (スクリーンショット + error-context の artifact 化 — 本 ADR の前段) / [#326](https://github.com/yomote/mind-inbox/pull/326) (Accept) / [#332](https://github.com/yomote/mind-inbox/pull/332) (D5 改訂 = この記録) / [#385](https://github.com/yomote/mind-inbox/pull/385) (ADR 棚から退避) / [#419](https://github.com/yomote/mind-inbox/pull/419) (管理系 RG と非エクスポート鍵の宣言)
+- **現行の正典**: [ADR 0056](../../0056-management-and-app-layers-with-backup-based-data-protection.md) D1 (層) / [`cicd/iac/main-mgmt.bicep`](../../../../cicd/iac/main-mgmt.bicep) (鍵の宣言) / [`docs/runbooks/mgmt-layer-apply.md`](../../../runbooks/mgmt-layer-apply.md) (適用) / [`cicd/keys/README.md`](../../../../cicd/keys/README.md) (鍵の運用手順)
 - Playwright: [#19992](https://github.com/microsoft/playwright/issues/19992) / [#31728](https://github.com/microsoft/playwright/issues/31728) / [#38673](https://github.com/microsoft/playwright/issues/38673) (組み込みリダクションが 3 年越しで未実装であることの根拠)
 - GitHub Docs: [Downloading workflow artifacts](https://docs.github.com/en/actions/managing-workflow-runs/downloading-workflow-artifacts) (public リポジトリの artifact は署名済みユーザーなら誰でも取得できる)

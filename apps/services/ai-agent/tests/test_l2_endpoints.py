@@ -9,7 +9,8 @@ HTTP レイヤをバイパスし FastAPI を in-process に叩く。
 - /health        : 何もモックしない (FastAPI 自体の wiring 確認)
 
 ここで test しないこと:
-- workflow の状態遷移 (CLASSIFY / RETRIEVE / EXECUTE_TOOL の分岐) — L1 (issue #2)
+- workflow の内部分岐 (ツール選択 / 承認の中断・再開 / 履歴の積み方) —
+  L1 (tests/test_workflow_*.py)
 - LLM 出力品質 — prompt engineering の領域
 - BFF 側の tRPC 挙動 — それは BFF L2
 - 実 Azure 環境疎通 — それは L4 smoke

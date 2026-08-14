@@ -64,6 +64,8 @@ Mind Inbox は **hub-and-spoke** で開発を回す。user の対話窓口は親
 | **subagent** (`isolation: "worktree"`) | **既定**。実装・修正・設定変更・調査。途中で判断が要る / 結果を読んで次を決める作業も含む |
 | **子セッション** (`create_session`) | 指示を一度で言い切れて、長時間かかり、成果が PR / Issue に残る作業 |
 
+- **モデルは分配先で必ず明示する** (2026-08-14 PO 裁定: 窓口 = Fable 5 / 分配先 = Opus 5)。子セッションは `create_session` に `model: "claude-opus-5"`、subagent は `Agent` 呼び出しに `model: "opus"` を書く。**省略すると親 (Fable 5) を継承する**ので、物量の作業が窓口の判断に要るトークンを食い潰す
+  - 例外は窓口が都度判断してよい — judge など**判断の質そのものが成果物**の呼び出しは Fable 5 に上げる
 - **分配先には commit / push まで任せる**。「親がまとめてコミットする」は窓口を統合のボトルネックに戻すので禁止 — 窓口が統合待ちを抱えている間、PO は待たされる。**PR を出させるかは起票パケットの指定 (Step 3 の 5 点目) が優先** — 「push だけ」「既存 PR に載せる」と指定した案件で勝手に PR を作らせない。指定が無いときだけ PR 作成まで任せる
 - **子との会話は片道 約 1 分**。`send_message` / `list_events` はこの環境に無く、メッセージは `create_trigger` + `run_once_at` を相手セッションに bind して送る。**往復が 1 回増えるごとに 1 分待つので、短い往復を繰り返す作業は子に出さず subagent にする**
 - 親 → 子の向きだけが確認済み。**子 → 親の報告は Issue コメントを既定**にする
@@ -92,13 +94,16 @@ create_session(
   prompt:          <Step 3 の起票パケット>,
   source_url:      "https://github.com/yomote/mind-inbox",
   source_revision: "main" または作業ブランチ,
+  model:           "claude-opus-5",
 )
 ```
 
 - **`source_url` と `source_revision` は必須**。環境は継承されるが**リポジトリは継承されない** — 省略すると子は空の作業ディレクトリで止まる
+- **`model` も書く** (Step 2 のモデル規約)。省略時は親の Fable 5 を継承する
 - 起動には 1〜3 分かかる
 - **使い終わったら `archive_session` する**
-- 子が止まったら `get_session` の `status_category` を見る。**`need_input` なら権限待ち** — `needs_action` のツール名を `.claude/settings.json` の `allow` に足す (その場しのぎで user に承認させない)
+- **`create_session` が `-32003 needs_approval` を返したら、それは MCP サーバ側の承認ゲートで、`.claude/settings.json` の `allow` では解けない** — 解けるのは **UI の「事後承認カード」を人間が押す**層だけなので、**待たずに subagent (`isolation: "worktree"`) に倒す**。allow への追記で直そうとしない ([2026-08-14 実測](https://github.com/yomote/mind-inbox/issues/353#issuecomment-5288785576): 両名 9 ツールが allow 済みでも発生し、CLI は UUID 名を正準名 `mcp__Claude_Code_Remote__*` にマップするのでどちらの名前で書いても同じ)
+- 子が止まったら `get_session` の `status_category` を見る。**`need_input` はローカルの権限待ちのことがある** (上の `-32003` はこの層ではない) — `needs_action` のツール名を `.claude/settings.json` の `allow` に足す (その場しのぎで user に承認させない)
   - ただし **`deny` に載っているツールは足さない** — 塞いだのは意図。子には commit + PR に切り替えさせる
   - **allow の追加は起動済みの子には効かない**。子は clone した時点のブランチの設定を読むので、**足したうえで子を起こし直す** (設定を main に入れるか、修正済みブランチを `source_revision` に指定する)
   - **MCP サーバ名は対話セッションと子セッションで違う** (`Claude_Code_Remote` / UUID `bf7c680d-…`)。allow は**両方の名前**を書く。破壊的なツールはサーバ単位ではなくツール単位でも列挙する
@@ -123,6 +128,7 @@ create_session(
 - ❌ 当番 Routine・子・subagent が窓口の退役操作をする / 実行中の窓口を archive する
 - ❌ 短い往復を繰り返す作業を子セッションに出す (1 往復 1 分。subagent にする)
 - ❌ `source_url` / `source_revision` を渡さずに子を起こす
+- ❌ モデルを指定せずに分配する (親の Fable 5 を継承し、物量の作業で窓口のトークンを食い潰す)
 - ❌ ファイル境界を書かずに分配する (並行作業が同じファイルで衝突する)
 - ❌ 子から user への直接報告 (成果は PR / Issue / `needs-human` に残し、親が集約して報告する)
 - ❌ 実務 Routine を `create_trigger` で作る
@@ -131,6 +137,7 @@ create_session(
 ## 失敗時の挙動
 
 - 子が `need_input` のまま進まない → `needs_action` のツールを allow に足し、**起こし直す** (待っても解けない)
+- `create_session` が `-32003 needs_approval` で落ちる → **allow では解けないサーバ側のゲート**。subagent に倒す (Step 4)
 - 子が黙って止まった → `get_session` で状態を確認し (これは窓口がやってよい)、成果が無ければ**別の subagent に出し直す**。**「たぶん動いている」で放置しない**
 - `create_session` が使えない → subagent (`isolation: "worktree"`) に倒す。分配自体を諦めない
 - 分配先の作業が想定より対話を要すると分かった → 子を archive して subagent で引き取る (往復を積まない)

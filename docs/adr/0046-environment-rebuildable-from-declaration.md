@@ -1,10 +1,12 @@
 # 0046. 環境を「宣言から作り直せるもの」にする — ライフサイクル 3 層分断 / Entra の Graph Bicep 宣言 / 週次プロビジョンテスト
 
-- Status: Accepted (2026-08-12, design-gate にて PO 承認)
+- Status: Accepted (2026-08-12, design-gate にて PO 承認) / **D1 は [ADR 0056](0056-management-and-app-layers-with-backup-based-data-protection.md) が Accept され次第 supersede (2026-08-14 PO 裁定 / 0056 は Proposed)。D2〜D10 は現行 (D9 本文の「持続層」は管理系 RG と読み替える) — 下の注記を読むこと**
 - Date: 2026-08-12
 - Deciders: omoteforlab
 - Consulted: —
 - Informed: —
+
+> **D1（層の分け方）だけが置き換わる予定です。** 以下の本文の「持続層 / 環境層」という呼び方と、Cosmos / OpenAI / Speech を持続層に置くという記述は**現行ではありません** — 正は [ADR 0056](0056-management-and-app-layers-with-backup-based-data-protection.md)（管理系 / アプリ系 + バックアップによるデータ保護。**Proposed** / 2026-08-14 の PO 裁定に基づく起案で、Status を動かすのは PO）。**D2〜D10 は現行（D9 本文の「持続層」は管理系 RG と読み替える）** — D9 の「バックアップ取得 → 破壊 → 再構築 → 復元」の流れは生きており、そこで言う持続層は管理系 RG (`rg-mgmt-mindbox`) を指します。
 
 関連: [ADR 0013](0013-standing-low-cost-dev-env-with-auto-deploy.md)（「常設」の解釈を**追補**する / supersede しない）/ [ADR 0003](0003-two-phase-bicep.md)（2-phase Bicep — 本 ADR はこの構造の上に乗る）/ [ADR 0025](0025-deploy-container-images-by-immutable-sha-tag.md)（image は不変 sha）/ [ADR 0045](archive/operations/e2e-artifacts-are-secret-by-default.md)（「管理系 RG」の初出。本 ADR がその実体を定義する）/ [ADR 0018](archive/operations/runtime-verification-in-the-loop.md)（動作検証）/ [ADR 0006](0006-azure-access-via-device-code.md)
 
@@ -237,7 +239,7 @@ ADR 0013 は「オンデマンド teardown をやめて常設にする」と決�
 
 ### 受け入れる穴 — 持続層の「再構築」は検証されない
 
-持続層を壊さないと決めた結果、**持続層の bicep だけが検証されない部分として残る**。しかもそこには**バックアップと、e2e trace 復号用の非エクスポート RSA 鍵オブジェクト**（[ADR 0045](archive/operations/e2e-artifacts-are-secret-by-default.md) D5 — Key Vault の外に出せないため、失われたら保持中の artifact は永久に開けない）が置かれる——**腐っていたことに気づくのが、いちばん困っているとき**という構造になる。
+持続層を壊さないと決めた結果、**持続層の bicep だけが検証されない部分として残る**。しかもそこには**バックアップと GPG 秘密鍵**（[ADR 0045](archive/operations/e2e-artifacts-are-secret-by-default.md) D5）が置かれる——**腐っていたことに気づくのが、いちばん困っているとき**という構造になる。
 
 ただし穴は見た目ほど大きくない: **週次の復元が持続層の「中身」（バックアップが読める / Key Vault に届く）を毎週使う**ので、検証されないのは「**持続層を作り直せるか**」だけ。
 

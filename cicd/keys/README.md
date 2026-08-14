@@ -1,7 +1,17 @@
 # E2E 成果物の暗号化鍵
 
-実環境 E2E (`e2e-live`) の **trace を暗号化するための公開鍵**を置く場所。判断の正典は
-[ADR 0045](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md)。
+実環境 E2E (`e2e-live`) の **trace を暗号化するための公開鍵**を置く場所。
+**このファイルが鍵まわりの運用手順の正典**です。
+
+判断の出どころは 3 つに分かれています:
+
+| 何を知りたいか                              | どこを見るか                                                                                                                                                                                                                          |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **鍵をどの RG / どの層に置くか**            | [ADR 0056](../../docs/adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D1 (管理系 RG `rg-mgmt-mindbox`。**Proposed** — Status を動かすのは PO)                                                                |
+| **鍵の実体 (非エクスポート / 鍵長 / 権限)** | [`cicd/iac/main-mgmt.bicep`](../iac/main-mgmt.bicep) の `e2eTraceKey` と、適用手順の [`docs/runbooks/mgmt-layer-apply.md`](../../docs/runbooks/mgmt-layer-apply.md)                                                                   |
+| **なぜ暗号化するのか / 何を秘密扱いするか** | [2026-08-12 の裁定記録](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md) (当時 ADR 0045。[#385](https://github.com/yomote/mind-inbox/pull/385) で運用文書へ退避したので**現行ルールの置き場ではありません**) |
+
+以下に出てくる **D1〜D9 はその裁定記録の中の決定番号**です (慣例として「ADR 0045 D5」と書いてある箇所も同じものを指します)。**手順を変えたいときは裁定記録ではなくこのファイルを直してください。**
 
 ## なぜ鍵が要るのか
 
@@ -21,11 +31,17 @@ GitHub ユーザーなら誰でもダウンロードできる。したがって 
 
 ## ファイル
 
-| ファイル                 | 中身                                                                | commit する?                                                                      |
-| ------------------------ | ------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `e2e-artifacts.pub.asc`  | GPG **公開**鍵 (**#302 まで**の暫定)                                | **する** (公開鍵は公開してよい)                                                   |
-| `e2e-artifacts.pub.json` | 恒久形。**公開鍵 (PEM) と Key Vault の鍵バージョンを 1 ファイルに** | **する** (#302 で作る)                                                            |
-| 秘密鍵                   | —                                                                   | **しない**。管理系 RG の Azure Key Vault に置く (#302 完了までは暫定で PO の手元) |
+| ファイル                 | 中身                                                                | commit する?                                                                               |
+| ------------------------ | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `e2e-artifacts.pub.asc`  | GPG **公開**鍵 (**管理系 RG の適用まで**の暫定)                     | **する** (公開鍵は公開してよい)                                                            |
+| `e2e-artifacts.pub.json` | 恒久形。**公開鍵 (PEM) と Key Vault の鍵バージョンを 1 ファイルに** | **する** (管理系 RG を適用したら作る)                                                      |
+| 秘密鍵                   | —                                                                   | **しない**。管理系 RG (`rg-mgmt-mindbox`) の Key Vault に置く (適用までは暫定で PO の手元) |
+
+> **「#302 完了まで」は「`rg-mgmt-mindbox` に `main-mgmt.bicep` を適用するまで」と読んでください。**
+> 宣言は [#419](https://github.com/yomote/mind-inbox/pull/419) で main に入っており
+> ([`cicd/iac/main-mgmt.bicep`](../iac/main-mgmt.bicep) の `e2eTraceKey` — 非エクスポートの RSA 鍵オブジェクト)、
+> 残っているのは**一度きりの手動適用**だけです ([`docs/runbooks/mgmt-layer-apply.md`](../../docs/runbooks/mgmt-layer-apply.md))。
+> **適用が済んでいないうちは下の GPG 手順が現行**で、**復号できるのは PO だけ**です。
 
 恒久形を 1 ファイルにする理由 ([ADR 0045](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D4 / D9):
 **CI は Azure の資格情報を持たない**ので、「どの鍵バージョンで wrap したか」をリポジトリから
@@ -35,7 +51,7 @@ GitHub ユーザーなら誰でもダウンロードできる。したがって 
 
 ```json
 {
-  "vault": "https://<持続層の Vault>.vault.azure.net/",
+  "vault": "https://<管理系 RG の Vault>.vault.azure.net/",
   "keyName": "e2e-artifacts",
   "keyVersion": "<Key Vault の鍵バージョン ID>",
   "wrapAlgorithm": "RSA-OAEP-256",
@@ -58,10 +74,10 @@ GitHub ユーザーなら誰でもダウンロードできる。したがって 
 **この制限は GPG 方式に固有のもので、恒久方式には適用されない。** どちらの方式かは
 リポジトリの公開鍵ファイルの形で判る (`*.pub.asc` = GPG / `*.pub.json` = 恒久)。
 
-|                          | GPG (#302 完了まで)   | 恒久 (Key Vault の非エクスポート鍵オブジェクト) |
-| ------------------------ | --------------------- | ----------------------------------------------- |
-| 鍵の生成・ローテーション | **PO の管理環境のみ** | **PO の管理環境のみ**                           |
-| **復号**                 | **PO の管理環境のみ** | **エージェントが実行してよい**                  |
+|                          | GPG (管理系 RG の適用まで) | 恒久 (Key Vault の非エクスポート鍵オブジェクト) |
+| ------------------------ | -------------------------- | ----------------------------------------------- |
+| 鍵の生成・ローテーション | **PO の管理環境のみ**      | **PO の管理環境のみ**                           |
+| **復号**                 | **PO の管理環境のみ**      | **エージェントが実行してよい**                  |
 
 **GPG で復号をエージェントにやらせない理由**: `gpg --import` した時点でパスフレーズ無しの
 長期秘密鍵がディスクに置かれ、そのセッション内の任意コードから読める状態になる。
@@ -71,9 +87,10 @@ GitHub ユーザーなら誰でもダウンロードできる。したがって 
 **恒久方式で許される理由**: `az keyvault key decrypt` は Key Vault の中で復号するので、
 **RSA 秘密鍵は一度も外に出ない**。ただし露出がゼロになるわけではない — 侵害された
 セッションは保持中の wrapped key を順に開けるし、**返ってきた AES 鍵は失効できない**。
-残る露出の正確な範囲は
-[ADR 0045](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D5
-「消える穴 / 消えない穴」が正典。
+残る露出の内訳は
+[裁定記録](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D5
+「消える穴 / 消えない穴」に書き出してある (露出モデルは Codex の指摘で 4 回訂正した結果なので、
+**要約せずにそちらを読むこと**)。**運用で守るべき手順は下の「侵害が疑われたら」が正典。**
 
 ### gpg 実行時の注意: GNUPGHOME は短いパスにする
 
@@ -121,28 +138,30 @@ gpg --armor --export-secret-keys "mind-inbox e2e artifacts"
   ドキュメントも「cloud environments have no dedicated secrets store, so don't add
   API keys or other credentials」と明示している
 
-**置き場所は持続層 (管理系) RG の Key Vault** (ADR 0045 D5 /
-[ADR 0046](../../docs/adr/0046-environment-rebuildable-from-declaration.md) D1 が層の実体を定義)。
+**置き場所は管理系 RG (`rg-mgmt-mindbox`) の Key Vault** (ADR 0045 D5 /
+[ADR 0056](../../docs/adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D1 が層を定義)。
 環境の RG に置くと `cleanup-env.sh` の RG 削除に巻き込まれる
 ([#302](https://github.com/yomote/mind-inbox/issues/302))。
 
 > **2026-08-12 更新**: ADR 0046 D6 で `PURGE_DELETED_KEYVAULTS` の既定を `false` にしたため、
 > 環境 RG に置いた場合でも **soft-delete による救済は残る**ようになった (以前は purge まで走り、
 > 救済不能に消えていた)。ただしこれは事故を止める安全弁であって置き場所の答えではない —
-> **秘密鍵は持続層に置く**方針は変わらない。
+> **秘密鍵は管理系に置く**方針は変わらない。
 
-持続層 RG ができるまでは暫定で PO の手元に置き、復号は PO が行う。
+管理系 RG に適用が済むまでは暫定で PO の手元に置き、復号は PO が行う。
 
-> **⚠️ 2026-08-12 の debrief で方式が変わりました (ADR 0045 D5 改訂)。**
+> **⚠️ 2026-08-12 の debrief で方式が変わりました (PO 裁定 / 裁定記録の D5 改訂)。**
 > 恒久形は「Key Vault の**鍵オブジェクト**に非エクスポートで置き、`az keyvault key decrypt` で
 > **Key Vault の中で復号する**」= 秘密鍵は一度も外に出ず、**エージェントも復号してよい**。
 > 暗号方式も gpg から封筒暗号 (AES + RSA-OAEP) に変わります。
 >
-> **ただし切り替えは [#302](https://github.com/yomote/mind-inbox/issues/302) の持続層 RG ができてから。**
-> それまでは下の GPG 手順が正典で、**復号できるのは PO のみ**です。
+> **切り替えの条件は `rg-mgmt-mindbox` への適用** ([#302](https://github.com/yomote/mind-inbox/issues/302))。
+> 鍵の宣言は [`main-mgmt.bicep`](../iac/main-mgmt.bicep) に入っているので、残っているのは
+> [Runbook](../../docs/runbooks/mgmt-layer-apply.md) の一度きりの手動適用だけです。
+> **適用前は下の GPG 手順が現行**で、**復号できるのは PO のみ**。
 > 既存の `.gpg` artifact は移行後も現行の GPG 鍵で復号します。
 
-## 復号して trace を見る (**PO の管理環境でのみ** / #302 完了までの手順)
+## 復号して trace を見る (**PO の管理環境でのみ** / 管理系 RG の適用前)
 
 > ⚠️ **エージェントのサンドボックスで復号しないこと。** `gpg --import` した時点で秘密鍵が
 > ディスク (`$GNUPGHOME/private-keys-v1.d/*.key`) に置かれ、**そのセッション内の任意の
@@ -184,10 +203,12 @@ pnpm --dir apps/frontend exec playwright show-trace trace.zip
 artifact の取得自体はエージェントからも可能 (`download_workflow_run_artifact` で
 署名付き URL を得る。2026-08-12 に実測済み)。
 
-## 復号して trace を見る (#302 完了後 / **エージェントも実行してよい**)
+## 復号して trace を見る (管理系 RG の適用後 / **エージェントも実行してよい**)
 
 恒久方式では**秘密鍵が Key Vault から出ない**ので、この手順はエージェントのサンドボックスで
-実行してよい ([ADR 0045](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D5)。
+実行してよい ([裁定記録](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D5)。
+鍵 (`e2e-artifacts`) は `main-mgmt.bicep` が **`exportable: false`** で宣言しており、
+kid の控え方は [Runbook](../../docs/runbooks/mgmt-layer-apply.md) の手順 6 にあります。
 
 ```bash
 az login --use-device-code            # ADR 0006。短命トークン
@@ -197,7 +218,7 @@ az login --use-device-code            # ADR 0006。短命トークン
 
 # 1. .enc から wrapped AES 鍵と「wrap したときの鍵バージョン」を取り出す
 # 2. Key Vault に開かせる (鍵は外に出ない。バージョンは .enc に書かれたものを使う)
-az keyvault key decrypt --vault-name <持続層の Vault> --name e2e-artifacts \
+az keyvault key decrypt --vault-name <管理系 RG の Vault> --name e2e-artifacts \
   --version "<.enc に記録されたバージョン>" --algorithm RSA-OAEP-256 \
   --value "<wrapped AES 鍵>" --data-type base64
 # 3. 返った AES 鍵で AES-256-GCM 復号する。**タグ検証に失敗したら平文を出さず落とす** (D9)
@@ -205,8 +226,9 @@ az keyvault key decrypt --vault-name <持続層の Vault> --name e2e-artifacts \
 
 > ⚠️ **返ってきた AES 鍵は失効できない。** Key Vault は秘密鍵を守るが、`decrypt` が返す
 > AES 鍵は手元の平文であり、資格情報を revoke しても**その時点で開いた artifact は
-> 読める状態のまま**になる。復号は必要な artifact に絞ること。残る露出の正確な範囲は
-> ADR 0045 D5「消える穴 / 消えない穴」が正典。
+> 読める状態のまま**になる。復号は必要な artifact に絞ること。残る露出の内訳は
+> [裁定記録](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D5
+> 「消える穴 / 消えない穴」。
 
 ### 侵害が疑われたら: 更新資格情報を revoke する
 
@@ -236,21 +258,25 @@ az rest --method POST \
 **恒久的に露出を絞るなら**、復号専用の最小権限プリンシパルにするか、JIT 権限 /
 復号ブローカーを入れる必要がある。どちらも
 [#302](https://github.com/yomote/mind-inbox/issues/302) 実装時の PO 裁定事項
-(ADR 0045 D5)。それまでは、**復号に使う資格情報が PO 個人のもの = サブスクリプション
+(裁定記録 D5)。それまでは、**復号に使う資格情報が PO 個人のもの = サブスクリプション
 全体に届く**ことを承知のうえで使う。
+
+なお `main-mgmt.bicep` の `keyVaultCryptoUserPrincipalIds` は**既定で空**で、
+Crypto User は後から個別に付ける運用です ([Runbook](../../docs/runbooks/mgmt-layer-apply.md) Prerequisites)。
+**付与した principal がそのまま「復号できる人」**になるので、誰に付けたかを控えておくこと。
 
 ## 鍵を替えるとき
 
-**方式が移行中なので手順が 2 つある** ([ADR 0045](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D5 / D9)。
+**方式が移行中なので手順が 2 つある** ([裁定記録](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D5 / D9)。
 今どちらかは、リポジトリに置かれている公開鍵の形 (`*.pub.asc` = GPG / `*.pub.json` = 鍵オブジェクトの公開部 + バージョン) で判る。
 
-### #302 完了まで — GPG (現行)
+### 管理系 RG の適用前 — GPG (現行)
 
 **PO の管理環境で**鍵を作り直し、`e2e-artifacts.pub.asc` を差し替えて commit するだけ。
 CI 側の変更は要らない (秘密を持っていないため)。**古い鍵で暗号化済みの artifact は
 古い秘密鍵でしか開けない**ので、**保持期限 (14 日) が切れるまで旧秘密鍵を捨てない**。
 
-### #302 完了後 — Key Vault の非エクスポート RSA 鍵オブジェクト (恒久)
+### 管理系 RG の適用後 — Key Vault の非エクスポート RSA 鍵オブジェクト (恒久)
 
 鍵は Key Vault から出せないので、「作り直して差し替える」ではなく**新しいバージョンを足す**形になる。
 
@@ -267,7 +293,6 @@ CI 側の変更は要らない (秘密を持っていないため)。**古い鍵
    気づくのは復号を試みた時 (最大 14 日後) になる。1 ファイルにしても**この 2 つは独立に
    編集できる**ので、ファイルを分けないだけでは防げない。だから 2 つを契約にする
    ([ADR 0045](../../docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D4):
-
    - **JSON 全体を 1 つの Azure 応答から生成する** — `az keyvault key show` の
      応答は `key.kid` (末尾がバージョン) と公開鍵の材料 (`key.n` / `key.e`) を**同時に**返す。
      ここから PEM を組み立てれば、バージョンと鍵が同じ応答に由来することが保証される。

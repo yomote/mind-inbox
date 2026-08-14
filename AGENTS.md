@@ -84,7 +84,8 @@ uv run --directory apps/services/ai-agent pytest   # Python は uv
   エージェント起案は `Status: Proposed` で入れる (`Accepted` にできるのは user だけ)
 - **運用・プロセスの決め事は ADR ではない** — レビュー体制 / セッションの回し方 / CI の
   運転ルールなどは数日で改訂されるので不変記録に載せない。置き場は `CLAUDE.md` と `.claude/skills/`。
-  過去に ADR として書かれた 29 本は `docs/adr/archive/` にあり、**現行ルールではない**
+  過去に ADR として書かれた 30 本 (運用・プロセス系 29 本 + 開発設備 1 本) は
+  `docs/adr/archive/` にあり、**現行ルールではない**
 - **採番は `origin/main` の最大番号 +1。欠番は埋めない** — 退避で 0008 / 0011 / 0014 …
   が飛んでいる。退役番号は `docs/adr/archive/retired-numbers.txt` にあり、
   実ファイルと合算して最大を取る (`adr-number-guard` が再利用を赤にする)

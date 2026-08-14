@@ -6,6 +6,10 @@ import { trpc } from "../trpc/client";
 import type { AppRouter } from "../trpc/client";
 import { useMock } from "./http";
 import { reportStubbedResponse } from "./stubStatus";
+import { isNotFound } from "./trpcError";
+// 失敗 token の値は BFF が真実 (依存を持たない値だけの module を共有する / ADR 0001)。
+import { EXTRACT_FAILURE_TOKENS } from "../../../bff/src/trpc/errorTokens";
+import type { ExtractFailureToken } from "../../../bff/src/trpc/errorTokens";
 
 /**
  * Problem / Mention の api 層（Phase C で mock→real を結線）。
@@ -48,19 +52,16 @@ function toBffTriageInput(input: TriageInput): BffTriageInput {
   }
 }
 
-function isNotFound(err: unknown): boolean {
-  return err instanceof TRPCClientError && err.data?.code === "NOT_FOUND";
-}
-
 /**
  * 抽出の失敗理由 (#183)。BFF は機械可読な token を message に載せて返す。
  * ユーザー向けの文面は UI 側 (extract-review.mdx の持ち場) で決める。
+ *
+ * token の値は **BFF の `errorTokens.ts` が 1 個だけ持つ**ものを import する
+ * (PR #416 judge minor-2)。ここに書き写すと、BFF 側だけ改名したときに下の照合が
+ * 静かに外れ、**原因別の案内が黙って `unknown` に落ちる** — 画面は壊れないので
+ * テストが無ければ気づけない。`unknown` だけはフロント固有 (BFF は返さない)。
  */
-export type ExtractFailureKind =
-  | "session-missing"
-  | "llm-parse-failed"
-  | "upstream-failed"
-  | "unknown";
+export type ExtractFailureKind = ExtractFailureToken | "unknown";
 
 export class ExtractFailed extends Error {
   // パラメータプロパティ短縮記法は erasableSyntaxOnly で使えないため明示代入する。
@@ -73,11 +74,8 @@ export class ExtractFailed extends Error {
   }
 }
 
-const EXTRACT_FAILURE_KINDS: ExtractFailureKind[] = [
-  "session-missing",
-  "llm-parse-failed",
-  "upstream-failed",
-];
+/** BFF が返しうる token だけを照合対象にする (`unknown` はフロント側の受け皿)。 */
+const EXTRACT_FAILURE_KINDS: readonly ExtractFailureKind[] = EXTRACT_FAILURE_TOKENS;
 
 /**
  * 吐き出し全文を Mention[] に抽出する。

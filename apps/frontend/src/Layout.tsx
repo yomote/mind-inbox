@@ -19,7 +19,14 @@ import AccountCircleRoundedIcon from "@mui/icons-material/AccountCircleRounded";
 import LogoutRoundedIcon from "@mui/icons-material/LogoutRounded";
 import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import { useLocation, useNavigate } from "react-router-dom";
-import { authEnabled, getAccount, initAuth, login, logout } from "./auth/msal";
+import {
+  authEnabled,
+  disableInteractiveRecovery,
+  getAccount,
+  initAuth,
+  login,
+  logout,
+} from "./auth/msal";
 import { useTextToSpeech } from "./voice/useTextToSpeech";
 import { useConsultation } from "./consultation/useConsultation";
 import { useEnvStatus } from "./envstatus/useEnvStatus";
@@ -56,6 +63,18 @@ const HEADER_BY_ROUTE: Record<AppRoute, string> = {
   problemList: "困りごと一覧",
   problemDetail: "困りごと詳細",
 };
+
+/**
+ * サインアウト時、承認待ちの却下がサーバに届くのを待つ上限 (ms)。
+ *
+ * 0 にすると却下は送信前に消える (tRPC は mutate から同期に fetch を出さない)。
+ * 長くするとサインアウトが BFF の応答性に人質を取られる。**届かなかったときに
+ * 失われるもの**は「ai-agent 側の承認待ちを即座に解放できないこと」だけで、
+ * Cosmos 構成なら TTL 1h が掃除する (dialogue-session.mdx §5.9)。
+ */
+const LOGOUT_DISCARD_TIMEOUT_MS = 2000;
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const isDev = import.meta.env.DEV;
@@ -203,13 +222,26 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
 
   const handleLogout = React.useCallback(() => {
     resetTts();
-    resetConsultation();
+    // **サインアウト開始を先に宣言する** — この後の BFF 呼び出し (承認待ちの却下) で
+    // トークンが取れなくても、サインイン画面へリダイレクトさせない (msal.ts 参照)。
+    // 宣言を却下の後ろに置くと、期限切れトークンで「サインアウトがサインインに化ける」。
+    if (!standalone && authEnabled) disableInteractiveRecovery();
+    // 捨てる承認要求の却下 (§5.9)。**完了を待ってからリダイレクトする** — tRPC の
+    // httpBatchLink は mutate() から同期に fetch を出さないので、待たずに
+    // `logoutRedirect()` すると却下は一度も送信されずに消える (PR #416 judge major-1)。
+    const discarded = resetConsultation();
     resetStubbedResponse();
     setAuthStatus("anonymous");
     navigate(ROUTE_PATHS.onboarding, { replace: true });
     // standalone（dev / mock デモ）と認証無効ビルドはサインアウト先が無いのでリダイレクトしない。
     if (!standalone && authEnabled) {
-      void logout();
+      // 待つのは**上限つき**。BFF が無応答のときにサインアウトを人質に取らない
+      // (画面上はすでにサインアウト済みで、残るのは Entra へのリダイレクトだけ)。
+      // 上限を超えたら却下は届かないまま離脱する — その承認待ちは ai-agent 側の
+      // TTL (Cosmos 構成で 1h) が解放する。in-memory 構成には TTL が無いので残る。
+      void Promise.race([discarded, delay(LOGOUT_DISCARD_TIMEOUT_MS)]).finally(() => {
+        void logout();
+      });
     }
   }, [navigate, resetConsultation, resetTts, standalone]);
 
@@ -370,6 +402,10 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
                 preview={consultation.preview}
                 previewStatus={consultation.previewStatus}
                 handleRefreshPreview={consultation.refreshPreview}
+                pendingApproval={consultation.pendingApproval}
+                handleRespondToApproval={(approved) =>
+                  void consultation.respondToPendingApproval(approved)
+                }
                 themeMode={themeMode}
                 onToggleTheme={onToggleTheme}
                 transition={transition}

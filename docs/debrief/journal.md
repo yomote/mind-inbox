@@ -18,6 +18,32 @@
 - **持ち越し**: {未消化の項目・次回に回した判断。無ければ「なし」}
 ```
 
+## 2026-08-14 — PO 裁定 (層の定義 / ADR 0056)
+
+- **対象**: [ADR 0046](../adr/0046-environment-rebuildable-from-declaration.md) D1 / [#302](https://github.com/yomote/mind-inbox/issues/302) / [PR #412](https://github.com/yomote/mind-inbox/pull/412) (マージ済み)
+- **決定**: **D1 初版の「持続層 = Cosmos / OpenAI / Speech 込み」は誤り。** 正は [#302 の 2026-08-12 コメント](https://github.com/yomote/mind-inbox/issues/302#issuecomment-5263080034) に記録された PO の設計 — 層の軸は「消えると困るか」ではなく「**運用のためのものか / アプリそのものか**」。**管理系 RG (`rg-mgmt-mindbox`)** = Key Vault / Log Analytics / バックアップ Storage / 予算、**アプリ系 RG** = Cosmos / OpenAI / Speech / CA / Functions / SWA。Cosmos は「守る」のではなく「**戻せる**」ようにする (管理系の非公開 Storage へバックアップ / **public リポなので git データブランチは禁止** / 「復元を 1 回通すまで完遂ではない」= ADR 0018)。記録は **[ADR 0056](../adr/0056-management-and-app-layers-with-backup-based-data-protection.md) を新規に起こして 0046 D1 を supersede** する形にし (Accepted ADR の本文は書き換えない / `/adr` skill。**0056 は Proposed** — Status を動かすのは PO なので、supersede が確定するのは Accept 時)、`main-shared.bicep` を `main-mgmt.bicep` に正した。**Azure には何も apply されていないため移行コストはゼロ**
+- **学びメモ**: 「消えると困るもの」は**層の軸ではなく、バックアップの対象を決める軸**だった。困るものを別 RG へ逃がすと「使い捨てにできる環境」が手に入らず、逃がさずに戻せるようにして初めて手に入る。撤収ガードも同じ整理で 2 種類に割った — **管理系 = 恒久の拒否 / Cosmos = 復元実証までの暫定の拒否** (判定コードを分けてあり、緩めてよいのは後者だけ)
+- **特記**: **実装報告に「Issue のコメントと ADR が食い違っているので、後で Accepted になった ADR を正とした」と書かれていたのに、そのまま流れた。** 食い違いに気づけていたのだから、そこで止めて PO に上げるべき事案だった。**教訓: 実装報告で「Issue と ADR (あるいは設計と規約) が食い違う」と申告されたら、実装者の裁量で片方を採らせず、PO 案件として上げる。** どちらが正かは実装の外側で決まる。**もう 1 件**: 裁定の反映で **Accepted の ADR 0046 本文 (D1/D9/Consequences) を直接書き換えた** PR を出し、Codex の P1 で捕まった (`docs/adr/README.md` /`/adr` skill「過去 ADR の本文は書き換えない」)。**裁定が過去 ADR の判断を覆すときは、本文改変ではなく新規 ADR で supersede する** — 本文を書き換えると「いつ何が変わったか」が消え、ADR が不変記録でなくなる
+- **持ち越し**: **バックアップ / 復元の実装 (ADR 0046 D9)** — 往復を 1 回通すまで「アプリ系は使い捨て」は宣言でしかない。通ったら撤収ガードの `data-restore-unproven` を**バックアップ鮮度の確認に差し替える** (差し替えないと週次プロビジョンテストが毎回 override を要求し、逃げ道が常用になってガードが死ぬ)。Cosmos 無料枠 / Speech F0 を作り直しで取り直せるかは**未検証**
+
+## 2026-08-14 — debrief
+
+- **対象**: [PR #385](https://github.com/yomote/mind-inbox/pull/385) (リポジトリの交通整理 — ADR を「アーキテクチャ判断」に戻す) / [PR #222](https://github.com/yomote/mind-inbox/pull/222) + 旧 ADR 0054 (調査用 read-only 識別) / [PR #388](https://github.com/yomote/mind-inbox/pull/388)・[PR #403](https://github.com/yomote/mind-inbox/pull/403) (分配の判断軸) / [PR #399](https://github.com/yomote/mind-inbox/pull/399)・[PR #330](https://github.com/yomote/mind-inbox/pull/330) (赤の名前 — 失敗を正しい名前で報告する) / dependabot 10 本
+- **決定**:
+  - **旧 ADR 0054 は「ADR ではない」と裁定** — #385 が引いた分類基準に照らすと、これはシステムアーキテクチャではなく**開発設備 (CI 資格情報) の運用判断**。`docs/adr/archive/operations/` へ退避し (Status の変更ではない — Accept も Reject もしていない)、**受容の条件 4 つの正典は Runbook [`azure-oidc-cd-setup.md`](../runbooks/azure-oidc-cd-setup.md) へ移す**。恒久解は [#405](https://github.com/yomote/mind-inbox/issues/405) (GitHub Environments ベースへの移行)
+  - **モデル方針**: 窓口 PM = Fable 5、分配先 (子セッション・subagent) = Opus 5 (トークン経済)
+  - **マージの門は内製化 ([#400](https://github.com/yomote/mind-inbox/issues/400)) で復旧** — 同日の窓口セッションで裁定済み
+- **学びメモ**: 理解確認は 2 問とも正答 — Q1 (レビュー手順の置き場 = skill)・Q2 (採番ガード)。認証まわりの疑問には「**セットアップ 1 回だけ PO のデバイスコード / 日常は OIDC の短命トークン**」の 2 段で解消した
+- **特記**: **PO 側から「0054 はそもそも ADR か?」の指摘が出た**のがこの回の最大の収穫。#385 で引いた分類基準が PO に浸透し、**エージェントの分類ミスを PO が捕まえる逆転**が起きている。あわせて、[#326](https://github.com/yomote/mind-inbox/pull/326) (マージ済み) と [#332](https://github.com/yomote/mind-inbox/pull/332) (open) で **0041 / 0045 の裁定反映が二重化**していたことが判明 ([#159](https://github.com/yomote/mind-inbox/issues/159) と同型)。#332 に残る固有価値は **0045 D5 の改訂 + journal のみ**
+- **持ち越し**: 機構の純増ゼロの裁定 (旧セッション由来)。[#187](https://github.com/yomote/mind-inbox/issues/187) の design-gate
+
+## 2026-08-14 — design-gate (v2 M1 のスコープ確定)
+
+- **対象**: [#82](https://github.com/yomote/mind-inbox/issues/82) (v2 M1) / [#320](https://github.com/yomote/mind-inbox/issues/320) (MAF ネイティブ function calling)。SK 除去は達成済みで、残件は「検証の穴」+ #320 の配管という調査結果を受けた裁定
+- **決定**: PO 裁定 4 件 — 承認 UI を M1 に含める / スタブ題材のツールは feature flag で既定オフ (開けるのは #321 の裁定後) / `docs/api/ai-agent.yaml` 生成 + CI diff 金網を含める / 順序は #320 (配管) → #321 (題材)。決定の全文は [#82 の 2026-08-14 コメント](https://github.com/yomote/mind-inbox/issues/82#issuecomment-5289806206)
+- **学びメモ**: (このエントリは実装側セッションからの追記。理解確認の対話は窓口 PM セッションの記録を参照)
+- **持ち越し**: 承認 UI + e2e (段⑤) は並行の別セッション。#321 (ツール題材の再定義) は flag を開ける前提条件
+
 ## 2026-08-12 — design-gate (合成ユーザー探索 PoC)
 
 - **対象**: [ADR 0053](../adr/archive/operations/synthetic-user-exploration-poc.md) (合成ユーザー探索 PoC の設計 / [#304](https://github.com/yomote/mind-inbox/issues/304) の次段階)。発端は PO の問い「PM セッションが二つになってしまい、窓口一本化が動かない」で、その追跡の副産物として、spend limit で中身ゼロのまま死んでいた `合成ユーザーでのUX探索` セッションの仕事が未消化だと判明したこと
@@ -46,7 +72,20 @@
 - **特記**: 0042 の D2 (直列化を Merge Queue に任せる) は **2026-08-11 の時点で実行不能と判明済み**だった — Merge Queue は organization 所有リポジトリ専用で、`yomote/mind-inbox` は個人アカウント所有。#269 のクローズ時に「**ADR 0042 の D2 を改訂する Proposed ADR を PM が起票し、次の debrief で裁定する**」と持ち越しが明記されていたが、**PM (この窓口セッション) がそれを読まずに debrief を開いた**。裁定の場で PO の記憶に救われた形。⇒ 本 debrief で D2 を「**strict OFF で追いつき自体を無くす。直列化はしない。組み合わせの破綻は後段 (main の CI / auto-deploy / golden-path) で捕まえる**」に書き直し、初版 D2 は `<details>` で経緯として残した。**再発防止**: debrief の Step 1 で「前回以降のマージ PR」だけでなく **クローズされた needs-human Issue の持ち越し欄**も集める
 - **持ち越し**: **0042 の裁定** (改訂 D2 で次回)。0042 D1 の引き継ぎ判定に実装バグ ([#323](https://github.com/yomote/mind-inbox/issues/323) / P1) — 本日 PR #286 で base が進んだだけなのに不成立になり再受け入れが発生。あわせて **strict が OFF になった以上、反射的な `update-branch` はしない** (今日の再受け入れは PM の不要な追随が引き金だった)
 
-## 2026-08-12 — debrief (ADR 裁定)
+## 2026-08-12 — debrief (ADR 裁定 / D5 改訂の回)
+
+> 上の「2026-08-12 — debrief (Proposed ADR 4 本の裁定)」の**続き**。あちらで 0045 を Accept して
+> 「エージェントも復号できる安全な道を探る」を [#325](https://github.com/yomote/mind-inbox/issues/325)
+> に宿題として出し、**この回でその道 (非エクスポート方式) を PO が選んで D5 を改訂**した。
+>
+> **その後の棚の移動**: 0041 / 0042 / 0045 は [#385](https://github.com/yomote/mind-inbox/pull/385) で
+> 「運用・プロセスの決め事は ADR ではない」として [`docs/adr/archive/operations/`](../adr/archive/README.md) へ退避し、
+> 番号も退役した (以下のリンクは退避先を指す)。したがって**この裁定は「ADR の Status 遷移」ではなく
+> 裁定の記録**として読むこと。E2E trace 復号鍵の現行の正典は
+> [ADR 0056](../adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D1 (管理系 RG) /
+> [`cicd/iac/main-mgmt.bicep`](../../cicd/iac/main-mgmt.bicep) /
+> [`docs/runbooks/mgmt-layer-apply.md`](../runbooks/mgmt-layer-apply.md) /
+> [`cicd/keys/README.md`](../../cicd/keys/README.md)。
 
 - **対象**: 未裁定 ADR の裁定。あわせて #293 の「trace 復号」と [#46](https://github.com/yomote/mind-inbox/issues/46) (OIDC ロール最小化) を PO 向けに解説
 - **決定**:

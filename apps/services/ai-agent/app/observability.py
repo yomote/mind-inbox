@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import secrets
 import traceback
 import uuid
@@ -132,3 +133,69 @@ def exception_frames(exc: BaseException) -> str:
 def client_detail(ref: str, message: str = _GENERIC_DETAIL) -> str:
     """クライアントへ返してよいエラー本文 (一般化した文言 + ref)。"""
     return f"{message} (ref: {ref})"
+
+
+# ── フレームワーク側のログ出口を塞ぐ (#417 P2 / Issue #418) ───────────────────
+
+_FRAMEWORK_LOGGER = "agent_framework"
+
+# MAF がツールの payload を**そのまま**載せるログ行の接頭辞 (実測 / agent_framework)。
+# いずれも f-string で組まれているので、record に届いた時点で本文が埋まっている。
+_FRAMEWORK_PAYLOAD_PREFIXES = (
+    # FunctionTool.invoke の中 = **アプリの middleware より内側**。ツール本体が
+    # 上流 URL・外部応答・相談内容を含む例外を投げると原文がそのまま出る
+    "Function failed. Error:",
+    # LLM が生成したツール引数 (= ユーザー発話由来)。DEBUG だが本番で DEBUG に
+    # 落とした瞬間に会話の中身が Log Analytics へ流れる
+    "Function arguments:",
+    # ツールの戻り値
+    "Function result:",
+)
+
+
+class _FrameworkPayloadRedactor(logging.Filter):
+    """`agent_framework` ロガーの payload 行を指紋に差し替える。
+
+    **行そのものは消さない** — 消すと「ツールが失敗した」という事実まで見えなく
+    なる (このリポジトリで最も繰り返している事故 = 取れなかったものを異常なしに
+    しない)。level も logger 名も残したまま、本文だけを `fingerprint` に替える。
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        for prefix in _FRAMEWORK_PAYLOAD_PREFIXES:
+            if message.startswith(prefix):
+                payload = message[len(prefix) :].strip()
+                record.msg = f"{prefix} <redacted {fingerprint(payload)}>"
+                record.args = ()
+                break
+        return True
+
+
+def redact_framework_tool_logs() -> None:
+    """MAF が自前でツール payload を出すログ行を指紋化する (冪等)。
+
+    **なぜ middleware だけでは足りないか** (#417 P2 の実測): アプリの
+    `tool_boundary` middleware が例外を一般化できるのは `FunctionTool.invoke` の
+    **外側**だけで、`invoke` の内側にある `logger.error(f"Function failed. Error:
+    {exception}")` はそれより先に走る。つまり middleware での一般化と、この
+    フィルタの両方が要る (層が違う)。
+
+    **効かない範囲**: logging のフィルタは「そのロガーに直接出た record」にしか
+    掛からず、子ロガー (`agent_framework.*`) から propagate してくる record には
+    掛からない。今 payload を載せているのは `agent_framework` ロガー自身なので
+    足りているが、**上流がロガーを分けたら静かに漏れ始める** — そのため
+    tests/test_workflow_tools.py が MAF の実ループを通して pin している。
+
+    **塞いでいないもの**: MAF は同じ例外を OTel span にも記録する
+    (`capture_exception`)。このサービスは exporter を 1 つも構成していないので
+    今は出口が無いが、**Application Insights 等を有効化したらそこが新しい出口に
+    なる** (ログとは別の経路なのでこのフィルタでは掛からない)。Issue #418。
+    """
+    framework_logger = logging.getLogger(_FRAMEWORK_LOGGER)
+    if any(
+        isinstance(existing, _FrameworkPayloadRedactor)
+        for existing in framework_logger.filters
+    ):
+        return
+    framework_logger.addFilter(_FrameworkPayloadRedactor())

@@ -13,6 +13,7 @@ vi.mock("../trpc/client", () => ({
   },
 }));
 
+import { EXTRACT_FAILURE_TOKENS } from "../../../bff/src/trpc/errorTokens";
 import { trpc } from "../trpc/client";
 import {
   ExtractFailed,
@@ -170,5 +171,20 @@ describe("[単体] 下書きプレビューの real 結線", () => {
     const failure = await commitPreview("s1", [DRAFT_ITEM]).catch((e: unknown) => e);
     expect(failure).toBeInstanceOf(ExtractFailed);
     expect((failure as ExtractFailed).kind).toBe("unknown");
+  });
+
+  // BFF が返しうる token を **1 個も取りこぼさない** (#183 / PR #416 judge minor-2)。
+  //
+  // 無いと何が静かに通るか: BFF 側で token を改名したのにフロントの照合表が古いまま、
+  // という状態。該当する失敗はすべて `unknown` (= 汎用エラーの案内) に落ちるが、
+  // 画面は壊れないので誰も気づかない。ここは **BFF の errorTokens から取った実物**で
+  // 回すので、照合表を書き写しに戻すとその瞬間に落ちる。
+  it.each(EXTRACT_FAILURE_TOKENS)("BFF の token '%s' は unknown に落ちない", async (token) => {
+    vi.mocked(trpc.consultation.preview.mutate).mockRejectedValue(new TRPCClientError(token));
+
+    const failure = await previewExtraction("s1", []).catch((e: unknown) => e);
+
+    expect(failure).toBeInstanceOf(ExtractFailed);
+    expect((failure as ExtractFailed).kind).toBe(token);
   });
 });

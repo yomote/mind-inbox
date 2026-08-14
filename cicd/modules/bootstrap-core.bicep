@@ -363,6 +363,33 @@ param appSubnetPrefix string = '10.10.20.0/24'
 @description('Log Analytics workspace name')
 param lawName string = 'law-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}-ops'
 
+@description('Application Insights (workspace-based) の名前。BFF のテレメトリの受け皿 (#307)。')
+param appInsightsName string = 'appi-${environmentName}-${replace(replace(appName, '-', ''), '_', '')}'
+
+// -------------------- BFF のテレメトリ (#307 / #293) --------------------
+// なぜ要るか: BFF (Functions) は相談フローの司令塔で、ai-agent / VOICEVOX / Cosmos への
+// 全ホップがここを通る。診断設定 (FunctionAppLogs) だけだと「実行された関数と例外」しか
+// 残らず、**「下流を呼んだのか / 何 ms で何が返ったのか」に答えられない**。#293 では
+// それが無かったせいで丸一日「SSE がハングしている」という誤った仮説で動いた。
+//
+// なぜ workspace-based App Insights か (追加リソース 1 個を許す判断):
+//   - HTTP の依存呼び出しが**アプリのコード変更なしに**自動計測される。BFF → ai-agent が
+//     「呼んだ / 返った / 何 ms / ステータス」として残るのは、既製品ではここだけ
+//   - 取り込み・保持の課金は**既存 LAW 側**で起きる (workspace-based の仕様)。新しい課金面は
+//     増えず、`lawDailyQuotaGb` (0.15 GB/日) と 30 日保持がそのままブレーカーとして効く
+//     (日次上限は LAW と App Insights の**最小値**が適用される)
+//   - classic (workspace 無し) は選ばない — 保持もコストも別勘定になり、上のブレーカーが効かない
+//
+// コスト暴発を止める段は 2 つ。**どちらも宣言側にあり、手設定に依存しない**:
+//   1. host.json の適応サンプリング (`maxTelemetryItemsPerSecond: 5`)。Request と Exception は
+//      `excludedTypes` で常に除外 = **「起きたのに記録が無い」を作らない**
+//   2. LAW の `workspaceCapping.dailyQuotaGb`。当たると収集が止まる (= 可視性を失うが請求は跳ねない)
+//
+// scale-to-zero (ADR 0002/0013) には影響しない — App Insights に待機課金は無く、
+// 課金は取り込んだ GB だけ。
+@description('BFF (Function App) のテレメトリ送信先として workspace-based Application Insights を作り、接続文字列を appSettings で配る (#307)。既定 true。false にすると診断設定の FunctionAppLogs だけが残り、下流ホップの所要時間は追えなくなる。')
+param enableAppInsights bool = true
+
 // -------------------- 監査ログのコスト境界 (#313 / ADR 0047 Phase 3) --------------------
 // Log Analytics は「取り込んだ GB」で課金される。無料枠は **請求アカウントあたり月 5 GB**
 // (Analytics Logs) と **31 日ぶんの保持** の 2 つで、どちらも超えた瞬間から課金が始まる。
@@ -432,6 +459,25 @@ resource law 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
     workspaceCapping: {
       dailyQuotaGb: json(lawDailyQuotaGb)
     }
+  }
+}
+
+// -------------------- Application Insights (BFF / #307) --------------------
+// 判断の根拠は param enableAppInsights の定義箇所に書いてある。
+resource appInsights 'Microsoft.Insights/components@2020-02-02' = if (enableAppInsights) {
+  name: appInsightsName
+  location: location
+  kind: 'web'
+  properties: {
+    Application_Type: 'web'
+    // **workspace-based**: テレメトリの実体は上の LAW に入る。ここを外すと classic に
+    // なり、保持もコストも LAW のブレーカーの外側に出る。
+    WorkspaceResourceId: law.id
+    IngestionMode: 'LogAnalytics'
+    // クライアント IP は既定でマスクされる。DisableIpMasking は**足さない**
+    // (足すと生 IP が 30 日残る = 機微データを増やす方向)。
+    publicNetworkAccessForIngestion: 'Enabled'
+    publicNetworkAccessForQuery: 'Enabled'
   }
 }
 
@@ -748,6 +794,25 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
                 value: functionContentShare
               }
             ],
+            // テレメトリの送信先 (#307)。**アプリのコードはこの値を読まない** —
+            // Functions ホストが読んで requests / dependencies / exceptions / traces を送る。
+            // az で後付けしない (appSettings は全置換なので次の bicep 適用で消える)。
+            //
+            // **この 1 行はアプリの許可リストを迂回する経路も開く**: ホストは
+            // `telemetry.ts` を通さずに `AppRequests` を作り、受信 URL をそのまま入れる。
+            // tRPC の query は `?input={"id":"…"}` として URL に載るので、そのままでは
+            // 相談本文が 30 日残る (#413 の Codex 指摘)。境界は `apps/bff/host.json` の
+            // `httpAutoCollectionOptions.enableHttpTriggerExtendedInfoCollection: false` が持つ
+            // (ADR 0055 / `docs/runbooks/bff-telemetry.md`)。**ここを有効にするなら、あちらが
+            // 効いていることを漏洩点検の KQL で確かめてから**。
+            enableAppInsights
+              ? [
+                  {
+                    name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+                    value: appInsights.?properties.?ConnectionString ?? ''
+                  }
+                ]
+              : [],
             // 認証の門 (ADR 0017 / #86) の audience。BFF はこの audience の
             // Managed Identity トークンを取得して下流 Container Apps を呼ぶ (#104)
             empty(containerAppsGateClientId)
@@ -1883,3 +1948,8 @@ output cosmosDataPlaneAuditEnabled bool = enableDiagnostics && enableCosmos && e
 output logAnalyticsWorkspaceName string = lawName
 output logAnalyticsRetentionInDays int = lawRetentionInDays
 output logAnalyticsDailyQuotaGb string = lawDailyQuotaGb
+// App Insights (#307)。**接続文字列は output しない** — 取り込みキーを含むので、
+// deployment の出力として残すと `az deployment group show` で誰でも読める。
+// 疎通確認に要るのは「在るか」と「どこを引くか」だけ (Runbook: bff-telemetry.md)。
+output appInsightsEnabled bool = enableAppInsights
+output appInsightsName string = enableAppInsights ? appInsightsName : ''
