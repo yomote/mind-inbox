@@ -6,7 +6,7 @@
   "scripts": {
     "prepare": "husky",
     "lint": "npm run lint:bff && npm run lint:frontend && npm run lint:py && npm run lint:md",
-    "lint:bff": "npm --prefix apps/bff run lint",
+    "lint:bff": "pnpm --dir apps/bff run lint",
     "lint:frontend": "pnpm --dir apps/frontend run lint",
     "lint:py": "uv run --directory apps/services/ai-agent ruff check .. && uv run --directory apps/services/ai-agent ruff format --check ..",
     "lint:md": "markdownlint-cli2 \"**/*.md\" \"#**/node_modules\" \"#**/dist\" \"#**/.serena\" \"#**/.playwright-mcp\" \"#**/artifacts\" \"#**/.venv\"",
@@ -14,15 +14,16 @@
     "format:check": "prettier --check .",
     "test": "npm-run-all2 --serial test:contract test:fast test:e2e",
     "test:fast": "npm-run-all2 --parallel test:bff test:frontend test:python test:scripts",
-    "test:bff": "npm --prefix apps/bff test",
+    "test:bff": "pnpm --dir apps/bff test",
     "test:frontend": "pnpm --dir apps/frontend test",
     "test:python": "npm-run-all2 --parallel test:py:ai-agent test:py:voicevox",
     "test:py:ai-agent": "uv run --directory apps/services/ai-agent pytest --tb=short",
     "test:py:voicevox": "echo 'placeholder: tests not yet implemented (issue #2)' && exit 0",
-    "test:scripts": "uv run --directory apps/services/ai-agent pytest ../../../cicd/scripts/ux-probe ../../../cicd/scripts/ux-eval ../../../cicd/scripts/ux-data ../../../cicd/scripts/status-page ../../../cicd/scripts/report-failure ../../../cicd/scripts/review-gate ../../../cicd/scripts/viz-structure ../../../cicd/scripts/debt-check ../../../cicd/scripts/security-sweep ../../../cicd/scripts/github-settings ../../../cicd/scripts/deploy ../../../cicd/scripts/smoke-test --tb=short",
+    "test:scripts": "uv run --directory apps/services/ai-agent pytest ../../../cicd/scripts/ux-probe ../../../cicd/scripts/ux-eval ../../../cicd/scripts/ux-data ../../../cicd/scripts/status-page ../../../cicd/scripts/report-failure ../../../cicd/scripts/review-gate ../../../cicd/scripts/viz-structure ../../../cicd/scripts/debt-check ../../../cicd/scripts/security-sweep ../../../cicd/scripts/github-settings ../../../cicd/scripts/deploy ../../../cicd/scripts/env ../../../cicd/scripts/smoke-test --tb=short",
     "test:contract": "node --experimental-strip-types --no-warnings apps/bff/scripts/contract-check.mjs",
     "test:e2e": "pnpm --dir apps/frontend run test:e2e",
-    "docs:openapi:bff": "npm --prefix apps/bff run docs:openapi"
+    "docs:openapi:bff": "pnpm --dir apps/bff run docs:openapi",
+    "docs:openapi:ai-agent": "uv run --directory apps/services/ai-agent python scripts/generate_openapi.py"
   },
   "devDependencies": {
     "husky": "^9.1.7",

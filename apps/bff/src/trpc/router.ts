@@ -4,7 +4,9 @@ import { ConversationMessageSchema } from "../clients/aiAgentContracts";
 import type { ConversationMessage } from "../clients/aiAgentContracts";
 import { z } from "zod";
 import type { TrpcContext } from "./context";
+import { APPROVAL_NOT_FOUND_TOKEN } from "./errorTokens";
 import {
+  ApprovalNotFoundError,
   approve as approveAiAgent,
   createPlan as createPlanAiAgent,
   ExtractError,
@@ -14,6 +16,7 @@ import {
   type StubMarked,
 } from "../clients/aiAgentClient";
 import { issueSpeechAuthToken } from "../clients/speechTokenClient";
+import { logErrorEvent, logEvent } from "../observability/telemetry";
 import {
   MAX_AFFECT_LABEL_LENGTH,
   MAX_CONVERSATION_MESSAGES,
@@ -334,7 +337,13 @@ async function runExtraction(
     });
   } catch (err) {
     if (err instanceof ExtractError) {
-      console.error(`[${label}] failed kind=${err.kind}: ${err.message}`);
+      // message は `aiAgentClient.extract` が組み立てた文面 (応答本文を含まない)。
+      logErrorEvent("extraction.failed", {
+        route: label,
+        kind: err.kind,
+        errorType: err.name,
+        errorMessage: err.message,
+      });
       throw new TRPCError({
         code:
           err.kind === "session-missing"
@@ -532,7 +541,12 @@ const consultationRouter = router({
     .output(z.object({ session: SessionSchema, stubbed: z.boolean().optional() }))
     .mutation(async ({ input }) => {
       const sessionId = randomUUID();
-      console.log(`[consultation.start] sessionId=${sessionId}`);
+      // concern は相談の書き出しそのもの。**長さだけ**残す (#307)。
+      logEvent("procedure", {
+        route: "consultation.start",
+        sessionId,
+        chars: input.concern.length,
+      });
 
       // 空 concern で開始するのが既定 (home.mdx: テーマ入力画面なしで直接対話開始)。
       // AI の挨拶 (初手) は出さない (#241 / dialogue-session.mdx §3.1) — 会話は空のまま
@@ -587,7 +601,11 @@ const consultationRouter = router({
     )
     .output(ChatReplySchema)
     .mutation(async ({ input }) => {
-      console.log(`[consultation.sendMessage] sessionId=${input.sessionId}`);
+      logEvent("procedure", {
+        route: "consultation.sendMessage",
+        sessionId: input.sessionId,
+        chars: input.message.length,
+      });
 
       const chatRes = await sendChatMessage({
         sessionId: input.sessionId,
@@ -619,9 +637,11 @@ const consultationRouter = router({
     )
     .output(ExtractionReplySchema)
     .mutation(async ({ input, ctx }) => {
-      console.log(
-        `[consultation.preview] sessionId=${input.sessionId} messages=${input.messages.length}`,
-      );
+      logEvent("procedure", {
+        route: "consultation.preview",
+        sessionId: input.sessionId,
+        count: input.messages.length,
+      });
       // 書かない: materializeExtraction を呼ばずそのまま返す。
       return await runExtraction(
         "consultation.preview",
@@ -655,10 +675,13 @@ const consultationRouter = router({
     )
     .output(ExtractionReplySchema)
     .mutation(async ({ input, ctx }) => {
-      console.log(
-        `[consultation.extract] sessionId=${input.sessionId} messages=${input.messages.length}` +
-          (input.draft ? ` draft=${input.draft.items.length}` : ""),
-      );
+      logEvent("procedure", {
+        route: "consultation.extract",
+        sessionId: input.sessionId,
+        count: input.messages.length,
+        // draft 経路 (再抽出しない / ADR 0039 D1) を通ったかは後から効く区別。
+        kind: input.draft ? `draft:${input.draft.items.length}` : "re-extract",
+      });
       // 再抽出しない: draft があれば下書きをそのまま確定する (ADR 0039 D1/D3)。
       const extracted: StubMarked<ExtractionResult> = input.draft
         ? {
@@ -696,13 +719,35 @@ const consultationRouter = router({
     )
     .output(ApproveResultSchema)
     .mutation(async ({ input }) => {
-      console.log(
-        `[consultation.approve] approvalRequestId=${input.approvalRequestId} approved=${input.approved}`,
-      );
-      return await approveAiAgent({
-        approvalRequestId: input.approvalRequestId,
-        approved: input.approved,
+      logEvent("procedure", {
+        route: "consultation.approve",
+        // 承認は副作用の門 (apps/bff/CLAUDE.md)。「誰が何を承認したか」ではなく
+        // 「承認が通ったか」を残す — 承認対象の中身は ai-agent 側の記録。
+        kind: input.approved ? "approved" : "rejected",
       });
+      try {
+        return await approveAiAgent({
+          approvalRequestId: input.approvalRequestId,
+          approved: input.approved,
+        });
+      } catch (err) {
+        // 承認レコードがもう無い (TTL 1h 失効 / ai-agent 再起動 / 消費済み) は
+        // **回復不能な失敗として区別する** (#82 / PR #416 judge major-1)。汎用エラーで
+        // 返すとフロントは「再試行してください」を出し続け、承認カードが閉じられない
+        // まま会話が永久に詰む (再試行は決して成功しない)。
+        if (err instanceof ApprovalNotFoundError) {
+          logErrorEvent("approve.record-gone", {
+            route: "consultation.approve",
+            kind: input.approved ? "approved" : "rejected",
+          });
+          // message は機械可読な token に固定する。**フロントは code だけでは判定できない**
+          // (tRPC は procedure 未配備でも NOT_FOUND を返す / Codex 4 巡目 P2) ので、
+          // この token がフロントとの唯一の合図になる。リテラルは errorTokens.ts が
+          // 1 個だけ持ち、フロントも同じものを import する (二重定義にしない)。
+          throw new TRPCError({ code: "NOT_FOUND", message: APPROVAL_NOT_FOUND_TOKEN });
+        }
+        throw err;
+      }
     }),
 });
 
@@ -735,7 +780,7 @@ const problemRouter = router({
     .input(TriageInputSchema)
     .output(z.object({ problems: z.array(ProblemSchema) }))
     .mutation(async ({ input, ctx }) => {
-      console.log(`[problem.triage] action=${input.action}`);
+      logEvent("procedure", { route: "problem.triage", action: input.action });
       return { problems: await applyTriage(input, ctx.problemRepo) };
     }),
 

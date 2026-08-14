@@ -14,12 +14,22 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+/**
+ * 認証まわりはテストごとに切り替える (既定は「認証無効ビルド」= 門を通す)。
+ * サインアウトの配線だけは**認証有効・非 standalone** でしか通らないので、
+ * その 1 本だけ enabled / account を立てる。
+ */
+const authState = vi.hoisted(() => ({ enabled: false, account: null as { name: string } | null }));
+
 vi.mock("./auth/msal", () => ({
-  authEnabled: false,
-  getAccount: () => null,
+  get authEnabled() {
+    return authState.enabled;
+  },
+  getAccount: () => authState.account,
   initAuth: vi.fn(async () => undefined),
   login: vi.fn(),
   logout: vi.fn(),
+  disableInteractiveRecovery: vi.fn(),
 }));
 
 vi.mock("./api", () => ({
@@ -29,6 +39,7 @@ vi.mock("./api", () => ({
     messages: [{ id: "a-1", role: "assistant", text: "どうしましたか", createdAt: "2026-01-01" }],
   })),
   sendMessage: vi.fn(),
+  respondToApproval: vi.fn(),
   organizeResult: vi.fn(),
   createActionPlan: vi.fn(),
   extractMentions: vi.fn(),
@@ -43,7 +54,8 @@ vi.mock("./api", () => ({
 }));
 
 import { Layout } from "./Layout";
-import { startNewConsultation } from "./api";
+import { respondToApproval, sendMessage, startNewConsultation } from "./api";
+import { disableInteractiveRecovery, logout } from "./auth/msal";
 
 /**
  * iOS の解錠は「音量 0 の空発話を speechSynthesis に流す」で表現されるので、
@@ -97,6 +109,9 @@ beforeEach(() => {
   // stubGlobal はファイル内で持ち越される。speechSynthesis の有無をテストごとに
   // 制御したい (「無い環境」で読み上げ失敗を再現するテストがある) ので毎回戻す。
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+  authState.enabled = false;
+  authState.account = null;
 });
 
 // vitest は isolate:false で走るので、DOM は test 間で共有される。
@@ -208,5 +223,156 @@ describe("[L2] Layout — 新しい相談の開始で読み上げを止める (#
     await waitFor(() =>
       expect(screen.queryByText("このブラウザは音声読み上げに対応していません。")).toBeNull(),
     );
+  });
+});
+
+describe("[単体] Layout — 承認カードの結線 (#82 / G1 / dialogue-session.mdx §5.9)", () => {
+  it("承認要求つきの応答でカードが出て、承認が api まで届き、カードが閉じる", async () => {
+    // 無いと何が静かに通るか: api 層と hook の単体テストは互いを知らないので、
+    // **hook → Router → SessionScreen の受け渡しを 1 本落としただけ**で承認カードが
+    // どの画面にも出なくなる (= #82 の着手前と同じ状態) のに、両方の単体は緑のまま。
+    // ブラウザを起動しない層で「画面に出て、押すと api が呼ばれる」までを固定する。
+    vi.mocked(startNewConsultation).mockResolvedValue({
+      id: "appr-session",
+      title: "相談セッション",
+      messages: [],
+    } as never);
+    vi.mocked(sendMessage).mockResolvedValue({
+      message: {
+        id: "a-appr",
+        role: "assistant",
+        text: "「send_reply」を実行するには承認が必要です。実行してよろしいですか？",
+        createdAt: "2026-01-01",
+      },
+      approval: {
+        id: "appr-1",
+        description: "「send_reply」を実行するには承認が必要です。実行してよろしいですか？",
+      },
+    } as never);
+    vi.mocked(respondToApproval).mockResolvedValue({
+      id: "a-done",
+      role: "assistant",
+      text: "[stub] Reply sent to team@example.com.",
+      createdAt: "2026-01-01",
+    } as never);
+
+    renderLayout();
+    await userEvent.click(await screen.findByRole("button", { name: "新しい相談を始める" }));
+    await userEvent.type(
+      await screen.findByPlaceholderText("ここに入力 / 話して入力"),
+      "この件、返信しておいて",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "送信" }));
+
+    const card = await screen.findByTestId("approval-request");
+    expect(card.textContent).toContain("send_reply");
+
+    await userEvent.click(screen.getByRole("button", { name: "承認して実行" }));
+
+    await waitFor(() => expect(respondToApproval).toHaveBeenCalledWith("appr-1", true));
+    await waitFor(() => expect(screen.queryByTestId("approval-request")).toBeNull());
+    expect(screen.getByText("[stub] Reply sent to team@example.com.")).toBeTruthy();
+  });
+});
+
+describe("[L2] Layout — サインアウト時の承認却下 (§5.9 / PR #416 judge major-1)", () => {
+  /**
+   * 無いと何が静かに通るか: `resetConsultation()` の却下を投げっぱなしにしたまま
+   * `msal.logoutRedirect()` を呼ぶ実装。tRPC の httpBatchLink は `mutate()` から
+   * **同期に fetch を出さない** (バッチのため 1 tick 遅らせる) ので、リダイレクトが
+   * 先に走ると却下は**一度も送信されないまま**消える。`respondToApproval` は
+   * 呼ばれているので「呼び出しの有無」だけを見るテストは緑のまま通り、MDX の
+   * 「ログアウトでも却下を送る」が実際には成立していない状態が残る。
+   *
+   * ここで固定するのは**順序** — 却下が決着するまでサインアウトのリダイレクトを
+   * 呼ばないこと。
+   */
+  function signedInDeployedBuild() {
+    // 認証有効・非 standalone (= 実デプロイ環境) でしか通らない分岐なので、そこに寄せる。
+    vi.stubEnv("DEV", false);
+    authState.enabled = true;
+    authState.account = { name: "テスト太郎" };
+  }
+
+  async function showApprovalCard() {
+    vi.mocked(startNewConsultation).mockResolvedValue({
+      id: "logout-session",
+      title: "相談セッション",
+      messages: [],
+    } as never);
+    vi.mocked(sendMessage).mockResolvedValue({
+      message: {
+        id: "a-appr",
+        role: "assistant",
+        text: "「send_reply」を実行するには承認が必要です。実行してよろしいですか？",
+        createdAt: "2026-01-01",
+      },
+      approval: { id: "appr-1", description: "「send_reply」を実行してよろしいですか？" },
+    } as never);
+
+    renderLayout();
+    await userEvent.click(await screen.findByRole("button", { name: "新しい相談を始める" }));
+    await userEvent.type(
+      await screen.findByPlaceholderText("ここに入力 / 話して入力"),
+      "この件、返信しておいて",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "送信" }));
+    await screen.findByTestId("approval-request");
+  }
+
+  it("承認待ちの却下がサーバに届くまでサインアウトのリダイレクトを呼ばない", async () => {
+    signedInDeployedBuild();
+
+    // 却下の応答をこちらで握って「まだ届いていない」状態を作る。
+    let settleDiscard: () => void = () => {};
+    vi.mocked(respondToApproval).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          settleDiscard = () =>
+            resolve({
+              id: "a-cancel",
+              role: "assistant",
+              text: "操作はキャンセルされました。",
+              createdAt: "2026-01-01",
+            } as never);
+        }),
+    );
+
+    await showApprovalCard();
+
+    await userEvent.click(screen.getByRole("button", { name: "アカウント" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "ログアウト" }));
+
+    // 却下は**サーバへ送られている**。
+    await waitFor(() => expect(respondToApproval).toHaveBeenCalledWith("appr-1", false));
+    // まだ決着していないので、リダイレクトは呼ばれていない (呼ぶと送信前に離脱する)。
+    expect(vi.mocked(logout)).not.toHaveBeenCalled();
+    // サインアウト開始の宣言は却下より前に済んでいる (トークン取得がサインイン画面に化けない)。
+    expect(vi.mocked(disableInteractiveRecovery)).toHaveBeenCalled();
+
+    settleDiscard();
+
+    await waitFor(() => expect(vi.mocked(logout)).toHaveBeenCalled());
+  });
+
+  it("承認待ちが無ければ待たずにサインアウトする", async () => {
+    // 無いと: 待ち合わせが「常に待つ」に化けても気づけない (通常のログアウトが
+    // 上限いっぱい遅れる)。承認要求が無いときは即座にリダイレクトすること。
+    signedInDeployedBuild();
+    vi.mocked(startNewConsultation).mockResolvedValue({
+      id: "logout-session-2",
+      title: "相談セッション",
+      messages: [],
+    } as never);
+
+    renderLayout();
+    await userEvent.click(await screen.findByRole("button", { name: "新しい相談を始める" }));
+    await screen.findByPlaceholderText("ここに入力 / 話して入力");
+
+    await userEvent.click(screen.getByRole("button", { name: "アカウント" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "ログアウト" }));
+
+    await waitFor(() => expect(vi.mocked(logout)).toHaveBeenCalled());
+    expect(respondToApproval).not.toHaveBeenCalled();
   });
 });

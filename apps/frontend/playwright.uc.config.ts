@@ -72,7 +72,7 @@ export default defineConfig({
     {
       // 本物の BFF。Azure Functions Core Tools は使わず、同じ http/handlers.ts を
       // 素の node で配信する (apps/bff/scripts/local-server.mjs)。
-      command: `npm --prefix ../bff run build && node ../bff/scripts/local-server.mjs`,
+      command: `pnpm --dir ../bff run build && node ../bff/scripts/local-server.mjs`,
       url: `${BFF_URL}/api/trpc/health.ping`,
       reuseExistingServer: !process.env.CI,
       timeout: 180_000,

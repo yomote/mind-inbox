@@ -16,6 +16,9 @@
 UUID 名 `bf7c680d-...` として見える**。片方しか書いていないと、もう片方の系統で毎回承認プロンプトが出て
 子が止まる (これが 2026-08-12 まで「毎回承認が飛んでくる」と言われていた状態の原因)。
 
+**ただし、`allow` で解けるのはローカルの承認プロンプト層まで。** MCP サーバ側の承認ゲート
+(`-32003 needs_approval`) は `allow` に何を書いても解けない (下の §4 の注記)。
+
 サーバ単位の `mcp__<server>` だけでは足りない。**`delete_trigger` はツール単位で書くまで止まった**。
 `create_session` / `archive_session` / `set_session_title` / `interrupt_session` / `delete_trigger` /
 `update_trigger` は両方の名前でツール単位に列挙する。
@@ -47,12 +50,17 @@ create_session(
   prompt:           <起票パケット。下の「プロンプトに必ず書くこと」を参照>,
   source_url:       "https://github.com/yomote/mind-inbox",
   source_revision:  "main"  または作業ブランチ,
+  model:            "claude-opus-5",
   tags:             ["<まとめて探せる名前>"]
 )
 ```
 
 **`source_url` / `source_revision` は必須。** 環境 (`environment_id`) は継承されるが
 **リポジトリは継承されない** — 省略すると子は空の作業ディレクトリで起動し「repo が無い」と言って止まる。
+
+**`model` も書く。** 分配先は Opus 5 (2026-08-14 PO 裁定 — 窓口 = Fable 5 / 分配先 = Opus 5)。
+省略すると親の Fable 5 を継承し、物量の作業で窓口のトークンを食い潰す
+(規約は [`dispatch` skill](../../.claude/skills/dispatch/SKILL.md) の Step 2)。
 
 起動には 1〜3 分かかる (`SESSION_STATUS_PENDING` → `RUNNING`)。
 
@@ -124,6 +132,13 @@ get_session(session_id)
 | `review_ready` | 1 ターン終えて待機       | 成果を回収する                                                                                                                                                                                                                               |
 | `need_input`   | **承認プロンプトで停止** | `needs_action` のツール名を `.claude/settings.json` の `allow` に足して**起こし直す**。その場しのぎで user に承認させない。**`deny` に載っているツール (下の §前提) は足さない** — 塞いだのは意図なので、子には commit + PR に切り替えさせる |
 | `failed`       | 落ちた                   | ログは取れないので、指示を直して起こし直す                                                                                                                                                                                                   |
+
+> **MCP サーバ側の承認ゲート (`-32003 needs_approval`) は `allow` では解けない。**
+> `create_session` がこれを返したときは、ローカルの権限判定は通っており (呼び出しはサーバまで到達している)、
+> `permissions.allow` はこの層に効かない。CLI は UUID 名を正準名 `mcp__Claude_Code_Remote__*` にマップするので、
+> **どちらの名前で書いても `-32003` は変わらない** (2026-08-14 実測 — 両名 9 ツールが allow 済みの状態で再現:
+> [#353 のコメント](https://github.com/yomote/mind-inbox/issues/353#issuecomment-5288785576))。
+> 解けるのは **UI の「事後承認カード」を人間が押す**層だけ。**無人で進めるなら subagent (`isolation: "worktree"`) に倒す。**
 
 `interrupt_session` で止められるが、**割り込んだセッションは `failed` に落ちて以後メッセージを受け取らなくなる**
 (2026-08-12 実測)。止めるなら作り直す前提で。

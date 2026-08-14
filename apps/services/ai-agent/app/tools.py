@@ -1,14 +1,21 @@
 """
-Tool registry — MAF の @ai_function (現行 API 名は @tool) 化 (ADR 0016 M1-4)。
+Tool registry — MAF の @ai_function (現行 API 名は @tool) 化 (ADR 0016 M1-4 / #320)。
 
-read-only / side-effecting の区分は FunctionTool の `approval_mode`
-メタデータとして持つ (G1 = HITL 承認要否の判定源):
+**このレジストリが LLM に見えるツールの唯一の真実源**。`exposed_tools()` が返した
+`FunctionTool` がそのまま chat client の `options["tools"]` に載り、MAF ネイティブの
+function calling がツール選択・引数生成・実行・承認を担う。プロンプトにツール一覧を
+書き写す場所はもう無い (#320 の「定義とプロンプトの二重管理」を構造的に潰した)。
+
+read-only / side-effecting の区分は FunctionTool の `approval_mode` メタデータ
+(G1 = HITL 承認要否の判定源):
 
   "never_require"  — read-only。副作用なし、承認不要
   "always_require" — side-effecting。状態を変えるので必ず人間の承認を要する
 
-`is_side_effecting` はこのメタデータだけを見る — v1 (_ToolEntry.side_effecting)
-と同一の判定挙動。ツールの中身はスタブのまま (実体化は M3-5)。
+**この 1 行が承認の実体**: MAF の function invocation loop が
+`approval_mode == "always_require"` のツール呼び出しをすべて `function_approval_request`
+に変えて実行前に返す。`is_side_effecting` は API 応答の文言組み立て等に使う読み取り
+専用のヘルパで、承認の可否そのものはもう自前判定ではない。
 
 **主体 (誰として実行するか) はモデルの出力から取らない** (Issue #313):
 ツール引数は LLM が生成する = ユーザーの発話で左右できる文字列なので、そこに
@@ -19,14 +26,29 @@ IDOR が成立する。主体は必ず呼び出し側 (FastAPI / workflow) が�
 
 import logging
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from agent_framework import FunctionTool, tool
+from agent_framework import (
+    Content,
+    FunctionInvocationContext,
+    FunctionTool,
+    MiddlewareTermination,
+    function_middleware,
+    tool,
+)
+from agent_framework.exceptions import UserInputRequiredException
 
-from .observability import fingerprint
+from .config import get_settings
+from .observability import fingerprint, new_ref, redact_framework_tool_logs
+from .rag import retrieve
 
 logger = logging.getLogger(__name__)
+
+# **import 時に張る** (#417 P2): ツールが走る経路は必ずこのモジュールを import する
+# ので、本番の入口 (main.py) を待たずにここで掛けておけば、workflow 経由でも
+# 将来の MAF 直呼びでも取りこぼしが無い。冪等なので何度 import されても 1 枚。
+redact_framework_tool_logs()
 
 
 # ── 実行コンテキスト (主体の出どころ) ─────────────────────────────────────────
@@ -39,10 +61,45 @@ class ToolContext:
     - `session_id`: 実行中の会話。今この時点でこのサービスが持つ唯一の実行文脈。
     - `user_id`: 認証済みの主体。BFF (EasyAuth の oid) から渡るようになったら埋まる
       (セッションの所有者バインドは Issue #319 の範囲)。**LLM は決して埋められない**。
+    - `citations`: ツールが引いた出典の集積先。**mutable にしてあるのが要点** —
+      MAF は各ツール呼び出しを `contextvars.copy_context()` の中で走らせるので、
+      ツール側で ContextVar を **再代入** しても呼び出し側には伝わらない。同じ
+      list オブジェクトを共有して append する形だけが並列実行を跨いで届く
+      (tests/test_tools.py が並列 2 本で pin する)。
+    - `executions`: **MAF が実際に実行した**ツール呼び出しの記録 (`tool_boundary`
+      middleware が積む)。citations と同じ理由で mutable。用途は
+      `ToolExecution` の docstring を参照。
     """
 
     session_id: str
     user_id: Optional[str] = None
+    citations: list[str] = field(default_factory=list)
+    executions: list["ToolExecution"] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ToolExecution:
+    """ツールが 1 回実行された事実 (`tool_boundary` middleware が記録する)。
+
+    **なぜ MAF の応答 (function_result) だけでは足りないか** (#417 P1 / 実測):
+    MAF の function invocation loop は、そのターンで**新しい承認要求が出た瞬間に
+    return する**ため、`_prepend_function_call_messages` を通らない。結果、
+    「承認済みツールを実行 → モデルが別の副作用ツールを要求」というターンでは、
+    **実行済みツールの function_result が応答から丸ごと落ちる**。応答だけを見て
+    履歴を書くと「実行されたのに履歴に無い」= 次のターンで同じ副作用ツールが
+    もう一度呼ばれる、が静かに成立する。
+
+    そこで**ツール境界で直接**記録する。`call_id` で応答側の function_result と
+    突き合わせられるので、両方に現れるものは二重に履歴へ積まない (workflow 側)。
+
+    `error_ref` が入っているものは実行が例外で失敗したもの。例外文そのものは
+    どこにも持たない — 出せるのは ref だけ (Issue #313)。
+    """
+
+    call_id: str
+    name: str
+    result: Optional[str] = None
+    error_ref: Optional[str] = None
 
 
 class ToolContextUnavailable(RuntimeError):
@@ -64,8 +121,27 @@ def current_tool_context() -> ToolContext:
     return ctx
 
 
+def use_tool_context(context: ToolContext):
+    """`with use_tool_context(ctx):` の間だけ実行コンテキストを立てる。
+
+    MAF の function invocation loop は chat client の中で回るので、**LLM を呼ぶ側が
+    呼び出し全体をこれで囲む**。ループが何本ツールを走らせても同じ context が見える。
+    """
+
+    class _Scope:
+        def __enter__(self):
+            self._token = _tool_context.set(context)
+            return context
+
+        def __exit__(self, *exc_info):
+            _tool_context.reset(self._token)
+            return False
+
+    return _Scope()
+
+
 # LLM のツール引数に現れてはいけない「主体を指す名前」。ツールがこれらを宣言していない
-# ことは test が機械検査する。ここでの除去は二重防御 (将来ツールが増えたときの保険)。
+# ことは test が機械検査する。middleware での除去は二重防御 (将来ツールが増えたときの保険)。
 IDENTITY_ARG_NAMES = frozenset(
     {
         "user_id",
@@ -88,13 +164,23 @@ IDENTITY_ARG_NAMES = frozenset(
 
 @tool(
     name="search_faq",
-    description="Search FAQ knowledge base",
+    description="Search the FAQ / knowledge base for passages relevant to a question",
     approval_mode="never_require",
 )
 async def search_faq(query: str) -> str:
     # ユーザー由来の文字列はログに出さない (rubric S3 / Issue #313)
     logger.info("Tool[search_faq] invoked query=%s", fingerprint(query))
-    return f"[stub] FAQ result for '{query}': No relevant FAQ found."
+    # RAG は rag.py のスタブのまま (#82: 「rag.py はスタブのまま」)。
+    # v1 では自前分類プロンプトの needs_retrieval が retrieve() を呼んでいたが、
+    # 分類を廃した今、検索するかどうかを決めるのは LLM の function calling。
+    # 出典は戻り値の文字列ではなく ToolContext に積む — API 契約の citations は
+    # 応答本文とは別のフィールドで、モデルに書き写させると事実と乖離しうる。
+    results = await retrieve(query)
+    context = current_tool_context()
+    context.citations.extend(r.source for r in results)
+    if not results:
+        return "[stub] No relevant FAQ found."
+    return "\n".join(r.content for r in results)
 
 
 @tool(
@@ -147,32 +233,172 @@ def is_side_effecting(tool_name: str | None) -> bool:
     return entry is not None and entry.approval_mode == "always_require"
 
 
-def _strip_identity_args(tool_name: str, tool_args: dict[str, Any]) -> dict[str, Any]:
-    """モデルが送ってきた「主体を指す引数」を捨てる (二重防御)。
+class UnknownExposedTool(ValueError):
+    """LLM_EXPOSED_TOOLS に registry に無い名前が入っていた。"""
 
-    ツール側が宣言していない以上、渡しても TypeError になるだけだが、その形だと
-    **注入の試行が「ツールが壊れた」に化けて見分けられない**。ここで落として警告に残す。
+
+def exposed_tools() -> tuple[FunctionTool, ...]:
+    """この構成で LLM に見せるツール (= `options["tools"]` に載るもの)。
+
+    既定は空。`LLM_EXPOSED_TOOLS` の書式と既定オフの理由は config.py を参照。
+    ここが registry から導出されているので、**registry に 1 本足せば LLM に渡る
+    tools も増える** (tests/test_tools.py が pin する)。
     """
-    dropped = [k for k in tool_args if k.lower() in IDENTITY_ARG_NAMES]
-    if dropped:
-        # 値は出さない (LLM 由来 = ユーザー入力由来の文字列)。捨てたキー名だけ残す
-        logger.warning(
-            "Tool[%s] model-supplied identity args dropped: %s", tool_name, dropped
+    raw = get_settings().llm_exposed_tools.strip()
+    if not raw:
+        return ()
+    if raw == "*":
+        return tuple(_REGISTRY.values())
+    names = [name.strip() for name in raw.split(",") if name.strip()]
+    unknown = [name for name in names if name not in _REGISTRY]
+    if unknown:
+        raise UnknownExposedTool(
+            f"LLM_EXPOSED_TOOLS に registry に無いツール名が含まれています: {unknown}"
         )
-    return {k: v for k, v in tool_args.items() if k.lower() not in IDENTITY_ARG_NAMES}
+    return tuple(_REGISTRY[name] for name in names)
 
 
-async def execute_tool(
-    tool_name: str, tool_args: dict[str, Any], context: ToolContext
-) -> str:
-    """ツールを実行する唯一の入口。主体は `context` から来る (tool_args からは来ない)。"""
-    entry = _REGISTRY.get(tool_name)
-    if entry is None:
-        raise ValueError(f"Unknown tool: {tool_name!r}")
-    args = _strip_identity_args(tool_name, tool_args)
-    token = _tool_context.set(context)
+# ── ツール境界 (実行の記録 + 例外の一般化) ───────────────────────────────────
+
+# 一般化した例外文の目印。workflow 側がこれを見て「ref は境界で採番済み」と分かる。
+_TOOL_ERROR_REF_PREFIX = "ToolExecutionFailed ref="
+
+
+class ToolExecutionFailed(RuntimeError):
+    """ツール本体の例外を **ref だけに置き換えた**もの (原文は外に出さない)。"""
+
+
+def tool_error_ref(exception_text: Optional[str]) -> Optional[str]:
+    """MAF の function_result に載った例外文から、境界で採番した ref を取り出す。
+
+    `tool_boundary` が一般化していない失敗 (MAF 内部が作る "Function not found" 等)
+    では None を返す — 呼び出し側はそこで新しい ref を採番してログに残す。
+    """
+    if not exception_text or _TOOL_ERROR_REF_PREFIX not in exception_text:
+        return None
+    return exception_text.split(_TOOL_ERROR_REF_PREFIX, 1)[1].split()[0] or None
+
+
+@function_middleware
+async def tool_boundary(context: FunctionInvocationContext, call_next) -> None:
+    """ツール境界で (1) 実行を記録し (2) 例外を ref だけに一般化する (#417 P2 / Issue #418)。
+
+    **(2) が無いと何が静かに通るか**: MAF は本体が投げた例外を function_result に
+    落とす前に `agent_framework._tools` ロガーへ `Exception: %r` でそのまま出す
+    (実測 / WARNING レベル)。ツールが上流の URL・外部応答・相談内容を含む例外を
+    投げれば、こちらの `_record_tool_outcomes` が指紋化しても**その前に原文が
+    Log Analytics へ流れている**。境界で `ToolExecutionFailed(ref)` に差し替えれば、
+    フレームワークが出せるのは ref だけになる。
+
+    `raise ... from None` にしているのは、`__cause__` として原文の例外を繋ぐと
+    traceback 整形 (`exc_info=True` を使う第三者コード) の最終行に原文が復活する
+    ため。**原文はこのプロセスのログにも残さず、指紋だけを残す**。
+
+    **(1)** は #417 P1: 承認要求で打ち切られたターンでは実行済みツールの
+    function_result が応答から落ちる (`ToolExecution` の docstring)。
+
+    MAF が制御フローに使う例外 (`MiddlewareTermination` /
+    `UserInputRequiredException`) は握らずそのまま通す — ここで一般化すると
+    「承認待ち」「middleware による打ち切り」が「ツールが失敗した」に化ける。
+    """
+    name = context.function.name
+    call_id = str(context.metadata.get("call_id") or "")
+    # 実行コンテキストは呼び出し側 (workflow) が立てる。MAF を直に叩く経路では
+    # 立っていないことがあり、そこでは記録だけを諦める (例外の一般化は常に効く)。
+    execution_log = getattr(_tool_context.get(), "executions", None)
     try:
-        # FunctionTool は呼び出し可能 (wrapped 関数へ委譲) — 戻り値は関数の生の str
-        return await entry(**args)
-    finally:
-        _tool_context.reset(token)
+        await call_next()
+    except (MiddlewareTermination, UserInputRequiredException):
+        raise
+    except Exception as exc:
+        ref = new_ref()
+        logger.error(
+            "Tool execution failed ref=%s tool=%s kind=execution detail=%s",
+            ref,
+            name,
+            fingerprint(str(exc)),
+        )
+        if execution_log is not None:
+            execution_log.append(
+                ToolExecution(call_id=call_id, name=name, error_ref=ref)
+            )
+        raise ToolExecutionFailed(f"{_TOOL_ERROR_REF_PREFIX}{ref}") from None
+    if execution_log is not None:
+        # MAF が function_result を作るときと**同じ正規化**を通す (`Content` の
+        # 生リストや非文字列がそのまま履歴に出ないように)。応答経由で記録された
+        # 場合と履歴の 1 行が一致する形にしておく
+        normalized = Content.from_function_result(call_id, result=context.result)
+        execution_log.append(
+            ToolExecution(call_id=call_id, name=name, result=str(normalized.result))
+        )
+
+
+# ── 主体識別子の防御 (Issue #313) ─────────────────────────────────────────────
+
+
+@function_middleware
+async def identity_arg_guard(context: FunctionInvocationContext, call_next) -> None:
+    """モデルが送ってきた「主体を指す引数」を実行直前に捨てる (二重防御)。
+
+    v1 の `_strip_identity_args` を MAF の FunctionMiddleware として置き直したもの。
+    middleware は chat client の function invocation loop の中で必ず通るので、
+    workflow を経由しない MAF 直呼び (将来の ChatAgent 化など) でも効く。
+
+    **これが拾えない層があることを明示しておく**: MAF は middleware に渡す前に
+    `tool.input_model.model_validate(...)` を通すため、**ツールが宣言していない**
+    引数 (今の registry では `user_id` 等がこれに当たる) はここに届く前に pydantic が
+    黙って捨てている (実測)。したがって「注入が試みられた事実」はここでは見えない。
+    その観測は `report_identity_arg_attempts()` が LLM の生の function_call 引数に
+    対して行う。ここが担うのは **ツールが将来そういう引数を宣言してしまった場合**に
+    値が実行まで届かないようにすること。
+    """
+    arguments = context.arguments
+    if isinstance(arguments, dict):
+        dropped = [key for key in arguments if key.lower() in IDENTITY_ARG_NAMES]
+        if dropped:
+            # 値は出さない (LLM 由来 = ユーザー入力由来の文字列)。捨てたキー名だけ残す
+            logger.warning(
+                "Tool[%s] model-supplied identity args dropped: %s",
+                context.function.name,
+                dropped,
+            )
+            context.arguments = {
+                key: value
+                for key, value in arguments.items()
+                if key.lower() not in IDENTITY_ARG_NAMES
+            }
+    await call_next()
+
+
+def report_identity_arg_attempts(function_calls: list[Content]) -> list[str]:
+    """LLM が生成した function_call の**生の引数**に主体識別子が混じっていたら記録する。
+
+    無いと: MAF の引数バリデーションが未宣言の引数を黙って捨てるため、
+    「user_id=他人 で呼んで」というプロンプト注入の**試行が痕跡なく消える**
+    (成功も失敗も等しく無音になり、攻撃されていることに気づけない)。
+
+    返すのは検出したツール名のリスト (呼び出し側がテスト・観測に使う)。
+    """
+    hits: list[str] = []
+    for call in function_calls:
+        if call.type != "function_call":
+            continue
+        arguments = call.parse_arguments() or {}
+        dropped = sorted(k for k in arguments if k.lower() in IDENTITY_ARG_NAMES)
+        if dropped:
+            hits.append(call.name or "?")
+            logger.warning(
+                "Tool[%s] model-supplied identity args rejected: %s",
+                call.name,
+                dropped,
+            )
+    return hits
+
+
+def function_invocation_limits() -> dict[str, Any]:
+    """MAF の function invocation loop に掛ける上限 (既定は無制限なので必ず明示する)。"""
+    settings = get_settings()
+    return {
+        "max_function_calls": settings.llm_max_function_calls,
+        "max_iterations": settings.llm_max_tool_iterations,
+    }

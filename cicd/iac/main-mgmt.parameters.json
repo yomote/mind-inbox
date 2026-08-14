@@ -1,0 +1,37 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "_comment": "管理系レイヤ (ADR 0056 D1 / #302)。適用先は rg-mgmt-mindbox。中身は運用のためのものだけ (Key Vault / バックアップ Storage / Log Analytics / 予算) で、Cosmos / OpenAI / Speech はアプリ系 RG に残す。Log Analytics はアプリ系に実在するため移行が済むまで false。",
+  "parameters": {
+    "appName": {
+      "value": "mind-box"
+    },
+    "environmentName": {
+      "value": "dev"
+    },
+    "enableKeyVault": {
+      "value": true
+    },
+    "keyVaultLocation": {
+      "value": "japaneast"
+    },
+    "enableE2eTraceKey": {
+      "value": true
+    },
+    "enableBackupStorage": {
+      "value": true
+    },
+    "backupStorageLocation": {
+      "value": "japaneast"
+    },
+    "enableLogAnalytics": {
+      "value": false
+    },
+    "enableBudgetAlert": {
+      "value": true
+    },
+    "budgetStartDate": {
+      "value": "2026-09-01"
+    }
+  }
+}

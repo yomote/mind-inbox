@@ -119,6 +119,23 @@ const TOPICS = [
 const sessions = new Map();
 
 /**
+ * 副作用ツールの承認 (G1 / ADR 0016 M1-3) を決定的に踏むためのトリガ。
+ *
+ * 実 ai-agent は LLM が `approval_mode="always_require"` のツール (`send_reply` 等) を
+ * 選んだときだけ承認待ちになる。LLM の判断はこの層の関心ではない (差し替えているのは
+ * それだけ) ので、語彙一致で同じ HTTP 契約を返す。
+ * 文面は実装 (`app/workflow.py`) と同じにしてある — 実物と別物に見えると、承認 UI が
+ * 「fake でだけ通る」形に寄っていくため。
+ */
+const APPROVAL_TRIGGER = "返信して";
+const APPROVAL_TOOL = "send_reply";
+/** 実装の `_REJECTION_REPLY` と同一文面。 */
+const REJECTION_REPLY = "操作はキャンセルされました。他にご用件はありますか？";
+
+/** approval_request_id → status。二重解決 (実装は 404) を再現するために持つ。 */
+const approvals = new Map();
+
+/**
  * createdAt を単調増加させるためのカウンタ。
  * 「今日」表示を保ちたいので基点は起動時刻にし、1 件ごとに 1 秒進めて順序を固定する。
  */
@@ -142,6 +159,23 @@ function replyTo(message) {
     return "そうだったんですね。もう少し聞かせてください。";
   }
   return `${topic.statement}、という感じでしょうか。いつ頃からそう感じていますか?`;
+}
+
+/** 副作用ツールを実行しようとした = 承認待ちの応答 (G1)。 */
+function needsApproval(message) {
+  return message.includes(APPROVAL_TRIGGER);
+}
+
+/** 承認待ちの ChatResponse。実装 (`workflow.py`) と同じ形・同じ文面で返す。 */
+function approvalPending() {
+  const id = nextId("appr");
+  approvals.set(id, "pending");
+  return {
+    reply: `「${APPROVAL_TOOL}」を実行するには承認が必要です。実行してよろしいですか？`,
+    requires_approval: true,
+    approval_request_id: id,
+    citations: [],
+  };
 }
 
 /** BFF が渡してくる既存 Problem 候補から、同じ型のものを探す (段2 グルーピング)。 */
@@ -220,6 +254,9 @@ const encoder = new TextEncoder();
 const routes = {
   "POST /chat": (body) => {
     record(body.session_id, body.message);
+    if (needsApproval(body.message)) {
+      return { status: 200, json: approvalPending() };
+    }
     return {
       status: 200,
       json: {
@@ -227,6 +264,24 @@ const routes = {
         requires_approval: false,
         approval_request_id: null,
         citations: [],
+      },
+    };
+  },
+
+  /**
+   * 承認 / 却下で中断していたツール実行を解決する (G1)。
+   * 未知 ID・解決済み ID は実装と同じく 404 (承認待ちが二重に消費されない)。
+   */
+  "POST /approve": (body) => {
+    const id = body.approval_request_id;
+    if (approvals.get(id) !== "pending") {
+      return { status: 404, json: { detail: `Approval not found: '${id}'` } };
+    }
+    approvals.set(id, body.approved ? "approved" : "rejected");
+    return {
+      status: 200,
+      json: {
+        reply: body.approved ? `[stub] Reply sent to team@example.com.` : REJECTION_REPLY,
       },
     };
   },
@@ -269,23 +324,24 @@ const server = createServer((req, res) => {
     if (req.method === "POST" && url.pathname === "/chat/stream") {
       const body = await readJson(req);
       record(body.session_id, body.message);
-      const reply = replyTo(body.message);
+      // 承認待ちもストリーミング経路で起きる (実装は同じ workflow を stream で回す)。
+      // ここを非ストリーミングだけにすると、フロントの主経路 (SSE) で承認要求が
+      // 運ばれるかを一度も踏まないまま緑になる。
+      const response = needsApproval(body.message)
+        ? approvalPending()
+        : {
+            reply: replyTo(body.message),
+            requires_approval: false,
+            approval_request_id: null,
+            citations: [],
+          };
+      const reply = response.reply;
 
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
       for (let i = 0; i < reply.length; i += 8) {
         res.write(`data: ${JSON.stringify({ type: "delta", text: reply.slice(i, i + 8) })}\n\n`);
       }
-      res.write(
-        `data: ${JSON.stringify({
-          type: "done",
-          response: {
-            reply,
-            requires_approval: false,
-            approval_request_id: null,
-            citations: [],
-          },
-        })}\n\n`,
-      );
+      res.write(`data: ${JSON.stringify({ type: "done", response })}\n\n`);
       res.end();
       return;
     }

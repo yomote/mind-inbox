@@ -1,0 +1,540 @@
+# 自動生成 — 手書き編集禁止。
+# 真実は apps/services/ai-agent の FastAPI route + pydantic schema。
+# 再生成: npm run docs:openapi:ai-agent
+components:
+  schemas:
+    Affect:
+      properties:
+        intensity:
+          maximum: 1.0
+          minimum: 0.0
+          title: Intensity
+          type: number
+        label:
+          title: Label
+          type: string
+        valence:
+          enum:
+          - negative
+          - neutral
+          - positive
+          title: Valence
+          type: string
+      required:
+      - label
+      - valence
+      - intensity
+      title: Affect
+      type: object
+    ApproveRequest:
+      properties:
+        approval_request_id:
+          title: Approval Request Id
+          type: string
+        approved:
+          title: Approved
+          type: boolean
+      required:
+      - approval_request_id
+      - approved
+      title: ApproveRequest
+      type: object
+    ApproveResponse:
+      properties:
+        reply:
+          title: Reply
+          type: string
+      required:
+      - reply
+      title: ApproveResponse
+      type: object
+    ChatRequest:
+      properties:
+        message:
+          description: User message
+          title: Message
+          type: string
+        session_id:
+          description: Session identifier
+          title: Session Id
+          type: string
+      required:
+      - session_id
+      - message
+      title: ChatRequest
+      type: object
+    ChatResponse:
+      properties:
+        approval_request_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Approval Request Id
+        citations:
+          default: []
+          items:
+            type: string
+          title: Citations
+          type: array
+        reply:
+          title: Reply
+          type: string
+        requires_approval:
+          default: false
+          title: Requires Approval
+          type: boolean
+      required:
+      - reply
+      title: ChatResponse
+      type: object
+    ConversationMessage:
+      description: 抽出対象の会話 1 発話 (#183)。BFF 経由でフロントの会話全文が渡ってくる。
+      properties:
+        role:
+          enum:
+          - user
+          - assistant
+          title: Role
+          type: string
+        text:
+          title: Text
+          type: string
+      required:
+      - role
+      - text
+      title: ConversationMessage
+      type: object
+    ExistingProblemRef:
+      description: グルーピングの突き合わせ候補。BFF (Problem リポジトリ) が /extract に渡す。
+      properties:
+        id:
+          title: Id
+          type: string
+        mentionCount:
+          default: 1
+          minimum: 0.0
+          title: Mentioncount
+          type: integer
+        status:
+          default: open
+          enum:
+          - open
+          - resolved
+          - shelved
+          title: Status
+          type: string
+        summary:
+          default: ''
+          title: Summary
+          type: string
+        theme:
+          enum:
+          - 仕事・キャリア
+          - お金
+          - 心と体
+          - 家族・パートナー
+          - 人間関係
+          - 自己理解・生き方
+          - 日常・生活
+          - 未分類
+          title: Theme
+          type: string
+        title:
+          title: Title
+          type: string
+      required:
+      - id
+      - title
+      - theme
+      title: ExistingProblemRef
+      type: object
+    ExtractRequest:
+      properties:
+        existingProblems:
+          items:
+            $ref: '#/components/schemas/ExistingProblemRef'
+          title: Existingproblems
+          type: array
+        messages:
+          items:
+            $ref: '#/components/schemas/ConversationMessage'
+          title: Messages
+          type: array
+        sessionId:
+          description: Session identifier
+          title: Sessionid
+          type: string
+      required:
+      - sessionId
+      title: ExtractRequest
+      type: object
+    ExtractedItem:
+      properties:
+        grouping:
+          $ref: '#/components/schemas/GroupingOutcome'
+        mention:
+          $ref: '#/components/schemas/Mention'
+      required:
+      - mention
+      - grouping
+      title: ExtractedItem
+      type: object
+    ExtractionResult:
+      properties:
+        items:
+          default: []
+          items:
+            $ref: '#/components/schemas/ExtractedItem'
+          title: Items
+          type: array
+        newProblemCount:
+          minimum: 0.0
+          title: Newproblemcount
+          type: integer
+        sessionId:
+          title: Sessionid
+          type: string
+        updatedProblemCount:
+          minimum: 0.0
+          title: Updatedproblemcount
+          type: integer
+      required:
+      - sessionId
+      - newProblemCount
+      - updatedProblemCount
+      title: ExtractionResult
+      type: object
+    GroupingOutcome:
+      properties:
+        groupingConfidence:
+          anyOf:
+          - maximum: 1.0
+            minimum: 0.0
+            type: number
+          - type: 'null'
+          title: Groupingconfidence
+        isRecurrence:
+          title: Isrecurrence
+          type: boolean
+        kind:
+          enum:
+          - new
+          - existing
+          title: Kind
+          type: string
+        mentionCount:
+          minimum: 1.0
+          title: Mentioncount
+          type: integer
+        problemId:
+          title: Problemid
+          type: string
+        problemTheme:
+          enum:
+          - 仕事・キャリア
+          - お金
+          - 心と体
+          - 家族・パートナー
+          - 人間関係
+          - 自己理解・生き方
+          - 日常・生活
+          - 未分類
+          title: Problemtheme
+          type: string
+        problemTitle:
+          title: Problemtitle
+          type: string
+        reignited:
+          title: Reignited
+          type: boolean
+      required:
+      - kind
+      - problemId
+      - problemTitle
+      - problemTheme
+      - isRecurrence
+      - mentionCount
+      - reignited
+      - groupingConfidence
+      title: GroupingOutcome
+      type: object
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          title: Detail
+          type: array
+      title: HTTPValidationError
+      type: object
+    HealthResponse:
+      properties:
+        status:
+          const: ok
+          default: ok
+          title: Status
+          type: string
+      title: HealthResponse
+      type: object
+    Mention:
+      properties:
+        affect:
+          $ref: '#/components/schemas/Affect'
+        createdAt:
+          title: Createdat
+          type: string
+        dumpId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Dumpid
+        excerpt:
+          title: Excerpt
+          type: string
+        groupingConfidence:
+          anyOf:
+          - maximum: 1.0
+            minimum: 0.0
+            type: number
+          - type: 'null'
+          title: Groupingconfidence
+        id:
+          title: Id
+          type: string
+        problemId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Problemid
+        proposedTags:
+          items:
+            type: string
+          title: Proposedtags
+          type: array
+        proposedTheme:
+          enum:
+          - 仕事・キャリア
+          - お金
+          - 心と体
+          - 家族・パートナー
+          - 人間関係
+          - 自己理解・生き方
+          - 日常・生活
+          - 未分類
+          title: Proposedtheme
+          type: string
+        sessionId:
+          title: Sessionid
+          type: string
+        statement:
+          title: Statement
+          type: string
+      required:
+      - id
+      - sessionId
+      - dumpId
+      - createdAt
+      - statement
+      - excerpt
+      - affect
+      - proposedTheme
+      - proposedTags
+      - problemId
+      - groupingConfidence
+      title: Mention
+      type: object
+    PlanRequest:
+      properties:
+        emotions:
+          default: []
+          items:
+            type: string
+          title: Emotions
+          type: array
+        priorities:
+          default: []
+          items:
+            type: string
+          title: Priorities
+          type: array
+        summary:
+          title: Summary
+          type: string
+      required:
+      - summary
+      title: PlanRequest
+      type: object
+    PlanResponse:
+      properties:
+        steps:
+          default: []
+          items:
+            type: string
+          title: Steps
+          type: array
+        title:
+          title: Title
+          type: string
+      required:
+      - title
+      title: PlanResponse
+      type: object
+    ValidationError:
+      properties:
+        ctx:
+          title: Context
+          type: object
+        input:
+          title: Input
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          title: Location
+          type: array
+        msg:
+          title: Message
+          type: string
+        type:
+          title: Error Type
+          type: string
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+      type: object
+info:
+  title: mind-inbox-ai-agent
+  version: 0.1.0
+openapi: 3.1.0
+paths:
+  /approve:
+    post:
+      operationId: approve_approve_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApproveResponse'
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Approve
+  /chat:
+    post:
+      operationId: chat_chat_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Chat
+  /chat/stream:
+    post:
+      description: /chat のストリーミング版。契約の真実は schemas.ChatStream* (done は ChatResponse を運ぶ)。
+      operationId: chat_stream_chat_stream_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: {}
+            text/event-stream: {}
+          description: SSE (text/event-stream)。data 行の JSON は ChatStreamDelta / ChatStreamDone / ChatStreamError
+            のいずれか (#120, ADR 0024)。
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Chat Stream
+  /extract:
+    post:
+      operationId: extract_endpoint_extract_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtractRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtractionResult'
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Extract Endpoint
+  /health:
+    get:
+      operationId: health_health_get
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+          description: Successful Response
+      summary: Health
+  /plan:
+    post:
+      operationId: plan_endpoint_plan_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanResponse'
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Plan Endpoint

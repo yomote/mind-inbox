@@ -82,7 +82,8 @@ GitHub MCP ツール（`mcp__github__*`。ToolSearch で `select:` して読み�
 PO の応答待ちを先頭に出すための材料を引く:
 
 1. **`needs-human` ラベルの Open Issue** — `list_issues` (labels: ["needs-human"])
-2. **Proposed のまま滞留している ADR** — `grep -l "Status: Proposed" docs/adr/*.md` (経過日数も出す)
+2. **Proposed のまま滞留している ADR** — `grep -l "^- Status: Proposed" docs/adr/*.md` (経過日数も出す)
+   - **行頭アンカー (`^-`) を落とさないこと。** アンカー無しだと本文中の「`Status: Proposed` で入れる」等の説明文に誤マッチする。2026-08-12 に実際に ADR 0014 (Accepted) を未裁定として数え、「未裁定 4 件」と繰り返し PO に報告した。自動生成の status ページ (`build.py`) は**先頭 1200 字に限定**しているため同じ誤りをしていない — 誤っていたのはこの skill の指示だけ
 3. **上位候補の中身を読む (必須)** — 1・2 で挙がったもののうち **3 件に絞ってから**、その Issue の `body` + 直近コメント (`issue_read` method: `get`／`get_comments`) と、ADR の本文 (Context / Decision Outcome) を読む
 
 **3 は省略できない** — 下の出力形式は「どのレーンが止まるか / 推奨 / 先送りの代償」を要求しており、**タイトルとラベルだけからは書けない**。読まずに書けば推測が裁定の材料として PO に届く (この skill が最も避けるべき失敗)。読めなかった場合は、その件について**推測で埋めず「未取得 — 中身を読めていない」と書く**。

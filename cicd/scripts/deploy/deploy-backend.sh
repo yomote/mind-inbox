@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Deploy BFF (Node.js + Azure Functions v4 + tRPC) to the existing Function App.
 #
-# 1. apps/bff で npm ci + tsc build
-# 2. dist / node_modules / package.json / host.json を zip
+# 1. apps/bff で pnpm install + tsc build
+# 2. 配布用ツリーを別ディレクトリに作り (prod 依存だけ / node_modules を実体で展開)、
+#    dist / node_modules / package.json / host.json を zip
+#    → pnpm 既定の node_modules は symlink 構造で、Functions の zip deploy では壊れる。
+#      `--node-linker=hoisted` で実体を作り、**symlink が 1 本も無いことを機械で確認**する (#420)
 # 3. config-zip で Function App にデプロイ
 # 4. Container App の FQDN を取得して AI_AGENT_BASE_URL / VOICEVOX_BASE_URL を BFF env に注入
 # 5. Function App を再起動して env を反映
@@ -21,11 +24,9 @@ need() {
 }
 
 need az
-need npm
-need zip
+# pnpm / zip / zipinfo の有無は lib/build-bff-package.sh 側で確認する
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-BFF_DIR="$ROOT_DIR/apps/bff"
 
 # ── Resolve deployment outputs ────────────────────────────────────────────────
 echo "=== Resolving deployment outputs ==="
@@ -62,42 +63,13 @@ if [[ -n "$RUN_FROM_PACKAGE_VALUE" && "$RUN_FROM_PACKAGE_VALUE" == http* ]]; the
 fi
 echo "Track deployment: https://$FUNC_APP_NAME.scm.azurewebsites.net/api/deployments/latest"
 
-# ── Build BFF ─────────────────────────────────────────────────────────────────
-echo ""
-echo "=== Building BFF ==="
-cd "$BFF_DIR"
-npm ci
-npm run build
-
-if [[ ! -d "$BFF_DIR/dist" ]]; then
-  echo "ERROR: dist/ not found at $BFF_DIR/dist after build" >&2
-  exit 1
-fi
-
-# ── Zip ───────────────────────────────────────────────────────────────────────
+# ── Build BFF deployment package ──────────────────────────────────────────────
+# パッケージ生成 (build → stage → symlink 検査 → zip) は az を使わない別スクリプトに
+# 切り出してある。デプロイせずローカルで同じ工程を回して zip の中身を確認できる (#420)。
 ZIP_PATH="$ROOT_DIR/.local/functionapp.zip"
-mkdir -p "$(dirname "$ZIP_PATH")"
-rm -f "$ZIP_PATH"
-
+export ZIP_PATH
 echo ""
-echo "=== Creating deployment zip ==="
-# Functions v4 (Node) zip layout:
-#   /host.json
-#   /package.json     (main = "dist/src/functions/*.js")
-#   /dist/...         (compiled output)
-#   /node_modules/... (production deps)
-zip -qr "$ZIP_PATH" \
-  host.json \
-  package.json \
-  package-lock.json \
-  dist \
-  node_modules \
-  -x "node_modules/.cache/*" \
-  -x "node_modules/.bin/*" \
-  -x "**/*.map"
-
-ZIP_BYTES="$(stat -c%s "$ZIP_PATH" 2>/dev/null || stat -f%z "$ZIP_PATH")"
-echo "Zip size: $ZIP_BYTES bytes ($ZIP_PATH)"
+"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/build-bff-package.sh"
 
 # ── Deploy ────────────────────────────────────────────────────────────────────
 echo ""

@@ -83,6 +83,28 @@ export const ApproveResponseSchema = z.object({
 });
 export type ApproveResponse = z.infer<typeof ApproveResponseSchema>;
 
+/**
+ * `/approve` が「承認レコードがもう無い」ときに返す 404 の `detail` (#82 / PR #416)。
+ *
+ * schema ではなくエラー本文の契約なので pydantic との機械比較には乗らないが、
+ * **BFF の分岐がこの文字列に依存している**ので契約の真実はここに置く。実文字列の
+ * 出どころは `apps/services/ai-agent/app/workflow.py` の `resume_after_approval` が
+ * 投げる `ValueError` で、`app/main.py` が `detail=str(exc)` にそのまま載せる:
+ *
+ *   - `Approval not found: '<id>'`             — 未知 ID / TTL 1h 失効 / 再起動で消えた
+ *   - `Approval already processed: '<status>'` — 消費済み (approved / rejected)
+ *   - `Approval checkpoint not found: '<id>'`  — checkpoint が消えている
+ *
+ * **これ以外の 404 は承認レコードの状態について何も言っていない** (FastAPI 既定の
+ * `Not Found` / プロキシの HTML / ベース URL 違い)。区別せず全部を「もう受け付け
+ * られない」に写すと、生きている checkpoint を持つ承認カードまで閉じてしまう。
+ *
+ * 文字列一致なので ai-agent 側の文言変更で静かに切れる — 切れたことに気づけるよう、
+ * `npm run test:contract` が ai-agent のソース中の実文字列と突き合わせる。
+ */
+export const APPROVAL_GONE_DETAIL =
+  /^Approval (not found|already processed|checkpoint not found)\b/;
+
 // ── /extract (Problem 中心 2層モデル / ADR 0007・0012) ────────────────────────
 
 /** グルーピングの突き合わせ候補（BFF の Problem リポジトリから渡す / ADR 0012） */

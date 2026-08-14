@@ -2,7 +2,7 @@
  * lint-staged 設定。pre-commit から `npx lint-staged` で起動される。
  *
  * 前提:
- *  - apps/bff: npm install 済み（ESLint）
+ *  - apps/bff: pnpm install 済み（ESLint）
  *  - apps/frontend: pnpm install 済み（ESLint）
  *  - ruff: グローバル or PATH 上にあること（推奨: `uv tool install ruff`）
  *  - shellcheck: 任意。インストール済みなら .sh をチェック、なければスキップ
@@ -37,7 +37,7 @@ const relToRoot = (files) =>
 
 module.exports = {
   "apps/bff/**/*.ts": (files) => [
-    `bash -c 'cd apps/bff && npx eslint --fix ${relTo("apps/bff", files)}'`,
+    `bash -c 'cd apps/bff && pnpm exec eslint --fix ${relTo("apps/bff", files)}'`,
     `prettier --write ${relToRoot(files)}`,
   ],
 

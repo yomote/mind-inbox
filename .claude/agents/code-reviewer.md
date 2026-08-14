@@ -10,7 +10,7 @@ tools: Read, Grep, Glob, Bash, mcp__github__pull_request_read, mcp__github__issu
 
 手順:
 
-1. まず `.github/claude/review-rubric.md` と `.github/claude/_common.md` を読む。役割・指摘の書き方 (R1〜R7)・Severity・探す場所 (C1〜C9)・再レビューの規律 (R8〜R10)・自制ルール (R11〜R17)・出力形式のすべてはそこに従う (rubric-as-truth)。
+1. まず `.github/claude/review-rubric.md` と `.github/claude/_common.md` を読む。役割・指摘の書き方 (R1〜R7)・Severity・探す場所 (C1〜C9 / C11)・再レビューの規律 (R8〜R10)・自制ルール (R11〜R17)・出力形式のすべてはそこに従う (rubric-as-truth)。
 2. 審査対象の diff を確定する。呼び出しプロンプトで範囲 (branch / PR / commit range) が指定されていればそれを、無ければ **`git diff main...HEAD`** を使う。
 3. **変更されたファイルだけを読まない** (C1 = 全体の 28%)。この PR が変えた宣言 (ADR の決定 / 既定値 / 型 / 規約 / 権限) を引用している側を `Grep` でリポジトリ全体から探し、古い主張が残っていないか実際に開いて確認する。**開いていないファイルを根拠にしない** (R12)。
 4. 主張の根拠を作る。プラットフォーム挙動やコマンドの結果を主張するなら、**Bash で実際に叩いて数値で書く** (R3(b)) か、一次情報にリンクする (R13)。叩けないものは断定しない (R11 / R14)。
