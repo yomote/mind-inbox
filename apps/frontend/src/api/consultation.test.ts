@@ -28,6 +28,7 @@ vi.mock("./http", () => ({
 }));
 
 import { TRPCClientError } from "@trpc/client";
+import { APPROVAL_NOT_FOUND_TOKEN } from "../../../bff/src/trpc/errorTokens";
 import { trpc } from "../trpc/client";
 import { chatStreamFetch, ttsPrefetchFetch } from "./http";
 import {
@@ -308,15 +309,50 @@ describe("[単体] 副作用ツールの承認要求 (#82 / G1)", () => {
     });
   });
 
-  it("NOT_FOUND (期限切れ / 処理済み) は ApprovalExpired に写す", async () => {
+  /** BFF が返す tRPC エラーの形を作る (message + data.code)。 */
+  function trpcError(message: string, code: string) {
+    const err = new TRPCClientError(message);
+    Object.defineProperty(err, "data", { value: { code } });
+    return err;
+  }
+
+  it("NOT_FOUND + approval-not-found token は ApprovalExpired に写す", async () => {
     // 無いと: 失効した承認 (ai-agent の TTL 1h / 再起動) や処理済みの承認への応答が通信失敗と同じ
     // 汎用エラーになり、UI は「再試行してください」しか出せない。再試行は決して
     // 成功しないので承認カードが閉じられず、その会話は永久に詰む (PR #416 judge major-1)。
-    const err = new TRPCClientError("approval-not-found");
-    Object.defineProperty(err, "data", { value: { code: "NOT_FOUND" } });
-    vi.mocked(trpc.consultation.approve.mutate).mockRejectedValue(err);
+    // token は BFF の errorTokens.ts と同じ値を import して使う (書き写さない)。
+    vi.mocked(trpc.consultation.approve.mutate).mockRejectedValue(
+      trpcError(APPROVAL_NOT_FOUND_TOKEN, "NOT_FOUND"),
+    );
 
     await expect(respondToApproval("appr-1", true)).rejects.toBeInstanceOf(ApprovalExpired);
+  });
+
+  it("token の無い NOT_FOUND (procedure 未配備) は ApprovalExpired にしない", async () => {
+    // 無いと: tRPC 自身が返す NOT_FOUND (`No procedure found on path ...` = frontend と
+    // BFF の版ずれ / BFF 単独配備 / ルーティング事故) まで「もう受け付けられない」に化け、
+    // **生きている checkpoint を持つ承認カードが閉じる**。サーバは承認待ちのまま、画面
+    // からは消えるので、承認も却下も再試行もできない (Codex 4 巡目 P2)。
+    vi.mocked(trpc.consultation.approve.mutate).mockRejectedValue(
+      trpcError('No procedure found on path "consultation.approve"', "NOT_FOUND"),
+    );
+
+    const err = await respondToApproval("appr-1", true).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(ApprovalExpired);
+  });
+
+  it("token だけ一致していてもコードが NOT_FOUND でなければ ApprovalExpired にしない", async () => {
+    // 無いと: 判定が message だけに退化しても気づけない (上流障害の文面が偶然一致した
+    // ときにカードを閉じてしまう)。
+    vi.mocked(trpc.consultation.approve.mutate).mockRejectedValue(
+      trpcError(APPROVAL_NOT_FOUND_TOKEN, "INTERNAL_SERVER_ERROR"),
+    );
+
+    const err = await respondToApproval("appr-1", true).catch((e: unknown) => e);
+
+    expect(err).not.toBeInstanceOf(ApprovalExpired);
   });
 
   it("NOT_FOUND 以外の失敗は ApprovalExpired にしない (再試行で直る失敗を消さない)", async () => {

@@ -4,6 +4,7 @@ import { ConversationMessageSchema } from "../clients/aiAgentContracts";
 import type { ConversationMessage } from "../clients/aiAgentContracts";
 import { z } from "zod";
 import type { TrpcContext } from "./context";
+import { APPROVAL_NOT_FOUND_TOKEN } from "./errorTokens";
 import {
   ApprovalNotFoundError,
   approve as approveAiAgent,
@@ -712,9 +713,11 @@ const consultationRouter = router({
         // まま会話が永久に詰む (再試行は決して成功しない)。
         if (err instanceof ApprovalNotFoundError) {
           console.error(`[consultation.approve] ${err.message}`);
-          // message は機械可読な token に固定する (フロントは code を見るが、
-          // ログ・監視で「期限切れ」と「上流障害」を混ぜないため)。
-          throw new TRPCError({ code: "NOT_FOUND", message: "approval-not-found" });
+          // message は機械可読な token に固定する。**フロントは code だけでは判定できない**
+          // (tRPC は procedure 未配備でも NOT_FOUND を返す / Codex 4 巡目 P2) ので、
+          // この token がフロントとの唯一の合図になる。リテラルは errorTokens.ts が
+          // 1 個だけ持ち、フロントも同じものを import する (二重定義にしない)。
+          throw new TRPCError({ code: "NOT_FOUND", message: APPROVAL_NOT_FOUND_TOKEN });
         }
         throw err;
       }

@@ -5,7 +5,7 @@ import { chatStreamFetch, ttsPrefetchFetch, useMock } from "./http";
 import { parseSseJsonStream } from "./sse";
 import { appendStreamingReply, beginStreamingReply, clearStreamingReply } from "./streamingReply";
 import { reportStubbedResponse, resetStubbedResponse } from "./stubStatus";
-import { isNotFound } from "./trpcError";
+import { isApprovalNotFound } from "./trpcError";
 
 const voicevoxSpeaker = Number(import.meta.env.VITE_VOICEVOX_SPEAKER || "3");
 
@@ -273,8 +273,8 @@ export async function sendMessage(sessionId: string, text: string): Promise<Assi
  *
  * **却下も送る**: 送らないとサーバ側の承認待ち (checkpoint) が宙に浮いたままになる。
  *
- * @throws {ApprovalExpired} 承認レコードが失効している (BFF の `NOT_FOUND`)。
- *         再試行では回復しないので、通信失敗と区別して投げる。
+ * @throws {ApprovalExpired} 承認レコードがもう無い (BFF の `NOT_FOUND` +
+ *         `approval-not-found` token)。再試行では回復しないので、通信失敗と区別して投げる。
  */
 export async function respondToApproval(
   approvalRequestId: string,
@@ -290,7 +290,12 @@ export async function respondToApproval(
     // または**すでに approved / rejected 済み**。ai-agent はこの 3 つを区別せず 404 を返す。
     // ここで種別を立てないと UI は「通信失敗 → 再試行」しか出せず、
     // 何度押しても同じ 404 に当たり続ける (#82 / PR #416 judge major-1)。
-    if (isNotFound(err)) throw new ApprovalExpired();
+    //
+    // **code だけで判定しない** (Codex 4 巡目 P2): tRPC は procedure 未配備でも
+    // NOT_FOUND を返すので、版ずれ・配備事故の NOT_FOUND まで「もう受け付けられない」に
+    // 化けると、生きている checkpoint のカードを閉じてしまう。BFF がこのケースにだけ
+    // 載せる token との一致まで見る (isApprovalNotFound)。
+    if (isApprovalNotFound(err)) throw new ApprovalExpired();
     throw err;
   }
   return {
