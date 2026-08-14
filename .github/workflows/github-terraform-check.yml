@@ -1,0 +1,122 @@
+name: github-terraform-check
+
+# `cicd/github/terraform/` の Terraform 宣言を機械検証する (Issue #390 A-1)。
+#
+# なぜ CI が要るか: **エージェント環境からは provider を取得できない**。
+#   registry.terraform.io が egress ポリシーで 403 (実測 2026-08-14。
+#   proxy status の recentRelayFailures に `registry.terraform.io:443` /
+#   `connect_rejected` が残る)。したがって `terraform init` が通らず、
+#   `validate` も `plan` もローカルでは回せない。GitHub runner はこのプロキシの
+#   外なので、**構文より先の検証ができる唯一の場所がここ**。
+#   (iac-validate.yml が bicep CLI について同じ理由で存在するのと同型。)
+#
+# ⚠️ **この workflow は `terraform plan` を実行しません。** plan は GitHub の
+#    管理系 API を読むためトークンが要り、**そのトークンをどこに置くかが未決定**
+#    だからです (#390 に needs-human として問いを残してある)。選択肢は
+#    docs/runbooks/github-terraform.md。
+#    **「plan が通った」とは書きません** — 回していないものを緑と書かないため、
+#    実行しなかった事実を毎回サマリに出します (CLAUDE.md「取れなかったものを
+#    『異常なし』と書かない」)。
+#
+# 🔒 apply は**この workflow からは絶対にしない**。#390 の PO 裁定は「宣言 + plan
+#    まで」、実 apply は #387 (needs-human) の裁定が先。
+
+on:
+  pull_request:
+    paths:
+      - "cicd/github/terraform/**"
+      - ".github/workflows/github-terraform-check.yml"
+  push:
+    branches: [main]
+    paths:
+      - "cicd/github/terraform/**"
+      - ".github/workflows/github-terraform-check.yml"
+
+# 読み取りだけ。GitHub の設定には一切触らない。
+permissions:
+  contents: read
+
+env:
+  TF_VERSION: "1.9.8"
+  # releases.hashicorp.com が配る公式 SHA256SUMS の値。
+  # 実測 2026-08-14: ダウンロードした zip の sha256sum と一致することを確認済み。
+  TF_SHA256: "186e0145f5e5f2eb97cbd785bc78f21bae4ef15119349f6ad4fa535b83b10df8"
+  TF_DIR: cicd/github/terraform
+
+jobs:
+  fmt-validate:
+    name: Terraform 宣言を検証する (fmt / validate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # setup-terraform action ではなく直接取る。理由: 版とチェックサムを
+      # この yml の中で固定でき、action の SHA ピン更新に追われない。
+      - name: terraform を入れる (チェックサム検証つき)
+        run: |
+          set -euo pipefail
+          url="https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip"
+          curl -fsSL -o /tmp/terraform.zip "$url"
+          echo "${TF_SHA256}  /tmp/terraform.zip" | sha256sum -c -
+          unzip -q -o /tmp/terraform.zip -d /tmp/tfbin
+          sudo install -m 0755 /tmp/tfbin/terraform /usr/local/bin/terraform
+          terraform version
+
+      # fmt は HCL をパースするので、構文エラーと整形崩れをここで落とす。
+      # **引数名が正しいかは見ていない** (それは validate の仕事)。
+      - name: terraform fmt -check
+        run: terraform -chdir=${{ env.TF_DIR }} fmt -check -diff -recursive
+
+      # provider をレジストリから取る。ここが通るかどうかが
+      # 「エージェント環境で塞がれていたもの」の答えになる。
+      # -backend=false: state のバックエンドは未決定 (#390 の ADR 案件) なので触らない。
+      - name: terraform init (-backend=false)
+        run: terraform -chdir=${{ env.TF_DIR }} init -backend=false -input=false -no-color
+
+      - name: terraform validate
+        run: terraform -chdir=${{ env.TF_DIR }} validate -no-color
+
+      # ロックファイルはまだリポジトリに無い (エージェント環境で生成できなかった)。
+      # ここで生成されたものをサマリに出して、PR で commit できるようにする。
+      # **これが commit されるまで provider はハッシュで固定されていない**。
+      - name: .terraform.lock.hcl を run に残す
+        if: always()
+        run: |
+          set -uo pipefail
+          lock="${TF_DIR}/.terraform.lock.hcl"
+          {
+            echo "## provider のロックファイル"
+            echo ""
+            if [ -f "$lock" ]; then
+              if git diff --quiet -- "$lock" 2>/dev/null && git ls-files --error-unmatch "$lock" >/dev/null 2>&1; then
+                echo "リポジトリの \`$lock\` と一致しています。"
+              else
+                echo "⚠️ リポジトリの \`$lock\` が無いか、生成結果と違います。"
+                echo "**下の内容を \`$lock\` として commit するまで、provider はハッシュで固定されていません。**"
+                echo ""
+                echo '```hcl'
+                cat "$lock"
+                echo '```'
+              fi
+            else
+              echo "❌ 生成されませんでした (init が失敗している)。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # 回していないものを緑と書かない。plan を実行しなかった事実を毎回残す。
+      - name: plan を実行していないことを明示する
+        if: always()
+        run: |
+          {
+            echo "## terraform plan: **未実行**"
+            echo ""
+            echo "理由: plan は GitHub の管理系 API を読むためトークンが要り、"
+            echo "**そのトークンをどこに置くかが未決定**です (Issue #390 に needs-human として残してある)。"
+            echo ""
+            echo "- したがって **この run は「宣言と現実が一致している」ことを何も言っていません**。"
+            echo "  言えているのは「HCL が整形済みで、provider のスキーマに対して妥当」まで。"
+            echo "- 選択肢と決め方: \`docs/runbooks/github-terraform.md\`"
+            echo "- 未取得のまま宣言から外している項目 (ruleset ほか): \`cicd/github/terraform/README.md\`"
+          } >> "$GITHUB_STEP_SUMMARY"
