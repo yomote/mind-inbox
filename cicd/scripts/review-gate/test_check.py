@@ -313,6 +313,13 @@ def test_l1_markdownの全コードブロック形式を判定対象から外す
     # 閉じタグの無い <pre> はコメント末尾まで除外 (過剰除外 = 安全側)
     unclosed = (f"<pre>\n[pm-accept] {HEAD[:7]} — 例\n", "OWNER")
     assert not has_pm_accept([unclosed], HEAD)
+    # 解除は開始タグと同種の閉じタグのみ (Codex round 5 P1): <pre> の中の
+    # </code> で状態を解除すると、まだ <pre> 内の例文が通常行に漏れる
+    mismatched = (
+        f"<pre>\n</code>\n[pm-accept] {HEAD[:7]} — 例\n</pre>\n",
+        "OWNER",
+    )
+    assert not has_pm_accept([mismatched], HEAD)
     # 過剰除外の対照: インデント無しの正規の受け入れは通る (上の正のテストと重複
     # だが、この除外がどこまでかをこのテスト内で読めるようにする)
     assert has_pm_accept([(f"[pm-accept] {HEAD[:7]} — ok", "OWNER")], HEAD)

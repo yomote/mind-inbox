@@ -145,9 +145,15 @@ REVIEWER_STANDIN = "代役 judge"
 # 「1 回レビューを貼ってから何でも push できる」門になる (pm-accept と同形の失効)。
 STANDIN_REVIEW_MARKER = "<!-- standin-review -->"
 # raw HTML のコードブロック (GitHub はこれもコード表示にする / Codex round 4 P1)。
-# 開き・閉じの判定は行単位: 同一行で閉じないタグをブロック開始とみなす
-_HTML_CODE_OPEN_RE = re.compile(r"<(?:pre|code)\b", re.IGNORECASE)
-_HTML_CODE_CLOSE_RE = re.compile(r"</(?:pre|code)\s*>", re.IGNORECASE)
+# 開き・閉じの判定は行単位: 同一行で閉じないタグをブロック開始とみなす。
+# 解除は**開始タグと同種の閉じタグのみ** (Codex round 5 P1: `<pre>` を
+# `</code>` で解除すると、不一致タグを含むコメントで `<pre>` の中身が
+# 通常行に漏れる)
+_HTML_CODE_OPEN_RE = re.compile(r"<(pre|code)\b", re.IGNORECASE)
+_HTML_CODE_CLOSE_RES = {
+    "pre": re.compile(r"</pre\s*>", re.IGNORECASE),
+    "code": re.compile(r"</code\s*>", re.IGNORECASE),
+}
 # 代役マーカーも行頭 = 桁 0 に限る (pm-accept と同じ構文厳密化 / Issue #380 と
 # 同型 + Codex round 3 P1 のリスト内フェンス対策)。地の文・インラインコード
 # (`<!-- standin-review -->` を貼ってください 等) の言及はレビューではない。
@@ -779,12 +785,14 @@ def _machine_lines(body: str) -> list[str]:
     lines: list[str] = []
     fence: str | None = None  # 開いているフェンスの文字 ("`" か "~")。None = 外
     fence_len = 0  # 開きフェンスの文字数 (閉じは同数以上が要る)
-    in_html_code = False  # <pre> / <code> の複数行ブロックの中か
+    # <pre> / <code> の複数行ブロックの開始タグ名。None = ブロック外。
+    # 解除は同種の閉じタグのみ (Codex round 5 P1 — 不一致タグで漏らさない)
+    in_html_code: str | None = None
     for line in body.splitlines():
         stripped = line.lstrip()
-        if in_html_code:
-            if _HTML_CODE_CLOSE_RE.search(line):
-                in_html_code = False
+        if in_html_code is not None:
+            if _HTML_CODE_CLOSE_RES[in_html_code].search(line):
+                in_html_code = None
             continue
         if stripped.startswith("```") or stripped.startswith("~~~"):
             char = stripped[0]
@@ -801,10 +809,14 @@ def _machine_lines(body: str) -> list[str]:
         if fence is not None or stripped.startswith(">"):
             continue
         opened = _HTML_CODE_OPEN_RE.search(line)
-        if opened and not _HTML_CODE_CLOSE_RE.search(line, opened.end()):
-            # 同じ行で閉じない <pre> / <code> — ブロック開始 (この行ごと除外)
-            in_html_code = True
-            continue
+        if opened:
+            tag = opened.group(1).lower()
+            if not _HTML_CODE_CLOSE_RES[tag].search(line, opened.end()):
+                # 同じ行で同種タグが閉じない <pre> / <code> — ブロック開始
+                # (この行ごと除外)。同一行で閉じるインライン span は通常行だが、
+                # 行頭が `<` なので桁 0 のマーカー判定には掛からない
+                in_html_code = tag
+                continue
         if line.startswith("\t") or line.startswith("    "):
             # インデントコード (4 スペース / タブ) — 書式例の貼り付け (Codex P1)
             continue
