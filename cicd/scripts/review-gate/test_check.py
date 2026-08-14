@@ -295,6 +295,24 @@ def test_l1_markdownの全コードブロック形式を判定対象から外す
         )
         == "aaa1111"
     )
+    # raw HTML のコードブロック (Codex round 4 P1): <pre> / <code> 包みの例文も
+    # GitHub ではコード表示になる — 宣言として読まない
+    html_pre = (f"書式:\n<pre>\n[pm-accept] {HEAD[:7]} — 例\n</pre>\n", "OWNER")
+    assert not has_pm_accept([html_pre], HEAD)
+    html_code = (
+        f"<code>\n{STANDIN_REVIEW_MARKER}\n代役レビュー ({HEAD[:7]})\n</code>",
+        "OWNER",
+    )
+    assert not has_standin_review([html_code], HEAD)
+    # 対照: ブロックを閉じた後の本物の受け入れは通る
+    pre_then_real = (f"<pre>\n例\n</pre>\n\n[pm-accept] {HEAD[:7]} — ok", "OWNER")
+    assert has_pm_accept([pre_then_real], HEAD)
+    # インライン span はブロックにしない — 行頭が < なので桁 0 判定にも掛からない
+    inline_code = (f"<code>[pm-accept] {HEAD[:7]}</code> は書式です", "OWNER")
+    assert not has_pm_accept([inline_code], HEAD)
+    # 閉じタグの無い <pre> はコメント末尾まで除外 (過剰除外 = 安全側)
+    unclosed = (f"<pre>\n[pm-accept] {HEAD[:7]} — 例\n", "OWNER")
+    assert not has_pm_accept([unclosed], HEAD)
     # 過剰除外の対照: インデント無しの正規の受け入れは通る (上の正のテストと重複
     # だが、この除外がどこまでかをこのテスト内で読めるようにする)
     assert has_pm_accept([(f"[pm-accept] {HEAD[:7]} — ok", "OWNER")], HEAD)

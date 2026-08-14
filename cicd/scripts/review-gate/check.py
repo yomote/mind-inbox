@@ -144,6 +144,10 @@ REVIEWER_STANDIN = "代役 judge"
 # 実装者と同じ GitHub アカウントから投稿されるため、SHA を縛らないと
 # 「1 回レビューを貼ってから何でも push できる」門になる (pm-accept と同形の失効)。
 STANDIN_REVIEW_MARKER = "<!-- standin-review -->"
+# raw HTML のコードブロック (GitHub はこれもコード表示にする / Codex round 4 P1)。
+# 開き・閉じの判定は行単位: 同一行で閉じないタグをブロック開始とみなす
+_HTML_CODE_OPEN_RE = re.compile(r"<(?:pre|code)\b", re.IGNORECASE)
+_HTML_CODE_CLOSE_RE = re.compile(r"</(?:pre|code)\s*>", re.IGNORECASE)
 # 代役マーカーも行頭 = 桁 0 に限る (pm-accept と同じ構文厳密化 / Issue #380 と
 # 同型 + Codex round 3 P1 のリスト内フェンス対策)。地の文・インラインコード
 # (`<!-- standin-review -->` を貼ってください 等) の言及はレビューではない。
@@ -765,12 +769,23 @@ def _machine_lines(body: str) -> list[str]:
       round 3 P1) — 対策はマーカー正規表現側の「桁 0 のみ」で持つ: リスト内
       コードの中身は必ず 2 スペース以上字下げされるため、字下げを許さない
       マーカー判定には掛からない (Markdown のリスト文法をここで追いかけない)。
+      **raw HTML のコードブロック** (`<pre>` / `<code>` の複数行ブロック) も
+      外す (Codex round 4 P1 — GitHub はこれもコード表示にするため、
+      `<pre>` 包みの書式例が宣言として読まれる)。同一行で閉じるインライン
+      span (`<code>…</code>`) はブロックにしない — どのみち行頭が `<` なので
+      桁 0 のマーカー判定には掛からない。閉じタグの無いブロックは
+      コメント末尾まで除外 (過剰除外 = 門が閉じる安全側)。
     """
     lines: list[str] = []
     fence: str | None = None  # 開いているフェンスの文字 ("`" か "~")。None = 外
     fence_len = 0  # 開きフェンスの文字数 (閉じは同数以上が要る)
+    in_html_code = False  # <pre> / <code> の複数行ブロックの中か
     for line in body.splitlines():
         stripped = line.lstrip()
+        if in_html_code:
+            if _HTML_CODE_CLOSE_RE.search(line):
+                in_html_code = False
+            continue
         if stripped.startswith("```") or stripped.startswith("~~~"):
             char = stripped[0]
             run = len(stripped) - len(stripped.lstrip(char))
@@ -784,6 +799,11 @@ def _machine_lines(body: str) -> list[str]:
                 fence, fence_len = None, 0
             continue
         if fence is not None or stripped.startswith(">"):
+            continue
+        opened = _HTML_CODE_OPEN_RE.search(line)
+        if opened and not _HTML_CODE_CLOSE_RE.search(line, opened.end()):
+            # 同じ行で閉じない <pre> / <code> — ブロック開始 (この行ごと除外)
+            in_html_code = True
             continue
         if line.startswith("\t") or line.startswith("    "):
             # インデントコード (4 スペース / タブ) — 書式例の貼り付け (Codex P1)
