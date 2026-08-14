@@ -22,10 +22,17 @@ SETTINGS = REPO_ROOT / ".claude" / "settings.json"
 
 # .claude/settings.json に載っているべき hook (Issue #392 案 A / B / C)。
 # ここを増やしたら settings.json 側も同じ PR で足す。
+#
+# **matcher まで含めて固定する。** event と script 名だけを見ると、matcher を
+# `Write` → `Bash` に書き換えても検査は緑のまま通り、意図した tool では hook が
+# 一度も発火しない。「配線が壊れると required check が赤くなる」を成立させるには、
+# 発火条件そのもの (event, matcher, script) の組で見る必要がある。
+# matcher を持たない event (SubagentStop) は None。
 EXPECTED = {
-    "PostToolUse": {"swallow_guard.py"},
-    "SubagentStop": {"subagent_dirty_guard.py"},
-    "PreToolUse": {"subagent_dirty_guard.py", "adr_number_guard.py"},
+    ("PostToolUse", "Edit|Write|MultiEdit", "swallow_guard.py"),
+    ("SubagentStop", None, "subagent_dirty_guard.py"),
+    ("PreToolUse", "Write", "adr_number_guard.py"),
+    ("PreToolUse", "Agent|Task", "subagent_dirty_guard.py"),
 }
 
 
@@ -35,6 +42,18 @@ def _commands(settings: dict, event: str) -> list[str]:
         for hook in matcher.get("hooks", []):
             if hook.get("type") == "command":
                 out.append(hook["command"])
+    return out
+
+
+def _wiring(settings: dict) -> set[tuple[str, str | None, str]]:
+    """登録されている (event, matcher, script 名) の組。**発火条件をそのまま表す形**。"""
+    out: set[tuple[str, str | None, str]] = set()
+    for event, groups in settings.get("hooks", {}).items():
+        for group in groups:
+            matcher = group.get("matcher")
+            for hook in group.get("hooks", []):
+                if hook.get("type") == "command":
+                    out.add((event, matcher, Path(hook["command"].split()[0]).name))
     return out
 
 
@@ -57,12 +76,12 @@ def test_単体_settings_が指す_hook_の実体が全部存在する() -> None
     assert checked > 0, "hook が 1 つも登録されていない"
 
 
-def test_単体_案_A_B_C_の_hook_が期待どおりの_event_に登録されている() -> None:
-    settings = _load_settings()
-    for event, expected_scripts in EXPECTED.items():
-        registered = {Path(c.split()[0]).name for c in _commands(settings, event)}
-        missing = expected_scripts - registered
-        assert not missing, f"{event} に {missing} が登録されていない"
+def test_単体_案_A_B_C_の_hook_が期待どおりの_event_と_matcher_に登録されている() -> None:
+    missing = EXPECTED - _wiring(_load_settings())
+    assert not missing, (
+        f"(event, matcher, script) の組が登録されていない: {sorted(map(str, missing))} "
+        "— matcher が変わると、その tool では hook が一度も発火しない"
+    )
 
 
 def test_単体_SessionStart_hook_を壊していない() -> None:

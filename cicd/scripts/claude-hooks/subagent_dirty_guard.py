@@ -10,8 +10,13 @@
     GitHub 側には何の痕跡も残らないので CI では検出できない。
 
 2 つのイベントで動く (settings.json で両方に登録している):
-    PreToolUse (Agent/Task) — subagent を起こす直前の dirty な path を控える
+    PreToolUse (Agent/Task) — subagent を起こす直前の dirty な path と**その指紋**を控える
     SubagentStop            — 今の dirty と突き合わせ、**subagent が増やした分**だけ咎める
+
+控えを path だけでなく指紋 (内容ハッシュ) で持つ理由:
+    親が既に触っているファイルを subagent がさらに編集した場合、path 集合は
+    起動前後で同じなので差集合が空になり、**置き去りを無警告で見逃す**。
+    指紋が変わった path も咎めることでこの穴を塞ぐ (`fingerprint` を参照)。
 
 控えが取れている場合と取れていない場合を**必ず区別して出す**。控えが無いときに
 作業ツリー全体を subagent のせいにすると、親自身の未コミット差分で subagent を
@@ -39,16 +44,26 @@ CI job `test (L0 / L1+L2 / L3 / L3-real)` (required status check) で走る。
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import json
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import hook_io  # noqa: E402
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover — Windows。このリポジトリの実行環境には無い
+    # 見えなくなるもの: 控えの読み書きの排他。並列 hook が重なると後勝ちで控えが
+    # 1 件消え、その subagent は "all" モード (作業ツリー全体) に落ちる。
+    fcntl = None  # type: ignore[assignment]
 
 _GIT_TIMEOUT_SEC = 10
 
@@ -57,10 +72,58 @@ _GIT_TIMEOUT_SEC = 10
 # 落ちて文言に出るので、黙って精度が下がることはない。
 _MAX_ENTRIES = 64
 
+# 内容ハッシュを取る上限。超えたファイルは (サイズ, mtime) を指紋にする。
+# 見えなくなるもの: 5MiB 超のファイルを、サイズと mtime が両方とも元に戻る形で
+# 書き換えた場合 (実運用で出ない)。
+_FINGERPRINT_MAX_BYTES = 5 * 1024 * 1024
+
+# 未追跡ディレクトリ (`?? dir/`) の指紋を作るときに見る最大エントリ数。
+# 見えなくなるもの: この数を超えるディレクトリの、501 件目以降だけの変化。
+_DIR_ENTRY_LIMIT = 500
+
 
 def snapshot_path(session_id: str) -> Path:
     safe = "".join(ch for ch in session_id if ch.isalnum() or ch in "-_")[:64] or "unknown"
     return Path(tempfile.gettempdir()) / f"claude-hooks-dirty-{safe}.json"
+
+
+@contextlib.contextmanager
+def locked(target: Path) -> Iterator[None]:
+    """控えの read-modify-write を直列化する。
+
+    これが無いと何が静かに通るか:
+        並列起動 (release-gate は subagent を同時に起こす) では PreToolUse の hook が
+        別プロセスとして同時に走る。排他なしだと双方が同じ旧列を読んで後勝ちで書き、
+        **控えが 1 件消える**。消えた側の subagent は基準を失って "all" に落ちるか、
+        他人の控えを最古として引く。`take_baseline` の「最古を採る」保証も、
+        列そのものが壊れると成立しない。
+
+    ロックは控え本体とは別ファイルに取る (控えは消費時に unlink するため、
+    同じ inode に取ると次の待ち手が消えた inode をロックして排他にならない)。
+    fcntl が無い環境では素通しする (上の import を参照 — 何が見えなくなるかも同じ)。
+    """
+    if fcntl is None:
+        yield
+        return
+    lock_path = target.with_suffix(target.suffix + ".lock")
+    handle_ = None
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle_ = lock_path.open("a+")
+        fcntl.flock(handle_.fileno(), fcntl.LOCK_EX)
+    except OSError:
+        # ロックが取れなくても hook は動かす (止めると分配そのものが止まる)。
+        # 見えなくなるもの: この 1 回の read-modify-write の排他。
+        if handle_ is not None:
+            handle_.close()
+        yield
+        return
+    try:
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            fcntl.flock(handle_.fileno(), fcntl.LOCK_UN)
+        handle_.close()
 
 
 def parse_porcelain(text: str) -> set[str]:
@@ -82,8 +145,45 @@ def parse_porcelain(text: str) -> set[str]:
     return paths
 
 
-def git_dirty_paths(cwd: str) -> tuple[set[str], str | None]:
-    """(dirty な path 集合, 失敗理由)。失敗理由が非 None なら**検査していない**。"""
+def fingerprint(root: str, rel: str) -> str:
+    """dirty な 1 件の指紋。**内容が変われば必ず変わる**ことだけを満たせばよい。
+
+    これが無いと何が静かに通るか:
+        親が既に触っているファイルを subagent がさらに編集して未コミットのまま
+        終わると、path 集合は起動前後で同じ (`{"foo.py"}`) なので差集合が空になり、
+        **置き去りが無警告で通る**。パスだけでは同一ファイル内の追加変更を識別できない。
+    """
+    path = Path(root) / rel
+    try:
+        st = path.stat()
+    except OSError:
+        return "missing"  # 削除された / stat できない (復活すれば指紋が変わる)
+    if path.is_dir():
+        # `?? dir/` (未追跡ディレクトリ) は中身が増えても porcelain の 1 行のまま。
+        # 中身の (相対パス, サイズ, mtime) を畳んで指紋にする (read はしない)。
+        digest = hashlib.sha256()
+        try:
+            entries = sorted(p for p in path.rglob("*") if p.is_file())
+        except OSError:
+            return "unreadable"
+        for child in entries[:_DIR_ENTRY_LIMIT]:
+            try:
+                cst = child.stat()
+            except OSError:
+                continue
+            digest.update(f"{child.relative_to(path)}:{cst.st_size}:{cst.st_mtime_ns}\n".encode())
+        truncated = "+" if len(entries) > _DIR_ENTRY_LIMIT else ""
+        return f"dir:{digest.hexdigest()}{truncated}"
+    if st.st_size > _FINGERPRINT_MAX_BYTES:
+        return f"stat:{st.st_size}:{st.st_mtime_ns}"
+    try:
+        return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return "unreadable"
+
+
+def git_dirty_paths(cwd: str) -> tuple[dict[str, str], str | None]:
+    """({dirty な path: 指紋}, 失敗理由)。失敗理由が非 None なら**検査していない**。"""
     try:
         proc = subprocess.run(
             ["git", "status", "--porcelain"],
@@ -94,22 +194,40 @@ def git_dirty_paths(cwd: str) -> tuple[set[str], str | None]:
             check=False,  # check=False にした分、非ゼロ終了は下で明示的に理由へ変換する
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        return set(), f"git status を実行できなかった ({exc!r})"
+        return {}, f"git status を実行できなかった ({exc!r})"
     if proc.returncode != 0:
         detail = (proc.stderr or "").strip().splitlines()
-        return set(), f"git status が失敗した ({detail[0] if detail else proc.returncode})"
-    return parse_porcelain(proc.stdout), None
+        return {}, f"git status が失敗した ({detail[0] if detail else proc.returncode})"
+    return {rel: fingerprint(cwd, rel) for rel in parse_porcelain(proc.stdout)}, None
 
 
-def select_paths_to_report(now: set[str], snapshot: set[str] | None) -> list[str]:
+def select_paths_to_report(
+    now: dict[str, str], snapshot: dict[str, str | None] | None
+) -> list[str]:
     """咎める path。控えが無い (None) なら作業ツリー全体。
+
+    咎めるのは **(a) 起動前に dirty でなかった path** と
+    **(b) 起動前から dirty だったが指紋が変わった path**。(b) が無いと、
+    親が既に触っているファイルへの subagent の追記が丸ごと見えない。
+
+    控えの指紋が None のとき (旧形式の控え = path しか持たない) は (b) を判定できない
+    ので path の増分だけを見る。**指紋が無いことを「変わっていない」と読み替えない**
+    — 判定できないものを判定したことにしない、が優先。
 
     根拠の強さ ("diff" / "diff-concurrent" / "all") は take_baseline が決める —
     **呼ぶ側はそれを必ず文言に出すこと** (精度を偽らないため)。
     """
     if snapshot is None:
         return sorted(now)
-    return sorted(now - snapshot)
+    report = []
+    for path, print_ in sorted(now.items()):
+        if path not in snapshot:
+            report.append(path)
+            continue
+        before = snapshot[path]
+        if before is not None and before != print_:
+            report.append(path)
+    return report
 
 
 def load_entries(path: Path) -> list[dict[str, Any]]:
@@ -126,12 +244,24 @@ def load_entries(path: Path) -> list[dict[str, Any]]:
         data = [data]
     if not isinstance(data, list):
         return []
-    return [e for e in data if isinstance(e, dict) and isinstance(e.get("paths"), list)]
+    return [
+        e
+        for e in data
+        if isinstance(e, dict) and (isinstance(e.get("prints"), dict) or isinstance(e.get("paths"), list))
+    ]
+
+
+def entry_prints(entry: dict[str, Any]) -> dict[str, str | None]:
+    """控え 1 件を {path: 指紋} にする。指紋を持たない旧形式は値が None になる。"""
+    prints = entry.get("prints")
+    if isinstance(prints, dict):
+        return {p: v for p, v in prints.items() if isinstance(p, str) and isinstance(v, str)}
+    return {p: None for p in entry.get("paths", []) if isinstance(p, str)}
 
 
 def take_baseline(
     entries: list[dict[str, Any]], cwd: str
-) -> tuple[set[str] | None, list[dict[str, Any]], str]:
+) -> tuple[dict[str, str | None] | None, list[dict[str, Any]], str]:
     """今停止した subagent の基準を 1 件取り出す。(基準, 残りの列, 根拠) を返す。
 
     同じ cwd の控えのうち**最も古いもの**を採る。並列起動では控えと subagent を
@@ -143,7 +273,7 @@ def take_baseline(
     if not matched:
         return None, entries, "all"
     index = matched[0]
-    baseline = {p for p in entries[index].get("paths", []) if isinstance(p, str)}
+    baseline = entry_prints(entries[index])
     remaining = entries[:index] + entries[index + 1 :]
     mode = "diff-concurrent" if len(matched) > 1 else "diff"
     return baseline, remaining, mode
@@ -196,22 +326,25 @@ def handle(event: dict[str, Any]) -> dict[str, Any] | None:
 def _record_snapshot(event: dict[str, Any], cwd: str, session_id: str) -> dict[str, Any] | None:
     if event.get("tool_name") not in ("Agent", "Task"):
         return None
-    paths, failure = git_dirty_paths(cwd)
+    prints, failure = git_dirty_paths(cwd)
     if failure is not None:
         # 控えが取れなくても subagent の起動は止めない。取れなかった事実は
         # SubagentStop 側が "all" モードとして文言に出す。
         return None
     target = snapshot_path(session_id)
-    entries = load_entries(target)
-    if len(entries) >= _MAX_ENTRIES:
-        # 新しい方を捨てる (理由は _MAX_ENTRIES のコメント)。この subagent は "all" に落ちる。
-        return None
-    entries.append({"cwd": cwd, "paths": sorted(paths)})
-    try:
-        target.write_text(json.dumps(entries, ensure_ascii=False), encoding="utf-8")
-    except OSError:
-        # 書けなくても起動は止めない。結果は "all" モードに落ちて文言に出る。
-        return None
+    # 読んで足して書くまでを 1 つのロックの中でやる。並列起動でここが割り込まれると
+    # 後勝ちで控えが 1 件消える (locked の docstring 参照)。
+    with locked(target):
+        entries = load_entries(target)
+        if len(entries) >= _MAX_ENTRIES:
+            # 新しい方を捨てる (理由は _MAX_ENTRIES のコメント)。この subagent は "all" に落ちる。
+            return None
+        entries.append({"cwd": cwd, "prints": dict(sorted(prints.items()))})
+        try:
+            target.write_text(json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            # 書けなくても起動は止めない。結果は "all" モードに落ちて文言に出る。
+            return None
     return None
 
 
@@ -225,8 +358,10 @@ def _check(event: dict[str, Any], cwd: str, session_id: str) -> dict[str, Any] |
         return hook_io.passthrough(f"{failure} ため、未コミット差分を検査していない")
 
     target = snapshot_path(session_id)
-    baseline, remaining, mode = take_baseline(load_entries(target), cwd)
-    _consume(target, remaining)
+    # 取り出しと書き戻しの間に別の停止が割り込むと、同じ控えを 2 つの subagent が引く。
+    with locked(target):
+        baseline, remaining, mode = take_baseline(load_entries(target), cwd)
+        _consume(target, remaining)
     paths = select_paths_to_report(now, baseline)
     if not paths:
         return None
