@@ -14,6 +14,8 @@ IaC (Bicep) / デプロイスクリプト / 運用スクリプト。運用手順
 
 **持続層と環境層は RG をまたぐ resource 参照をしない** — 持続層の output を環境層の parameter に渡す。**撤収 (`cleanup-env.sh`) の対象は環境層だけ**で、持続層 RG は削除できない (判定は `cicd/scripts/env/persistent_layer_guard.py`)。
 
+**持続層のリソースには層タグ `mindInboxLayer=persistent` を刻む** — Key Vault / Storage / Log Analytics は環境層にも同じ型が居るので、撤収ガードは**型ではなくこのタグ**で層を見分ける。`main-shared.bicep` にリソースを足したら `tags: persistentLayerTags` も付ける (付け忘れると撤収で黙って消える)。
+
 **リソース命名**: `{resourcetype}-{env}-{appname}` — 例 `func-dev-mindbox` / `swa-dev-mindbox`。環境は `dev` / `stg` / `prod`、既定の appName は `mind-box`。
 
 ## デプロイスクリプト

@@ -53,6 +53,23 @@ param location string = resourceGroup().location
 
 var appNameCompact = replace(replace(appName, '-', ''), '_', '')
 
+// -------------------- 層タグ (撤収ガードの一次ソース) --------------------
+//
+// **このタグは飾りではなく、`cleanup-env.sh` の判定入力**。
+// Key Vault / Storage / Log Analytics は環境層にも同じ型が居る (SQL 管理者用 vault /
+// Function App の実行 storage / 環境層の workspace) ため、**型だけでは層を区別できない**。
+// 型で一括りにすると正当な環境層の撤収まで常に拒否され、`ALLOW_PERSISTENT_DELETE=true`
+// が常用になってガードが意味を失う。逆に型から外すとバックアップ Storage が黙って消える。
+// そこで「持続層として作ったものにはこのタグが付いている」を機械可読な事実にしておく。
+//
+// このタグが付いた資源は、**どの RG に居ても** `persistent_layer_guard.py` が持続層と
+// 判定して撤収を拒否する (誤って環境層 RG へこのテンプレートを流した場合も含む)。
+// タグ名を変えるときは `persistent_layer_guard.py` の LAYER_TAG_KEY も同じ PR で直すこと。
+var persistentLayerTags = {
+  mindInboxLayer: 'persistent'
+  mindInboxEnvironment: environmentName
+}
+
 // -------------------- Key Vault (新設 / ADR 0045 D5 / #301) --------------------
 
 @description('Key Vault を作る。E2E trace の復号鍵 (非エクスポート) の器。')
@@ -257,6 +274,7 @@ param budgetStartDate string = '2026-09-01'
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = if (enableKeyVault) {
   name: keyVaultName
   location: keyVaultLocation
+  tags: persistentLayerTags
   properties: union(
     {
       tenantId: subscription().tenantId
@@ -344,6 +362,7 @@ resource keyVaultCryptoUserAssignments 'Microsoft.Authorization/roleAssignments@
 resource backupStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = if (enableBackupStorage) {
   name: backupStorageAccountName
   location: backupStorageLocation
+  tags: persistentLayerTags
   sku: {
     // LRS。バックアップの目的は「環境層を壊しても戻せる」であって地域災害対策ではない。
     name: 'Standard_LRS'
@@ -399,6 +418,7 @@ resource backupContainer 'Microsoft.Storage/storageAccounts/blobServices/contain
 resource law 'Microsoft.OperationalInsights/workspaces@2023-09-01' = if (enableLogAnalytics) {
   name: lawName
   location: location
+  tags: persistentLayerTags
   properties: {
     retentionInDays: lawRetentionInDays
     features: {
@@ -420,6 +440,7 @@ resource law 'Microsoft.OperationalInsights/workspaces@2023-09-01' = if (enableL
 resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' = if (enableCosmos) {
   name: cosmosAccountName
   location: cosmosLocation
+  tags: persistentLayerTags
   kind: 'GlobalDocumentDB'
   properties: union(
     {
@@ -524,6 +545,7 @@ resource cosmosAiAgentTtlContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDa
 resource openAiAccount 'Microsoft.CognitiveServices/accounts@2023-05-01' = if (enableOpenAi) {
   name: openAiAccountName
   location: openAiLocation
+  tags: persistentLayerTags
   kind: 'OpenAI'
   sku: {
     name: openAiSkuName
@@ -562,6 +584,7 @@ resource openAiDeployment 'Microsoft.CognitiveServices/accounts/deployments@2023
 resource speechAccount 'Microsoft.CognitiveServices/accounts@2023-05-01' = if (enableSpeech) {
   name: speechAccountName
   location: speechLocation
+  tags: persistentLayerTags
   kind: 'SpeechServices'
   sku: {
     name: speechSkuName

@@ -146,6 +146,8 @@ az deployment group show -g rg-shared-mindbox -n main-shared \
 また環境層 RG の中に持続層のリソースが残っている間も、**何も消さずに拒否**します。
 詳細は [`../scripts/env/README.md`](../scripts/env/README.md#持続層ガード--何も消さずに拒否する条件-adr-0046-d1--302)。
 
+このテンプレートが作るリソースには**層タグ `mindInboxLayer=persistent`（`persistentLayerTags`）が刻まれ**、撤収ガードはそれを見て層を判定します。Key Vault / Storage / Log Analytics は環境層にも同じ型が居るため、**型ではなくタグが根拠**です。ここにリソースを足すときは `tags: persistentLayerTags` も付けてください — 付け忘れると、そのリソースは環境層と見なされて撤収で消えます。
+
 ---
 
 ## 2. Bootstrap（基盤作成 / 更新）
