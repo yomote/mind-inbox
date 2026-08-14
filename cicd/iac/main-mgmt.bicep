@@ -402,8 +402,17 @@ output keyVaultName string = enableKeyVault ? keyVaultName : ''
 output keyVaultUri string = keyVault.?properties.vaultUri ?? ''
 output e2eTraceKeyEnabled bool = enableKeyVault && enableE2eTraceKey
 output e2eTraceKeyName string = (enableKeyVault && enableE2eTraceKey) ? e2eTraceKeyName : ''
-// 鍵の URI (kid)。`az keyvault key decrypt --id <kid>` にそのまま渡せる。
+// 鍵の URI。**2 つ出すのが意図**で、用途が違う。
+//
+// - `e2eTraceKeyUri` は**版なし** (`.../keys/e2e-artifacts`)。指定すると Key Vault が
+//   **常に最新バージョン**で処理するので、**復号には使ってはいけない** — ローテーション後に
+//   旧バージョンで wrap された `.enc` を最新版で開こうとして落ちる。Vault と鍵名の確認用。
+// - `e2eTraceKeyUriWithVersion` は**版つき** (`.../keys/e2e-artifacts/<version>`)。
+//   `e2e-artifacts.pub.json` に載せる `keyVersion` の出どころで、`az keyvault key decrypt --id`
+//   にそのまま渡せる。復号は **`.enc` に記録されたバージョン**を使うのが正なので、
+//   これは「今 CI が wrap に使うべきバージョン」を知るための値。
 output e2eTraceKeyUri string = e2eTraceKey.?properties.keyUri ?? ''
+output e2eTraceKeyUriWithVersion string = e2eTraceKey.?properties.keyUriWithVersion ?? ''
 
 output backupStorageEnabled bool = enableBackupStorage
 output backupStorageAccountName string = enableBackupStorage ? backupStorageAccountName : ''

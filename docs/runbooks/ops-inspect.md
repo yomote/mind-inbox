@@ -42,7 +42,7 @@ GitHub の Actions タブ → `ops-inspect` → **Run workflow** → `check` を
 
 `e2e-live-failure-*` / `playwright-live-report-*` に入っている `error-context.md` (aria スナップショット) と `test-failed-1.png` は、E2E が落ちた瞬間の画面そのもの。**「入力欄が disabled だったのか」級の問いはこれで決着する。**
 
-**取れないもの**: `e2e-live-trace-*` (Playwright の trace) は公開鍵で暗号化されている ([ADR 0045](../adr/archive/operations/e2e-artifacts-are-secret-by-default.md) — 記録は archive だが暗号化そのものは現役)。ダウンロードはできるが**復号できるのは PO だけ** ([`cicd/keys/README.md`](../../cicd/keys/README.md))。trace にしか無い情報 (アクション実行の記録・DOM の時系列) が要る場合はここで人手が要る — その一歩手前まではエージェントで進む。
+**取れないもの**: `e2e-live-trace-*` (Playwright の trace) は公開鍵で暗号化されている ([ADR 0045](../adr/archive/operations/e2e-artifacts-are-secret-by-default.md) — 記録は archive だが暗号化そのものは現役)。ダウンロードはできるが**復号できるのは PO だけ** (手順は [`e2e-trace-keys.md`](e2e-trace-keys.md))。trace にしか無い情報 (アクション実行の記録・DOM の時系列) が要る場合はここで人手が要る — その一歩手前まではエージェントで進む。
 
 **動作確認 (2026-08-13)**: run `31648071011` の `playwright-live-report-31648071011` を `http=200 size=83809` で取得し、`error-context.md` を読めた。
 

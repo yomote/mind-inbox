@@ -72,6 +72,37 @@
 - **特記**: 0042 の D2 (直列化を Merge Queue に任せる) は **2026-08-11 の時点で実行不能と判明済み**だった — Merge Queue は organization 所有リポジトリ専用で、`yomote/mind-inbox` は個人アカウント所有。#269 のクローズ時に「**ADR 0042 の D2 を改訂する Proposed ADR を PM が起票し、次の debrief で裁定する**」と持ち越しが明記されていたが、**PM (この窓口セッション) がそれを読まずに debrief を開いた**。裁定の場で PO の記憶に救われた形。⇒ 本 debrief で D2 を「**strict OFF で追いつき自体を無くす。直列化はしない。組み合わせの破綻は後段 (main の CI / auto-deploy / golden-path) で捕まえる**」に書き直し、初版 D2 は `<details>` で経緯として残した。**再発防止**: debrief の Step 1 で「前回以降のマージ PR」だけでなく **クローズされた needs-human Issue の持ち越し欄**も集める
 - **持ち越し**: **0042 の裁定** (改訂 D2 で次回)。0042 D1 の引き継ぎ判定に実装バグ ([#323](https://github.com/yomote/mind-inbox/issues/323) / P1) — 本日 PR #286 で base が進んだだけなのに不成立になり再受け入れが発生。あわせて **strict が OFF になった以上、反射的な `update-branch` はしない** (今日の再受け入れは PM の不要な追随が引き金だった)
 
+## 2026-08-12 — debrief (ADR 裁定 / D5 改訂の回)
+
+> 上の「2026-08-12 — debrief (Proposed ADR 4 本の裁定)」の**続き**。あちらで 0045 を Accept して
+> 「エージェントも復号できる安全な道を探る」を [#325](https://github.com/yomote/mind-inbox/issues/325)
+> に宿題として出し、**この回でその道 (非エクスポート方式) を PO が選んで D5 を改訂**した。
+>
+> **その後の棚の移動**: 0041 / 0042 / 0045 は [#385](https://github.com/yomote/mind-inbox/pull/385) で
+> 「運用・プロセスの決め事は ADR ではない」として [`docs/adr/archive/operations/`](../adr/archive/README.md) へ退避し、
+> 番号も退役した (以下のリンクは退避先を指す)。したがって**この裁定は「ADR の Status 遷移」ではなく
+> 裁定の記録**として読むこと。E2E trace 復号鍵の現行の正典は
+> [ADR 0056](../adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D1 (管理系 RG) /
+> [`cicd/iac/main-mgmt.bicep`](../../cicd/iac/main-mgmt.bicep) /
+> [`docs/runbooks/mgmt-layer-apply.md`](../runbooks/mgmt-layer-apply.md) /
+> [`docs/runbooks/e2e-trace-keys.md`](../runbooks/e2e-trace-keys.md) (鍵の運用手順) /
+> [`cicd/keys/README.md`](../../cicd/keys/README.md) (鍵ファイルの置き場)。
+
+- **対象**: 未裁定 ADR の裁定。あわせて #293 の「trace 復号」と [#46](https://github.com/yomote/mind-inbox/issues/46) (OIDC ロール最小化) を PO 向けに解説
+- **決定**:
+  - **[ADR 0041](../adr/archive/operations/ux-observations-on-git-data-branch.md) を Accept** — 選択自体は 2026-08-11 に #197 で実施済み、実装も PR #260 で着地。形式的な追認
+  - **[ADR 0042](../adr/archive/operations/pm-accept-carryover-and-merge-queue.md) は保留** — 決定の 2 本柱が両方とも現状動いていない (D1 の pm-accept 引き継ぎが純粋な base マージでも成立しない = [#329](https://github.com/yomote/mind-inbox/issues/329) / D2 の Merge Queue は本リポで実行不能と PR #292 が報告済み)。**#329 の原因が判ってから裁定する**
+  - **[ADR 0045](../adr/archive/operations/e2e-artifacts-are-secret-by-default.md) を Accept、ただし D5 を改訂** — **エージェント復号を認める**。方式は**非エクスポート版** (Key Vault の鍵オブジェクトに置き `az keyvault key decrypt` で Key Vault 内で復号。鍵は一度も外に出ない)。暗号方式は gpg → 封筒暗号へ
+  - **Key Vault だけ先に作る案は不採用** — #302 をまとめてやる。したがって**エージェント復号が効くのは #302 完了時**で、#293 はそれまで PO 復号のまま (artifact 期限 8/26 が実質の締切)
+  - #314 (SWA カスタムドメイン) は寝かせる / #311 (Action の SHA 固定) は別セッションへ分配済み
+- **学びメモ**: PO は「Key Vault に入れた上でやると決めたはず」と**自分の合意内容を正確に覚えていて、ADR との食い違いを指摘した**。裁定の場で PO が仕様の記憶を頼りに差分を見つけている状態は、こちらの提示の仕方に問題がある (下記)
+- **特記 (エージェント側の失敗 3 件)**:
+  - **(a) 決定を狭めたのに目立たせなかった** — ADR 0045 の初版 D5 は「鍵を環境変数に置きエージェントが復号」。Codex の P1 (ADR 0031 と衝突) を受けてエージェントが書き換えた際、**鍵の置き場所を直す (Key Vault へ) だけでなく、エージェント復号そのものを禁じた**。技術的な理由 (`gpg --import` で鍵がディスクに落ち持ち出せる) は正しかったが、**「PO が合意した内容を狭める」ことを理由の節に畳んで宣言しなかった**。Proposed のまま承認キューに載せたのは手続き上正しいが、気づけたのは PO の記憶によるもので仕組みでは捕まっていない
+  - **(b) 選択肢を探し切らずに「できない」と結論した** — 初版 ADR 自身が恒久解として「Key Vault の鍵オブジェクト + `az keyvault key decrypt`」を挙げていたのに、**PO への選択肢として提示されなかった**。「安全のためにできないことにする」判断は、**「安全なままできる方法」を探し切ってから**出す
+  - **(c) 私 (裁定を回した側) も部分読みで断じた** — 最初 PO に「エージェントが勝手に狭めた、理由づけに穴がある」と説明したが、全文を読むと前エージェントの理由づけは私の説明より筋が通っていた (使い捨てサンドボックス論の否定まで書かれていた)。**その場で訂正した**。ADR を部分読みして評価を下すのは (a) と同じ型の失敗
+  - **(d) 未裁定 ADR の数え違い** — `grep -l "Status: Proposed"` が本文中の「Proposed」の語に誤マッチし、ADR 0014 (実際は Accepted) を未裁定として数え、「4 件」と繰り返し報告していた。`/status` skill の集計にも同じ穴がある
+- **持ち越し**: [ADR 0042](../adr/archive/operations/pm-accept-carryover-and-merge-queue.md) の裁定 (#329 の原因特定後)。ADR 0045 D5 の実装 (封筒暗号への組み替え / #302 待ち)。#293 の trace 復号 (PO / 8/26 期限)。#46 の権限最小化 (CD 主体が User Access Administrator を持つと実測)
+
 ## 2026-08-12 — design-gate
 
 - **対象**: インフラ整備の 3 件を 1 本にまとめた [ADR 0046](../adr/0046-environment-rebuildable-from-declaration.md) 起案 — [#302](https://github.com/yomote/mind-inbox/issues/302) (ライフサイクル 3 層分断) / [#303](https://github.com/yomote/mind-inbox/issues/303) (設定を宣言に一本化・Entra 含む) / [#306](https://github.com/yomote/mind-inbox/issues/306) (週次プロビジョンテスト)。ADR 0013「常設 dev 環境」の解釈追補を含む

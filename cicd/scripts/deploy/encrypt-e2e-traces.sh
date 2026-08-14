@@ -21,7 +21,7 @@ OUT_DIR="${3:?出力ディレクトリを指定してください}"
 # 公開鍵が未設置なら trace を残さず、必ず 1 行喋って続行する (ADR 0045 D6)。
 # 「鍵が無いから平文で上げる」を構造的に不可能にするための分岐。沈黙もしない。
 if [ ! -f "$PUBKEY" ]; then
-  echo "::warning::公開鍵 $PUBKEY が無いため trace を残しません (cicd/keys/README.md の手順で設置してください)"
+  echo "::warning::公開鍵 $PUBKEY が無いため trace を残しません (docs/runbooks/e2e-trace-keys.md の手順で設置してください)"
   exit 0
 fi
 

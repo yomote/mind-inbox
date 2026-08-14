@@ -301,7 +301,7 @@ jobs:
       # 外科的な除去は列挙漏れで**静かに漏れる** (失敗が公開側に倒れる)。暗号化は
       # 中身の形に依存しないので、その失敗モードが存在しない。
       #
-      # 鍵の準備・復号手順は cicd/keys/README.md。
+      # 鍵の準備・復号手順は docs/runbooks/e2e-trace-keys.md (鍵ファイルの置き場は cicd/keys/README.md)。
       - name: E2E の trace を公開鍵で暗号化して残す
         id: encrypt_trace
         if: always() && steps.e2e.conclusion == 'failure'
