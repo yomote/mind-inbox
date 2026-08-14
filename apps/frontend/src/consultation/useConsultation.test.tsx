@@ -672,7 +672,9 @@ describe("[L1] useConsultation — reset", () => {
     });
     expect(result.current.session).not.toBeNull();
 
-    act(() => result.current.reset());
+    await act(async () => {
+      await result.current.reset();
+    });
 
     await waitFor(() => expect(result.current.session).toBeNull());
     expect(result.current.problems).toEqual([]);
@@ -930,7 +932,10 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
       createdAt: "2026-01-01",
     });
 
-    act(() => result.current.reset());
+    // reset は却下の完了を返す (ログアウトはこれを待ってからリダイレクトする)。
+    await act(async () => {
+      await result.current.reset();
+    });
 
     expect(respondToApproval).toHaveBeenCalledWith("appr-1", false);
     expect(result.current.pendingApproval).toBeNull();

@@ -5,6 +5,7 @@ import { summarizeIssues } from "../schemaIssues";
 import { serviceHeaders } from "./serviceToken";
 import { ExtractionResultSchema, type ExtractionResult } from "../trpc/domain";
 import { APPROVAL_GONE_DETAIL } from "./aiAgentContracts";
+import type { ExtractFailureToken } from "../trpc/errorTokens";
 import type {
   ApproveRequest,
   ApproveResponse,
@@ -31,14 +32,11 @@ export type {
 /**
  * `/extract` が失敗した理由。**フロントが文面と復帰導線を出し分けるための機械可読な種別**
  * (#183)。以前は理由が失われ、画面には何も出なかった。
+ *
+ * 値の真実は `trpc/errorTokens.ts` (フロントも同じものを import する)。ここで書き写すと
+ * BFF 側だけ改名したときにフロントの照合が黙って外れる (PR #416 judge minor-2)。
  */
-export type ExtractFailureKind =
-  /** 会話が手に入らない (404)。会話を送れば解消する。 */
-  | "session-missing"
-  /** LLM の応答を解釈できなかった (502)。「0 件」とは別物。 */
-  | "llm-parse-failed"
-  /** それ以外の上流失敗 (5xx / ネットワーク断)。 */
-  | "upstream-failed";
+export type ExtractFailureKind = ExtractFailureToken;
 
 /**
  * stub フォールバック応答の機械判別フラグ (#146 / ADR 0039 D6)。

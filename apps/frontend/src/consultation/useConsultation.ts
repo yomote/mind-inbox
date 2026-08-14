@@ -77,8 +77,14 @@ export type Consultation = {
   triage: (input: TriageInput) => Promise<void>;
   dismissExtracted: (problemId: string) => Promise<void>;
   createPlanForProblem: (problemId: string) => Promise<void>;
-  /** ログアウト時に相談の状態を捨てる。 */
-  reset: () => void;
+  /**
+   * ログアウト時に相談の状態を捨てる。
+   *
+   * 返す Promise は「捨てた承認要求の却下がサーバに届く (or 失敗が確定する) まで」。
+   * **サインアウトのリダイレクト前に待つこと** — 待たずに離脱すると却下は送信前に消える
+   * (PR #416 judge major-1)。承認要求が無ければ即解決する。
+   */
+  reset: () => Promise<void>;
 };
 
 /**
@@ -165,15 +171,25 @@ async function respondOrExpire(
  * 画面から消すだけだと ai-agent 側の `ApprovalRecord` / checkpoint が pending の
  * まま残る (in-memory 構成には TTL が無い)。
  *
- * fire-and-forget にしているのは、新規相談やログアウトを却下の通信の成否に
- * 人質に取らないため。**見えなくなるのは「却下が届かなかった」事実**だが、
- * この経路には結果を出す画面がもう無い (次の相談 / ログイン画面に遷移している)
- * ので console に落とす。届かなかった場合でも Cosmos 構成なら TTL 1h で解放される。
+ * 失敗しても新規相談・ログアウトは妨げない (成否に人質を取らない)。**見えなくなるのは
+ * 「却下が届かなかった」事実**だが、この経路には結果を出す画面がもう無い (次の相談 /
+ * ログイン画面に遷移している) ので console に落とす。届かなかった場合でも Cosmos 構成
+ * なら TTL 1h で解放される。
+ *
+ * **Promise を返す** (PR #416 judge major-1): ログアウトは直後に
+ * `msal.logoutRedirect()` で画面ごと離脱するため、投げっぱなしにすると
+ * **リクエストが送信される前に離脱して却下が届かない** — tRPC の httpBatchLink は
+ * `mutate()` から同期に fetch を出さない (バッチ用に 1 tick 遅延する) ので、
+ * 「呼んだのに一度も飛んでいない」が無音で起きる。呼び出し側 (Layout) が
+ * これを待ってからリダイレクトできるようにする。
  */
-function discardApprovalOnServer(approvalRequestId: string): void {
-  void respondToApproval(approvalRequestId, false).catch((err: unknown) => {
-    console.error("[useConsultation] 破棄した承認要求の却下を送れませんでした", err);
-  });
+function discardApprovalOnServer(approvalRequestId: string): Promise<void> {
+  return respondToApproval(approvalRequestId, false).then(
+    () => undefined,
+    (err: unknown) => {
+      console.error("[useConsultation] 破棄した承認要求の却下を送れませんでした", err);
+    },
+  );
 }
 
 /**
@@ -394,7 +410,8 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     invalidatePreview();
     // 前セッションの承認要求も持ち込まない (別の会話の実行確認を新しい会話で押させない)。
     // 画面から消すだけでなく**サーバにも却下を届ける** (PR #416 judge minor-3)。
-    if (abandoned) discardApprovalOnServer(abandoned.id);
+    // 新規相談はこの後も画面が生きているので待たない (fire-and-forget)。
+    if (abandoned) void discardApprovalOnServer(abandoned.id);
     setPendingApproval(null);
     transition("session");
   }, [invalidatePreview, pendingApproval, runAction, transition]);
@@ -642,10 +659,14 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
 
   const clearActionError = React.useCallback(() => setActionError(null), []);
 
-  const reset = React.useCallback(() => {
+  const reset = React.useCallback((): Promise<void> => {
     // 捨てる承認要求はサーバにも却下として届ける (PR #416 judge minor-3)。
-    // reset はログアウト経路なので待たない (fire-and-forget)。
-    if (pendingApproval) discardApprovalOnServer(pendingApproval.id);
+    // **却下の完了を Promise で返す** — reset はログアウト経路で、呼び出し側 (Layout) は
+    // これを待ってから `logoutRedirect` する。待たずに離脱すると却下が送信前に消える
+    // (judge major-1)。承認要求が無ければ即座に解決するので、通常のログアウトは待たない。
+    const discarded = pendingApproval
+      ? discardApprovalOnServer(pendingApproval.id)
+      : Promise.resolve();
     setBusy(false);
     setActionError(null);
     setDraftMessage("");
@@ -655,6 +676,7 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     setSelectedProblem(null);
     setPendingApproval(null);
     invalidatePreview();
+    return discarded;
   }, [invalidatePreview, pendingApproval, setBusy]);
 
   return {

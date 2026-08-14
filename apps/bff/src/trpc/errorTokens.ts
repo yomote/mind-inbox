@@ -25,3 +25,28 @@
  * ので通信失敗と同じ扱い = カードを残す。
  */
 export const APPROVAL_NOT_FOUND_TOKEN = "approval-not-found";
+
+/**
+ * 抽出 (`consultation.preview` / `consultation.extract`) の失敗理由 (#183)。
+ * BFF はこの token を `TRPCError.message` に載せ、フロントは token から復帰導線を選ぶ。
+ *
+ * ここに 1 個だけ置く理由は上と同じ (PR #416 judge minor-2): 以前は BFF の
+ * `aiAgentClient.ts` (union 型) と フロントの `problems.ts` (照合用の配列) に**同じ
+ * リテラルが書き写されていた**。BFF 側だけ改名すると、フロントの照合が外れて
+ * **原因別の案内が黙って「unknown」(汎用エラー) に落ちる** — 画面は壊れないので
+ * 気づけない。値を共有すれば、片側だけ変える書き方自体ができなくなる。
+ *
+ * `as const` にしているのは、この配列から型を導けるようにするため
+ * (メンバを増減すると BFF の分岐が型エラーになる = 追随漏れが機械で出る)。
+ */
+export const EXTRACT_FAILURE_TOKENS = [
+  /** 会話が手に入らない (ai-agent の 404)。会話を送り直せば解消する。 */
+  "session-missing",
+  /** LLM の応答を解釈できなかった (502)。「抽出 0 件」とは別物。 */
+  "llm-parse-failed",
+  /** それ以外の上流失敗 (5xx / ネットワーク断)。再試行で直りうる。 */
+  "upstream-failed",
+] as const;
+
+/** 抽出の失敗理由 (BFF が返しうる token)。フロントはこれに `unknown` を足して扱う。 */
+export type ExtractFailureToken = (typeof EXTRACT_FAILURE_TOKENS)[number];
