@@ -16,6 +16,7 @@
       64 件で新しい控えが保存されなくなる (hook が実質死ぬ)
 """
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -39,14 +40,25 @@ HOOK_DIR = Path(__file__).resolve().parent
 def test_単体_porcelain_を解釈する() -> None:
     # `--porcelain -z`: NUL 区切り / rename は <new>\0<old>\0 の 2 フィールド
     text = " M apps/bff/src/a.ts\0?? new.txt\0R  new.md\0old.md\0A  docs/x.md\0"
-    assert parse_porcelain(text) == {"apps/bff/src/a.ts", "new.txt", "new.md", "docs/x.md"}
+    assert parse_porcelain(text) == {
+        "apps/bff/src/a.ts": " M",
+        "new.txt": "??",
+        "new.md": "R ",
+        "docs/x.md": "A ",
+    }
+
+
+def test_単体_porcelain_は_XY_状態を保持する() -> None:
+    # 内容が同じでもステージ状態だけが変わる (` M foo` → `M  foo`)。XY を捨てると
+    # 指紋が一致し、親の差分が勝手にステージされた状態を見逃す。
+    assert parse_porcelain(" M foo\0")["foo"] != parse_porcelain("M  foo\0")["foo"]
 
 
 def test_単体_非_ASCII_の_path_を引用のまま取り込まない() -> None:
     # 既定の porcelain は `"\346\227..."` と C 形式で引用する。引用符を外すだけだと
     # 実在しない path になり、指紋が両側とも "missing" になって変更を見逃す。
     # `-z` は引用しないので、そのまま実在する path として読めること。
-    assert parse_porcelain(" M 日本語.txt\0?? 改\n行.txt\0") == {"日本語.txt", "改\n行.txt"}
+    assert set(parse_porcelain(" M 日本語.txt\0?? 改\n行.txt\0")) == {"日本語.txt", "改\n行.txt"}
 
 
 def test_単体_控えがあれば_subagent_が増やした分だけ咎める() -> None:
@@ -190,9 +202,47 @@ def test_単体_実際の_git_から非_ASCII_の_path_を実在する形で取�
     prints, failure = git_dirty_paths(str(tmp_path))
     assert failure is None, failure
     assert "日本語.txt" in prints, f"C 形式引用のまま返っている: {sorted(prints)}"
-    assert prints["日本語.txt"].startswith("sha256:"), (
+    assert prints["日本語.txt"].endswith(":" + hashlib.sha256(b"x").hexdigest()), (
         "実在しない path を見て missing になっている (指紋比較がすり抜ける)"
     )
+
+
+def test_単体_実際の_git_で_ステージしただけでも指紋が変わる(tmp_path: Path) -> None:
+    """親の差分を subagent が `git add` しただけで停止したとき、それを咎めるか。
+
+    これが無いと何が静かに通るか:
+        親が変更中のファイル (` M foo`) を subagent がステージすると `M  foo` になるが
+        **作業ツリーの内容は 1 バイトも変わらない**。指紋が内容だけなら起動前後で一致し、
+        親の差分が勝手にステージされて**次のコミットに混入しうる状態が無警告で通る**。
+    """
+    import subprocess
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, timeout=30,
+                       capture_output=True)
+
+    git("init", "-q")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    (tmp_path / "foo.txt").write_text("base\n", encoding="utf-8")
+    git("add", "foo.txt")
+    git("commit", "-qm", "base")
+
+    # 親が変更する (未ステージ = " M")
+    (tmp_path / "foo.txt").write_text("parent edit\n", encoding="utf-8")
+    before, failure = git_dirty_paths(str(tmp_path))
+    assert failure is None, failure
+    assert set(before) == {"foo.txt"}
+
+    # subagent が内容を変えずにステージするだけ ("M ")
+    git("add", "foo.txt")
+    after, failure = git_dirty_paths(str(tmp_path))
+    assert failure is None, failure
+
+    assert after["foo.txt"] != before["foo.txt"], (
+        "内容が同じでもステージ状態が変われば指紋は変わるべき"
+    )
+    assert select_paths_to_report(after, before) == ["foo.txt"]
 
 
 def test_単体_控えの置き場はセッションごとに分かれる() -> None:

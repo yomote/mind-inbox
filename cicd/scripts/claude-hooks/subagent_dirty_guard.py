@@ -39,10 +39,15 @@
     残っている dirty は**全部その subagent のもの**で、`all` (混ざっているかもしれない) より
     強い判定ができる。
 
-控えを path だけでなく指紋 (内容ハッシュ) で持つ理由:
+控えを path だけでなく指紋 (`XY 状態|内容ハッシュ`) で持つ理由:
     親が既に触っているファイルを subagent がさらに編集した場合、path 集合は
     起動前後で同じなので差集合が空になり、**置き去りを無警告で見逃す**。
     指紋が変わった path も咎めることでこの穴を塞ぐ (`fingerprint` を参照)。
+
+    指紋に porcelain の **XY 状態も畳む**。内容ハッシュだけだと、親が変更中の
+    ファイルを subagent が `git add` しただけで停止したとき (` M foo` → `M  foo`)
+    作業ツリーの内容が変わらないので指紋が一致し、**親の差分が勝手にステージされて
+    次のコミットに混入しうる状態が無警告で通る** (`parse_porcelain` を参照)。
 
 指紋と排他で**残る**穴 (取れていないものを「異常なし」と書かないための明示):
     - 5MiB 超のファイルは内容ハッシュではなく `size:mtime_ns` — サイズと mtime が
@@ -50,6 +55,10 @@
     - 未追跡ディレクトリの指紋は配下 500 件まで — 501 件目以降だけの変化は見えない
     - `fcntl` が無い環境 (Windows) では控えの排他が素通しになり、控えが 1 件消える
       (消えた側は "all" モードに落ちるので、文言には出る)
+    - 指紋の書式を変えた版をまたぐ控え (旧版で積み、新版で消費する = セッション中に
+      更新した場合) は全 path の指紋が食い違い、**過剰報告**になる。見落とし側には
+      倒れないので、そのまま置く (揃えるには控えに書式版を持たせることになるが、
+      版が読めない控えの扱いをまた決めることになり穴が増える)
 
 控えが取れている場合と取れていない場合を**必ず区別して出す**。控えが無いときに
 作業ツリー全体を subagent のせいにすると、親自身の未コミット差分で subagent を
@@ -159,8 +168,8 @@ def locked(target: Path) -> Iterator[None]:
         handle_.close()
 
 
-def parse_porcelain(text: str) -> set[str]:
-    """`git status --porcelain -z` の出力から path 集合を作る。
+def parse_porcelain(text: str) -> dict[str, str]:
+    """`git status --porcelain -z` の出力から `{path: XY 状態}` を作る。
 
     **`-z` を使う理由** (これが無いと何が静かに通るか):
         既定の porcelain は非 ASCII や特殊文字を含む path を C 形式で引用する
@@ -169,11 +178,17 @@ def parse_porcelain(text: str) -> set[str]:
         指紋が一致するので、そのファイルへの subagent の編集は**無警告で通る**。
         `-z` なら引用されず、path に改行が含まれていても取りこぼさない。
 
+    **XY 状態も返す理由** (これが無いと何が静かに通るか):
+        親が既に変更しているファイルを subagent が `git add` しただけで停止すると、
+        porcelain は ` M foo` から `M  foo` に変わるが**作業ツリーの内容は変わらない**。
+        内容だけを指紋にしていると起動前後の指紋が一致し、**親の差分が勝手に
+        ステージされて次のコミットに混入しうる状態が無警告で通る**。
+
     形式: `XY <path>\\0` の並び。rename / copy (`R` / `C`) だけは
     `XY <new>\\0<old>\\0` と 2 フィールドで来るので、new を採って old は読み飛ばす。
     """
     fields = text.split("\0")
-    paths: set[str] = set()
+    states: dict[str, str] = {}
     index = 0
     while index < len(fields):
         entry = fields[index]
@@ -184,12 +199,15 @@ def parse_porcelain(text: str) -> set[str]:
         if "R" in status or "C" in status:
             index += 1  # 直後の old path を読み飛ばす
         if path:
-            paths.add(path)
-    return paths
+            states[path] = status
+    return states
 
 
 def fingerprint(root: str, rel: str) -> str:
-    """dirty な 1 件の指紋。**内容が変われば必ず変わる**ことだけを満たせばよい。
+    """dirty な 1 件の**内容側**の指紋。**内容が変われば必ず変わる**ことだけを満たせばよい。
+
+    控えに載る指紋はこれ単体ではなく `XY|内容` (`git_dirty_paths` が畳む)。
+    内容が同じでもステージ状態が変われば指紋は変わる。
 
     これが無いと何が静かに通るか:
         親が既に触っているファイルを subagent がさらに編集して未コミットのまま
@@ -241,7 +259,11 @@ def git_dirty_paths(cwd: str) -> tuple[dict[str, str], str | None]:
     if proc.returncode != 0:
         detail = (proc.stderr or "").strip().splitlines()
         return {}, f"git status が失敗した ({detail[0] if detail else proc.returncode})"
-    return {rel: fingerprint(cwd, rel) for rel in parse_porcelain(proc.stdout)}, None
+    # 指紋 = `XY|内容`。XY を畳まないと `git add` しただけの変化 (` M foo` → `M  foo`)
+    # が内容同一で素通りする (parse_porcelain の docstring 参照)。
+    return {
+        rel: f"{status}|{fingerprint(cwd, rel)}" for rel, status in parse_porcelain(proc.stdout).items()
+    }, None
 
 
 def select_paths_to_report(
