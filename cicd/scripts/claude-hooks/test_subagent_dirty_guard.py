@@ -10,12 +10,17 @@
     - `stop_hook_active` を見落として無限に差し戻す
     - `git status` が失敗したときに「未コミット差分なし」と答える
       (取れなかったものを「異常なし」と書く — このリポジトリ最優先の禁止事項)
+    - **`isolation: "worktree"` の停止で控えを回収せず、親側の列に溜め続ける** —
+      このリポジトリの subagent は既定で worktree 起動なので、使うたびに 1 件ずつ増え、
+      後続の親 cwd 起動が古い控えを基準に引いて無関係な親の変更を咎め続けたあと、
+      64 件で新しい控えが保存されなくなる (hook が実質死ぬ)
 """
 
 import json
 from pathlib import Path
 
 from subagent_dirty_guard import (
+    drop_worktree_entry,
     fingerprint,
     git_dirty_paths,
     format_reason,
@@ -25,6 +30,7 @@ from subagent_dirty_guard import (
     select_paths_to_report,
     snapshot_path,
     take_baseline,
+    worktree_parent,
 )
 
 HOOK_DIR = Path(__file__).resolve().parent
@@ -292,6 +298,144 @@ def test_単体_停止のたびに控えを_1_件ずつ消費する(monkeypatch,
         "並列グループの全員が同じ最古の基準と突き合わせること"
     )
     assert not target.exists(), "列が空になったら控えは残さない"
+
+
+def test_単体_worktree_の判定は_agent_id_まで一致したときだけ() -> None:
+    # 実測 (2026-08-14): worktree は `<親の cwd>/.claude/worktrees/agent-<agent_id>`。
+    # 末尾まで見ないと、似た名前のディレクトリを worktree と誤認して
+    # **親の作業ツリーの控えを黙って捨てる**ことになる。
+    assert worktree_parent("/repo/.claude/worktrees/agent-abc", "abc") == "/repo"
+    assert worktree_parent("/repo/.claude/worktrees/agent-abc", "zzz") is None
+    assert worktree_parent("/repo/worktrees/agent-abc", "abc") is None
+    assert worktree_parent("/repo/.claude/agent-abc", "abc") is None
+    assert worktree_parent("/repo", "abc") is None
+    assert worktree_parent("/repo/.claude/worktrees/agent-abc", None) is None
+
+
+def test_単体_worktree_の停止でも控えを回収して蓄積させない(monkeypatch, tmp_path: Path) -> None:
+    """Codex #396 r3780243543 の再現条件そのもの。
+
+    無いと何が静かに通るか: worktree 起動は cwd が一致しないので、控えが回収されずに
+    1 回の起動ごとに 1 件ずつ溜まる。溜まった控えは後続の親 cwd 起動の基準に化け、
+    64 件で新規の控えが保存されなくなる。
+    """
+    import subagent_dirty_guard as guard
+
+    target = tmp_path / "snap.json"
+    dirty = {"/repo": {"parent.ts": "sha256:p"}}  # worktree 側は空 (置き去り無しで終わる)
+    monkeypatch.setattr(guard, "git_dirty_paths", lambda cwd: (dict(dirty.get(cwd, {})), None))
+    monkeypatch.setattr(guard, "snapshot_path", lambda sid: target)
+
+    for i in range(3):
+        handle(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Agent",
+                "cwd": "/repo",
+                "session_id": "s",
+                "tool_input": {"subagent_type": "general-purpose", "isolation": "worktree"},
+            }
+        )
+        assert handle(
+            {
+                "hook_event_name": "SubagentStop",
+                "cwd": f"/repo/.claude/worktrees/agent-a{i}",
+                "agent_id": f"a{i}",
+                "session_id": "s",
+            }
+        ) is None, "親の未コミット差分で worktree subagent をブロックしてはいけない"
+
+    assert not target.exists(), (
+        "worktree 停止で控えが回収されず、親側の列に溜まっている "
+        f"(残り: {target.read_text(encoding='utf-8') if target.exists() else ''})"
+    )
+
+
+def test_単体_worktree_の停止は基準を空にして自分の差分だけを全部咎める(
+    monkeypatch, tmp_path: Path
+) -> None:
+    # 実測 (2026-08-14): 親が dirty でも worktree 起動直後の git status は空。
+    # だから worktree に残った差分は全部その subagent のもので、"all" の
+    # 「混ざっている可能性」ではなく断定してよい。親の差分は 1 件も出さない。
+    import subagent_dirty_guard as guard
+
+    target = tmp_path / "snap.json"
+    dirty = {
+        "/repo": {"parent.ts": "sha256:p"},
+        "/repo/.claude/worktrees/agent-abc": {"wt.ts": "sha256:w"},
+    }
+    monkeypatch.setattr(guard, "git_dirty_paths", lambda cwd: (dict(dirty.get(cwd, {})), None))
+    monkeypatch.setattr(guard, "snapshot_path", lambda sid: target)
+
+    handle(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "cwd": "/repo",
+            "session_id": "s",
+            "tool_input": {"isolation": "worktree"},
+        }
+    )
+    result = handle(
+        {
+            "hook_event_name": "SubagentStop",
+            "cwd": "/repo/.claude/worktrees/agent-abc",
+            "agent_id": "abc",
+            "session_id": "s",
+        }
+    )
+    assert result["decision"] == "block"
+    assert "wt.ts" in result["reason"]
+    assert "parent.ts" not in result["reason"], "親の作業ツリーの差分を subagent に押し付けている"
+    assert "全部あなたが作った差分です" in result["reason"]
+    assert "混ざっている可能性" not in result["reason"], (
+        "worktree は起動時に空なので、混入の可能性があるかのように言うと精度を偽る"
+    )
+
+
+def test_単体_印の無い控えでも_worktree_停止で回収して混入を申告する() -> None:
+    # 印 (`isolation`) が付くのはこの修正以降。旧形式の控えや tool_input が
+    # 渡らない起動でも、回収しないと蓄積が残る。代わりに親 cwd を共有する別の
+    # subagent の基準を 1 件奪うので、残りに concurrent を立てて申告する。
+    entries = [
+        {"cwd": "/repo", "prints": {}},
+        {"cwd": "/repo", "prints": {"a.ts": "sha256:a"}},
+        {"cwd": "/other", "prints": {}},
+    ]
+    assert drop_worktree_entry(entries, "/repo") == [
+        {"cwd": "/repo", "prints": {}, "concurrent": True},
+        {"cwd": "/other", "prints": {}},
+    ]
+    # 印がある控えがあれば、そちらを落とす (基準として誰にも使われない控えなので、
+    # 落としても他の subagent の判定が変わらない)
+    marked = [
+        {"cwd": "/repo", "prints": {}},
+        {"cwd": "/repo", "prints": {"a.ts": "sha256:a"}, "isolation": "worktree"},
+    ]
+    assert drop_worktree_entry(marked, "/repo") == [{"cwd": "/repo", "prints": {}}]
+    assert drop_worktree_entry(entries, "/どこにも無い") == entries
+
+
+def test_単体_worktree_起動の控えには印が付く(monkeypatch, tmp_path: Path) -> None:
+    # 印が無いと、停止側は親 cwd の控えを新しい順に食うしかなくなり、
+    # 親 cwd を共有する別 subagent の基準を不必要に奪う。
+    import subagent_dirty_guard as guard
+
+    target = tmp_path / "snap.json"
+    monkeypatch.setattr(guard, "git_dirty_paths", lambda cwd: ({}, None))
+    monkeypatch.setattr(guard, "snapshot_path", lambda sid: target)
+    handle(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "cwd": "/repo",
+            "session_id": "s",
+            "tool_input": {"isolation": "worktree"},
+        }
+    )
+    assert json.loads(target.read_text(encoding="utf-8")) == [
+        {"cwd": "/repo", "prints": {}, "isolation": "worktree"}
+    ]
 
 
 def test_単体_並列に控えを積んでも_1_件も失われない(tmp_path: Path) -> None:

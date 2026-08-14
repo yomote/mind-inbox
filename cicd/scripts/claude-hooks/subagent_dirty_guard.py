@@ -2,16 +2,42 @@
 """subagent が未コミットの差分を作業ツリーに置き去りにしたまま終わるのを止める hook。
 
 これが無いと何が静かに通るか:
-    subagent は親と作業ツリーを共有する (2026-08-13 実測: SubagentStop の `cwd` が
-    親と同一で、subagent の書き込みが親の作業ツリーにそのまま出た)。subagent が
-    commit / push せずに終わると、**親からは「作業が終わった」としか見えない**まま
-    差分だけが残る。次に親が別の作業を始めると、そのコミットに他人の差分が紛れるか、
-    誰のものか分からない差分として捨てられる。実際に 2026-08-13 に起きている。
-    GitHub 側には何の痕跡も残らないので CI では検出できない。
+    subagent が commit / push せずに終わると、**親からは「作業が終わった」としか
+    見えない**まま差分だけが残る。置き去りの行き先は起動の仕方で 2 通りある:
+
+    - **親と作業ツリーを共有する起動** (2026-08-13 実測: SubagentStop の `cwd` が
+      親と同一で、subagent の書き込みが親の作業ツリーにそのまま出た) — 次に親が
+      別の作業を始めると、そのコミットに他人の差分が紛れるか、誰のものか
+      分からない差分として捨てられる。実際に 2026-08-13 に起きている
+    - **`isolation: "worktree"` の起動** (下の実測を参照) — 差分は subagent 専用の
+      worktree に残り、**親にも GitHub にも届かないまま誰にも読まれずに消える**
+
+    どちらも GitHub 側には何の痕跡も残らないので CI では検出できない。
 
 2 つのイベントで動く (settings.json で両方に登録している):
     PreToolUse (Agent/Task) — subagent を起こす直前の dirty な path と**その指紋**を控える
     SubagentStop            — 今の dirty と突き合わせ、**subagent が増やした分**だけ咎める
+
+`isolation: "worktree"` の起動 (このリポジトリの既定) の扱い:
+    実測 (2026-08-14 / Claude Code 2.1.231。親を dirty にしたラボ repo で計測):
+
+        PreToolUse   cwd=/lab/repo                                      agent_id 無し
+                     tool_input.isolation="worktree"
+        SubagentStop cwd=/lab/repo/.claude/worktrees/agent-adebf040d4f4a3ab7
+                     agent_id="adebf040d4f4a3ab7"
+
+    **控えは親の cwd で積まれ、停止では worktree の cwd が渡る**ので cwd が一致しない。
+    ここで控えを列に残すと、worktree subagent を使うたびに親側の控えが 1 件ずつ溜まり、
+    後続の親 cwd 起動が古い控え (無関係な親の変更を含む) を基準に引いて咎め続け、
+    64 件で新しい控えが保存されなくなる = **この hook が実質死ぬ**。
+    そこで停止側で worktree 起動を機械判定し (`worktree_parent`)、親 cwd の控えを
+    1 件回収する (`drop_worktree_entry`)。
+
+    worktree の基準は**空**にする。同じ実測で、**親が dirty (`M README.md` /
+    `?? parent-dirty.txt`) でも worktree 起動直後の `git status --porcelain` は空**
+    だった (worktree は親の未コミット差分を引き継がない)。したがって停止時に worktree に
+    残っている dirty は**全部その subagent のもの**で、`all` (混ざっているかもしれない) より
+    強い判定ができる。
 
 控えを path だけでなく指紋 (内容ハッシュ) で持つ理由:
     親が既に触っているファイルを subagent がさらに編集した場合、path 集合は
@@ -311,11 +337,75 @@ def take_baseline(
     return baseline, remaining, "diff-concurrent" if concurrent else "diff"
 
 
+def worktree_parent(cwd: str, agent_id: Any) -> str | None:
+    """worktree 起動の subagent の停止なら**親の cwd** を返す。違えば None。
+
+    判定は cwd の形だけで行う。実測 (2026-08-14) で worktree の場所は
+    `<親の cwd>/.claude/worktrees/agent-<agent_id>` に固定されており、末尾の
+    `agent_id` が**同じ stdin に入っている値と一致すること**まで見るので、
+    たまたま似た名前のディレクトリを worktree と誤認しない。
+
+    これが無いと何が静かに通るか:
+        停止側が「cwd が違う控え」を単に無視するだけだと、親側の控えが
+        回収されずに溜まり続ける (モジュール docstring の実測を参照)。
+    """
+    if not isinstance(agent_id, str) or not agent_id:
+        return None
+    path = Path(cwd)
+    if path.name != f"agent-{agent_id}":
+        return None
+    if path.parent.name != "worktrees" or path.parent.parent.name != ".claude":
+        return None
+    return str(path.parent.parent.parent)
+
+
+def drop_worktree_entry(entries: list[dict[str, Any]], parent_cwd: str) -> list[dict[str, Any]]:
+    """worktree 起動の停止に対応する控えを、親 cwd の列から 1 件回収する。
+
+    落とすのは **`isolation` が `worktree` と記録された控え**を優先する
+    (`_record_snapshot` が PreToolUse の `tool_input.isolation` を写している)。
+    印のある控えは基準として誰にも使われないので、落としても他の subagent の
+    判定は変わらない。
+
+    印が 1 件も無いときは同じ親 cwd の**最も新しい**控えを落とす。控えに印が付くのは
+    この修正以降なので、印を読めない形 (旧形式の控え / `tool_input` が渡らない起動) でも
+    **必ず 1 件回収して蓄積を止める**ための保険。その代わり親 cwd を共有する別の
+    subagent の基準を 1 件奪うので、残った控えに `concurrent` を立てて
+    「他人の差分が混ざりうる」と申告する (奪われた側は基準を失って `all` に落ちる —
+    どちらも過剰報告側で、置き去りの見落としにはならない)。
+    """
+    matched = [i for i, entry in enumerate(entries) if entry.get("cwd") == parent_cwd]
+    if not matched:
+        return entries
+    marked = [i for i in matched if entries[i].get("isolation") == "worktree"]
+    drop = (marked or matched)[-1]
+    remaining = [entry for i, entry in enumerate(entries) if i != drop]
+    if not marked:
+        for i, entry in enumerate(remaining):
+            if entry.get("cwd") == parent_cwd:
+                remaining[i] = {**entry, "concurrent": True}
+                break
+    return remaining
+
+
 def format_reason(paths: list[str], mode: str) -> str:
     shown = paths[:20]
     listed = "\n".join(f"  {p}" for p in shown)
     if len(paths) > len(shown):
         listed += f"\n  ... 他 {len(paths) - len(shown)} 件"
+    if mode == "worktree":
+        # worktree は起動時に空 (親の未コミット差分を引き継がない) — 実測はモジュール
+        # docstring。だから「作業ツリー全体」でも混入の可能性が無く、断定できる。
+        return (
+            f"未コミットの変更が {len(paths)} 件、あなたの worktree に残ったまま"
+            "終わろうとしています。\n"
+            f"{listed}\n"
+            "この worktree は起動時に空だったので、**全部あなたが作った差分です**。\n"
+            "worktree は親の作業ツリーとは別なので、ここで置き去りにすると"
+            "この差分は親にも GitHub にも届かず、誰にも読まれないまま消えます。\n"
+            "commit と push まで完遂してから終了してください。"
+            "意図的に残すなら、何をなぜ残したかを最終回答に書いてください。"
+        )
     if mode == "diff":
         basis = "これは subagent の起動前後の差分なので、あなたが作った差分です。"
     elif mode == "diff-concurrent":
@@ -371,7 +461,13 @@ def _record_snapshot(event: dict[str, Any], cwd: str, session_id: str) -> dict[s
         if len(entries) >= _MAX_ENTRIES:
             # 新しい方を捨てる (理由は _MAX_ENTRIES のコメント)。この subagent は "all" に落ちる。
             return None
-        entries.append({"cwd": cwd, "prints": dict(sorted(prints.items()))})
+        entry: dict[str, Any] = {"cwd": cwd, "prints": dict(sorted(prints.items()))}
+        tool_input = event.get("tool_input")
+        if isinstance(tool_input, dict) and tool_input.get("isolation") == "worktree":
+            # 停止側で回収するときの目印 (drop_worktree_entry)。停止では worktree の
+            # cwd しか来ないので、控えの側に「worktree 起動だった」と書いておく。
+            entry["isolation"] = "worktree"
+        entries.append(entry)
         try:
             target.write_text(json.dumps(entries, ensure_ascii=False), encoding="utf-8")
         except OSError:
@@ -390,9 +486,15 @@ def _check(event: dict[str, Any], cwd: str, session_id: str) -> dict[str, Any] |
         return hook_io.passthrough(f"{failure} ため、未コミット差分を検査していない")
 
     target = snapshot_path(session_id)
+    parent = worktree_parent(cwd, event.get("agent_id"))
     # 取り出しと書き戻しの間に別の停止が割り込むと、同じ控えを 2 つの subagent が引く。
     with locked(target):
-        baseline, remaining, mode = take_baseline(load_entries(target), cwd)
+        entries = load_entries(target)
+        if parent is None:
+            baseline, remaining, mode = take_baseline(entries, cwd)
+        else:
+            # worktree 起動: 基準は空 (起動時の worktree は空) で、控えは親 cwd の列から回収する。
+            baseline, remaining, mode = {}, drop_worktree_entry(entries, parent), "worktree"
         _consume(target, remaining)
     paths = select_paths_to_report(now, baseline)
     if not paths:
