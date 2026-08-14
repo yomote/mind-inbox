@@ -56,16 +56,24 @@
    ```bash
    az deployment group what-if \
      -g rg-shared-mindbox -n main-shared \
-     -f main-shared.bicep -p @main-shared.parameters.json
+     -f main-shared.bicep -p @main-shared.parameters.json \
+     -p budgetContactEmails='["<your-email@example.com>"]'
    ```
 
-5. 適用する。
+5. 適用する。**`budgetContactEmails` を初回に必ず渡すこと** — 下の理由で、渡さないと予算アラートが作られません。
 
    ```bash
    az deployment group create \
      -g rg-shared-mindbox -n main-shared \
-     -f main-shared.bicep -p @main-shared.parameters.json
+     -f main-shared.bicep -p @main-shared.parameters.json \
+     -p budgetContactEmails='["<your-email@example.com>"]'
    ```
+
+   > ⚠️ **通知先メールは PII なので `main-shared.parameters.json` には commit しません** (`main-bootstrap` と同じ扱い / [`entra-spa-auth-and-budget.md`](entra-spa-auth-and-budget.md))。空のままだと `main-shared.bicep` の `enableBudgetAlert && !empty(budgetContactEmails)` により **budget リソース自体が作られません** (通知先の無いアラートは沈黙と同じなので、意図的にそうしてあります)。
+   >
+   > **持続層を別 RG に出すと、環境層 RG に張ってある予算の射程から Cosmos / OpenAI が外れます。** ここで渡し忘れると、あとで `enableCosmos` / `enableOpenAi` を `true` にした時点で**どちらの RG の予算にも載っていない**状態になります ([ADR 0013](../adr/0013-standing-low-cost-dev-env-with-auto-deploy.md))。
+   >
+   > budget は作成後 ARM の incremental デプロイで残るので、**2 回目以降は省略しても消えません**。
 
 6. E2E trace 復号鍵の URI (kid) を控える。`az keyvault key decrypt --id <kid>` にそのまま渡せます ([#301](https://github.com/yomote/mind-inbox/issues/301) / ADR 0045 D5 — **本文は未マージ** (PR #332) なのでリンクは張っていません)。
 
@@ -82,6 +90,7 @@
 - [ ] **作ったリソース全部に層タグが付いている** (下の 2) — このタグが撤収ガードの判定入力なので、**付いていないものは環境層と見なされて撤収で消えます**
 - [ ] 鍵が**エクスポート不可**で作られている (下の 3 が `false` を返すこと)
 - [ ] **撤収ガードが持続層 RG を拒否する** (下の 4 が exit 3 で、何も消えないこと)
+- [ ] **月次予算が作られている** (下の 5 が `true` を返すこと) — `false` なら `budgetContactEmails` を渡し忘れており、**持続層のコストがどの予算にも載っていません**
 
 ```bash
 # 1. デプロイの結果
@@ -98,6 +107,10 @@ az keyvault key show --vault-name kv-dev-mindbox -n e2e-artifacts \
 
 # 4. 撤収ガードが持続層 RG を拒否するか
 cd cicd && RG=rg-shared-mindbox ./scripts/env/cleanup-env.sh; echo "exit=$?"
+
+# 5. 月次予算が作られたか (false なら budgetContactEmails の渡し忘れ)
+az deployment group show -g rg-shared-mindbox -n main-shared \
+  --query properties.outputs.budgetAlertEnabled.value -o tsv
 ```
 
 ## Rollback
@@ -123,6 +136,11 @@ cd cicd && RG=rg-shared-mindbox ./scripts/env/cleanup-env.sh; echo "exit=$?"
 
 - 原因: 逆のパターン。**User Access Administrator / RBAC Administrator しか持っていない** — これらは**ロール割り当て専用**で、Key Vault や Storage、deployment を作る権限がない
 - 対処: Contributor (または Owner) を足す。この 2 つは片方だけでは足りない (Prerequisites の表を参照)
+
+### 予算アラートが来ない / `budgetAlertEnabled` が `false`
+
+- 原因: `budgetContactEmails` が空のまま適用した。**通知先の無い予算はアラートとして無意味なので、budget リソース自体を作らない**設計 (`main-shared.bicep` の `enableBudgetAlert && !empty(budgetContactEmails)`)
+- 対処: 手順 5 を `-p budgetContactEmails='["<your-email@example.com>"]'` 付きで流し直す (冪等)。**`enableCosmos` / `enableOpenAi` を `true` にする前に必ず直すこと** — 持続層は環境層 RG の予算の射程外なので、放置するとコストの歯止めがどこにも無くなります
 
 ### Cosmos の無料枠 / Speech F0 でデプロイが落ちる
 
