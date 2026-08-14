@@ -21,9 +21,12 @@
     workflow run の緑は「評価できたこと」しか意味しない — 判定の 🟢/🔴 は status 側に出る。
 
 条件 (全部揃うまで failure):
-    1. PM の受け入れコメント — `[pm-accept]` マーカー + いまの head SHA (先頭 7 桁) を
-       含むコメントが PR にある。**SHA を含める規約により push で自動的に無効化される**
-       (受け入れ後に積まれた未レビューコードのマージを防ぐ)。
+    1. PM の受け入れコメント — **行頭の `[pm-accept] <head SHA 先頭 7 桁以上>` 行**が
+       信頼できる投稿者のコメントにある。**SHA を含める規約により push で自動的に
+       無効化される** (受け入れ後に積まれた未レビューコードのマージを防ぐ)。
+       判定は構文一致 (Issue #380): マーカーと SHA が本文のどこかに「含まれる」
+       だけでは受け入れと数えない — 「[pm-accept] は押していません」+ 見出しの SHA
+       という否定文が受け入れとして読まれた実害 (PR #379) への対処。
        例外 (ADR 0042 — pm-accept の引き継ぎ): 最新の `[pm-accept] <sha>` の <sha> から
        現 head までの追加コミットが **base (main) からのマージのみ** で、かつ
        **PR の実装差分 (base...head) が受け入れ時点と同一** なら、受け入れは現 head に
@@ -31,15 +34,19 @@
        判定は evaluate_gate → decide の共通経路にあるため、**マージ執行 (下) の
        「受け入れ済み」判定にも同じ引き継ぎが効く**
     2. レビュースレッドが全部解決している
-    3. コード PR (apps/ か cicd/ に触れる) かつ REVIEW_GATE_REQUIRE_CODEX=true のとき、
-       **独立レビューが 1 本ある** — 担い手は次のどちらでもよい (ADR 0052 D7):
+    3. コード PR (apps/ か cicd/ に触れる) なら、**独立レビューが 1 本ある** —
+       これは**常時要求**で、環境変数では切れない (Issue #400 D1。旧
+       REVIEW_GATE_REQUIRE_CODEX は「上限が来たら false にする」経路として
+       機能してしまい、実際に false のまま誰も気づかなかった)。
+       担い手は次のどちらでもよい (ADR 0052 D7):
        (a) Codex のレビュー (login が CODEX_LOGIN_PATTERN にマッチする投稿。
            指摘ゼロの clean review は issue コメントにしか痕跡が残らないため、
            「Codex Review」ヘッダを持つ issue コメントも数える — PR #239 実測)
        (b) 代役 judge (code-reviewer subagent) のレビュー — 権限保持者が投稿した
-           `<!-- standin-review -->` + 現 head SHA を含むコメント。**Codex と違い
-           SHA を縛る** (代役の投稿は実装者と同じアカウントから出るため / has_standin_review)
-       変数名が REQUIRE_CODEX のままなのは repository variable の改名を避けるため
+           行頭の `<!-- standin-review -->` マーカー + 現 head SHA を含むコメント。
+           **Codex と違い SHA を縛る** (代役の投稿は実装者と同じアカウントから
+           出るため / has_standin_review)。代役で通した PR には degrade を可視化する
+           コメントを 1 回だけ貼り、status の文言にも担い手を出す (Issue #400 D3)
 
 付随して、合否とは別に advisory のコメントを 2 種類だけ自動投稿する (ADR 0038):
     A. Codex 自動レビューの再トリガー依頼 — コード PR に Codex レビューが
@@ -96,6 +103,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 PM_ACCEPT_MARKER = "[pm-accept]"
+# 受け入れ行の構文 (Issue #380): **行頭にマーカー、直後に SHA (7〜40 桁 hex)**。
+# 「含む」判定 (`marker in body and sha in body`) は、マーカーに言及しただけの
+# 地の文 (「[pm-accept] は押していません」) と見出しの SHA の組み合わせを
+# 受け入れとして読んだ (PR #379 で実発生 / 13 秒後に success が貼られた)。
+# 正典の書式 (`/merge` skill): `[pm-accept] a1b2c3d — <一言の判定理由>`。
+# SHA の後ろは自由文 (判定理由) を許す — 否定文の検出はしない (言い回しは
+# 無限にあるので脆い / #380 案 C の却下理由)。守るのは「マーカーの直後が
+# 現 head の SHA である」ことだけで、これは偶然の文章では満たしにくい。
+PM_ACCEPT_LINE_RE = re.compile(r"^\s*\[pm-accept\]\s+([0-9a-fA-F]{7,40})\b")
 # 受け入れとして数えるコメントの投稿者。**このリポジトリは public なので、
 # 誰でも PR にコメントできる** — 投稿者を見ないと第三者が `[pm-accept] <sha>` と
 # 書くだけで門が開く (2026-08-10 の受け入れレビューで発見)。
@@ -103,11 +119,27 @@ PM_ACCEPT_MARKER = "[pm-accept]"
 TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 CODE_PREFIXES = ("apps/", "cicd/")
 STATUS_CONTEXT = "review-gate"
+# 独立レビューは**常時要求** (Issue #400 D1)。旧 REVIEW_GATE_REQUIRE_CODEX
+# (repository variable) は読まない — フラグが残る限り「上限が来たら false にする」
+# 経路が生き続け、実際に false のまま門がレビューを見ていなかった (2026-08-13 の
+# Actions ログで実測)。担い手 (Codex / 代役 judge) の差し替えで吸収し、
+# 外部サービスの生死で要求そのものを緩めない。
+REQUIRE_INDEPENDENT_REVIEW = True
+# 独立レビューの担い手 (Verdict.reviewer / status 文言と degrade 可視化に使う)
+REVIEWER_CODEX = "Codex"
+REVIEWER_STANDIN = "代役 judge"
 # 代役 judge の独立レビュー (ADR 0050)。Codex が使えない間、門の「独立レビュー」
 # 条件をこちらでも満たせるようにする。**Codex より条件を強くする** — 代役は
 # 実装者と同じ GitHub アカウントから投稿されるため、SHA を縛らないと
 # 「1 回レビューを貼ってから何でも push できる」門になる (pm-accept と同形の失効)。
 STANDIN_REVIEW_MARKER = "<!-- standin-review -->"
+# 代役マーカーも行頭に限る (pm-accept と同じ構文厳密化 / Issue #380 と同型)。
+# 地の文・インラインコード (`<!-- standin-review -->` を貼ってください 等) の
+# 言及はレビューではない。rubric (review-rubric.md Part 6) の必須ヘッダは
+# マーカーを 1 行目に単独で置くので、正規の投稿はこの条件を常に満たす。
+STANDIN_MARKER_LINE_RE = re.compile(r"^\s*<!--\s*standin-review\s*-->")
+# 代役 judge で門を通した PR に 1 回だけ貼る degrade 告知の冪等マーカー (#400 D3-2)
+STANDIN_PASS_MARKER = "<!-- standin-pass-notice -->"
 SHORT_SHA_LEN = 7
 
 # ---- pm-accept の引き継ぎ / merge_group (ADR 0042) ----
@@ -209,6 +241,18 @@ def should_request_security_review(
 ) -> bool:
     """`@codex security review` を自動投稿すべきか (敏感パスに触れる PR に 1 回だけ)。"""
     return bool(sensitive) and not draft and not marker_posted
+
+
+def should_notice_standin_pass(
+    *, verdict_ok: bool, reviewer: str, marker_posted: bool
+) -> bool:
+    """代役 judge で門を通した PR に degrade 告知を投稿すべきか (Issue #400 D3-2)。
+
+    「黙って代役で通る」を潰す — 代役の投稿は実装者と同じアカウントから出るため
+    独立性は回復しておらず (#400 D4)、それが status の 1 行以外に痕跡なく流れると
+    PO は degrade に気づけない。1 PR 1 回だけ (marker 冪等 — advisory と同じ)。
+    """
+    return verdict_ok and reviewer == REVIEWER_STANDIN and not marker_posted
 
 
 def still_unposted(marker: str, comment_bodies: list[str]) -> bool:
@@ -619,17 +663,20 @@ def recently_merged(
 class Verdict:
     ok: bool
     missing: list[str] = field(default_factory=list)
-    # 緑の補足 (例: pm-accept 引き継ぎ — ADR 0042)。判定理由を status に可視化する
+    # 緑の内訳 (受け入れの由来・独立レビューの担い手)。**固定文言を使わない** —
+    # 「OK: 受け入れ・スレッド・レビューが揃った」の固定文は、レビューを一度も
+    # 見ていない PR にも同じ文が出て嘘になった (Issue #400 P1 / PR #338 実測)。
     note: str = ""
+    # 独立レビューの担い手 (REVIEWER_CODEX / REVIEWER_STANDIN / 空 = 要求対象外)。
+    # 代役で通した PR の degrade 可視化コメント (#400 D3-2) がここを読む
+    reviewer: str = ""
 
     @property
     def description(self) -> str:
         if self.ok:
-            text = (
-                f"OK: {self.note}"
-                if self.note
-                else "OK: 受け入れ・スレッド・レビューが揃った"
-            )
+            # note は decide() が必ず組み立てる。空なら「何で通ったか不明」であり、
+            # それを「揃った」と書かない (取れなかったものを異常なしと書かない)
+            text = f"OK: {self.note}" if self.note else "OK (判定内訳なし)"
         else:
             text = " / ".join(self.missing)
         return text[:137] + "…" if len(text) > 140 else text
@@ -650,38 +697,64 @@ def is_code_pr(changed_paths: list[str]) -> bool:
     return any(p.startswith(CODE_PREFIXES) for p in changed_paths)
 
 
+def _machine_lines(body: str) -> list[str]:
+    """機械判定の対象になる行だけを返す (引用とコードフェンスを落とす)。
+
+    落とす理由はどちらも「本人が書いた宣言ではないものを宣言として読まない」:
+
+    - **引用行 (`>` 始まり)**: マーカーが HTML コメント = **画面に見えない**ため、
+      第三者が不可視の `<!-- standin-review --> <sha>` を投稿し、権限保持者が
+      GitHub の "Quote reply" で返信すると、raw markdown がそのまま `> ` 付きで
+      複製されて **association が NONE → OWNER に化け、誰もレビューしていないのに
+      門が開く** (security-reviewer が実測: 第三者単体は False → OWNER の
+      引用返信で True)。
+    - **コードフェンス (``` 〜 ```) の中**: 書式の説明で rubric や skill の例文
+      (`[pm-accept] <sha>` / 必須ヘッダ) をそのまま貼ると、例文が受け入れ・
+      レビューとして読まれる (#380 と同型の「言及を宣言と読む」誤爆)。
+    """
+    lines: list[str] = []
+    in_fence = False
+    for line in body.splitlines():
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence or line.lstrip().startswith(">"):
+            continue
+        lines.append(line)
+    return lines
+
+
+def _pm_accept_tokens(body: str) -> list[str]:
+    """本文中の**構文的に正しい受け入れ行**から SHA トークンを取り出す (Issue #380)。
+
+    受け入れ行 = 行頭 `[pm-accept]` + 直後に hex 7〜40 桁 (PM_ACCEPT_LINE_RE)。
+    地の文でのマーカー言及 (「[pm-accept] は押していません」/ 行の途中の
+    `[pm-accept]`) は受け入れ行ではないので拾わない。小文字化して返す。
+    """
+    tokens: list[str] = []
+    for line in _machine_lines(body):
+        m = PM_ACCEPT_LINE_RE.match(line)
+        if m:
+            tokens.append(m.group(1).lower())
+    return tokens
+
+
 def has_pm_accept(comments: list[tuple[str, str]], head_sha: str) -> bool:
     """受け入れと数える条件は 3 つ全部。
 
-    1. マーカー `[pm-accept]` を含む
-    2. **いまの** head SHA (先頭 7 桁) を含む — push で自動失効させるため
+    1. **行頭の受け入れ行** `[pm-accept] <sha>` がある (構文一致 / Issue #380 —
+       マーカーと SHA が本文の別々の場所に「含まれる」だけでは数えない)
+    2. その SHA が **いまの** head SHA の先頭一致 (7 桁以上) — push で自動失効させるため
     3. **投稿者がこのリポジトリの権限保持者** (author_association) — public リポジトリで
        第三者がコメントするだけで門が開くのを塞ぐ
 
     comments は (本文, author_association) の列。
     """
-    short = head_sha[:SHORT_SHA_LEN]
+    head = head_sha.lower()
     return any(
-        PM_ACCEPT_MARKER in body
-        and short in body
-        and (association or "").upper() in TRUSTED_ASSOCIATIONS
+        (association or "").upper() in TRUSTED_ASSOCIATIONS
+        and any(head.startswith(token) for token in _pm_accept_tokens(body))
         for body, association in comments
-    )
-
-
-def _without_quotes(body: str) -> str:
-    """引用行 (`>` 始まり) を落とした本文を返す。
-
-    マーカーが HTML コメント = **画面に見えない**ため、第三者が不可視の
-    `<!-- standin-review --> <sha>` を投稿し、権限保持者が GitHub の
-    "Quote reply" で返信すると、raw markdown がそのまま `> ` 付きで複製されて
-    **association が NONE → OWNER に化け、誰もレビューしていないのに門が開く**
-    (security-reviewer が実測: 第三者単体は False → OWNER の引用返信で True)。
-    `[pm-accept]` は可視文字列なので誤爆が目に見えるが、こちらは PR 画面に
-    痕跡が一切出ない。よって**引用された本文は数えない**。
-    """
-    return "\n".join(
-        line for line in body.splitlines() if not line.lstrip().startswith(">")
     )
 
 
@@ -694,7 +767,7 @@ def has_standin_review(
 
     数える条件は 3 つ全部 — has_pm_accept と同形にしている:
 
-    1. マーカー `<!-- standin-review -->` を含む
+    1. **行頭の**マーカー `<!-- standin-review -->` 行がある
     2. **いまの** head SHA (先頭 7 桁) を含む — push で自動失効させるため
     3. **投稿者がこのリポジトリの権限保持者** (author_association)
 
@@ -703,42 +776,62 @@ def has_standin_review(
     (chatgpt-codex-connector[bot]) なので実装者は自分でレビューを貼れないが、
     代役の投稿はレビュー対象を書いた本人と同じアカウントから出る。SHA を縛らないと
     「1 回レビューを貼ってから、以後は何を push しても門が開いたまま」になる。
+
+    マーカーは**行頭にある行だけ**を数え、引用・コードフェンス内の言及は数えない
+    (_machine_lines / STANDIN_MARKER_LINE_RE — #380 と同型の構文厳密化。rubric の
+    必須ヘッダはマーカーを 1 行目に単独で置くので、正規の投稿は常に満たす)。
+    SHA は本文中の hex トークン (7 桁以上) が現 head の先頭 7 桁から始まるかで見る —
+    rubric の書式は SHA をマーカーと別の行 (`**代役レビュー (`sha`)**`) に置くため、
+    マーカー行そのものには縛らない。
     """
-    accepted = {head_sha[:SHORT_SHA_LEN]}
+    accepted = {head_sha[:SHORT_SHA_LEN].lower()}
     # pm-accept と同じ引き継ぎを効かせる (ADR 0042 / PR #330 の代役レビュー指摘)。
     # 引き継ぎが成立している = 「実装差分が不変の base 追随」なので、レビュー対象の
     # コードは 1 文字も変わっていない。ここを揃えないと「PM 受け入れは carryover で
     # 生き残るのに独立レビューだけ失効する」非対称が出て、main を追随するたびに
     # 門が赤へ戻る (実測: 両 PR を 3-way マージした tree で再現)。
     if carried_short:
-        accepted.add(carried_short)
-    return any(
-        STANDIN_REVIEW_MARKER in own
-        and any(s in own for s in accepted)
-        and (association or "").upper() in TRUSTED_ASSOCIATIONS
-        for own, association in (
-            (_without_quotes(body), assoc) for body, assoc in comments
-        )
-    )
+        accepted.add(carried_short.lower())
+    for body, association in comments:
+        if (association or "").upper() not in TRUSTED_ASSOCIATIONS:
+            continue
+        lines = _machine_lines(body)
+        if not any(STANDIN_MARKER_LINE_RE.match(line) for line in lines):
+            continue
+        tokens = [t.lower() for t in HEX_TOKEN_RE.findall("\n".join(lines))]
+        if any(t.startswith(short) for t in tokens for short in accepted):
+            return True
+    return False
 
 
 def latest_pm_accept_token(comments: list[tuple[str, str]]) -> str | None:
     """最新の信頼できる pm-accept コメントから受け入れ SHA トークンを取る (ADR 0042)。
 
     comments は API 取得順 (created_at 昇順) の (本文, author_association)。
-    末尾から走査して最初に見つかった信頼できる `[pm-accept]` コメントの、
-    マーカーより後ろにある最初の hex トークン (7〜40 桁) を小文字で返す。
+    末尾から走査し、**構文的に正しい受け入れ行** (_pm_accept_tokens / Issue #380)
+    を持つ最初の信頼できるコメントの SHA を小文字で返す。
     **最新の受け入れだけを見る** — 古い受け入れへ遡って引き継がない
     (PM が受け入れをやり直したら新しい方が意思)。
+
+    行頭にマーカーがあるのに受け入れ行として成立していないコメント
+    (SHA 書き忘れ / 「[pm-accept] は押していません」等の行頭宣言) は
+    **None = 引き継ぎ判定不能**で止める — 古い受け入れへ黙って遡ると、
+    PM の最新の意思 (やり直し・保留) を機械が上書きする。行の途中や
+    引用・コードフェンス内の言及 (地の文) は受け入れの意思と無関係なので
+    素通しして、さらに古いコメントを見に行く。
     """
     for body, association in reversed(comments):
         if (association or "").upper() not in TRUSTED_ASSOCIATIONS:
             continue
-        if PM_ACCEPT_MARKER not in body:
-            continue
-        tail = body[body.index(PM_ACCEPT_MARKER) + len(PM_ACCEPT_MARKER) :]
-        m = HEX_TOKEN_RE.search(tail)
-        return m.group(0).lower() if m else None
+        tokens = _pm_accept_tokens(body)
+        if tokens:
+            return tokens[-1]
+        if any(
+            line.lstrip().startswith(PM_ACCEPT_MARKER) for line in _machine_lines(body)
+        ):
+            # 行頭マーカーだが SHA が続かない — 受け入れの試み (書き忘れ) か
+            # 明示の保留。どちらでも「最新の意思が受け入れでない」ので引き継がない
+            return None
     return None
 
 
@@ -863,12 +956,14 @@ def decide(
     carryover: Carryover | None = None,
 ) -> Verdict:
     missing: list[str] = []
-    note = ""
+    # 緑のときの内訳 (Issue #400 D3-1)。固定文言は「レビューを見ていないのに
+    # 揃ったと書く」嘘の源だった (PR #338 実測) — 何で通ったかを毎回組み立てる
+    notes: list[str] = []
     if has_pm_accept(comments, head_sha):
-        pass  # 現 head への直接の受け入れ (従来どおり)
+        notes.append("受け入れ済み")
     elif carryover is not None and carryover.ok:
         # ADR 0042: 実装差分が不変の main 追随なら受け入れを引き継ぐ
-        note = f"pm-accept を {carryover.accepted_short} から引き継ぎ (差分不変)"
+        notes.append(f"pm-accept を {carryover.accepted_short} から引き継ぎ (差分不変)")
     else:
         item = f"PM 受け入れ ([pm-accept] + {head_sha[:SHORT_SHA_LEN]}) が無い"
         if carryover is not None and carryover.detail:
@@ -878,15 +973,30 @@ def decide(
         missing.append(f"未解決スレッド {unresolved_threads} 件")
     # 門が要求するのは「独立レビューが 1 本あること」で、担い手は Codex でも
     # 代役 judge でもよい (ADR 0052 D7)。Codex が上限で黙っている間、門を開ける
-    # (require を false にする) のではなく担い手を差し替えることで、
+    # (要求を止める) のではなく担い手を差し替えることで、
     # 「有限資源の都合で門が開く」前例を作らずに済む。
-    # 環境変数名 REVIEW_GATE_REQUIRE_CODEX はそのまま — repository variable なので
-    # 改名すると PO が web UI で作り直すことになる (機構の都合で人に作業を回さない)。
+    # require_independent_review は本番では常に True (REQUIRE_INDEPENDENT_REVIEW /
+    # Issue #400 D1) — 引数として残すのはテストが条件分岐を突けるようにするため。
+    reviewer = ""
     if require_independent_review and is_code_pr(changed_paths):
         carried = carryover.accepted_short if (carryover and carryover.ok) else None
-        if not codex_present and not has_standin_review(comments, head_sha, carried):
+        if codex_present:
+            reviewer = REVIEWER_CODEX
+            notes.append(f"独立レビュー: {REVIEWER_CODEX}")
+        elif has_standin_review(comments, head_sha, carried):
+            reviewer = REVIEWER_STANDIN
+            # degrade を status の文言から読めるようにする (#400 D3-1)
+            notes.append(f"独立レビュー: {REVIEWER_STANDIN} (独立性は未回復)")
+        else:
             missing.append("独立レビューが無い (コード PR)")
-    return Verdict(ok=not missing, missing=missing, note=note)
+    elif require_independent_review:
+        notes.append("コード PR でない (独立レビュー対象外)")
+    else:
+        # 本番では通らない分岐だが、通った場合に「揃った」と書かない
+        notes.append("独立レビュー未評価")
+    return Verdict(
+        ok=not missing, missing=missing, note=" / ".join(notes), reviewer=reviewer
+    )
 
 
 # ---- ここから下は GitHub との入出力 (テスト対象は上の純粋ロジック) ----
@@ -1158,8 +1268,8 @@ def compute_carryover(
 def evaluate_gate(
     repo: str, number: int, head_sha: str, pr: dict | None = None
 ) -> GateEval:
-    """門の 3 条件 (pm-accept + head SHA / スレッド解決 / Codex) を現在の API
-    状態から評価する。イベント経路 (main) と sweep のマージ直前再評価 (Codex
+    """門の 3 条件 (pm-accept + head SHA / スレッド解決 / 独立レビュー) を現在の
+    API 状態から評価する。イベント経路 (main) と sweep のマージ直前再評価 (Codex
     P1 / PR #258) の共通実装 — 判定材料の取り方を 1 箇所にする。
 
     pm-accept の引き継ぎ判定 (ADR 0042) もここに置く — **マージ執行の経路
@@ -1172,11 +1282,10 @@ def evaluate_gate(
     changed_paths = [f["filename"] for f in files]  # type: ignore[union-attr]
     comments = gh("api", f"repos/{repo}/issues/{number}/comments", "--paginate")
     unresolved = fetch_unresolved_threads(owner, name, number)
-    # 変数名は「Codex 必須」だが、意味は「独立レビュー必須」— 担い手は Codex か
-    # 代役 judge (ADR 0052 D7)。repository variable なので改名しない (上の decide 参照)
-    require_independent_review = (
-        os.environ.get("REVIEW_GATE_REQUIRE_CODEX", "").lower() == "true"
-    )
+    # 独立レビューは常時要求 (Issue #400 D1)。旧 REVIEW_GATE_REQUIRE_CODEX
+    # (repository variable) はもう読まない — 変数の消し忘れ・typo が「静かに門が
+    # 緩む」側に倒れる設計だった上、実測で false のまま門がレビューを見ていなかった。
+    # 変数自体の削除は PO の web UI 作業だが、コードが読まなければ害は無い
     code_pr = is_code_pr(changed_paths)
     # 合否だけでなく自動再トリガー (ADR 0038) もコード PR で
     # Codex の既着を見るので、コード PR なら常に取得する
@@ -1184,7 +1293,7 @@ def evaluate_gate(
         fetch_codex_present(
             repo, number, os.environ.get("CODEX_LOGIN_PATTERN", "codex")
         )
-        if (require_independent_review or code_pr)
+        if code_pr
         else False
     )
     comment_pairs = [
@@ -1203,7 +1312,7 @@ def evaluate_gate(
         comments=comment_pairs,
         unresolved_threads=unresolved,
         codex_present=codex_present,
-        require_independent_review=require_independent_review,
+        require_independent_review=REQUIRE_INDEPENDENT_REVIEW,
         carryover=carryover,
     )
     return GateEval(
@@ -1832,6 +1941,29 @@ def evaluate_pr(
         f"review-gate → {'🟢' if verdict.ok else '🔴'} {verdict.description}"
         f" (PR head {head_sha[:7]} / status 先 {target_sha[:7]})"
     )
+    # 代役 judge で通した PR には degrade 告知を 1 回だけ貼る (Issue #400 D3-2)。
+    # status の 1 行 (D3-1) だけだと一覧を開かない限り見えない — PR 本体に痕跡を残す。
+    # **マージ執行より前**に貼る: 執行が即マージすると advisory 段に到達せず、
+    # 「代役で通ってそのままマージされた」痕跡が status にしか残らなくなる
+    if advisories and should_notice_standin_pass(
+        verdict_ok=verdict.ok,
+        reviewer=verdict.reviewer,
+        marker_posted=not still_unposted(
+            STANDIN_PASS_MARKER, [body for body, _ in ev.comment_pairs]
+        ),
+    ):
+        posted = post_advisory_once(
+            repo,
+            number,
+            STANDIN_PASS_MARKER,
+            f"{STANDIN_PASS_MARKER}\n"
+            "🟡 **この PR の独立レビュー条件は代役 judge (standin review) で"
+            "満たされました。** 代役の投稿は実装者と同じアカウントから出るため、"
+            "Codex のような別アカウントによる構造的な独立性は回復していません"
+            " (Issue #400 D3 / D4)。担い手は review-gate status の文言にも出ます。",
+        )
+        if posted:
+            print("advisory: 代役 judge で通過 — degrade 告知を投稿した (#400 D3-2)")
     if verdict.ok and execute_merge:
         # マージ執行 (ADR 0040 D1 / #253): この success status が「最後の required
         # check の緑」だった場合、GITHUB_TOKEN 起点のため GitHub の auto-merge は

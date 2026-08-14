@@ -93,7 +93,7 @@ Codex が応答できない間 ([#345](https://github.com/yomote/mind-inbox/issu
 - diff に認証・入力検証・秘密情報・インフラ (Bicep / workflow)・依存追加が含まれる場合は、あわせて security-reviewer も起動する (code-reviewer 側はセキュリティの深掘りを委譲する規約)
 - 修正 push 後は**同じ subagent を再起動して再レビュー**し、同じ指摘が再提起されないことを確認してから PM がスレッドを resolve する (規律の正典は [`merge` skill](../../.claude/skills/merge/SKILL.md))
 - **resolve する前に「対策の強さ」を見る** ([#351](https://github.com/yomote/mind-inbox/issues/351) Phase 0 — 受け取り方の修正)。judge は finding ごとに `書けなくする` (型・ラッパで封じる) / `機械に探させる` (lint・契約テスト) / `レビューで見る` (判断が要る) のどれかを宣言する ([rubric R4-b](../../.github/claude/review-rubric.md))。**前 2 つの指摘を点修正で resolve しない** — 機構に落とすか、落とす Issue を分ける。実測 62 件のうち **35.5% は機構に落とせた**のに点修正で畳まれ、`createdAt` のソート汚染 ([#274](https://github.com/yomote/mind-inbox/issues/274)) は同じ型のバグが**今も 2 箇所生きている**
-- **Codex が復帰したら指摘者を Codex に戻す** (`REVIEW_GATE_REQUIRE_CODEX` を true のまま、[Codex が復帰したら](#codex-が復帰したら))
+- **Codex が復帰したら指摘者を Codex に戻す** ([Codex が復帰したら](#codex-が復帰したら)。門の「独立レビュー 1 本」要求は常時有効なので何も切り替えない — Issue #400 D1)
 
 #### 巡回手順 (このリポジトリの正典 — Routine もこれを読んで従う)
 
@@ -124,13 +124,13 @@ Codex が応答できない間 ([#345](https://github.com/yomote/mind-inbox/issu
 
 機構としては Routine も subagent も同じ (新品コンテキストで rubric を読んで judge を回す)。違うのは「誰も見ていないときに誰が引くか」だけで、そこは当番 PM tick が埋めています。
 
-**「呼び忘れ」の受け皿は、引く仕組みではなく門です。** `REVIEW_GATE_REQUIRE_CODEX=true` なら、独立レビューが無い PR は `review-gate` が赤のままでマージできません。**引く仕組みを増やすより、門が開かないほうが確実です** (「規律は破られ、機構は守られる」)。
+**「呼び忘れ」の受け皿は、引く仕組みではなく門です。** 門 (`review-gate`) はコード PR に**独立レビュー 1 本を常時要求**します (Issue #400 D1 — 旧 `REVIEW_GATE_REQUIRE_CODEX` フラグは廃止され、環境変数では切れない)。独立レビューが無いコード PR は `review-gate` が赤のままマージできません。**引く仕組みを増やすより、門が開かないほうが確実です** (「規律は破られ、機構は守られる」)。
 
 **claude.ai 側の Routine 実体は残っています** — `delete_trigger` は `created_via: http_api` の Routine に通りません (2026-08-13 実測: `the requested resource was not found`)。**削除は PO の手作業**。それまでは enabled のまま残りますが、発火しても巡回手順に従うだけなので害はありません。
 
 #### Codex が復帰したら
 
-1. `REVIEW_GATE_REQUIRE_CODEX` は `true` のまま (門の条件は「独立レビューが 1 本」で、担い手が Codex に戻るだけ)
+1. 門の設定は何も変えない — 条件は「独立レビューが 1 本」の常時要求 (Issue #400 D1) で、担い手が Codex に戻るだけ。代役レビューを止める操作も不要 (Codex レビューが付けばそちらで緑になる)
 2. `.github/claude/review-rubric.md` と巡回手順はそのまま使える (rubric は Codex の実レビュー 215 件から導出したもの)
 3. 代役 judge は「Codex 対象外の PR」と「Codex を待てない場合の埋め合わせ」に退く
 

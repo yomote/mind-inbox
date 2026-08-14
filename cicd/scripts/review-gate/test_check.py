@@ -27,8 +27,11 @@ from check import (
     latest_pm_accept_token,
     parse_merge_group_pr,
     human_queue_issues,
+    REVIEWER_CODEX,
+    REVIEWER_STANDIN,
     STANDIN_REVIEW_MARKER,
     has_standin_review,
+    should_notice_standin_pass,
     is_bot_login,
     is_code_pr,
     is_codex_review_result,
@@ -102,9 +105,110 @@ def test_l1_コードprはcodex必須_docsは不要() -> None:
     assert decide(HEAD, docs, [ACCEPT_OK], 0, False, True).ok
 
 
-def test_l1_codexフラグが切のときは要求しない() -> None:
-    # REVIEW_GATE_REQUIRE_CODEX 未設定 (= #205 の有効化前) は advisory に留める
-    assert decide(HEAD, ["apps/bff/x.ts"], [ACCEPT_OK], 0, False, False).ok
+def test_l1_独立レビューは環境変数では切れない(monkeypatch) -> None:
+    """Issue #400 D1: 旧 REVIEW_GATE_REQUIRE_CODEX を false にしても要求は生きること。
+
+    無いと何が静かに通るか:
+        フラグが残る限り「上限が来たら false にする」経路が生き続ける。実際に
+        2026-08-13 の実測で false のまま門はレビューを一度も見ておらず、
+        status は「レビューが揃った」と出続けた (PR #338)。degrade したことは
+        Actions run のログを開かないと分からなかった。
+    """
+    assert check.REQUIRE_INDEPENDENT_REVIEW is True
+    monkeypatch.setenv("REVIEW_GATE_REQUIRE_CODEX", "false")
+
+    def fake_gh(*args):
+        path = args[1]
+        if path.endswith("/files"):
+            return [{"filename": "apps/bff/x.ts"}]
+        if path.endswith("/comments"):
+            return [
+                {"body": "[pm-accept] abc1234 — 意図どおり", "author_association": "OWNER"}
+            ]
+        raise AssertionError(f"想定外の gh 呼び出し: {args}")
+
+    monkeypatch.setattr(check, "gh", fake_gh)
+    monkeypatch.setattr(check, "fetch_unresolved_threads", lambda *a: 0)
+    monkeypatch.setattr(check, "fetch_codex_present", lambda *a: False)
+    ev = check.evaluate_gate("o/r", 1, HEAD)
+    assert not ev.verdict.ok, "env が false でも独立レビューは要求される"
+    assert any("独立レビュー" in m for m in ev.verdict.missing)
+
+
+# ---- 受け入れ行の構文一致 (Issue #380) ----
+
+
+def test_l1_380_否定文と見出しのshaでは門が開かない() -> None:
+    """Issue #380 の実物 (PR #379, 2026-08-12): 見出しに head SHA、本文末尾に
+    「[pm-accept] は押していません。」という進捗コメントに、13 秒後に
+    success が貼られた。
+
+    無いと何が静かに通るか:
+        「マーカーを含む + SHA を含む」の含有判定は文脈も否定も見ない。
+        このリポジトリの規約は [pm-accept] を頻繁に文章で参照するため、
+        攻撃なしの日常コメントで門が緑になり、常設承認と組み合わさると
+        受け入れの無い PR が黙ってマージされる。
+    """
+    body = (
+        f"### 進捗 (`{HEAD[:7]}`)\n\n"
+        "実装が完了しました。CI は緑です。\n\n"
+        "[pm-accept] は押していません。\n"
+    )
+    assert not has_pm_accept([(body, "OWNER")], HEAD)
+    assert not decide(HEAD, ["apps/bff/x.ts"], [(body, "OWNER")], 0, True, True).ok
+
+
+def test_l1_受け入れ行は行頭マーカー直後のshaだけを読む() -> None:
+    """受け入れ = 行頭 `[pm-accept] <sha>` の構文一致 (#380 案 A+B)。
+
+    無いと何が静かに通るか:
+        正の形を固定しないと、厳密化のつもりが正規の受け入れ (merge skill の
+        規定書式) まで弾いて全 PR が受け入れ不能になる。負の形を固定しないと、
+        含有判定への退行 (#380 の穴の復活) に気づけない。
+    """
+    # 正: 規定書式 (`/merge` skill) / 理由なし / 全長 SHA / 複数行コメントの中の 1 行
+    assert has_pm_accept([("[pm-accept] abc1234 — 意図どおり", "OWNER")], HEAD)
+    assert has_pm_accept([("[pm-accept] abc1234", "OWNER")], HEAD)
+    assert has_pm_accept([(f"[pm-accept] {HEAD}", "OWNER")], HEAD)
+    assert has_pm_accept([(f"確認しました。\n\n[pm-accept] {HEAD[:7]} — ok", "OWNER")], HEAD)
+    # 負: 行の途中のマーカー言及 (規約の説明文が SHA を含むだけ)
+    assert not has_pm_accept(
+        [(f"マージには [pm-accept] {HEAD[:7]} の投稿が必要です", "OWNER")], HEAD
+    )
+    # 負: マーカーと SHA が別の場所 (含有判定なら通っていた形)
+    assert not has_pm_accept(
+        [(f"`{HEAD[:7]}` を確認中。\n[pm-accept] はまだです", "OWNER")], HEAD
+    )
+
+
+def test_l1_引用とコードフェンス内の受け入れ行は数えない() -> None:
+    """無いと何が静かに通るか:
+        引用: 第三者の偽受け入れを権限保持者が Quote reply すると association が
+        OWNER に化けて門が開く (standin マーカーで実測済みの経路と同型)。
+        フェンス: 書式説明で skill の例文を貼っただけのコメントが受け入れになる
+        (#380 と同じ「言及を宣言と読む」誤爆)。
+    """
+    quoted = (f"> [pm-accept] {HEAD[:7]} — ok\n\n引用を確認しました", "OWNER")
+    fenced = (f"書式はこうです:\n```\n[pm-accept] {HEAD[:7]} — 理由\n```", "OWNER")
+    assert not has_pm_accept([quoted], HEAD)
+    assert not has_pm_accept([fenced], HEAD)
+
+
+def test_l1_トークン抽出も構文一致で行頭の保留宣言を尊重する() -> None:
+    """carryover (ADR 0042) の起点も受け入れ行の構文で選ぶこと。
+
+    無いと何が静かに通るか:
+        含有判定のままだと「[pm-accept] は押していません」という保留コメントが
+        最新の受け入れとして読まれ、そこに hex らしき語があれば引き継ぎの起点に
+        すらなる (#380 の穴が門ではなく carryover 側から開く)。
+    """
+    accept = ("[pm-accept] aaa1111 — ok", "OWNER")
+    hold = ("[pm-accept] は押していません。理由: レビュー待ち", "OWNER")
+    prose = ("`[pm-accept]` の書式は merge skill を見てください", "OWNER")
+    # 行頭の保留宣言 (SHA なし) は最新の意思 — 古い受け入れへ遡らない
+    assert latest_pm_accept_token([accept, hold]) is None
+    # 地の文・インラインコードの言及は素通しして、直近の正規の受け入れを読む
+    assert latest_pm_accept_token([accept, prose]) == "aaa1111"
 
 
 # ---- 代役 judge の独立レビュー (ADR 0052 D7) ----
@@ -236,6 +340,68 @@ def test_l1_引き継ぎが不成立なら代役レビューは失効する() ->
     v = decide(HEAD, ["apps/bff/x.ts"], [ACCEPT_OK, old_review], 0, False, True, failed)
     assert not v.ok
     assert any("独立レビュー" in m for m in v.missing)
+
+
+def test_l1_代役マーカーは行頭の行だけ数える() -> None:
+    """standin マーカーにも #380 と同型の構文厳密化が効くこと。
+
+    無いと何が静かに通るか:
+        含有判定のままだと、書式の説明 (インラインコード / フェンス内の
+        rubric 必須ヘッダの例文) に head SHA が並んだだけの権限保持者コメントが
+        独立レビューになる — レビューされていないコード PR の門が開く。
+    """
+    inline = (f"`{STANDIN_REVIEW_MARKER}` を貼ってください ({HEAD[:7]})", "OWNER")
+    fenced = (
+        f"必須ヘッダ:\n```\n{STANDIN_REVIEW_MARKER}\n代役レビュー ({HEAD[:7]})\n```",
+        "OWNER",
+    )
+    assert not has_standin_review([inline], HEAD)
+    assert not has_standin_review([fenced], HEAD)
+    # rubric (review-rubric.md Part 6) の必須ヘッダ書式はそのまま数える
+    rubric_form = (
+        f"{STANDIN_REVIEW_MARKER}\n\n**代役レビュー (`{HEAD[:7]}`)** — "
+        "Codex 不在の埋め合わせであり、独立性は回復していません",
+        "OWNER",
+    )
+    assert has_standin_review([rubric_form], HEAD)
+
+
+def test_l1_緑のstatusは担い手を明示する() -> None:
+    """Issue #400 P1 / D3-1: 何で門が通ったかが status の文言から読めること。
+
+    無いと何が静かに通るか:
+        固定文言「レビューが揃った」は、レビューを一度も見ていない PR (#338) にも
+        出て嘘になった。degrade (代役で通った / レビュー対象外) が status から
+        見えないと、独立性が落ちたまま誰も気づかない (#400 の PO 裁定の実体)。
+    """
+    code = ["apps/bff/x.ts"]
+    by_codex = decide(HEAD, code, [ACCEPT_OK], 0, True, True)
+    assert by_codex.ok and by_codex.reviewer == REVIEWER_CODEX
+    assert "独立レビュー: Codex" in by_codex.description
+    by_standin = decide(HEAD, code, [ACCEPT_OK, STANDIN_OK], 0, False, True)
+    assert by_standin.ok and by_standin.reviewer == REVIEWER_STANDIN
+    assert "代役 judge" in by_standin.description
+    assert "未回復" in by_standin.description, "degrade を成功の顔で書かない"
+    docs = decide(HEAD, ["docs/x.md"], [ACCEPT_OK], 0, False, True)
+    assert docs.ok and docs.reviewer == ""
+    assert "コード PR でない" in docs.description
+    # 固定文言は返さない (見ていないものを「揃った」と書かない)
+    assert "レビューが揃った" not in docs.description
+
+
+def test_l1_代役通過の告知は代役で通ったときだけ1回() -> None:
+    """Issue #400 D3-2: degrade 告知の発火条件。
+
+    無いと何が静かに通るか:
+        条件の退行は「Codex で通った PR にも毎回貼るノイズ」か「代役で通ったのに
+        黙る (= 可視化の欠落)」に倒れ、どちらも run は緑のまま。
+    """
+    ok = dict(verdict_ok=True, reviewer=REVIEWER_STANDIN, marker_posted=False)
+    assert should_notice_standin_pass(**ok)
+    assert not should_notice_standin_pass(**{**ok, "verdict_ok": False})
+    assert not should_notice_standin_pass(**{**ok, "reviewer": REVIEWER_CODEX})
+    assert not should_notice_standin_pass(**{**ok, "reviewer": ""})
+    assert not should_notice_standin_pass(**{**ok, "marker_posted": True}), "1 回だけ"
 
 
 def test_l1_独立レビュー不足の文言は担い手を限定しない() -> None:
