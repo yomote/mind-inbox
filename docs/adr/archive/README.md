@@ -1,9 +1,11 @@
 # ADR archive — 「ADR ではなかったもの」の置き場
 
 > ここにあるのは **ADR ではありません**。過去に ADR として書かれたが、
-> アーキテクチャ判断ではなく**開発の運用・プロセスの決め事**だったものを退避した場所です。
+> アーキテクチャ判断ではなく**開発の運用・プロセスの決め事**、または
+> **開発設備 (CI / 資格情報) の運用判断**だったものを退避した場所です。
 >
 > **現行のルールはここにはありません。** 今どう動かすかは [`CLAUDE.md`](../../../CLAUDE.md) を見てください。
+> 開発設備の運転条件は [`docs/runbooks/`](../../runbooks/README.md) が持ちます。
 
 ## なぜ分けたか
 
@@ -27,6 +29,26 @@
 さらに、退避対象の内容は `CLAUDE.md` にも要約されて二重管理になっていました。片方を直しても
 もう片方に古い記述が残るため、`CLAUDE.md` の本文に「〜は誤り」「〜は撤回」という取り消し線が
 溜まっていく原因になっていました。
+
+### 追加の退避 (2026-08-14) — 開発設備の運用判断も ADR ではない
+
+29 本の一斉退避 ([PR #385](https://github.com/yomote/mind-inbox/pull/385)) の翌々日、
+**2026-08-14 の debrief で PO が旧 0054 を「そもそも ADR か?」と問い**、
+「これはシステムアーキテクチャではなく**開発設備 (CI 資格情報) の運用判断**なので ADR ではない」
+と裁定しました。#385 が引いた分類基準を PO 自身が適用した形です。
+
+初回の 29 本が「エージェントの回し方 = 運用・プロセス」だったのに対し、旧 0054 は
+**プロダクトの構成ではないもの (調査用の CI 資格情報をどのブランチに紐づけるか)** でした。
+プロダクトの構成を決めていない以上、不変記録の棚には載りません。
+
+**この退避は Status の変更ではありません。** `Proposed` のまま凍結してあり、
+Accept も Reject もしていません (分類のやり直しであって裁定ではないため)。
+ただし旧 0054 は**現に守るべき制約 (受容の条件 4 つ) を持っていた**ので、そこだけは
+凍結した記録に置いたままにできません。**正典を Runbook へ移しました**:
+
+- 条件の正典 → [`docs/runbooks/azure-oidc-cd-setup.md` 「read-only 識別の受容条件 (正典)」](../../runbooks/azure-oidc-cd-setup.md#read-only-識別の受容条件-正典)
+- 恒久解 → [#405](https://github.com/yomote/mind-inbox/issues/405) (GitHub Environments ベースへの移行。
+  移行が終わると「保護なしブランチに資格情報が紐づく」構図そのものが消える)
 
 ## ファイル名から番号を落としてある
 
@@ -53,10 +75,10 @@
 - **0049** — open PR [#342](https://github.com/yomote/mind-inbox/pull/342) にあり、main には未着地
 - **0050 / 0051** — main に存在しない。**退役でも欠番でもなく、着地しなかった採番**
   (未マージのブランチで取られ、PR も無い)。`retired-numbers.txt` には**載せない** —
-  この一覧が持つのは退避した 29 本だけ。参照している docs はもう無い
+  この一覧が持つのは退避した 30 本だけ。参照している docs はもう無い
   (`debt-check` の `broken-doc-links` が 0 件)。番号自体は取られているので**再利用しない**
 
-## 退避した 29 本
+## 退避した 30 本
 
 | 旧番号 | ファイル | 内容 |
 | --- | --- | --- |
@@ -89,16 +111,19 @@
 | 0048 | [child-sessions-are-usable-again-with-a-one-way-poke-channel.md](operations/child-sessions-are-usable-again-with-a-one-way-poke-channel.md) | 子セッションは再び起動できる — 会話は Routine 経由で片道 1 分なので、分配先は往復の少ない作業に限る |
 | 0052 | [codex-derived-review-rubric-and-stand-in-judge.md](operations/codex-derived-review-rubric-and-stand-in-judge.md) | PR レビューの基準を Codex の実レビュー 215 件から導出し、Codex 不在の間は代役 judge が読む |
 | 0053 | [synthetic-user-exploration-poc.md](operations/synthetic-user-exploration-poc.md) | 合成ユーザーによる探索テストは「採点が繋がってから」「週 1 手動 1 回」から始める |
+| 0054 | [readonly-investigation-identity-on-unprotected-branch.md](operations/readonly-investigation-identity-on-unprotected-branch.md) | 調査用 read-only ID を保護のないブランチ (`ops/inspect`) に紐づける — **2026-08-14 の debrief で追加退避** (開発設備の運用判断)。条件の正典は [Runbook](../../runbooks/azure-oidc-cd-setup.md#read-only-識別の受容条件-正典) / 恒久解は [#405](https://github.com/yomote/mind-inbox/issues/405) |
 
 ## ここに置いたものの扱い
 
 - **消していません。** 過去の判断がなぜそうなったかを追う必要が出たら読んでください
 - **`Status:` 行は更新しません。** 退避時点の状態のまま凍結しています。
-  **`Proposed` のまま入った 3 本は、ADR としては裁定されません** —
+  **`Proposed` のまま入った 4 本は、ADR としては裁定されません** —
   [`pm-accept-carryover-and-merge-queue.md`](operations/pm-accept-carryover-and-merge-queue.md) (旧 0042) /
   [`security-posture-in-layers-free-tier-first.md`](operations/security-posture-in-layers-free-tier-first.md) (旧 0047) /
-  [`codex-derived-review-rubric-and-stand-in-judge.md`](operations/codex-derived-review-rubric-and-stand-in-judge.md) (旧 0052)。
-  **これらの中身のうち現に運用されているもの** (pm-accept の引き継ぎ / 代役 judge によるレビュー) は、
-  現行ルールとして [`/merge` skill](../../../.claude/skills/merge/SKILL.md) と
-  [`docs/team.md`](../../team.md) が持っています。**ここを裁定しに来ないでください**
+  [`codex-derived-review-rubric-and-stand-in-judge.md`](operations/codex-derived-review-rubric-and-stand-in-judge.md) (旧 0052) /
+  [`readonly-investigation-identity-on-unprotected-branch.md`](operations/readonly-investigation-identity-on-unprotected-branch.md) (旧 0054)。
+  **これらの中身のうち現に運用されているもの** (pm-accept の引き継ぎ / 代役 judge によるレビュー /
+  read-only 識別の受容条件) は、現行ルールとして [`/merge` skill](../../../.claude/skills/merge/SKILL.md) /
+  [`docs/team.md`](../../team.md) / [`azure-oidc-cd-setup.md`](../../runbooks/azure-oidc-cd-setup.md)
+  が持っています。**ここを裁定しに来ないでください**
 - **ここを直して運用を変えようとしないでください。** 現行ルールの置き場は `CLAUDE.md` です
