@@ -1,0 +1,191 @@
+name: github-terraform-check
+
+# `cicd/github/terraform/` の Terraform 宣言を機械検証する (Issue #390 A-1)。
+#
+# なぜ CI が要るか: **`.tf` を触る全員に同じ検証を強制できる場所がここしかない**。
+#   ローカルで回せるかどうかは環境次第で変わる (registry.terraform.io は
+#   2026-08-14 朝の時点では egress ポリシーで 403 だったが、同日中に開通して
+#   `terraform init` / `validate` がエージェント環境でも通るようになった)。
+#   「回せる環境の人が回したはず」は検証ではないので、PR ごとに機械で通す。
+#   (iac-validate.yml が bicep CLI について同じ位置にいるのと同型。)
+#
+# ⚠️ **この workflow は `terraform plan` を実行しません。** plan は GitHub の
+#    管理系 API を読むためトークンが要り、**そのトークンをどこに置くかが未決定**
+#    だからです (#390 に needs-human として問いを残してある)。選択肢は
+#    docs/runbooks/github-terraform.md。
+#    **「plan が通った」とは書きません** — 回していないものを緑と書かないため、
+#    実行しなかった事実を毎回サマリに出します (CLAUDE.md「取れなかったものを
+#    『異常なし』と書かない」)。
+#
+# 🔒 apply は**この workflow からは絶対にしない**。#390 の PO 裁定は「宣言 + plan
+#    まで」、実 apply は #387 (needs-human) の裁定が先。
+
+on:
+  pull_request:
+    paths:
+      - "cicd/github/terraform/**"
+      - ".github/workflows/github-terraform-check.yml"
+  push:
+    branches: [main]
+    paths:
+      - "cicd/github/terraform/**"
+      - ".github/workflows/github-terraform-check.yml"
+
+# 読み取りだけ。GitHub の設定には一切触らない。
+permissions:
+  contents: read
+
+env:
+  TF_VERSION: "1.9.8"
+  # releases.hashicorp.com が配る公式 SHA256SUMS の値。
+  # 実測 2026-08-14: ダウンロードした zip の sha256sum と一致することを確認済み。
+  TF_SHA256: "186e0145f5e5f2eb97cbd785bc78f21bae4ef15119349f6ad4fa535b83b10df8"
+  TF_DIR: cicd/github/terraform
+
+jobs:
+  fmt-validate:
+    name: Terraform 宣言を検証する (fmt / validate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # setup-terraform action ではなく直接取る。理由: 版とチェックサムを
+      # この yml の中で固定でき、action の SHA ピン更新に追われない。
+      - name: terraform を入れる (チェックサム検証つき)
+        run: |
+          set -euo pipefail
+          url="https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip"
+          curl -fsSL -o /tmp/terraform.zip "$url"
+          echo "${TF_SHA256}  /tmp/terraform.zip" | sha256sum -c -
+          unzip -q -o /tmp/terraform.zip -d /tmp/tfbin
+          sudo install -m 0755 /tmp/tfbin/terraform /usr/local/bin/terraform
+          terraform version
+
+      # fmt は HCL をパースするので、構文エラーと整形崩れをここで落とす。
+      # **引数名が正しいかは見ていない** (それは validate の仕事)。
+      - name: terraform fmt -check
+        id: tf-fmt
+        run: terraform -chdir=${{ env.TF_DIR }} fmt -check -diff -recursive
+
+      # **provider をハッシュで固定しているのはこのファイルだけ**。
+      # `versions.tf` の `~> 6.13` は「6.13 以上 7.0 未満の何か」しか言えず、
+      # 同じ版を名乗る別バイナリを弾けない。
+      #
+      # なぜ独立したステップとして落とすか: ロックファイルが無くても
+      # `terraform init` は黙って生成して **成功する**。そのままだと
+      # 「ハッシュ固定されていないのに CI は緑」が通り、しかもロックファイルは
+      # runner 上にしか残らないので、誰も気づかないまま繰り返される。
+      # ここで非ゼロ終了させて、その通り道を塞ぐ。
+      - name: .terraform.lock.hcl が commit されていることを確かめる
+        id: tf-lock
+        run: |
+          set -euo pipefail
+          lock="${TF_DIR}/.terraform.lock.hcl"
+          if ! git ls-files --error-unmatch "$lock" > /dev/null 2>&1; then
+            echo "::error file=${lock}::provider のロックファイルが git に登録されていません。provider がハッシュで固定されていないので、この run は落とします。"
+            echo "生成して commit してください:"
+            echo "  terraform -chdir=${TF_DIR} providers lock \\"
+            echo "    -platform=linux_amd64 -platform=linux_arm64 \\"
+            echo "    -platform=darwin_amd64 -platform=darwin_arm64"
+            exit 1
+          fi
+          echo "登録済み: $lock"
+
+      # -backend=false: state のバックエンドは未決定 (#390 の ADR 案件) なので触らない。
+      # -lockfile=readonly: **ロックファイルをこの run で書き換えさせない**。
+      #   版制約とロックファイルが食い違っていたら、黙って更新せず init を落とす
+      #   (= 版を上げてロックファイルを更新し忘れた PR がここで止まる)。
+      #   runner の platform (linux_amd64) のハッシュが無い場合も落ちる。
+      - name: terraform init (-backend=false -lockfile=readonly)
+        id: tf-init
+        run: terraform -chdir=${{ env.TF_DIR }} init -backend=false -lockfile=readonly -input=false -no-color
+
+      - name: terraform validate
+        id: tf-validate
+        run: terraform -chdir=${{ env.TF_DIR }} validate -no-color
+
+      # 上の init が検証したのは **runner の platform (linux_amd64) の分だけ**。
+      # 他 platform のハッシュが欠けていても壊れていても、init は
+      # 「Provider lock file not updated」の **warning を出して exit 0 で通る**
+      # (実測 2026-08-14 / Terraform 1.9.8)。それだと PO のローカル (darwin) は
+      # ハッシュ検証なしで provider を入れることになり、緑のまま穴が空く。
+      #
+      # そこでロックファイルを 4 platform 分作り直し、commit 済みの内容と
+      # **1 バイトでも違えば落とす**。同じ版から作り直せば出力は決定的
+      # (実測: 同一ファイルが再生成される)。落ちるのは次のとき:
+      #   - どれかの platform のハッシュが欠けている / 手で書き換えられている
+      #   - 版を上げてロックファイルの更新を忘れた
+      - name: ロックファイルが 4 platform 分そろっていることを確かめる
+        id: tf-lock-complete
+        run: |
+          set -euo pipefail
+          lock="${TF_DIR}/.terraform.lock.hcl"
+          terraform -chdir=${TF_DIR} providers lock \
+            -platform=linux_amd64 -platform=linux_arm64 \
+            -platform=darwin_amd64 -platform=darwin_arm64
+          if ! git diff --exit-code -- "$lock"; then
+            echo "::error file=${lock}::commit されているロックファイルが、この版から生成される内容と一致しません (上が差分)。ハッシュ固定が効いていない platform があります。同じコマンドをローカルで回して commit し直してください。"
+            exit 1
+          fi
+
+      # 回していないものを緑と書かない。plan を実行しなかった事実を毎回残す。
+      #
+      # このステップは `if: always()` で、**失敗した run でも動く**。だから
+      # 「provider のスキーマに対して妥当」を無条件に書いてはいけない
+      # (fmt/init が落ちた run では validate は skipped で、何も検証できていない)。
+      # 各ステップの outcome を見て、成立した分だけを書き、成立しなかった分は
+      # `未検証:` として出す (CLAUDE.md「取れなかったものを『異常なし』と書かない」)。
+      - name: どこまで検証できたか / plan を実行していないことを明示する
+        if: always()
+        env:
+          FMT_OUTCOME: ${{ steps.tf-fmt.outcome }}
+          LOCK_OUTCOME: ${{ steps.tf-lock.outcome }}
+          INIT_OUTCOME: ${{ steps.tf-init.outcome }}
+          VALIDATE_OUTCOME: ${{ steps.tf-validate.outcome }}
+          LOCK_COMPLETE_OUTCOME: ${{ steps.tf-lock-complete.outcome }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## この run で検証できたこと"
+            echo ""
+            echo "| ステップ | 結果 |"
+            echo "| --- | --- |"
+            echo "| \`terraform fmt -check\` | \`${FMT_OUTCOME}\` |"
+            echo "| \`.terraform.lock.hcl\` が commit されている | \`${LOCK_OUTCOME}\` |"
+            echo "| \`terraform init -backend=false -lockfile=readonly\` | \`${INIT_OUTCOME}\` |"
+            echo "| \`terraform validate\` | \`${VALIDATE_OUTCOME}\` |"
+            echo "| ロックファイルが 4 platform 分そろっている | \`${LOCK_COMPLETE_OUTCOME}\` |"
+            echo ""
+            if [ "${FMT_OUTCOME}" = "success" ] && [ "${LOCK_OUTCOME}" = "success" ] \
+              && [ "${VALIDATE_OUTCOME}" = "success" ] && [ "${LOCK_COMPLETE_OUTCOME}" = "success" ]; then
+              echo "✅ 言えているのは **「HCL が整形済みで、ハッシュで固定した provider のスキーマに対して妥当」** まで。"
+            else
+              # 最初に success でなかったステップを名指しする。以降は skipped になるため。
+              if [ "${FMT_OUTCOME}" != "success" ]; then
+                blocked="terraform fmt -check (${FMT_OUTCOME})"
+              elif [ "${LOCK_OUTCOME}" != "success" ]; then
+                blocked=".terraform.lock.hcl の登録確認 (${LOCK_OUTCOME}) — provider がハッシュで固定されていない"
+              elif [ "${INIT_OUTCOME}" != "success" ]; then
+                blocked="terraform init (${INIT_OUTCOME})"
+              elif [ "${VALIDATE_OUTCOME}" != "success" ]; then
+                blocked="terraform validate (${VALIDATE_OUTCOME})"
+              else
+                blocked="ロックファイルの platform 網羅 (${LOCK_COMPLETE_OUTCOME}) — ハッシュ固定が効いていない platform がある"
+              fi
+              echo "❌ **未検証: ${blocked}**。"
+              echo ""
+              echo "上の表で \`success\` でない行は、**この run では確認できていません**。"
+              echo "この run を「宣言は妥当」としてまとめないでください。"
+            fi
+            echo ""
+            echo "## terraform plan: **未実行**"
+            echo ""
+            echo "理由: plan は GitHub の管理系 API を読むためトークンが要り、"
+            echo "**そのトークンをどこに置くかが未決定**です (Issue #390 に needs-human として残してある)。"
+            echo ""
+            echo "- したがって **この run は成否によらず「宣言と現実が一致している」ことを何も言っていません**。"
+            echo "- 選択肢と決め方: \`docs/runbooks/github-terraform.md\`"
+            echo "- 未取得のまま宣言から外している項目 (ruleset ほか): \`cicd/github/terraform/README.md\`"
+          } >> "$GITHUB_STEP_SUMMARY"

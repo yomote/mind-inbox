@@ -1,5 +1,20 @@
 # 0054. 調査用 read-only ID は保護のないブランチに紐づける (トレードオフを明示して受容する)
 
+> **これは ADR ではありません。** 2026-08-14 の debrief で PO が「これはシステム
+> アーキテクチャではなく**開発設備 (CI 資格情報) の運用判断**なので ADR ではない」と裁定し、
+> ここへ退避しました ([archive の分類基準](../README.md) / 交通整理は
+> [PR #385](https://github.com/yomote/mind-inbox/pull/385))。
+> **Status の変更ではありません** — Accept も Reject もしていないので、
+> 下の `Status: Proposed` は退避時点のまま凍結してあります。
+>
+> - **現に守るべき「受容の条件 4 つ」の正典は Runbook にあります** →
+>   [`docs/runbooks/azure-oidc-cd-setup.md` 「read-only 識別の受容条件 (正典)」](../../../runbooks/azure-oidc-cd-setup.md#read-only-識別の受容条件-正典)。
+>   条件を外す・広げるときはこのファイルではなく Runbook を直してください
+> - **恒久解は [#405](https://github.com/yomote/mind-inbox/issues/405)** (GitHub Environments
+>   ベースへの移行)。`ops/inspect` という保護なしブランチへの紐づけ自体が消えるため、
+>   下のトレードオフは移行完了時点で失効します
+> - 以下は**退避時点の記録**です。経緯を追う目的でだけ読んでください
+
 - Status: Proposed
 - Date: 2026-08-12
 - Deciders: PO (yomote), PM セッション
@@ -21,7 +36,7 @@ Azure を「読む」だけの確認 (リソース一覧・コスト・ログ) �
 成立しない**。結果として「保護のないブランチに push できること」＝「サブスクリプション スコープの
 Reader / Cost Management Reader / Log Analytics Reader を取得できること」になる。
 
-これは構成上のトレードオフであり、[CLAUDE.md](../../CLAUDE.md) の「アーキテクチャに関わる判断は
+これは構成上のトレードオフであり、[CLAUDE.md](../../../../CLAUDE.md) の「アーキテクチャに関わる判断は
 ADR を先に書く」に該当する。PR #222 のレビューで指摘され、記録が無いまま進めないために本 ADR を置く。
 
 ## Decision Drivers
@@ -119,5 +134,6 @@ Chosen option: **"Option B"**, because 用途 (調査のたびに直 push) と�
 
 - PR: <https://github.com/yomote/mind-inbox/pull/222>
 - Issue: <https://github.com/yomote/mind-inbox/issues/209> / 関連: <https://github.com/yomote/mind-inbox/issues/46>
-- Runbook: [azure-oidc-cd-setup.md](../runbooks/azure-oidc-cd-setup.md)
-- 関連 ADR: [0006](0006-azure-access-via-device-code.md) / [0031](archive/operations/agent-reaches-outside-via-github-actions.md) / [0035](archive/operations/role-split-across-agents-and-actions.md) (0031 / 0035 は #385 で `archive/operations/` へ退避済み — 現行ルールではない)
+- Runbook: [azure-oidc-cd-setup.md](../../../runbooks/azure-oidc-cd-setup.md) — **受容の条件 4 つの正典はこちら**
+- 後継 Issue: <https://github.com/yomote/mind-inbox/issues/405> (GitHub Environments ベースへの移行 = 恒久解)
+- 関連 ADR: [0006](../../0006-azure-access-via-device-code.md) / [0031](agent-reaches-outside-via-github-actions.md) / [0035](role-split-across-agents-and-actions.md) (0031 / 0035 は #385 で `archive/operations/` へ退避済み — 現行ルールではない)

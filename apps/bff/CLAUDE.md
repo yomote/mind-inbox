@@ -34,6 +34,17 @@ AI Agent への薄いプロキシではなく、**アーティファクト生成
 
 新しい外部依存を足すときも**未設定で動く経路を必ず用意する**。「設定されていなければ落ちる」にすると、ローカルとテストが同時に死ぬ。
 
+## ログは相談の本文を運ばない
+
+実環境の BFF のログは Application Insights / Log Analytics に 30 日残り、Azure のロールを持つ人なら誰でも読める。**相談の本文 (発話 / 応答 / statement / excerpt / title / summary) をそこへ出さない。**
+
+- **テレメトリの出口は [`src/observability/telemetry.ts`](src/observability/telemetry.ts) 1 箇所**。`console.log` を直接書かない — Functions v4 では console はどの invocation の話か紐づかず、並行リクエストで突き合わせ不能になる
+- 出せるフィールドは同ファイルの `ALLOWED_FIELDS` が持つ。**そこに無い名前は値ごと捨てられ `dropped=<名前>` だけが残る**。足したい名前が無いなら、それは本文である可能性が高い
+- **ID (`sessionId` / `userId`) は呼び出し側でハッシュしない** — 出口の `HASHED_FIELDS` が `sessionHash=` / `userHash=` に変える。`sessionId` はスキーマが長さしか見ていない自由文字列で、**相関キーの顔をして本文を運べる** (#413)
+- **許可リストはアプリが書いた行にしか効かない** — Functions ホストは `telemetry.ts` を通さず `AppRequests` に**受信 URL をそのまま**入れる。tRPC の query 入力は URL に載るので、[`host.json`](host.json) の `enableHttpTriggerExtendedInfoCollection: false` を**戻さない** (#413)
+- 何を記録し何を落とすかの正典は [`docs/runbooks/bff-telemetry.md`](../../docs/runbooks/bff-telemetry.md)
+- 下流ホップは `trackDependency` で挟む。**開始と終了を対で出す** — 終了だけにすると「呼んだが返ってこなかった」が沈黙になり、正常時の沈黙と混ざる (#293)
+
 ## 型は zod が真実、OpenAPI は生成物
 
 - tRPC ルータの zod スキーマが API の正典。**`docs/api/` の OpenAPI は手書きしない** — `npm run docs:openapi` で再生成する。

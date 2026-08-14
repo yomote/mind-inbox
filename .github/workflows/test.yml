@@ -210,6 +210,18 @@ jobs:
             exit 1
           }
 
+      # ai-agent の OpenAPI (#9 / #82) — 真実は FastAPI route + pydantic。
+      # 生成物 (docs/api/ai-agent.yaml) を commit させ、乖離をここで赤にする。
+      - name: Docs OpenAPI (ai-agent) regen + diff
+        id: openapi_ai_agent
+        continue-on-error: true
+        run: |
+          npm run docs:openapi:ai-agent
+          git diff --exit-code docs/api/ai-agent.yaml || {
+            echo "::error::docs/api/ai-agent.yaml が FastAPI の実装と乖離しています。ローカルで 'npm run docs:openapi:ai-agent' を実行して commit してください。"
+            exit 1
+          }
+
       - name: Build summary
         run: |
           fmt() {
@@ -229,6 +241,7 @@ jobs:
             echo "| Build BFF (tsc)                            | $(fmt ${{ steps.build_bff.outcome }}) | \`npm --prefix apps/bff run build\` |"
             echo "| Build Frontend (tsc + vite)                | $(fmt ${{ steps.build_frontend.outcome }}) | \`pnpm --dir apps/frontend run build\` |"
             echo "| OpenAPI (BFF) 再生成 + diff                 | $(fmt ${{ steps.openapi_bff.outcome }}) | \`npm run docs:openapi:bff\` |"
+            echo "| OpenAPI (ai-agent) 再生成 + diff            | $(fmt ${{ steps.openapi_ai_agent.outcome }}) | \`npm run docs:openapi:ai-agent\` |"
             echo ""
             echo "戦略: [docs/testing/strategy.md §5.3](https://github.com/yomote/mind-inbox/blob/main/docs/testing/strategy.md)"
           } | tee lint-build-comment.md >> "$GITHUB_STEP_SUMMARY"
@@ -247,7 +260,8 @@ jobs:
           if [ "${{ steps.lint.outcome }}" != "success" ] || \
              [ "${{ steps.build_bff.outcome }}" != "success" ] || \
              [ "${{ steps.build_frontend.outcome }}" != "success" ] || \
-             [ "${{ steps.openapi_bff.outcome }}" != "success" ]; then
+             [ "${{ steps.openapi_bff.outcome }}" != "success" ] || \
+             [ "${{ steps.openapi_ai_agent.outcome }}" != "success" ]; then
             echo "::error::Lint or build check failed"
             exit 1
           fi

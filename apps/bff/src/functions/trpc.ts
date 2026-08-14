@@ -13,8 +13,8 @@ async function trpcHandler(
   req: HttpRequest,
   context: InvocationContext,
 ): Promise<HttpResponseInit> {
-  context.log(`[trpcHandler] ${req.method} ${req.url}`);
-
+  // リクエストの開始・終了・所要時間は `handlers.ts` の trackRequest が出す
+  // (ローカル配信サーバと同じ行になるように / #307)。ここでは重複して出さない。
   const response = await handleTrpc(await toFetchRequest(req), contextLogger(context));
   return await toHttpResponseInit(response);
 }

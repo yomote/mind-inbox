@@ -1,11 +1,14 @@
 # Infra 運用手順（Bootstrap / Config 分離）
 
-このディレクトリでは、次の 2 つのエントリで Azure インフラを管理します。
+このディレクトリでは、次のエントリで Azure インフラを管理します。
 
-- [main-bootstrap.bicep](main-bootstrap.bicep): 初回構築と基盤更新
+- [main-shared.bicep](main-shared.bicep): **持続層**（消えると困るもの / 別 RG に一度きり）
+- [main-bootstrap.bicep](main-bootstrap.bicep): 初回構築と基盤更新（**環境層**）
 - [main-config.bicep](main-config.bicep): 認証など後追い設定
 
-対象スコープは resource group です。
+対象スコープはいずれも resource group です。**適用順は shared → bootstrap → config**
+（[ADR 0003](../../docs/adr/0003-two-phase-bicep.md) の 2 フェーズは環境層の中の話で、
+その前段に持続層が 1 つ増えた形。順序を入れ替えない）。
 
 ## 目次
 
@@ -13,6 +16,7 @@
   - [目次](#目次)
   - [0. 最短ルート（初回）](#0-最短ルート初回)
   - [1. 前提](#1-前提)
+  - [1-5. 持続層（rg-shared-mindbox / 一度きり）](#1-5-持続層rg-shared-mindbox--一度きり)
   - [2. Bootstrap（基盤作成 / 更新）](#2-bootstrap基盤作成--更新)
     - [命名規則（既定値）](#命名規則既定値)
     - [2-1. 事前確認（build + what-if）](#2-1-事前確認build--what-if)
@@ -83,6 +87,49 @@ az login
 az account set --subscription "<subscription-name-or-id>"
 az bicep version
 ```
+
+---
+
+## 1-5. 持続層（rg-shared-mindbox / 一度きり）
+
+**環境の撤収で消してはいけないものを、環境層とは別の RG に置きます**
+（[ADR 0046](../../docs/adr/0046-environment-rebuildable-from-declaration.md) D1 /
+[#302](https://github.com/yomote/mind-inbox/issues/302)）。宣言は
+[main-shared.bicep](main-shared.bicep)、値は [main-shared.parameters.json](main-shared.parameters.json)。
+
+| 層             | RG                     | 中身                                                                                             | 撤収              |
+| -------------- | ---------------------- | ------------------------------------------------------------------------------------------------ | ----------------- |
+| **持続層**     | `rg-shared-mindbox`    | Key Vault（+ E2E trace 復号鍵）/ バックアップ Storage / Cosmos / OpenAI / Speech / Log Analytics | ❌ **触らない**   |
+| **環境層**     | `rg-dev-mind-inbox`    | SWA / Functions / Container Apps                                                                 | ✅ 壊して作り直す |
+| **デプロイ層** | （リソースを作らない） | image の sha 差し替え / zip deploy / 静的配信                                                    | —                 |
+
+**適用手順は [`docs/runbooks/persistent-layer-apply.md`](../../docs/runbooks/persistent-layer-apply.md)**（一度きりの手動オペ。持続層の RG は `provision.sh` / `cleanup-env.sh` のどちらも触りません）。ここには構成と `enable*` の考え方だけを置きます。
+
+### 段階適用（`enable*` の既定がなぜこうなっているか）
+
+**既定で作るのは「まだどこにも無いもの」だけ**（Key Vault + 鍵 + バックアップ Storage）。
+`enableCosmos` / `enableOpenAi` / `enableSpeech` / `enableLogAnalytics` は**既定 `false`** です。
+これらは現在 `rg-dev-mind-inbox` に実在しており、Cosmos の無料枠と Speech F0 は
+**1 サブスクに 1 つ**なので、移行前に `true` にするとデプロイが落ちます。
+**RG 間の移動そのものは本テンプレートの担当ではありません**（[#302](https://github.com/yomote/mind-inbox/issues/302) の「段階的に切り出す」）。
+
+### E2E trace の復号鍵（[#301](https://github.com/yomote/mind-inbox/issues/301) / ADR 0045 D5）
+
+Key Vault に **secret ではなく「鍵オブジェクト」を非エクスポートで**宣言しています
+（`attributes.exportable: false`）。復号は `az keyvault key decrypt` で **Key Vault の中**で
+行い、秘密鍵は一度も外に出ません。鍵を使う人には
+**Key Vault Crypto User** だけを与えます（`keyVaultCryptoUserPrincipalIds` に object ID を渡す）。
+**封筒暗号のスクリプト実装は別 PR**です（ここは器だけ）。
+
+鍵の URI（kid）の取り出し方は [runbook](../../docs/runbooks/persistent-layer-apply.md#steps) にあります（output `e2eTraceKeyUri`）。
+
+### 撤収との関係
+
+`cleanup-env.sh` は**持続層 RG を削除できません**（どのフラグでも通りません）。
+また環境層 RG の中に持続層のリソースが残っている間も、**何も消さずに拒否**します。
+詳細は [`../scripts/env/README.md`](../scripts/env/README.md#持続層ガード--何も消さずに拒否する条件-adr-0046-d1--302)。
+
+このテンプレートが作るリソースには**層タグ `mindInboxLayer=persistent`（`persistentLayerTags`）が刻まれ**、撤収ガードはそれを見て層を判定します。Key Vault / Storage / Log Analytics は環境層にも同じ型が居るため、**型ではなくタグが根拠**です。ここにリソースを足すときは `tags: persistentLayerTags` も付けてください — 付け忘れると、そのリソースは環境層と見なされて撤収で消えます。
 
 ---
 
@@ -249,12 +296,15 @@ cd cicd
 RG=<rg-name> ./scripts/env/cleanup-env.sh
 ```
 
+- **持続層 RG (`rg-shared-mindbox`) は削除できない**（どのフラグでも通らない）
+- **環境層 RG に持続層のリソースが残っている間は、何も消さずに拒否する**（[#302](https://github.com/yomote/mind-inbox/issues/302)）
 - RG を削除する
 - **soft-delete の purge は既定で行わない**（Key Vault / Cognitive Services の救済を残す）
 - **Entra アプリ登録も既定で削除しない**（テナントのオブジェクトであり RG の持ち物ではない）
 - 手動指定した既存 Entra アプリと共有 UAMI は削除しない
 
-破壊系の既定が off である理由は [ADR 0046](../../docs/adr/0046-environment-rebuildable-from-declaration.md) D5/D6。
+破壊系の既定が off である理由は [ADR 0046](../../docs/adr/0046-environment-rebuildable-from-declaration.md) D5/D6、
+持続層ガードは同 D1（判定は [`../scripts/env/persistent_layer_guard.py`](../scripts/env/persistent_layer_guard.py)）。
 
 オプション:
 
@@ -364,11 +414,11 @@ gh secret list -R yomote/mind-inbox   # GITHUB_TOKEN は表示されない（自
 
 **現状ここが宣言の外にあるため、bicep から環境を作り直しても、デプロイが走るまで設定が入りません。**
 
-| スクリプト | 何を設定しているか | 持ち主 |
-| --- | --- | --- |
-| `cicd/scripts/deploy/deploy-ai-agent.sh` | Container App の環境変数（`--set-env-vars`） | **シェルのみ**（宣言の外） |
-| `cicd/scripts/deploy/deploy-voicevox-wrapper.sh` | Container App の環境変数 | **シェルのみ**（宣言の外） |
-| `cicd/scripts/deploy/deploy-backend.sh` | Function App の appsettings（`az functionapp config appsettings set`） | **シェルのみ**（宣言の外） |
+| スクリプト                                       | 何を設定しているか                                                     | 持ち主                     |
+| ------------------------------------------------ | ---------------------------------------------------------------------- | -------------------------- |
+| `cicd/scripts/deploy/deploy-ai-agent.sh`         | Container App の環境変数（`--set-env-vars`）                           | **シェルのみ**（宣言の外） |
+| `cicd/scripts/deploy/deploy-voicevox-wrapper.sh` | Container App の環境変数                                               | **シェルのみ**（宣言の外） |
+| `cicd/scripts/deploy/deploy-backend.sh`          | Function App の appsettings（`az functionapp config appsettings set`） | **シェルのみ**（宣言の外） |
 
 > **⚠️ 認証ゲート（[ADR 0017](../../docs/adr/0017-container-apps-access-via-auth-gate.md)）はこの表に入りません — 宣言の外ではなく「二重管理」です。**
 > `bootstrap-core.bicep:1133-1187` の `aiAgentAuthConfig` / `voicevoxWrapperAuthConfig` が

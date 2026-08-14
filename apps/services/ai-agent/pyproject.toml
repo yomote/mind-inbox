@@ -26,6 +26,10 @@ dev-dependencies = [
     "pytest-asyncio>=0.23.0",
     "httpx>=0.27.0",
     "ruff>=0.5.0",
+    # docs/api/ai-agent.yaml の生成 (scripts/generate_openapi.py)。
+    # 依存の依存として入ってはいるが、それに乗ると上流が外した瞬間に
+    # 「CI の OpenAPI 再生成だけが落ちる」ので明示する。
+    "pyyaml>=6.0",
 ]
 
 [tool.pytest.ini_options]

@@ -18,6 +18,24 @@
 - **持ち越し**: {未消化の項目・次回に回した判断。無ければ「なし」}
 ```
 
+## 2026-08-14 — debrief
+
+- **対象**: [PR #385](https://github.com/yomote/mind-inbox/pull/385) (リポジトリの交通整理 — ADR を「アーキテクチャ判断」に戻す) / [PR #222](https://github.com/yomote/mind-inbox/pull/222) + 旧 ADR 0054 (調査用 read-only 識別) / [PR #388](https://github.com/yomote/mind-inbox/pull/388)・[PR #403](https://github.com/yomote/mind-inbox/pull/403) (分配の判断軸) / [PR #399](https://github.com/yomote/mind-inbox/pull/399)・[PR #330](https://github.com/yomote/mind-inbox/pull/330) (赤の名前 — 失敗を正しい名前で報告する) / dependabot 10 本
+- **決定**:
+  - **旧 ADR 0054 は「ADR ではない」と裁定** — #385 が引いた分類基準に照らすと、これはシステムアーキテクチャではなく**開発設備 (CI 資格情報) の運用判断**。`docs/adr/archive/operations/` へ退避し (Status の変更ではない — Accept も Reject もしていない)、**受容の条件 4 つの正典は Runbook [`azure-oidc-cd-setup.md`](../runbooks/azure-oidc-cd-setup.md) へ移す**。恒久解は [#405](https://github.com/yomote/mind-inbox/issues/405) (GitHub Environments ベースへの移行)
+  - **モデル方針**: 窓口 PM = Fable 5、分配先 (子セッション・subagent) = Opus 5 (トークン経済)
+  - **マージの門は内製化 ([#400](https://github.com/yomote/mind-inbox/issues/400)) で復旧** — 同日の窓口セッションで裁定済み
+- **学びメモ**: 理解確認は 2 問とも正答 — Q1 (レビュー手順の置き場 = skill)・Q2 (採番ガード)。認証まわりの疑問には「**セットアップ 1 回だけ PO のデバイスコード / 日常は OIDC の短命トークン**」の 2 段で解消した
+- **特記**: **PO 側から「0054 はそもそも ADR か?」の指摘が出た**のがこの回の最大の収穫。#385 で引いた分類基準が PO に浸透し、**エージェントの分類ミスを PO が捕まえる逆転**が起きている。あわせて、[#326](https://github.com/yomote/mind-inbox/pull/326) (マージ済み) と [#332](https://github.com/yomote/mind-inbox/pull/332) (open) で **0041 / 0045 の裁定反映が二重化**していたことが判明 ([#159](https://github.com/yomote/mind-inbox/issues/159) と同型)。#332 に残る固有価値は **0045 D5 の改訂 + journal のみ**
+- **持ち越し**: 機構の純増ゼロの裁定 (旧セッション由来)。[#187](https://github.com/yomote/mind-inbox/issues/187) の design-gate
+
+## 2026-08-14 — design-gate (v2 M1 のスコープ確定)
+
+- **対象**: [#82](https://github.com/yomote/mind-inbox/issues/82) (v2 M1) / [#320](https://github.com/yomote/mind-inbox/issues/320) (MAF ネイティブ function calling)。SK 除去は達成済みで、残件は「検証の穴」+ #320 の配管という調査結果を受けた裁定
+- **決定**: PO 裁定 4 件 — 承認 UI を M1 に含める / スタブ題材のツールは feature flag で既定オフ (開けるのは #321 の裁定後) / `docs/api/ai-agent.yaml` 生成 + CI diff 金網を含める / 順序は #320 (配管) → #321 (題材)。決定の全文は [#82 の 2026-08-14 コメント](https://github.com/yomote/mind-inbox/issues/82#issuecomment-5289806206)
+- **学びメモ**: (このエントリは実装側セッションからの追記。理解確認の対話は窓口 PM セッションの記録を参照)
+- **持ち越し**: 承認 UI + e2e (段⑤) は並行の別セッション。#321 (ツール題材の再定義) は flag を開ける前提条件
+
 ## 2026-08-12 — design-gate (合成ユーザー探索 PoC)
 
 - **対象**: [ADR 0053](../adr/archive/operations/synthetic-user-exploration-poc.md) (合成ユーザー探索 PoC の設計 / [#304](https://github.com/yomote/mind-inbox/issues/304) の次段階)。発端は PO の問い「PM セッションが二つになってしまい、窓口一本化が動かない」で、その追跡の副産物として、spend limit で中身ゼロのまま死んでいた `合成ユーザーでのUX探索` セッションの仕事が未消化だと判明したこと
