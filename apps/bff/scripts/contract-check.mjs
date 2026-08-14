@@ -11,6 +11,7 @@
  * 比較粒度 (詳細と表層差の吸収ルールは src/contract/schemaDiff.ts のヘッダに集約):
  *   - フィールドパス集合 (`items[].mention.affect.valence` まで再帰展開)
  *   - 型カテゴリ / nullable / 欠落可能性 (optional) / enum メンバ集合
+ *   - schema に乗らないが BFF の分岐が依存している契約: `/approve` の 404 detail (#82)
  *
  * ここで test しないこと:
  *   - 個別フィールドの値検証 (それは L2 endpoint test の領域)
@@ -18,6 +19,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { register } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,6 +32,7 @@ register("./ts-extension-resolver.mjs", import.meta.url);
 const { diffSchemas } = await import("../src/contract/schemaDiff.ts");
 const { ExtractionResultSchema } = await import("../src/trpc/domain.ts");
 const {
+  APPROVAL_GONE_DETAIL,
   ApproveRequestSchema,
   ApproveResponseSchema,
   ChatRequestSchema,
@@ -79,6 +82,61 @@ function fetchAiAgentSchemas() {
   return JSON.parse(out);
 }
 
+// ── /approve の 404 detail (schema に乗らない契約 / #82 / PR #416) ────────────
+//
+// 無いと何が静かに通るか: BFF は `/approve` の 404 のうち **ai-agent が承認レコードに
+// ついて返したもの**だけを「もう受け付けられない」に変換する (それ以外の 404 =
+// ルート未配備 / プロキシの経路不整合は上流障害として扱う)。判別は detail 文字列との
+// 一致なので、ai-agent 側が文言を変えると**変換が静かに効かなくなり**、失効した承認が
+// 上流障害に化けて 404 デッドロック (承認カードが閉じられず会話が進まない) が戻る。
+// pydantic schema にはエラー本文が現れないので、上の再帰比較では捕まらない。
+
+/** ai-agent 側で 404 の detail を作っている場所 (`main.py` が `detail=str(exc)` で載せる)。 */
+const APPROVAL_DETAIL_SOURCE = "apps/services/ai-agent/app/workflow.py";
+const APPROVAL_DETAIL_FUNCTION = "async def resume_after_approval(";
+
+function checkApprovalGoneDetail() {
+  const path = resolve(REPO_ROOT, APPROVAL_DETAIL_SOURCE);
+  // 読めなければ「一致した」ではなく失敗として出す (取れなかったものを異常なしと書かない)。
+  const source = readFileSync(path, "utf-8");
+
+  const start = source.indexOf(APPROVAL_DETAIL_FUNCTION);
+  if (start < 0) {
+    console.error(
+      `  ✗ ApprovalGoneDetail: ${APPROVAL_DETAIL_SOURCE} に ${APPROVAL_DETAIL_FUNCTION} が無い (関数名が変わった?)`,
+    );
+    return 1;
+  }
+  // 次の top-level def までを関数本体とみなす。
+  const rest = source.slice(start + APPROVAL_DETAIL_FUNCTION.length);
+  const end = rest.search(/\n(?:async )?def /);
+  const body = end < 0 ? rest : rest.slice(0, end);
+
+  // `raise ValueError(f"...")` の文言だけ抜く (404 に写るのは ValueError だけ / main.py)。
+  const messages = [...body.matchAll(/raise ValueError\(\s*f?"([^"]*)"/g)].map((m) => m[1]);
+  if (messages.length === 0) {
+    console.error(
+      `  ✗ ApprovalGoneDetail: ${APPROVAL_DETAIL_SOURCE} の resume_after_approval に ValueError が 1 件も無い (404 の出どころが変わった?)`,
+    );
+    return 1;
+  }
+
+  const unmatched = messages.filter((m) => !APPROVAL_GONE_DETAIL.test(m));
+  if (unmatched.length > 0) {
+    console.error(
+      `  ✗ ApprovalGoneDetail: BFF の判別パターン ${APPROVAL_GONE_DETAIL} に一致しない 404 detail が ai-agent にある:`,
+    );
+    for (const m of unmatched) console.error(`      - ${m}`);
+    console.error(
+      "      → この detail の 404 は BFF が「上流障害」として扱う (承認カードが閉じられず会話が詰まる)。",
+    );
+    return unmatched.length;
+  }
+
+  out(`  ✓ ApprovalGoneDetail: /approve の 404 detail ${messages.length} 件 すべて判別可能`);
+  return 0;
+}
+
 // ── main ────────────────────────────────────────────────────────────────────
 
 /** stdout への成功系出力 (CLI ツールとしての結果表示。debug 用 console.log ではない) */
@@ -119,6 +177,8 @@ function main() {
       totalIssues++;
     }
   }
+
+  totalIssues += checkApprovalGoneDetail();
 
   if (totalIssues > 0) {
     console.error(

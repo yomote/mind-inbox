@@ -1,15 +1,21 @@
 // @vitest-environment jsdom
 /**
- * [単体] SessionScreen — 下書き更新の未読通知 (dialogue-session.mdx §5.8 / ADR 0039 D4)。
+ * [単体] SessionScreen — 下書き更新の未読通知 (dialogue-session.mdx §5.8 / ADR 0039 D4) と
+ * 承認要求の到着時のタブ復帰 (§5.9)。
  *
- * 無いと何が静かに通るか: モバイルで「整理中」タブを一度開いた後、**件数が変わらない
- * 更新** (カードの中身だけが変わる / 1 件が別の困りごとに差し替わる) が通知されない。
- * バッジが出ないだけで描画は壊れないため、テストが無ければ静かに通る (PR #282 P2-b)。
+ * 無いと何が静かに通るか:
+ * - 未読通知: モバイルで「整理中」タブを一度開いた後、**件数が変わらない更新**
+ *   (カードの中身だけが変わる / 1 件が別の困りごとに差し替わる) が通知されない。
+ *   バッジが出ないだけで描画は壊れないため、テストが無ければ静かに通る (PR #282 P2-b)。
+ * - タブ復帰: 「整理中」タブ表示中に承認要求が届いても対話ペインは display:none のままで、
+ *   カードは DOM にあるのに**画面には出ない**。サーバは承認待ちで止まっているのに
+ *   ユーザーには何も伝わらない (PR #416 Codex P2)。DOM 上はカードが存在するので、
+ *   タブの選択状態を見ないと静かに通る。
  */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ExtractionResult } from "../../api";
+import type { ApprovalRequest, ExtractionResult } from "../../api";
 import { SessionScreen } from "./SessionScreen";
 
 afterEach(cleanup);
@@ -51,101 +57,136 @@ const draft = (statement: string): ExtractionResult =>
     updatedProblemCount: 0,
   }) as ExtractionResult;
 
-function renderScreen(preview: ExtractionResult | null) {
-  const view = render(
-    <SessionScreen
-      session={session}
-      draftMessage=""
-      loading={false}
-      speaking={false}
-      ttsEnabled
-      voiceError={null}
-      previewEnabled
-      preview={preview}
-      previewStatus="idle"
-      onRefreshPreview={() => {}}
-      onDraftMessageChange={() => {}}
-      onSendMessage={() => {}}
-      onToggleTtsEnabled={() => {}}
-      onStopSpeaking={() => {}}
-      onCrisisSupport={() => {}}
-      onPause={() => {}}
-      onExtract={() => {}}
-    />,
-  );
+type ScreenOverrides = {
+  preview?: ExtractionResult | null;
+  pendingApproval?: ApprovalRequest | null;
+};
+
+const screenEl = ({ preview = null, pendingApproval = null }: ScreenOverrides) => (
+  <SessionScreen
+    session={session}
+    draftMessage=""
+    loading={false}
+    speaking={false}
+    ttsEnabled
+    voiceError={null}
+    previewEnabled
+    preview={preview}
+    previewStatus="idle"
+    onRefreshPreview={() => {}}
+    pendingApproval={pendingApproval}
+    onRespondToApproval={() => {}}
+    onDraftMessageChange={() => {}}
+    onSendMessage={() => {}}
+    onToggleTtsEnabled={() => {}}
+    onStopSpeaking={() => {}}
+    onCrisisSupport={() => {}}
+    onPause={() => {}}
+    onExtract={() => {}}
+  />
+);
+
+function renderScreen(overrides: ScreenOverrides) {
+  const view = render(screenEl(overrides));
   return {
     ...view,
+    rerenderScreen: (next: ScreenOverrides) => view.rerender(screenEl(next)),
     unseen: () => screen.getByTestId("preview-tab").getAttribute("data-preview-unseen"),
     openPreviewTab: () => fireEvent.click(screen.getByTestId("preview-tab")),
+    openDialogueTab: () => fireEvent.click(screen.getByRole("tab", { name: "対話" })),
+    // タブの選択状態が「どちらのペインが見えているか」の真実 (もう一方は display:none)。
+    selectedTab: () => screen.getByRole("tab", { selected: true }).textContent,
   };
 }
 
 describe("[単体] SessionScreen — 下書き更新の未読通知", () => {
   it("件数が同じでも、中身が更新されたら未読になる", () => {
-    const { rerender, unseen, openPreviewTab } = renderScreen(draft("最初の下書き"));
+    const { rerenderScreen, unseen, openPreviewTab, openDialogueTab } = renderScreen({
+      preview: draft("最初の下書き"),
+    });
 
     // 一度開いて既読にする。
     openPreviewTab();
     expect(unseen()).toBe("false");
 
     // 対話タブに戻り、**件数据え置き**で内容だけ変わった更新を受け取る。
-    fireEvent.click(screen.getByRole("tab", { name: "対話" }));
-    rerender(
-      <SessionScreen
-        session={session}
-        draftMessage=""
-        loading={false}
-        speaking={false}
-        ttsEnabled
-        voiceError={null}
-        previewEnabled
-        preview={draft("更新された下書き")}
-        previewStatus="idle"
-        onRefreshPreview={() => {}}
-        onDraftMessageChange={() => {}}
-        onSendMessage={() => {}}
-        onToggleTtsEnabled={() => {}}
-        onStopSpeaking={() => {}}
-        onCrisisSupport={() => {}}
-        onPause={() => {}}
-        onExtract={() => {}}
-      />,
-    );
+    openDialogueTab();
+    rerenderScreen({ preview: draft("更新された下書き") });
 
     expect(unseen()).toBe("true");
   });
 
   it("プレビュータブを開いている間の更新は未読にしない (その場で見えている)", () => {
-    const { rerender, unseen, openPreviewTab } = renderScreen(draft("最初の下書き"));
+    const { rerenderScreen, unseen, openPreviewTab } = renderScreen({
+      preview: draft("最初の下書き"),
+    });
     openPreviewTab();
 
-    rerender(
-      <SessionScreen
-        session={session}
-        draftMessage=""
-        loading={false}
-        speaking={false}
-        ttsEnabled
-        voiceError={null}
-        previewEnabled
-        preview={draft("開いたまま更新")}
-        previewStatus="idle"
-        onRefreshPreview={() => {}}
-        onDraftMessageChange={() => {}}
-        onSendMessage={() => {}}
-        onToggleTtsEnabled={() => {}}
-        onStopSpeaking={() => {}}
-        onCrisisSupport={() => {}}
-        onPause={() => {}}
-        onExtract={() => {}}
-      />,
-    );
+    rerenderScreen({ preview: draft("開いたまま更新") });
 
     expect(unseen()).toBe("false");
   });
 
   it("下書きがまだ無い間は未読にならない", () => {
-    const { unseen } = renderScreen(null);
+    const { unseen } = renderScreen({ preview: null });
     expect(unseen()).toBe("false");
+  });
+});
+
+// ---- 承認要求の到着とタブ (§5.9 / PR #416 Codex P2) --------------------------
+
+const approval = (id: string): ApprovalRequest => ({
+  id,
+  description: "山田さんへ返信を送ります。よろしいですか?",
+});
+
+describe("[単体] SessionScreen — 承認要求が届いたら対話タブへ戻す", () => {
+  it("「整理中」タブ表示中に承認要求が届くと対話タブへ戻る", () => {
+    // 無いと: カードは DOM に出るが display:none の裏なので画面には現れない。
+    // サーバは承認待ちで止まったまま、ユーザーは押すべきボタンの存在を知れない。
+    const { rerenderScreen, openPreviewTab, selectedTab } = renderScreen({
+      preview: draft("最初の下書き"),
+    });
+
+    openPreviewTab();
+    expect(selectedTab()).toContain("整理中");
+
+    rerenderScreen({ preview: draft("最初の下書き"), pendingApproval: approval("appr-1") });
+
+    expect(selectedTab()).toBe("対話");
+    expect(screen.getByTestId("approval-request")).toBeTruthy();
+  });
+
+  it("承認待ちのまま「整理中」タブへ移ることはできる (pending 中の固定にしない)", () => {
+    // 無いと: 「到着時だけ戻す」が「pending の間ずっと対話タブに固定」に化けても
+    // 上のテストは通る。承認を保留したまま下書きを見に行けなくなる退行を止める。
+    const { openPreviewTab, rerenderScreen, selectedTab } = renderScreen({
+      preview: draft("最初の下書き"),
+      pendingApproval: approval("appr-1"),
+    });
+
+    openPreviewTab();
+    expect(selectedTab()).toContain("整理中");
+
+    // 同じ承認が出たままの再描画 (下書きの更新など) では引き戻さない。
+    rerenderScreen({ preview: draft("更新された下書き"), pendingApproval: approval("appr-1") });
+
+    expect(selectedTab()).toContain("整理中");
+  });
+
+  it("承認が解決したあとに次の要求が届いたら、また対話タブへ戻る", () => {
+    // 無いと: 「初回だけ戻す」実装 (フラグの立てっぱなし) が通ってしまい、
+    // 2 回目以降の承認要求で同じ見落としが起きる。
+    const { openPreviewTab, rerenderScreen, selectedTab } = renderScreen({
+      preview: draft("最初の下書き"),
+      pendingApproval: approval("appr-1"),
+    });
+
+    // 1 件目を解決 → 整理中タブへ移動 → 2 件目が届く。
+    rerenderScreen({ preview: draft("最初の下書き"), pendingApproval: null });
+    openPreviewTab();
+    rerenderScreen({ preview: draft("最初の下書き"), pendingApproval: approval("appr-2") });
+
+    expect(selectedTab()).toBe("対話");
   });
 });

@@ -3,6 +3,7 @@ import { config } from "../config";
 import { summarizeIssues } from "../schemaIssues";
 import { serviceHeaders } from "./serviceToken";
 import { ExtractionResultSchema, type ExtractionResult } from "../trpc/domain";
+import { APPROVAL_GONE_DETAIL } from "./aiAgentContracts";
 import type {
   ApproveRequest,
   ApproveResponse,
@@ -78,6 +79,23 @@ export class ApprovalNotFoundError extends Error {
   constructor(approvalRequestId: string) {
     super(`aiAgentClient: approval not found — ${approvalRequestId}`);
     this.name = "ApprovalNotFoundError";
+  }
+}
+
+/**
+ * エラー応答の `detail` (FastAPI の HTTPException が返す形) を読む。読めなければ null。
+ *
+ * 握り潰す範囲: 本文が JSON でない / `detail` が文字列でない場合の理由は捨てる。
+ * 捨てても見えなくなるものは無い — どちらも「ai-agent が承認について返した 404」では
+ * ないので、呼び出し側の扱い (上流障害) は同じになる。**読んだ本文は例外文にも
+ * ログにも載せない** (上流本文の転記は #313 B-3 で塞いだ経路)。
+ */
+async function readErrorDetail(res: Response): Promise<string | null> {
+  try {
+    const body = (await res.json()) as { detail?: unknown };
+    return typeof body?.detail === "string" ? body.detail : null;
+  } catch {
+    return null;
   }
 }
 
@@ -269,11 +287,27 @@ export async function approve(req: ApproveRequest): Promise<ApproveResponse> {
     }),
   });
 
-  // 404 は「承認レコードがもう無い」(TTL 失効 / ai-agent 再起動 / 消費済み)。
-  // 種別を保って上げる — 呼び出し側 (router) が NOT_FOUND に翻訳し、フロントが
-  // 「期限切れ」として扱えるようにする。ここで潰すと再試行地獄に戻る。
+  // 404 のうち **ai-agent が承認レコードについて返したもの** だけを「もう無い」
+  // (TTL 失効 / ai-agent 再起動 / 消費済み) として上げる。種別を保つのは、呼び出し側
+  // (router) が NOT_FOUND に翻訳し、フロントが「カードを閉じて続行」に落とすため。
+  //
+  // **すべての 404 を変換しない** (PR #416 Codex 3 巡目 P2): ルート未配備・リバース
+  // プロキシの経路不整合・ベース URL 違いでも 404 は返る。それを「処理済み」に写すと、
+  // 生きている checkpoint を持つ承認カードが閉じられ、承認も却下も再試行もできなくなる
+  // (サーバは承認待ちのまま、画面からは消える)。
   if (res.status === 404) {
-    throw new ApprovalNotFoundError(req.approvalRequestId);
+    const detail = await readErrorDetail(res);
+    if (detail !== null && APPROVAL_GONE_DETAIL.test(detail)) {
+      throw new ApprovalNotFoundError(req.approvalRequestId);
+    }
+    // 承認レコードについて何も言っていない 404 = 上流障害。汎用エラーとして上げる
+    // (フロントはカードを残して再試行できる)。**本文は例外文に載せない** (#313 B-3)。
+    console.error(
+      `[aiAgentClient] POST /approve returned a 404 that is not an approval-record 404 (detail unmatched) — treating as upstream failure`,
+    );
+    throw new Error(
+      `aiAgentClient: POST /approve failed — ${res.status} ${res.statusText} (承認レコード由来ではない 404)`,
+    );
   }
 
   if (!res.ok) {

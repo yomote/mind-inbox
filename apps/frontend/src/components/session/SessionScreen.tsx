@@ -80,6 +80,22 @@ export function SessionScreen({
     if (activeTab === "preview") setSeenPreview(preview);
   }, [activeTab, preview]);
 
+  // 承認要求が届いたら対話タブへ引き戻す (§5.9 / PR #416 Codex P2)。
+  //
+  // 承認カードは対話ペインの中にしか無い。md 未満で「整理中」タブを見ている間に
+  // 要求が届くと、カードは display:none の裏に出るだけで**画面には何も出ない** —
+  // サーバ (ai-agent) は承認待ちで止まっているのに、ユーザーには止まっていることも
+  // 押すべきボタンがあることも伝わらない (G1 が静かに無効化される)。
+  //
+  // 引き戻すのは**到着した瞬間だけ** (id が変わった時)。pending の間ずっと対話タブに
+  // 固定すると、承認を保留したまま下書きを見に行くことができなくなる。
+  const arrivedApprovalId = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    const id = pendingApproval?.id ?? null;
+    if (id !== null && id !== arrivedApprovalId.current) setActiveTab("dialogue");
+    arrivedApprovalId.current = id;
+  }, [pendingApproval]);
+
   const handleTabChange = (_: React.SyntheticEvent, next: "dialogue" | "preview") => {
     setActiveTab(next);
     if (next === "preview") setSeenPreview(preview);

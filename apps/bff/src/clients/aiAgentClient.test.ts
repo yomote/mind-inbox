@@ -251,10 +251,16 @@ describe("[単体] /approve の 404 は「承認レコードがもう無い」�
     mockConfig.aiAgentBaseUrl = "http://ai-agent.example";
   });
 
-  it("404 は ApprovalNotFoundError で失敗する", async () => {
+  // ai-agent が承認レコードについて返す 404 の detail (workflow.resume_after_approval の
+  // ValueError そのまま)。3 本とも同じ「もう受け付けられない」に落ちる。
+  it.each([
+    { name: "未知 ID / TTL 失効", detail: "Approval not found: 'appr-1'" },
+    { name: "消費済み", detail: "Approval already processed: 'approved'" },
+    { name: "checkpoint が消えた", detail: "Approval checkpoint not found: 'appr-1'" },
+  ])("$name の 404 は ApprovalNotFoundError で失敗する", async ({ detail }) => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => Response.json({ detail: "Approval not found: 'appr-1'" }, { status: 404 })),
+      vi.fn(async () => Response.json({ detail }, { status: 404 })),
     );
 
     const err = await approve({ approvalRequestId: "appr-1", approved: true }).catch(
@@ -262,6 +268,46 @@ describe("[単体] /approve の 404 は「承認レコードがもう無い」�
     );
 
     expect(err).toBeInstanceOf(ApprovalNotFoundError);
+  });
+
+  // 承認レコードについて何も言っていない 404 (PR #416 Codex 3 巡目 P2)。
+  //
+  // 無いと何が静かに通るか: ルート未配備 / プロキシの経路不整合 / ベース URL 違いの
+  // 汎用 404 まで「もう受け付けられません」に化け、フロントは**生きている checkpoint を
+  // 持つ承認カードを閉じる**。サーバは承認待ちのまま、ユーザーは承認も却下も再試行も
+  // できない (デプロイ事故が「処理済み」に見えるので、原因にも辿り着けない)。
+  it.each([
+    { name: "FastAPI の既定 404 (ルート未配備)", body: { detail: "Not Found" } },
+    { name: "別リソースの 404", body: { detail: "Session not found: 's1'" } },
+    { name: "detail が文字列でない", body: { detail: { code: 404 } } },
+    { name: "detail が無い", body: { error: "not found" } },
+  ])("$name は ApprovalNotFoundError にしない (上流障害として扱う)", async ({ body }) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(body, { status: 404 })),
+    );
+
+    const err = await approve({ approvalRequestId: "appr-1", approved: true }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(ApprovalNotFoundError);
+  });
+
+  it("JSON ですらない 404 本文 (プロキシの HTML) も ApprovalNotFoundError にしない", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<html>404 Not Found</html>", { status: 404 })),
+    );
+
+    const err = await approve({ approvalRequestId: "appr-1", approved: true }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).not.toBeInstanceOf(ApprovalNotFoundError);
+    // 上流本文を例外文に転記しない (#313 B-3)。
+    expect((err as Error).message).not.toContain("<html>");
   });
 
   it("404 以外の失敗は ApprovalNotFoundError にしない (上流障害と混ぜない)", async () => {
