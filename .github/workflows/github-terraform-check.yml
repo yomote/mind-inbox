@@ -2,13 +2,12 @@ name: github-terraform-check
 
 # `cicd/github/terraform/` の Terraform 宣言を機械検証する (Issue #390 A-1)。
 #
-# なぜ CI が要るか: **エージェント環境からは provider を取得できない**。
-#   registry.terraform.io が egress ポリシーで 403 (実測 2026-08-14。
-#   proxy status の recentRelayFailures に `registry.terraform.io:443` /
-#   `connect_rejected` が残る)。したがって `terraform init` が通らず、
-#   `validate` も `plan` もローカルでは回せない。GitHub runner はこのプロキシの
-#   外なので、**構文より先の検証ができる唯一の場所がここ**。
-#   (iac-validate.yml が bicep CLI について同じ理由で存在するのと同型。)
+# なぜ CI が要るか: **`.tf` を触る全員に同じ検証を強制できる場所がここしかない**。
+#   ローカルで回せるかどうかは環境次第で変わる (registry.terraform.io は
+#   2026-08-14 朝の時点では egress ポリシーで 403 だったが、同日中に開通して
+#   `terraform init` / `validate` がエージェント環境でも通るようになった)。
+#   「回せる環境の人が回したはず」は検証ではないので、PR ごとに機械で通す。
+#   (iac-validate.yml が bicep CLI について同じ位置にいるのと同型。)
 #
 # ⚠️ **この workflow は `terraform plan` を実行しません。** plan は GitHub の
 #    管理系 API を読むためトークンが要り、**そのトークンをどこに置くかが未決定**
@@ -70,43 +69,66 @@ jobs:
         id: tf-fmt
         run: terraform -chdir=${{ env.TF_DIR }} fmt -check -diff -recursive
 
-      # provider をレジストリから取る。ここが通るかどうかが
-      # 「エージェント環境で塞がれていたもの」の答えになる。
+      # **provider をハッシュで固定しているのはこのファイルだけ**。
+      # `versions.tf` の `~> 6.13` は「6.13 以上 7.0 未満の何か」しか言えず、
+      # 同じ版を名乗る別バイナリを弾けない。
+      #
+      # なぜ独立したステップとして落とすか: ロックファイルが無くても
+      # `terraform init` は黙って生成して **成功する**。そのままだと
+      # 「ハッシュ固定されていないのに CI は緑」が通り、しかもロックファイルは
+      # runner 上にしか残らないので、誰も気づかないまま繰り返される。
+      # ここで非ゼロ終了させて、その通り道を塞ぐ。
+      - name: .terraform.lock.hcl が commit されていることを確かめる
+        id: tf-lock
+        run: |
+          set -euo pipefail
+          lock="${TF_DIR}/.terraform.lock.hcl"
+          if ! git ls-files --error-unmatch "$lock" > /dev/null 2>&1; then
+            echo "::error file=${lock}::provider のロックファイルが git に登録されていません。provider がハッシュで固定されていないので、この run は落とします。"
+            echo "生成して commit してください:"
+            echo "  terraform -chdir=${TF_DIR} providers lock \\"
+            echo "    -platform=linux_amd64 -platform=linux_arm64 \\"
+            echo "    -platform=darwin_amd64 -platform=darwin_arm64"
+            exit 1
+          fi
+          echo "登録済み: $lock"
+
       # -backend=false: state のバックエンドは未決定 (#390 の ADR 案件) なので触らない。
-      - name: terraform init (-backend=false)
+      # -lockfile=readonly: **ロックファイルをこの run で書き換えさせない**。
+      #   版制約とロックファイルが食い違っていたら、黙って更新せず init を落とす
+      #   (= 版を上げてロックファイルを更新し忘れた PR がここで止まる)。
+      #   runner の platform (linux_amd64) のハッシュが無い場合も落ちる。
+      - name: terraform init (-backend=false -lockfile=readonly)
         id: tf-init
-        run: terraform -chdir=${{ env.TF_DIR }} init -backend=false -input=false -no-color
+        run: terraform -chdir=${{ env.TF_DIR }} init -backend=false -lockfile=readonly -input=false -no-color
 
       - name: terraform validate
         id: tf-validate
         run: terraform -chdir=${{ env.TF_DIR }} validate -no-color
 
-      # ロックファイルはまだリポジトリに無い (エージェント環境で生成できなかった)。
-      # ここで生成されたものをサマリに出して、PR で commit できるようにする。
-      # **これが commit されるまで provider はハッシュで固定されていない**。
-      - name: .terraform.lock.hcl を run に残す
-        if: always()
+      # 上の init が検証したのは **runner の platform (linux_amd64) の分だけ**。
+      # 他 platform のハッシュが欠けていても壊れていても、init は
+      # 「Provider lock file not updated」の **warning を出して exit 0 で通る**
+      # (実測 2026-08-14 / Terraform 1.9.8)。それだと PO のローカル (darwin) は
+      # ハッシュ検証なしで provider を入れることになり、緑のまま穴が空く。
+      #
+      # そこでロックファイルを 4 platform 分作り直し、commit 済みの内容と
+      # **1 バイトでも違えば落とす**。同じ版から作り直せば出力は決定的
+      # (実測: 同一ファイルが再生成される)。落ちるのは次のとき:
+      #   - どれかの platform のハッシュが欠けている / 手で書き換えられている
+      #   - 版を上げてロックファイルの更新を忘れた
+      - name: ロックファイルが 4 platform 分そろっていることを確かめる
+        id: tf-lock-complete
         run: |
-          set -uo pipefail
+          set -euo pipefail
           lock="${TF_DIR}/.terraform.lock.hcl"
-          {
-            echo "## provider のロックファイル"
-            echo ""
-            if [ -f "$lock" ]; then
-              if git diff --quiet -- "$lock" 2>/dev/null && git ls-files --error-unmatch "$lock" >/dev/null 2>&1; then
-                echo "リポジトリの \`$lock\` と一致しています。"
-              else
-                echo "⚠️ リポジトリの \`$lock\` が無いか、生成結果と違います。"
-                echo "**下の内容を \`$lock\` として commit するまで、provider はハッシュで固定されていません。**"
-                echo ""
-                echo '```hcl'
-                cat "$lock"
-                echo '```'
-              fi
-            else
-              echo "❌ 生成されませんでした (init が失敗している)。"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          terraform -chdir=${TF_DIR} providers lock \
+            -platform=linux_amd64 -platform=linux_arm64 \
+            -platform=darwin_amd64 -platform=darwin_arm64
+          if ! git diff --exit-code -- "$lock"; then
+            echo "::error file=${lock}::commit されているロックファイルが、この版から生成される内容と一致しません (上が差分)。ハッシュ固定が効いていない platform があります。同じコマンドをローカルで回して commit し直してください。"
+            exit 1
+          fi
 
       # 回していないものを緑と書かない。plan を実行しなかった事実を毎回残す。
       #
@@ -119,8 +141,10 @@ jobs:
         if: always()
         env:
           FMT_OUTCOME: ${{ steps.tf-fmt.outcome }}
+          LOCK_OUTCOME: ${{ steps.tf-lock.outcome }}
           INIT_OUTCOME: ${{ steps.tf-init.outcome }}
           VALIDATE_OUTCOME: ${{ steps.tf-validate.outcome }}
+          LOCK_COMPLETE_OUTCOME: ${{ steps.tf-lock-complete.outcome }}
         run: |
           set -euo pipefail
           {
@@ -129,24 +153,31 @@ jobs:
             echo "| ステップ | 結果 |"
             echo "| --- | --- |"
             echo "| \`terraform fmt -check\` | \`${FMT_OUTCOME}\` |"
-            echo "| \`terraform init -backend=false\` | \`${INIT_OUTCOME}\` |"
+            echo "| \`.terraform.lock.hcl\` が commit されている | \`${LOCK_OUTCOME}\` |"
+            echo "| \`terraform init -backend=false -lockfile=readonly\` | \`${INIT_OUTCOME}\` |"
             echo "| \`terraform validate\` | \`${VALIDATE_OUTCOME}\` |"
+            echo "| ロックファイルが 4 platform 分そろっている | \`${LOCK_COMPLETE_OUTCOME}\` |"
             echo ""
-            if [ "${FMT_OUTCOME}" = "success" ] && [ "${VALIDATE_OUTCOME}" = "success" ]; then
-              echo "✅ 言えているのは **「HCL が整形済みで、provider のスキーマに対して妥当」** まで。"
+            if [ "${FMT_OUTCOME}" = "success" ] && [ "${LOCK_OUTCOME}" = "success" ] \
+              && [ "${VALIDATE_OUTCOME}" = "success" ] && [ "${LOCK_COMPLETE_OUTCOME}" = "success" ]; then
+              echo "✅ 言えているのは **「HCL が整形済みで、ハッシュで固定した provider のスキーマに対して妥当」** まで。"
             else
               # 最初に success でなかったステップを名指しする。以降は skipped になるため。
               if [ "${FMT_OUTCOME}" != "success" ]; then
                 blocked="terraform fmt -check (${FMT_OUTCOME})"
+              elif [ "${LOCK_OUTCOME}" != "success" ]; then
+                blocked=".terraform.lock.hcl の登録確認 (${LOCK_OUTCOME}) — provider がハッシュで固定されていない"
               elif [ "${INIT_OUTCOME}" != "success" ]; then
                 blocked="terraform init (${INIT_OUTCOME})"
-              else
+              elif [ "${VALIDATE_OUTCOME}" != "success" ]; then
                 blocked="terraform validate (${VALIDATE_OUTCOME})"
+              else
+                blocked="ロックファイルの platform 網羅 (${LOCK_COMPLETE_OUTCOME}) — ハッシュ固定が効いていない platform がある"
               fi
               echo "❌ **未検証: ${blocked}**。"
               echo ""
-              echo "この run は **「provider のスキーマに対して妥当」とは言えていません**。"
-              echo "上の表で \`success\` でない行は、この run では確認できていません。"
+              echo "上の表で \`success\` でない行は、**この run では確認できていません**。"
+              echo "この run を「宣言は妥当」としてまとめないでください。"
             fi
             echo ""
             echo "## terraform plan: **未実行**"

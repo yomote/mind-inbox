@@ -26,15 +26,15 @@
 
 **推測で書かないと決めた**ので、読めなかったものは宣言していません。名前だけは必ず出します (黙って対象外にしない)。
 
-| 対象                                                               | 状態                                                                                                                                                     | 置き場                                         |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| **ruleset (本当の門)**                                             | **未取得** — 実際にマージを止めているのはこれ ([#373](https://github.com/yomote/mind-inbox/issues/373) が `405 Repository rule violations found` を実測) | [`rulesets.tf`](rulesets.tf)                   |
-| auto-merge 許可 / ブランチ自動削除 / squash 設定 / secret scanning | **未取得** — `github_repository` は全体で 1 resource なので、半分未取得のまま宣言すると残りが既定値に倒れる (#377 の再演)                                | [`unmanaged.tf`](unmanaged.tf)                 |
-| Actions 権限 (`allowed_actions` / `default_workflow_permissions`)  | **未取得**                                                                                                                                               | [`unmanaged.tf`](unmanaged.tf)                 |
-| Pages の配信元 (build_type / source)                               | **未取得** (`has_pages = true` だけ読めた)                                                                                                               | [`unmanaged.tf`](unmanaged.tf)                 |
-| ラベル                                                             | **集合が未取得** — `github_issue_labels` は authoritative なので、列挙漏れが apply で消える                                                              | [`unmanaged.tf`](unmanaged.tf)                 |
-| `code_scanning_default_setup`                                      | **provider に対応 resource が無い**                                                                                                                      | [`unmanaged.tf`](unmanaged.tf)                 |
-| branch protection の 6 項目 (`allow_force_pushes` 等)              | **`github_branch_protection_v3` の引数に無い** — 現状が全て REST 既定値 `false` なので写しとしては一致するが、plan には出ない                            | [`branch_protection.tf`](branch_protection.tf) |
+| 対象                                                               | 状態                                                                                                                                                                                                              | 置き場                                         |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| **ruleset (本当の門)**                                             | **未取得** — 実際にマージを止めているのはこれ ([#373](https://github.com/yomote/mind-inbox/issues/373) が `405 Repository rule violations found` を実測)                                                          | [`rulesets.tf`](rulesets.tf)                   |
+| auto-merge 許可 / ブランチ自動削除 / squash 設定 / secret scanning | **未取得** — `github_repository` は全体で 1 resource なので、半分未取得のまま宣言すると残りが既定値に倒れる (#377 の再演)                                                                                         | [`unmanaged.tf`](unmanaged.tf)                 |
+| Actions 権限 (`allowed_actions` / `default_workflow_permissions`)  | **未取得**                                                                                                                                                                                                        | [`unmanaged.tf`](unmanaged.tf)                 |
+| Pages の配信元 (build_type / source)                               | **未取得** (`has_pages = true` だけ読めた)                                                                                                                                                                        | [`unmanaged.tf`](unmanaged.tf)                 |
+| ラベル                                                             | **集合が未取得** — `github_issue_labels` は authoritative なので、列挙漏れが apply で消える                                                                                                                       | [`unmanaged.tf`](unmanaged.tf)                 |
+| `code_scanning_default_setup`                                      | **provider に対応 resource が無い**                                                                                                                                                                               | [`unmanaged.tf`](unmanaged.tf)                 |
+| branch protection の 6 項目 (`allow_force_pushes` 等)              | **`github_branch_protection_v3` の引数に無い** — 現状が全て REST 既定値 `false` なので写しとしては一致するが、plan には出ない                                                                                     | [`branch_protection.tf`](branch_protection.tf) |
 | `require_signed_commits` (署名コミットの強制)                      | **未取得** — スナップショットに `required_signatures` が無く、自作機構も比較対象外 (`settings_diff.py:70`)。既定値 `false` で現実を上書きしないよう `lifecycle.ignore_changes` で管理から外した (= plan に出ない) | [`branch_protection.tf`](branch_protection.tf) |
 
 取り方 (PO 本人の権限が要る) は各ファイルのコメントと [`docs/runbooks/github-terraform.md`](../../../docs/runbooks/github-terraform.md)。
@@ -43,31 +43,36 @@
 
 ## ファイル構成
 
-| ファイル                                       | 中身                                                                           |
-| ---------------------------------------------- | ------------------------------------------------------------------------------ |
-| [`versions.tf`](versions.tf)                   | Terraform / provider の版 (`integrations/github ~> 6.13`)                      |
-| [`providers.tf`](providers.tf)                 | provider 設定。**トークンは `GITHUB_TOKEN` 環境変数から** (ファイルに書かない) |
-| [`variables.tf`](variables.tf)                 | 適用先 (owner / repo)。**既定値なし** — 宣言に適用先を書かない規律を継承       |
-| [`branch_protection.tf`](branch_protection.tf) | main / release の classic branch protection (現状の写し)                       |
-| [`security.tf`](security.tf)                   | Dependabot alerts / security updates (現状の写し)                              |
-| [`imports.tf`](imports.tf)                     | 既存設定を取り込む `import` ブロック (state を保管しない方式の要)              |
-| [`rulesets.tf`](rulesets.tf)                   | **本当の門。未取得のため resource なし** + 写し方のテンプレ                    |
-| [`unmanaged.tf`](unmanaged.tf)                 | 宣言していないものと、その理由                                                 |
+| ファイル                                       | 中身                                                                                                                                                                                                        |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`versions.tf`](versions.tf)                   | Terraform / provider の版 (`integrations/github ~> 6.13`)                                                                                                                                                   |
+| `.terraform.lock.hcl`                          | provider の**ハッシュ固定**。`version` 制約だけでは同じ版を名乗る別バイナリを弾けない。版を上げるときは `terraform providers lock` で同じ PR で更新する (CI は `-lockfile=readonly` なので、忘れると落ちる) |
+| [`providers.tf`](providers.tf)                 | provider 設定。**トークンは `GITHUB_TOKEN` 環境変数から** (ファイルに書かない)                                                                                                                              |
+| [`variables.tf`](variables.tf)                 | 適用先 (owner / repo)。**既定値なし** — 宣言に適用先を書かない規律を継承                                                                                                                                    |
+| [`branch_protection.tf`](branch_protection.tf) | main / release の classic branch protection (現状の写し)                                                                                                                                                    |
+| [`security.tf`](security.tf)                   | Dependabot alerts / security updates (現状の写し)                                                                                                                                                           |
+| [`imports.tf`](imports.tf)                     | 既存設定を取り込む `import` ブロック (state を保管しない方式の要)                                                                                                                                           |
+| [`rulesets.tf`](rulesets.tf)                   | **本当の門。未取得のため resource なし** + 写し方のテンプレ                                                                                                                                                 |
+| [`unmanaged.tf`](unmanaged.tf)                 | 宣言していないものと、その理由                                                                                                                                                                              |
 
 ---
 
 ## 検証の状態 (できたこと / できなかったこと)
 
-| 検証                              | 結果                                                                                                                                                                                              |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `terraform fmt -check -recursive` | ✅ 通した (Terraform v1.9.8 / 2026-08-14)                                                                                                                                                         |
-| `terraform validate`              | ❌ **未検証: `registry.terraform.io:443` が egress ポリシーで 403** (proxy status の `connect_rejected` に記録あり)。provider を取得できないので `init` が通らず、`validate` は `init` を要求する |
-| `terraform plan`                  | ❌ **未検証: 同上 + 認証が未決定**                                                                                                                                                                |
-| `import` ブロックの振る舞い       | ❌ **未検証** (#390 の「未確認 1〜3」はそのまま残っている)                                                                                                                                        |
+| 検証                                    | 結果                                                                                                                                                                      |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `terraform fmt -check -diff -recursive` | ✅ 通した (Terraform v1.9.8 / 2026-08-14)                                                                                                                                 |
+| `terraform providers lock` (4 platform) | ✅ 通した — `integrations/github v6.13.0` を `.terraform.lock.hcl` に固定 (HashiCorp partner 署名 key `38027F80D7FD5FB2` を検証)                                          |
+| `terraform init -backend=false`         | ✅ 通した (2026-08-14。同日中に `registry.terraform.io` の egress が開通した)                                                                                             |
+| `terraform validate`                    | ✅ 通した — ただし **警告 1 件**: `github_branch_protection_v3.main` の `contexts` は provider が非推奨とし `checks` を勧めている (`branch_protection.tf:85`)。移行は別途 |
+| `terraform plan`                        | ❌ **未検証: 認証 (トークンの置き場) が未決定** — #390 に needs-human として残っている                                                                                    |
+| `import` ブロックの振る舞い             | ❌ **未検証** (#390 の「未確認 1〜3」はそのまま残っている)                                                                                                                |
 
-`terraform` バイナリ自体は `releases.hashicorp.com` から取得できました (HTTP 200)。**塞がれているのは provider レジストリだけ**です。GitHub runner はこのプロキシの外なので、CI では通る見込み ([`.github/workflows/github-terraform-check.yml`](../../../.github/workflows/github-terraform-check.yml))。
+上の ✅ と同じものを、PR ごとに [`github-terraform-check.yml`](../../../.github/workflows/github-terraform-check.yml) が回します。**ロックファイルが未登録なら、その workflow は非ゼロ終了で落ちます** — 無いまま `init` すると terraform は黙って生成して成功してしまい、「ハッシュ固定されていないのに CI は緑」が通ってしまうため。
 
 > `fmt` は HCL をパースするので構文エラーは捕まえますが、**resource の引数名が正しいか・型が合うかは見ていません**。「fmt が通った = 正しい」ではありません。
+>
+> `validate` が見るのは**宣言が provider のスキーマに合っているか**だけです。**「宣言と GitHub の現実が一致しているか」は plan を回すまで何も言えません。**
 
 ---
 
