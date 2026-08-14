@@ -10,6 +10,8 @@ MAF の `FunctionInvocationLayer` を**本物のまま**通す fake (tests/fakes
 - ツール実行の上限 (MAF の既定は**無制限**) を掛け忘れる
 - ToolContext (ContextVar) が MAF の並列ツール実行を跨いで見えず、
   主体依存のツールだけが「Tool error」に化ける
+- 引数のスキーマ検証失敗が "Tool error" に埋もれ、
+  「ツール定義とモデルの噛み合わせが悪い」と「実行が壊れた」を区別できなくなる
 
 ここで test しないこと:
 - 承認の中断 / 再開 (test_workflow_approval.py)
@@ -112,6 +114,36 @@ class TestToolContextAcrossParallelCalls:
 
 
 class TestToolFailureClassification:
+    async def test_l1_引数のスキーマ検証失敗は_tool_error_と別区分になる(
+        self, tools_enabled, session_repo, approval_repo, caplog
+    ):
+        # 無いと: LLM が作った引数がツール定義と合わない事故が "Tool error" に
+        # 埋もれる。直し方 (description / 引数名を直す) が実行時例外とはまったく
+        # 違うのに、ログでも履歴でも見分けられない (#320 完了条件)。
+        client = ScriptedChatClient(
+            [
+                # search_faq(query: str) に対して存在しない引数名で呼ぶ
+                tool_call_step("search_faq", {"q": "退職"}),
+                text_step("うまく調べられませんでした。"),
+            ]
+        )
+
+        with caplog.at_level(logging.ERROR, logger="app.workflow"):
+            await run_workflow(
+                "s-badargs", "調べて", session_repo, approval_repo, client
+            )
+
+        history = await session_repo.get("s-badargs")
+        contents = [m.text for m in history.messages]
+        assert any("Tool argument error (search_faq)" in c for c in contents)
+        assert not any("Tool error (search_faq)" in c for c in contents)
+
+        records = [r.getMessage() for r in caplog.records]
+        assert any("kind=schema_validation" in r for r in records)
+        # ログにも履歴にも引数の値そのものは出さない (Issue #313)
+        assert not any("退職" in r for r in records)
+        assert not any("退職" in c for c in contents if c.startswith("Tool "))
+
     async def test_l1_ツール実行の例外は_tool_error_区分になる(
         self, tools_enabled, monkeypatch, session_repo, approval_repo, caplog
     ):
@@ -134,6 +166,7 @@ class TestToolFailureClassification:
         history = await session_repo.get("s-boom")
         contents = [m.text for m in history.messages]
         assert any("Tool error (exploding_tool)" in c for c in contents)
+        assert not any("Tool argument error" in c for c in contents)
         # 例外文 (上流のホスト名) を履歴にも**このサービスのログ**にも出さない (Issue #313)。
         # 注意: MAF 自身は `agent_framework` ロガーに例外文をそのまま出す (実測)。
         # それはフレームワーク側の挙動なのでここでは検査対象にしていない —

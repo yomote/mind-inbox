@@ -78,6 +78,14 @@ _WORKFLOW_NAME = "mind-inbox-chat-turn"
 
 _REJECTION_REPLY = "操作はキャンセルされました。他にご用件はありますか？"
 
+# MAF が「引数がツールのスキーマに合わなかった」ときに function_result へ入れる定型文
+# (agent_framework._tools._auto_invoke_function)。実行そのものが失敗した場合の
+# "Error: Function failed." とはここで区別する (#320 / 段④)。
+# **上流がこの文言を変えたら区別が静かに壊れる** ので、MAF の実ループを通す
+# tests/test_workflow_tools.py の引数エラーのテストが赤になるようにしてある。
+_MAF_ARGUMENT_ERROR_PREFIX = "Error: Argument parsing failed."
+
+
 # checkpoint に入り得るアプリの pydantic 型 (edge を流れるメッセージ + HITL payload)。
 # CosmosCheckpointStorage の復元は許可リスト式 (JSON + pickle ハイブリッド) なので、
 # ここに登録が無い型は **保存は通るのに復元 (= /approve の再開) だけが落ちる**。
@@ -243,7 +251,14 @@ def _record_tool_outcomes(
     """MAF が実行したツールの結果 / 失敗を履歴に写す。
 
     v1 の EXECUTE_TOOL が担っていた「結果は履歴に、詳細はログに」を、MAF の
-    function_result content に対して行う。
+    function_result content に対して行う。**3 区分に分ける** (#320 段④):
+
+      成功        → `Tool result (name): <戻り値>`
+      引数エラー  → `Tool argument error (name): ...` — LLM が作った引数がツールの
+                    スキーマに合わなかった。**"Tool error" に埋もれさせない** —
+                    ツール定義とモデルの噛み合わせが悪いという別種の事故で、
+                    直し方 (description / 引数名) が実行時例外とはまったく違う。
+      実行エラー  → `Tool error (name): ...`
 
     例外文・引数の値は履歴に入れない — 履歴はそのまま LLM へ再送され、最終的に
     ユーザーの画面まで届きうる出口 (上流のエンドポイント名等が漏れる)。詳細は
@@ -261,8 +276,21 @@ def _record_tool_outcomes(
             history.add_system_message(f"Tool result ({name}): {result}")
             continue
         ref = new_ref()
+        if isinstance(result, str) and result.startswith(_MAF_ARGUMENT_ERROR_PREFIX):
+            # 引数の値も検証エラー文もユーザー入力由来なので指紋だけ残す
+            logger.error(
+                "Tool argument validation failed ref=%s tool=%s kind=schema_validation detail=%s",
+                ref,
+                name,
+                fingerprint(str(content.exception)),
+            )
+            history.add_system_message(
+                f"Tool argument error ({name}): "
+                f"引数がツールの定義と合いませんでした (ref: {ref})"
+            )
+            continue
         logger.error(
-            "Tool execution failed ref=%s tool=%s detail=%s",
+            "Tool execution failed ref=%s tool=%s kind=execution detail=%s",
             ref,
             name,
             fingerprint(str(content.exception)),
