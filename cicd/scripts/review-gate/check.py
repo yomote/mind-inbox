@@ -708,17 +708,32 @@ def _machine_lines(body: str) -> list[str]:
       複製されて **association が NONE → OWNER に化け、誰もレビューしていないのに
       門が開く** (security-reviewer が実測: 第三者単体は False → OWNER の
       引用返信で True)。
-    - **コードフェンス (``` 〜 ```) の中**: 書式の説明で rubric や skill の例文
+    - **コードブロックの中**: 書式の説明で rubric や skill の例文
       (`[pm-accept] <sha>` / 必須ヘッダ) をそのまま貼ると、例文が受け入れ・
       レビューとして読まれる (#380 と同型の「言及を宣言と読む」誤爆)。
+      GitHub Markdown でコードになる 3 形式すべてを外す (Codex P1 / PR #404 —
+      ``` フェンスだけ外しても ~~~ フェンスとインデントコードが残る):
+      ``` フェンス / ~~~ フェンス / 行頭 4 スペース以上・タブのインデントコード。
+      フェンスの閉じは**開いたのと同じ文字**だけ (``` の中の ~~~ 行は中身)。
+      インデストコードの厳密な文法 (直前に空行が要る等) は追わず、4 スペース
+      以上は一律で外す — 過剰除外は門が閉じる側 (安全側) にしか倒れない
+      (正典の書式はどちらも行頭から書く)。
     """
     lines: list[str] = []
-    in_fence = False
+    fence: str | None = None  # 開いているフェンスの文字 ("`" か "~")。None = 外
     for line in body.splitlines():
-        if line.lstrip().startswith("```"):
-            in_fence = not in_fence
+        stripped = line.lstrip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            char = stripped[0]
+            if fence is None:
+                fence = char
+            elif fence == char:
+                fence = None
             continue
-        if in_fence or line.lstrip().startswith(">"):
+        if fence is not None or stripped.startswith(">"):
+            continue
+        if line.startswith("\t") or line.startswith("    "):
+            # インデントコード (4 スペース / タブ) — 書式例の貼り付け (Codex P1)
             continue
         lines.append(line)
     return lines
@@ -1131,6 +1146,38 @@ def post_advisory_once(repo: str, number: int, marker: str, body: str) -> bool:
     return True
 
 
+def maybe_post_standin_notice(
+    repo: str, number: int, verdict: Verdict, comment_bodies: list[str]
+) -> None:
+    """代役 judge で門を通した PR に degrade 告知を 1 回だけ貼る (Issue #400 D3-2)。
+
+    呼び出しは**マージを実行しうる全経路のマージより前** — イベント経路
+    (evaluate_pr) と sweep の再評価経路 (reverify_and_merge) の両方 (Codex P2 /
+    PR #404: イベント経路の投稿が一過性で失敗すると、次の sweep が告知なしで
+    マージし「代役で通った痕跡」が永久に残らない)。投稿失敗の例外はここで
+    握らない — 呼び出し元 (sweep の隔離 / evaluate_pr の run 赤) が失敗として
+    数え、マージは次の周回に譲られる (痕跡なしのマージより遅いマージを取る)。
+    """
+    if not should_notice_standin_pass(
+        verdict_ok=verdict.ok,
+        reviewer=verdict.reviewer,
+        marker_posted=not still_unposted(STANDIN_PASS_MARKER, comment_bodies),
+    ):
+        return
+    posted = post_advisory_once(
+        repo,
+        number,
+        STANDIN_PASS_MARKER,
+        f"{STANDIN_PASS_MARKER}\n"
+        "🟡 **この PR の独立レビュー条件は代役 judge (standin review) で"
+        "満たされました。** 代役の投稿は実装者と同じアカウントから出るため、"
+        "Codex のような別アカウントによる構造的な独立性は回復していません"
+        " (Issue #400 D3 / D4)。担い手は review-gate status の文言にも出ます。",
+    )
+    if posted:
+        print("advisory: 代役 judge で通過 — degrade 告知を投稿した (#400 D3-2)")
+
+
 def maybe_post_advisories(
     repo: str,
     number: int,
@@ -1342,6 +1389,12 @@ def reverify_and_merge(repo: str, number: int, head_sha: str) -> bool:
             " (保存済み success を failure に訂正)"
         )
         return False
+    # 代役で通っているなら告知をマージより先に (Codex P2 / PR #404): イベント
+    # 経路の投稿が失敗していた場合、ここが最後の砦。投稿失敗は例外で上へ —
+    # sweep_one_pr の隔離が失敗として数え、マージは次の周回 (≤30 分) に譲る
+    maybe_post_standin_notice(
+        repo, number, ev.verdict, [body for body, _ in ev.comment_pairs]
+    )
     merged, _ = try_merge(repo, number, head_sha)
     if merged:
         # 補償の基準時刻は**マージ成功の後**に取る (Codex P1 / PR #258): 再評価の
@@ -1945,25 +1998,10 @@ def evaluate_pr(
     # status の 1 行 (D3-1) だけだと一覧を開かない限り見えない — PR 本体に痕跡を残す。
     # **マージ執行より前**に貼る: 執行が即マージすると advisory 段に到達せず、
     # 「代役で通ってそのままマージされた」痕跡が status にしか残らなくなる
-    if advisories and should_notice_standin_pass(
-        verdict_ok=verdict.ok,
-        reviewer=verdict.reviewer,
-        marker_posted=not still_unposted(
-            STANDIN_PASS_MARKER, [body for body, _ in ev.comment_pairs]
-        ),
-    ):
-        posted = post_advisory_once(
-            repo,
-            number,
-            STANDIN_PASS_MARKER,
-            f"{STANDIN_PASS_MARKER}\n"
-            "🟡 **この PR の独立レビュー条件は代役 judge (standin review) で"
-            "満たされました。** 代役の投稿は実装者と同じアカウントから出るため、"
-            "Codex のような別アカウントによる構造的な独立性は回復していません"
-            " (Issue #400 D3 / D4)。担い手は review-gate status の文言にも出ます。",
+    if advisories:
+        maybe_post_standin_notice(
+            repo, number, verdict, [body for body, _ in ev.comment_pairs]
         )
-        if posted:
-            print("advisory: 代役 judge で通過 — degrade 告知を投稿した (#400 D3-2)")
     if verdict.ok and execute_merge:
         # マージ執行 (ADR 0040 D1 / #253): この success status が「最後の required
         # check の緑」だった場合、GITHUB_TOKEN 起点のため GitHub の auto-merge は

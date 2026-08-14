@@ -123,7 +123,10 @@ def test_l1_独立レビューは環境変数では切れない(monkeypatch) -> 
             return [{"filename": "apps/bff/x.ts"}]
         if path.endswith("/comments"):
             return [
-                {"body": "[pm-accept] abc1234 — 意図どおり", "author_association": "OWNER"}
+                {
+                    "body": "[pm-accept] abc1234 — 意図どおり",
+                    "author_association": "OWNER",
+                }
             ]
         raise AssertionError(f"想定外の gh 呼び出し: {args}")
 
@@ -170,7 +173,9 @@ def test_l1_受け入れ行は行頭マーカー直後のshaだけを読む() ->
     assert has_pm_accept([("[pm-accept] abc1234 — 意図どおり", "OWNER")], HEAD)
     assert has_pm_accept([("[pm-accept] abc1234", "OWNER")], HEAD)
     assert has_pm_accept([(f"[pm-accept] {HEAD}", "OWNER")], HEAD)
-    assert has_pm_accept([(f"確認しました。\n\n[pm-accept] {HEAD[:7]} — ok", "OWNER")], HEAD)
+    assert has_pm_accept(
+        [(f"確認しました。\n\n[pm-accept] {HEAD[:7]} — ok", "OWNER")], HEAD
+    )
     # 負: 行の途中のマーカー言及 (規約の説明文が SHA を含むだけ)
     assert not has_pm_accept(
         [(f"マージには [pm-accept] {HEAD[:7]} の投稿が必要です", "OWNER")], HEAD
@@ -183,15 +188,52 @@ def test_l1_受け入れ行は行頭マーカー直後のshaだけを読む() ->
 
 def test_l1_引用とコードフェンス内の受け入れ行は数えない() -> None:
     """無いと何が静かに通るか:
-        引用: 第三者の偽受け入れを権限保持者が Quote reply すると association が
-        OWNER に化けて門が開く (standin マーカーで実測済みの経路と同型)。
-        フェンス: 書式説明で skill の例文を貼っただけのコメントが受け入れになる
-        (#380 と同じ「言及を宣言と読む」誤爆)。
+    引用: 第三者の偽受け入れを権限保持者が Quote reply すると association が
+    OWNER に化けて門が開く (standin マーカーで実測済みの経路と同型)。
+    フェンス: 書式説明で skill の例文を貼っただけのコメントが受け入れになる
+    (#380 と同じ「言及を宣言と読む」誤爆)。
     """
     quoted = (f"> [pm-accept] {HEAD[:7]} — ok\n\n引用を確認しました", "OWNER")
     fenced = (f"書式はこうです:\n```\n[pm-accept] {HEAD[:7]} — 理由\n```", "OWNER")
     assert not has_pm_accept([quoted], HEAD)
     assert not has_pm_accept([fenced], HEAD)
+
+
+def test_l1_markdownの全コードブロック形式を判定対象から外す() -> None:
+    """Codex P1 (PR #404): ``` フェンスだけ外しても、GitHub Markdown でコードに
+    なる形式は他に 2 つある (~~~ フェンス / 4 スペース・タブのインデントコード)。
+
+    無いと何が静かに通るか:
+        権限保持者が現 head の SHA 入りの書式例をインデントコードで貼るだけで
+        受け入れ・代役レビューが成立し、以前の受け入れで auto-merge が武装済みの
+        PR なら実際の受け入れ・レビューなしでマージされる。
+    """
+    indented = (f"書式の例:\n\n    [pm-accept] {HEAD[:7]} — 理由\n", "OWNER")
+    tabbed = (f"例:\n\n\t[pm-accept] {HEAD[:7]} — 理由\n", "OWNER")
+    tilde = (f"~~~\n[pm-accept] {HEAD[:7]} — 理由\n~~~\n", "OWNER")
+    assert not has_pm_accept([indented], HEAD)
+    assert not has_pm_accept([tabbed], HEAD)
+    assert not has_pm_accept([tilde], HEAD)
+    standin_indented = (
+        f"ヘッダの例:\n\n    {STANDIN_REVIEW_MARKER}\n    代役レビュー ({HEAD[:7]})\n",
+        "OWNER",
+    )
+    standin_tilde = (
+        f"~~~markdown\n{STANDIN_REVIEW_MARKER}\n代役レビュー ({HEAD[:7]})\n~~~\n",
+        "OWNER",
+    )
+    assert not has_standin_review([standin_indented], HEAD)
+    assert not has_standin_review([standin_tilde], HEAD)
+    # フェンスの閉じは開いたのと同じ文字だけ — ``` の中の ~~~ 行はフェンスを
+    # 閉じない (閉じ扱いにすると、以降のブロック内容が判定対象に漏れる)
+    mixed = (
+        f"```\n~~~\n[pm-accept] {HEAD[:7]} — 例\n```\n",
+        "OWNER",
+    )
+    assert not has_pm_accept([mixed], HEAD)
+    # 過剰除外の対照: インデント無しの正規の受け入れは通る (上の正のテストと重複
+    # だが、この除外がどこまでかをこのテスト内で読めるようにする)
+    assert has_pm_accept([(f"[pm-accept] {HEAD[:7]} — ok", "OWNER")], HEAD)
 
 
 def test_l1_トークン抽出も構文一致で行頭の保留宣言を尊重する() -> None:
@@ -1037,6 +1079,63 @@ def test_l1_sweepはpm_acceptが消えたprをマージしない(monkeypatch) ->
     )
     merged = check.reverify_and_merge("o/r", 1, "abc1234")
     assert merged and followups == [["docs/x.md"]]
+
+
+def test_l1_sweep経路でも代役通過の告知はマージ前に出る(monkeypatch) -> None:
+    """Codex P2 (PR #404): 告知がイベント経路 (evaluate_pr) にしか無いと、
+    そこでの投稿が一過性で失敗した場合、次の sweep (reverify_and_merge) が
+    告知なしでマージする。
+
+    無いと何が静かに通るか:
+        D3-2 の「代役で通った痕跡」が PR に永久に残らない — degrade の可視化が
+        status の 1 行 (マージ後は誰も見ない) だけになり、#400 P1 の
+        「黙って代役で通る」が sweep 経路にだけ残る。
+    """
+    order: list[str] = []
+    standin_ok = check.GateEval(
+        verdict=check.Verdict(ok=True, reviewer=check.REVIEWER_STANDIN),
+        changed_paths=["apps/x.ts"],
+        comment_pairs=[],
+        code_pr=True,
+        codex_present=False,
+    )
+    monkeypatch.setattr(check, "evaluate_gate", lambda *a: standin_ok)
+    monkeypatch.setattr(
+        check,
+        "post_advisory_once",
+        lambda *a: order.append("notice") or True,
+    )
+    monkeypatch.setattr(
+        check, "try_merge", lambda *a: order.append("merge") or (True, "")
+    )
+    monkeypatch.setattr(check, "ensure_merge_followup", lambda *a: None)
+    assert check.reverify_and_merge("o/r", 1, "abc1234")
+    assert order == ["notice", "merge"], "告知はマージより前"
+    # Codex で通った PR には告知を出さない (ノイズ防止)
+    order.clear()
+    codex_ok = check.GateEval(
+        verdict=check.Verdict(ok=True, reviewer=check.REVIEWER_CODEX),
+        changed_paths=["apps/x.ts"],
+        comment_pairs=[],
+        code_pr=True,
+        codex_present=True,
+    )
+    monkeypatch.setattr(check, "evaluate_gate", lambda *a: codex_ok)
+    assert check.reverify_and_merge("o/r", 1, "abc1234")
+    assert order == ["merge"]
+    # 告知の投稿が失敗したらマージしない (痕跡なしのマージより遅いマージ)
+    order.clear()
+    monkeypatch.setattr(check, "evaluate_gate", lambda *a: standin_ok)
+
+    def failing_post(*args):
+        raise subprocess.CalledProcessError(1, ["gh"], stderr="HTTP 500")
+
+    monkeypatch.setattr(check, "post_advisory_once", failing_post)
+    import pytest
+
+    with pytest.raises(subprocess.CalledProcessError):
+        check.reverify_and_merge("o/r", 1, "abc1234")
+    assert order == [], "投稿失敗の例外は握らず、マージ API も叩かない"
 
 
 def test_l1_補償の基準時刻はマージ成功の後に取る(monkeypatch) -> None:
