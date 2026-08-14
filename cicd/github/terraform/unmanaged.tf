@@ -119,7 +119,25 @@
 # }
 #
 # ══════════════════════════════════════════════════════════════════════════
-#  5. provider に対応が無いもの
+#  5. branch protection のうち、resource はあるが管理から外した項目
+# ══════════════════════════════════════════════════════════════════════════
+#
+#   require_signed_commits (署名コミットの強制) — main / release の両方
+#     → `github_branch_protection_v3` の引数には**ある**が、**現在値が未取得**。
+#       スナップショットに `required_signatures` キーが無く、自作機構も
+#       `settings_diff.py:70` の `NOT_COMPARED` で比較対象外と明記している。
+#       provider の既定値 false で現実を上書きしないよう、
+#       `branch_protection.tf` の `lifecycle.ignore_changes` で外している。
+#       = **plan に差分が出ない** (誰かが有効/無効にしても気づけない)。
+#
+#       取り方: gh api repos/{owner}/{repo}/branches/{branch}/protection/required_signatures --jq '.enabled'
+#       実値を取れたら `ignore_changes` を消して明示する。
+#
+#   ※ 引数そのものが無い 6 項目 (allow_force_pushes / lock_branch など) は
+#      `branch_protection.tf` 冒頭を参照。そちらは resource 側の穴。
+#
+# ══════════════════════════════════════════════════════════════════════════
+#  6. provider に対応が無いもの
 # ══════════════════════════════════════════════════════════════════════════
 #
 #   code_scanning_default_setup (CodeQL の default setup)

@@ -35,6 +35,7 @@
 | ラベル                                                             | **集合が未取得** — `github_issue_labels` は authoritative なので、列挙漏れが apply で消える                                                              | [`unmanaged.tf`](unmanaged.tf)                 |
 | `code_scanning_default_setup`                                      | **provider に対応 resource が無い**                                                                                                                      | [`unmanaged.tf`](unmanaged.tf)                 |
 | branch protection の 6 項目 (`allow_force_pushes` 等)              | **`github_branch_protection_v3` の引数に無い** — 現状が全て REST 既定値 `false` なので写しとしては一致するが、plan には出ない                            | [`branch_protection.tf`](branch_protection.tf) |
+| `require_signed_commits` (署名コミットの強制)                      | **未取得** — スナップショットに `required_signatures` が無く、自作機構も比較対象外 (`settings_diff.py:70`)。既定値 `false` で現実を上書きしないよう `lifecycle.ignore_changes` で管理から外した (= plan に出ない) | [`branch_protection.tf`](branch_protection.tf) |
 
 取り方 (PO 本人の権限が要る) は各ファイルのコメントと [`docs/runbooks/github-terraform.md`](../../../docs/runbooks/github-terraform.md)。
 

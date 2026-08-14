@@ -32,6 +32,33 @@
 # **ruleset (本当の門)** は別ファイル `rulesets.tf` を参照。classic branch
 # protection をいくら宣言しても #373 が実測した `405 Repository rule violations`
 # の門は再現されません。
+#
+# **`require_signed_commits` (署名コミットの強制) は未取得です。**
+# 写し元のスナップショット (`snapshots/yomote/mind-inbox.json`) に
+# `required_signatures` キーがそもそも無く、自作機構も
+# `cicd/scripts/github-settings/settings_diff.py:70` の `NOT_COMPARED` で
+# 「v1 の適用対象外」と明記して**比較していません**。= 現在値が false だとは
+# 確認できていません。
+#
+# provider の既定値は `false` です。ここで引数を省いたまま import して apply
+# すると、**実際には署名必須が有効でも「false への変更」として適用され、保護が
+# 黙って弱まります** (#377 「PUT が送らなかった項目が既定値に戻った」の再演)。
+# 観測していない値を既定値で上書きしないため、下の 2 resource では
+# `lifecycle.ignore_changes` でこの引数を**管理対象から外して**います。
+#
+# ⚠️ これは「安全に倒した」のであって「一致を保証した」のではありません。
+#    管理外なので **plan に差分が出ません** (誰かが変えても気づけない)。
+#    上記 6 項目と同じ穴です。`unmanaged.tf` にも名前を出しています。
+# ⚠️ `ignore_changes` が効くのは**更新時だけ**です。この 2 resource が import
+#    ではなく**新規作成**になった場合 (= 保護が消えている場合) は既定値 false で
+#    作られます。その状況は保護そのものが失われているということなので、plan の
+#    `will be created` を人が見て止めること。
+#
+#   取り方 (PO 本人の権限が要る):
+#     gh api repos/{owner}/{repo}/branches/main/protection/required_signatures --jq '.enabled'
+#     gh api repos/{owner}/{repo}/branches/release/protection/required_signatures --jq '.enabled'
+#   実値を取れたら `ignore_changes` を消して `require_signed_commits = <実値>` を
+#   明示すること (それが本来の「現状の写し」)。
 
 resource "github_branch_protection_v3" "main" {
   repository = var.github_repository
@@ -74,6 +101,12 @@ resource "github_branch_protection_v3" "main" {
   # 書くと「誰も push できない」制限を作ってしまうので書きません。
   # なお `restrictions` は organization 所有リポジトリでしか使えない
   # (provider docs)。このリポジトリは個人所有。
+
+  lifecycle {
+    # `require_signed_commits` は未取得 (冒頭コメント参照)。既定値 false で
+    # 現実を上書きしないため管理対象から外す。実値を取れたら消して明示する。
+    ignore_changes = [require_signed_commits]
+  }
 }
 
 resource "github_branch_protection_v3" "release" {
@@ -93,5 +126,10 @@ resource "github_branch_protection_v3" "release" {
     require_code_owner_reviews      = false
     require_last_push_approval      = false
     required_approving_review_count = 0
+  }
+
+  lifecycle {
+    # main と同じ理由 (未取得の署名設定を既定値 false で上書きしない)。
+    ignore_changes = [require_signed_commits]
   }
 }
