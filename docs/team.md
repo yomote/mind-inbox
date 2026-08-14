@@ -107,7 +107,7 @@ user の対話窓口。**常に 1 本**で、使い捨てローテーション�
 
 **規律ではなく機構で守る層**。セッションの生死に依存せず、run 履歴が必ず残る。
 
-- **PR ごとの門** — `test` (4 層テスト + lint/build) / `codeql` / `iac-validate` / `adr-number-guard` (ADR 採番の衝突) / `auto-improve-guard` (自動改変の範囲)
+- **PR ごとの門** — `test` (4 層テスト + lint/build) / `CodeQL` (**GitHub の default setup**。自前 workflow だった `codeql.yml` は 2026-08-14 の PO 裁定で退役 — [#408](https://github.com/yomote/mind-inbox/issues/408)) / `iac-validate` / `adr-number-guard` (ADR 採番の衝突) / `auto-improve-guard` (自動改変の範囲)
 - **マージの門** — `review-gate` が commit status を貼る。緑になる条件は 3 つ: (1) `[pm-accept]` + 現 head SHA の受け入れコメント、(2) レビュースレッドが全解決、(3) コード PR なら**独立レビューが 1 本** (担い手は Codex でも代役 judge でもよい)。**push で受け入れは失効する** (実装差分が不変の main 追随だけは引き継ぐ)。さらに 30 分毎の sweep が advisory・マージ執行・ストール検知を回す
 - **配る** — `deploy` (main → dev) / `build-images` (ghcr へ事前ビルド)
 - **見張る** — `golden-path-monitor` (毎朝の実環境チェック) / `ux-eval` (UX 機械計測) / `debt-check` / `security-sweep` / `refresh-infra-diagram` / `status-page`
