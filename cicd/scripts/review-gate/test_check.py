@@ -269,6 +269,32 @@ def test_l1_markdownの全コードブロック形式を判定対象から外す
         "OWNER",
     )
     assert has_pm_accept([trailing_space], HEAD)
+    # リスト項目内のフェンス (Codex round 3 P1): `- ```text` はフェンス検出に
+    # 掛からないが、中身は必ず 2 スペース以上字下げされる — マーカー判定を
+    # 桁 0 に限ることでリスト文脈ごと外れる (フェンス検出でリスト文法を追わない)
+    list_fence = (
+        f"- ```text\n  [pm-accept] {HEAD[:7]} — 理由\n  ```\n",
+        "OWNER",
+    )
+    assert not has_pm_accept([list_fence], HEAD)
+    standin_list_fence = (
+        f"- ```text\n  {STANDIN_REVIEW_MARKER}\n  代役レビュー ({HEAD[:7]})\n  ```\n",
+        "OWNER",
+    )
+    assert not has_standin_review([standin_list_fence], HEAD)
+    # 同じ理由で、字下げされたマーカー行そのものを数えない (1〜3 スペースも含む)
+    assert not has_pm_accept([(f" [pm-accept] {HEAD[:7]} — ok", "OWNER")], HEAD)
+    assert not has_standin_review(
+        [(f" {STANDIN_REVIEW_MARKER}\n代役レビュー ({HEAD[:7]})", "OWNER")], HEAD
+    )
+    # 字下げされた保留宣言も「最新の意思」とは読まない (リスト内コードの例文が
+    # carryover を誤って打ち消さない)
+    assert (
+        latest_pm_accept_token(
+            [("[pm-accept] aaa1111 — ok", "OWNER"), ("  [pm-accept] は例文", "OWNER")]
+        )
+        == "aaa1111"
+    )
     # 過剰除外の対照: インデント無しの正規の受け入れは通る (上の正のテストと重複
     # だが、この除外がどこまでかをこのテスト内で読めるようにする)
     assert has_pm_accept([(f"[pm-accept] {HEAD[:7]} — ok", "OWNER")], HEAD)

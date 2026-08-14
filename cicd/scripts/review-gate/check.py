@@ -117,7 +117,12 @@ PM_ACCEPT_MARKER = "[pm-accept]"
 # **受け入れの取り消しは文章ではなくコメントの削除で行う** (PR #404 代役レビュー
 # minor-4: 「[pm-accept] <sha> を取り消します」の文型は構文一致で受け入れと
 # 読まれる。削除は sweep のマージ直前再評価 / reverify_and_merge が検出する)。
-PM_ACCEPT_LINE_RE = re.compile(r"^\s*\[pm-accept\]\s+`?([0-9a-fA-F]{7,40})\b`?")
+# **行頭 = 桁 0 (字下げ一切なし)** (Codex round 3 P1 / PR #404): リスト項目内の
+# コードフェンス (`- ```text`) はフェンス検出に掛からないが、その中身は必ず
+# 2 スペース以上字下げされる — 字下げを許さないことで、リスト文脈ごと
+# 「言及を宣言と読む」クラスから外れる (Markdown のリスト文法を追いかけない)。
+# 全角空白等の Unicode 空白開始も同時に締まる (security-reviewer info-1)。
+PM_ACCEPT_LINE_RE = re.compile(r"^\[pm-accept\]\s+`?([0-9a-fA-F]{7,40})\b`?")
 # 受け入れとして数えるコメントの投稿者。**このリポジトリは public なので、
 # 誰でも PR にコメントできる** — 投稿者を見ないと第三者が `[pm-accept] <sha>` と
 # 書くだけで門が開く (2026-08-10 の受け入れレビューで発見)。
@@ -139,11 +144,12 @@ REVIEWER_STANDIN = "代役 judge"
 # 実装者と同じ GitHub アカウントから投稿されるため、SHA を縛らないと
 # 「1 回レビューを貼ってから何でも push できる」門になる (pm-accept と同形の失効)。
 STANDIN_REVIEW_MARKER = "<!-- standin-review -->"
-# 代役マーカーも行頭に限る (pm-accept と同じ構文厳密化 / Issue #380 と同型)。
-# 地の文・インラインコード (`<!-- standin-review -->` を貼ってください 等) の
-# 言及はレビューではない。rubric (review-rubric.md Part 6) の必須ヘッダは
-# マーカーを 1 行目に単独で置くので、正規の投稿はこの条件を常に満たす。
-STANDIN_MARKER_LINE_RE = re.compile(r"^\s*<!--\s*standin-review\s*-->")
+# 代役マーカーも行頭 = 桁 0 に限る (pm-accept と同じ構文厳密化 / Issue #380 と
+# 同型 + Codex round 3 P1 のリスト内フェンス対策)。地の文・インラインコード
+# (`<!-- standin-review -->` を貼ってください 等) の言及はレビューではない。
+# rubric (review-rubric.md Part 6) の必須ヘッダはマーカーを 1 行目に字下げなしで
+# 単独で置くので、正規の投稿はこの条件を常に満たす。
+STANDIN_MARKER_LINE_RE = re.compile(r"^<!--\s*standin-review\s*-->")
 # 代役 judge で門を通した PR に 1 回だけ貼る degrade 告知の冪等マーカー (#400 D3-2)
 STANDIN_PASS_MARKER = "<!-- standin-pass-notice -->"
 # 正規の告知の投稿者 (workflow の GITHUB_TOKEN)。**告知済みの判定は本文の
@@ -755,6 +761,10 @@ def _machine_lines(body: str) -> list[str]:
       インデントコードの厳密な文法 (直前に空行が要る等) は追わず、4 スペース
       以上は一律で外す — 過剰除外は門が閉じる側 (安全側) にしか倒れない
       (正典の書式はどちらも行頭から書く)。
+      **リスト項目内のフェンス** (`- ```text`) はここでは検出しない (Codex
+      round 3 P1) — 対策はマーカー正規表現側の「桁 0 のみ」で持つ: リスト内
+      コードの中身は必ず 2 スペース以上字下げされるため、字下げを許さない
+      マーカー判定には掛からない (Markdown のリスト文法をここで追いかけない)。
     """
     lines: list[str] = []
     fence: str | None = None  # 開いているフェンスの文字 ("`" か "~")。None = 外
@@ -885,7 +895,10 @@ def latest_pm_accept_token(comments: list[tuple[str, str]]) -> str | None:
         if tokens:
             return tokens[-1]
         if any(
-            line.lstrip().startswith(PM_ACCEPT_MARKER) for line in _machine_lines(body)
+            # 桁 0 のみ (PM_ACCEPT_LINE_RE と同じ基準 — 字下げされたマーカーは
+            # リスト内コード等の言及であり、受け入れの意思表示ではない)
+            line.startswith(PM_ACCEPT_MARKER)
+            for line in _machine_lines(body)
         ):
             # 行頭マーカーだが SHA が続かない — 受け入れの試み (書き忘れ) か
             # 明示の保留。どちらでも「最新の意思が受け入れでない」ので引き継がない
