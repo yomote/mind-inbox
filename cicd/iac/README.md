@@ -103,20 +103,7 @@ az bicep version
 | **環境層**     | `rg-dev-mind-inbox`    | SWA / Functions / Container Apps                                                                 | ✅ 壊して作り直す |
 | **デプロイ層** | （リソースを作らない） | image の sha 差し替え / zip deploy / 静的配信                                                    | —                 |
 
-```bash
-# 一度きり（持続層の RG は provision.sh / cleanup-env.sh のどちらも触らない）
-az group create -n rg-shared-mindbox -l japaneast
-
-cd cicd/iac
-az bicep build --file main-shared.bicep
-az deployment group what-if \
-  -g rg-shared-mindbox -n main-shared \
-  -f main-shared.bicep -p @main-shared.parameters.json
-
-az deployment group create \
-  -g rg-shared-mindbox -n main-shared \
-  -f main-shared.bicep -p @main-shared.parameters.json
-```
+**適用手順は [`docs/runbooks/persistent-layer-apply.md`](../../docs/runbooks/persistent-layer-apply.md)**（一度きりの手動オペ。持続層の RG は `provision.sh` / `cleanup-env.sh` のどちらも触りません）。ここには構成と `enable*` の考え方だけを置きます。
 
 ### 段階適用（`enable*` の既定がなぜこうなっているか）
 
@@ -134,11 +121,7 @@ Key Vault に **secret ではなく「鍵オブジェクト」を非エクスポ
 **Key Vault Crypto User** だけを与えます（`keyVaultCryptoUserPrincipalIds` に object ID を渡す）。
 **封筒暗号のスクリプト実装は別 PR**です（ここは器だけ）。
 
-```bash
-# 鍵の URI（kid）を取り出す
-az deployment group show -g rg-shared-mindbox -n main-shared \
-  --query properties.outputs.e2eTraceKeyUri.value -o tsv
-```
+鍵の URI（kid）の取り出し方は [runbook](../../docs/runbooks/persistent-layer-apply.md#steps) にあります（output `e2eTraceKeyUri`）。
 
 ### 撤収との関係
 

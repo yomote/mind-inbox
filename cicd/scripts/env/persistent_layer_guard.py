@@ -419,6 +419,10 @@ def main(argv: list[str] | None = None) -> int:
         allow_persistent=args.allow_persistent,
     )
     print(decision.render(), file=sys.stderr)
+    # 判定コードは **stdout** に出す。呼び出し側 (cleanup-env.sh) は許可/拒否の 2 値
+    # だけでは足りない — 「不在だから通した」のか「中身を見て通した」のかで、
+    # そのあと RG が現れたときの扱いが変わる。人間向けの本文は stderr のまま。
+    print(decision.code)
     return 0 if decision.allowed else 3
 
 

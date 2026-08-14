@@ -1,4 +1,4 @@
-"""persistent_layer_guard の判定テスト。
+"""[単体] persistent_layer_guard の判定テスト。
 
 各テストの「無いと何が静かに通るか」:
   - test_refuses_persistent_rg_itself       … 持続層 RG そのものが削除される
@@ -401,6 +401,33 @@ def test_cli_layer_tag_from_az_output() -> None:
         '"tags": {"mindInboxLayer": "persistent", "mindInboxEnvironment": "dev"}}]'
     )
     assert main(["--target-rg", "rg-dev-mind-inbox", "--inventory", inventory]) == 3
+
+
+def test_cli_prints_decision_code_on_stdout(capsys: pytest.CaptureFixture[str]) -> None:
+    """判定コードは stdout に出す。
+
+    無いと: 呼び出し側 (cleanup-env.sh) が許可/拒否の 2 値しか受け取れず、
+    「不在だから通した」と「中身を見て通した」を区別できない。区別できないと、
+    不在判定のあとに再作成された RG を無検証で消す経路が塞げない。
+    """
+    assert main(["--target-rg", "rg-dev-mind-inbox", "--rg-missing"]) == 0
+    assert capsys.readouterr().out.strip() == "rg-absent"
+
+    assert (
+        main(
+            [
+                "--target-rg",
+                "rg-dev-mind-inbox",
+                "--inventory",
+                '["Microsoft.Web/sites"]',
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out.strip() == "ok"
+
+    assert main(["--target-rg", "rg-shared-mindbox", "--rg-missing"]) == 3
+    assert capsys.readouterr().out.strip() == "target-is-persistent-rg"
 
 
 def test_cli_broken_inventory_is_refused_not_treated_as_empty() -> None:

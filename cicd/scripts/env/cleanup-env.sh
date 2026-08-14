@@ -145,12 +145,19 @@ rg_exists() {
   [[ "$(rg_exists_state)" == "true" ]]
 }
 
+# 直近のガード判定コード (rg-absent / ok / … )。許可か拒否かの 2 値では足りない —
+# 「不在だから通した」のか「中身を見て通した」のかで、その後の扱いが変わる。
+GUARD_DECISION_CODE=""
+# 一度でも「RG は不在」で通したか。**通したあとに RG が現れたら、それは別の誰かが
+# 作った RG** なので触ってはいけない (中身を一度も検証していない)。
+GUARD_SAW_RG_ABSENT=false
+
 # 撤収してよい RG かを判定する。判定そのものは持たず、材料 (RG の中身) を集めて
-# persistent_layer_guard.py に渡すだけ。拒否されたら**何も消さずに**終了する。
-assert_target_is_not_persistent_layer() {
+# persistent_layer_guard.py に渡すだけ。**呼ぶたびに材料を取り直す** (使い回さない)。
+run_persistent_layer_guard() {
   local guard="${SCRIPT_DIR}/persistent_layer_guard.py"
   local -a guard_args=(--target-rg "$RG" --persistent-rg "$PERSISTENT_RG")
-  local inventory err_file rg_state name
+  local inventory err_file rg_state name rc=0
 
   if [[ "$ALLOW_PERSISTENT_DELETE" == "true" ]]; then
     guard_args+=(--allow-persistent)
@@ -184,14 +191,43 @@ assert_target_is_not_persistent_layer() {
     rm -f "$err_file"
   fi
 
-  if ! python3 "$guard" "${guard_args[@]}"; then
+  # 判定コードは stdout、人間向けの本文は stderr (そのまま流す)。
+  if ! GUARD_DECISION_CODE="$(python3 "$guard" "${guard_args[@]}")"; then
+    rc=3
+  fi
+
+  if [[ "$GUARD_DECISION_CODE" == "rg-absent" ]]; then
+    GUARD_SAW_RG_ABSENT=true
+  fi
+
+  return "$rc"
+}
+
+# **破壊系の 1 つ手前で必ず呼ぶ。** 最初の判定から時間が経つ間に RG が作り直されて
+# いる可能性があるため (TOCTOU)、材料はそのつど取り直す。
+assert_safe_to_destroy() {
+  local phase="$1"
+
+  if ! run_persistent_layer_guard; then
     echo "" >&2
-    echo "Nothing was deleted. See the guard line above for which case you hit:" >&2
+    echo "Nothing was deleted (refused before ${phase}). See the guard line above:" >&2
     echo "  - persistent resources still in the RG -> move them to ${PERSISTENT_RG} first (Issue #302)" >&2
     echo "  - could not check (existence or contents) -> fix az login / permissions and re-run" >&2
     echo "  - target IS the persistent RG -> there is no flag for this, on purpose" >&2
     echo "ALLOW_PERSISTENT_DELETE=true overrides the first two only, and what it destroys" >&2
     echo "does not come back." >&2
+    exit 3
+  fi
+
+  # 「不在だから通した」あとに RG が現れた = このスクリプトの外で誰かが作った RG。
+  # **中身が空に見えても消さない** — provision 中の RG を巻き込む事故になる。
+  if [[ "$GUARD_SAW_RG_ABSENT" == "true" && "$GUARD_DECISION_CODE" != "rg-absent" ]]; then
+    echo "" >&2
+    echo "ERROR: ${RG} did not exist when the guard first ran, but exists now" >&2
+    echo "(guard says: ${GUARD_DECISION_CODE}). Something re-created it between the check" >&2
+    echo "and ${phase} -- a concurrent provision, most likely." >&2
+    echo "Refusing to delete a resource group that appeared under us. Nothing was deleted." >&2
+    echo "Re-run this script from the start if you still want it gone." >&2
     exit 3
   fi
 }
@@ -469,9 +505,12 @@ purge_deleted_cognitive_services() {
 # ---- main flow ----
 
 # **破壊系より前**に置く。ここを通らないと 1 つも消えない。
-assert_target_is_not_persistent_layer
+# 以降、破壊系の 1 つ手前でそのつど取り直す (TOCTOU — 判定と削除の間に RG の中身が
+# 変わりうる。特に「不在だから通した」あとに provision が RG を作り直す経路)。
+assert_safe_to_destroy "any destructive step"
 
 if [[ "$DELETE_ENTRA_APP" == "true" ]]; then
+  assert_safe_to_destroy "the Entra app deletion"
   delete_auto_created_entra_app
 else
   echo "Keeping the Entra app registration (DELETE_ENTRA_APP=false)."
@@ -491,6 +530,7 @@ else
 fi
 
 if [[ "$FORCE_DELETE_LOG_ANALYTICS" == "true" ]]; then
+  assert_safe_to_destroy "the Log Analytics force-delete"
   force_delete_log_analytics_workspaces
 else
   echo "Keeping Log Analytics workspace(s) recoverable (FORCE_DELETE_LOG_ANALYTICS=false)."
@@ -516,7 +556,11 @@ if [[ "$PURGE_DELETED_KEYVAULTS" != "true" || "$PURGE_DELETED_COGNITIVE_SERVICES
   echo ""
 fi
 
-if rg_exists; then
+# 削除の直前にもう一度。**削除するかどうかもこのガードの判定から取る** —
+# `rg_exists` を別に呼ぶと、その返答と「中身を検証した瞬間」がまたズレる。
+assert_safe_to_destroy "the resource group deletion"
+
+if [[ "$GUARD_DECISION_CODE" != "rg-absent" ]]; then
   delete_args=(group delete -n "$RG" --yes)
   if [[ "$NO_WAIT" == "true" ]]; then
     delete_args+=(--no-wait)
