@@ -6,13 +6,13 @@
 
 ## ファイル構成
 
-| ファイル        | 真実の所在                                  | 生成方法                                          | 関連 issue                                          |
-| --------------- | ------------------------------------------- | ------------------------------------------------- | --------------------------------------------------- |
-| `bff-trpc.yaml` | `apps/bff/src/trpc/router.ts` の zod schema | `npm run docs:openapi:bff` (router introspection) | [#8](https://github.com/yomote/mind-inbox/issues/8) |
+| ファイル        | 真実の所在                                                   | 生成方法                                                 | 関連 issue                                          |
+| --------------- | ------------------------------------------------------------ | -------------------------------------------------------- | --------------------------------------------------- |
+| `bff-trpc.yaml` | `apps/bff/src/trpc/router.ts` の zod schema                  | `npm run docs:openapi:bff` (router introspection)        | [#8](https://github.com/yomote/mind-inbox/issues/8) |
+| `ai-agent.yaml` | `apps/services/ai-agent` の FastAPI route + `app/schemas.py` | `npm run docs:openapi:ai-agent` (`app.openapi()` 直出し) | [#9](https://github.com/yomote/mind-inbox/issues/9) |
 
-FastAPI 2 サービス (ai-agent / voicevox) の OpenAPI 生成は**未整備** ([#9](https://github.com/yomote/mind-inbox/issues/9) 未完)。
-`ai-agent.yaml` / `voicevox.yaml` はまだ存在せず、CI ゲートも無い。真実は各サービスの pydantic 実装
-(ai-agent は `app/schemas.py`) にある。#9 を実装するまでこの README に載せない。
+voicevox サービスの OpenAPI 生成は**未整備** ([#9](https://github.com/yomote/mind-inbox/issues/9) の残り)。
+`voicevox.yaml` はまだ存在せず、CI ゲートも無い。真実は実装 (pydantic) にある。
 
 ### `bff-trpc.yaml` の生成方式
 
@@ -23,12 +23,18 @@ FastAPI 2 サービス (ai-agent / voicevox) の OpenAPI 生成は**未整備** 
 として `/api/trpc/{path}` に素直にマップする。レスポンス仕様を保つため router の各 procedure には
 `.output()` を付与している (出力 schema の真実も router に集約)。
 
-## 更新フロー
+### `ai-agent.yaml` の生成方式
 
-1. 該当する router のコードを変更
-2. ローカルで再生成 (`npm run docs:openapi:bff`)
+`apps/services/ai-agent/scripts/generate_openapi.py` が FastAPI の `app.openapi()` を
+そのまま YAML に落とす (手書きの記述を足さない)。キー順は `sort_keys=True` で固定してあり、
+FastAPI / pydantic のバージョン差で「中身は同じなのに diff が出る」ことを防ぐ。
+
+### 更新フロー
+
+1. 該当する router / route のコードを変更
+2. ローカルで再生成 (`npm run docs:openapi:bff` / `npm run docs:openapi:ai-agent`)
 3. commit に含める
-4. CI が再度生成し `git diff --exit-code` で乖離をチェック
+4. CI (`test.yml` の `lint-and-build`) が再度生成し `git diff --exit-code` で乖離をチェック
 
 ## なぜ生成物を commit するか
 
