@@ -36,6 +36,9 @@ class Step:
     chunks: Optional[list[Content]] = None
     # この数の chunk を流した後に例外を投げる (接続断の再現)。None なら投げない
     fail_after: Optional[int] = None
+    # 呼ばれた瞬間に例外を投げる (stream / 非 stream の両方)。fail_after は
+    # ストリーミングでしか効かないので、非 stream の失敗はこちらで作る
+    fail_immediately: bool = False
     error: str = "LLM connection lost"
 
     def as_message(self) -> Message:
@@ -52,6 +55,14 @@ def text_step(
         fail_after=fail_after,
         error=error,
     )
+
+
+def error_step(error: str = "LLM connection lost") -> Step:
+    """モデル呼び出しそのものが落ちる 1 往復 (非 stream でも投げる)。
+
+    承認再開は常に非 stream なので、再開中の LLM 障害はこれでしか作れない。
+    """
+    return Step(contents=[], fail_immediately=True, error=error)
 
 
 def tool_call_step(name: str, arguments: dict, *, call_id: str = "call-1") -> Step:
@@ -125,11 +136,15 @@ class ScriptedChatClient(
         if not stream:
 
             async def _respond() -> ChatResponse:
+                if step.fail_immediately:
+                    raise RuntimeError(step.error)
                 return ChatResponse(messages=[step.as_message()], response_id="fake")
 
             return _respond()
 
         async def _emit():
+            if step.fail_immediately:
+                raise RuntimeError(step.error)
             if step.chunks is None:
                 # ツール呼び出し等、テキストでない content はまとめて 1 update で流す
                 yield ChatResponseUpdate(role="assistant", contents=step.contents)

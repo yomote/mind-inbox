@@ -69,6 +69,16 @@ class Plan(BaseModel):
 
 
 class ApprovalRecord(BaseModel):
+    """承認レコード (Cosmos の永続モデル / `CosmosApprovalRepository`)。
+
+    **`extra="forbid"` にしてはいけない。** Cosmos の read_item は文書に
+    システムプロパティ (`_rid` / `_self` / `_etag` / `_ts` / `_attachments`) を
+    載せて返すので、forbid にすると `model_validate(doc)` が**既存文書の読み込みを
+    すべて弾く** (実測 5 件の extra エラー)。廃止フィールドが残った古い文書も
+    同じ理由で読めなくなる。余剰フィールドを黙って捨てる代わりに払っている代償が
+    これで、**廃止フィールドを渡すテストの残骸は型では止まらない** (judge #417)。
+    """
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     session_id: str
     plan: Plan

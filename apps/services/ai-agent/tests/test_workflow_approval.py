@@ -8,6 +8,8 @@
   (PR #243 レビュー指摘)
 - **再開後**にモデルが別の副作用ツールを要求したターンを完了扱いし、承認レコードを
   作らないまま空 reply で閉じる退行 (PR #417 P1 / TestChainedApproval)
+- **承認再開中に LLM が落ちた**とき、実行済み副作用ツールの記録が履歴に残らず、
+  次ターンで同じツールがもう一度呼ばれる退行 (judge #417 / TestResumeFailure)
 
 ここで test しないこと:
 - SSE / HTTP の枠組み (それは L2 /chat 系)
@@ -32,6 +34,7 @@ from app.workflow import (
 )
 from tests.fakes import (
     ScriptedChatClient,
+    error_step,
     text_step,
     tool_call_step,
     tool_calls_step,
@@ -355,6 +358,43 @@ class TestChainedApproval:
         assert not any("Tool result (archive_message)" in c for c in contents)
         # 捨てたことがログに残る (静かに落とさない)
         assert any("承認要求が 2 件届いた" in r.getMessage() for r in caplog.records)
+
+
+class TestResumeFailure:
+    """承認を再開した LLM 呼び出しが落ちたターン (judge #417)。
+
+    無いと何が静かに通るか: 再開経路だけ `converse` と違って try/except が無く、
+    **承認済みツールは実行されたのに履歴には 1 行も残らない**まま例外が上がる。
+    /approve は 500 を返し、ユーザーは同じ依頼をもう一度出す — 履歴に実行の痕跡が
+    無いのでモデルは同じ副作用ツールを呼び直す (承認済みメールの二重送信)。
+    """
+
+    async def test_l1_承認再開中にLLMが落ちても実行済みツールの記録が履歴に残る(
+        self, session_repo, approval_repo
+    ):
+        # judge の再現手順そのまま: send_reply を承認 → ツールは実行される →
+        # その直後の内側 LLM 呼び出しが RuntimeError
+        client = ScriptedChatClient(
+            [tool_call_step("send_reply", APPROVAL_ARGS), error_step()]
+        )
+
+        res = await run_workflow(
+            "s-resume-fail", "返信して", session_repo, approval_repo, client
+        )
+
+        with pytest.raises(RuntimeError, match="LLM connection lost"):
+            await resume_after_approval(
+                res.approval_request_id, True, session_repo, approval_repo, client
+            )
+
+        history = await session_repo.get("s-resume-fail")
+        contents = [m.text for m in history.messages]
+        assert any(
+            "Tool result (send_reply): [stub] Reply sent to a@example.com." in c
+            for c in contents
+        )
+        # 落ちたターンで assistant 応答は積まない (完了していない)
+        assert history.messages[-1].role == "system"
 
 
 class TestCheckpointCleanup:

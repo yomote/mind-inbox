@@ -630,14 +630,25 @@ class ConverseExecutor(Executor):
         ]
         # 再開は常に非ストリーミング (/approve は SSE ではない)
         tool_context = ToolContext(session_id=request.session_id)
-        response = await self._call_llm(
-            request.session_id,
-            messages,
-            ctx,
-            stream=False,
-            updates=[],
-            tool_context=tool_context,
-        )
+        updates: list = []
+        try:
+            response = await self._call_llm(
+                request.session_id,
+                messages,
+                ctx,
+                stream=False,
+                updates=updates,
+                tool_context=tool_context,
+            )
+        except Exception:
+            # `converse` と同じ扱いにする (judge #417)。**再開経路の方が損害が大きい** —
+            # ここで落ちた時点で承認済みの副作用ツールは既に実行されているので、
+            # 履歴に残さないと /approve が 500 を返したあとユーザーが出し直した
+            # ターンで、モデルが同じ副作用ツールを呼び直す (承認済みメールの二重送信)。
+            await self._flush_partial_tool_outcomes(
+                request.session_id, updates, tool_context
+            )
+            raise
         tool_context.citations.extend(request.citations)
         # `_settle` を通す = 再開後にモデルが別の副作用ツールを要求したら、
         # **新しい承認要求として立て直す** (完了扱いにしない / #417 P1)
