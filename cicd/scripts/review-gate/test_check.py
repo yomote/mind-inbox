@@ -255,6 +255,20 @@ def test_l1_markdownの全コードブロック形式を判定対象から外す
         "OWNER",
     )
     assert has_pm_accept([closed_then_real], HEAD)
+    # 閉じは後続が空白のみ (CommonMark / Codex round 2 P1): info string 付きの
+    # 同文字・同数行 (``` の中の ```python) は閉じではなくブロックの中身 —
+    # 閉じ扱いにすると以降のブロック内容 (受け入れ例) が判定対象に漏れる
+    info_string = (
+        f"```\n```python\n[pm-accept] {HEAD[:7]} — 例\n```\n",
+        "OWNER",
+    )
+    assert not has_pm_accept([info_string], HEAD)
+    # 対照: 閉じフェンスの後続の空白 (行末スペース) は閉じのまま
+    trailing_space = (
+        f"```\n例\n```  \n[pm-accept] {HEAD[:7]} — ok\n",
+        "OWNER",
+    )
+    assert has_pm_accept([trailing_space], HEAD)
     # 過剰除外の対照: インデント無しの正規の受け入れは通る (上の正のテストと重複
     # だが、この除外がどこまでかをこのテスト内で読めるようにする)
     assert has_pm_accept([(f"[pm-accept] {HEAD[:7]} — ok", "OWNER")], HEAD)
@@ -1124,10 +1138,9 @@ def test_l1_sweep経路でも代役通過の告知はマージ前に出る(monke
         codex_present=False,
     )
     monkeypatch.setattr(check, "evaluate_gate", lambda *a: standin_ok)
+    monkeypatch.setattr(check, "fetch_comments_with_times", lambda *a: [])
     monkeypatch.setattr(
-        check,
-        "post_advisory_once",
-        lambda *a: order.append("notice") or True,
+        check, "post_comment", lambda *a: order.append("notice") or None
     )
     monkeypatch.setattr(
         check, "try_merge", lambda *a: order.append("merge") or (True, "")
@@ -1154,12 +1167,32 @@ def test_l1_sweep経路でも代役通過の告知はマージ前に出る(monke
     def failing_post(*args):
         raise subprocess.CalledProcessError(1, ["gh"], stderr="HTTP 500")
 
-    monkeypatch.setattr(check, "post_advisory_once", failing_post)
+    monkeypatch.setattr(check, "post_comment", failing_post)
     import pytest
 
     with pytest.raises(subprocess.CalledProcessError):
         check.reverify_and_merge("o/r", 1, "abc1234")
     assert order == [], "投稿失敗の例外は握らず、マージ API も叩かない"
+
+
+def test_l1_告知済み判定は正規の投稿者に限る() -> None:
+    """Codex round 2 P2 (PR #404): 告知済みの判定を本文マーカーだけでやらない。
+
+    無いと何が静かに通るか:
+        public リポジトリでは第三者が不可視の `<!-- standin-pass-notice -->` を
+        先に投稿できる。本文だけの判定だと正規の告知が「投稿済み」扱いになり、
+        代役で通った PR の可視の degrade 痕跡が永久に残らない (D3-2 の無効化)。
+    """
+    from check import GATE_ACTIONS_LOGIN, STANDIN_PASS_MARKER, standin_notice_posted
+
+    outsider = (f"{STANDIN_PASS_MARKER} 先回り", "attacker")
+    legit = (f"{STANDIN_PASS_MARKER}\n🟡 告知本文", GATE_ACTIONS_LOGIN)
+    assert not standin_notice_posted([outsider]), "第三者のマーカーは告知ではない"
+    assert standin_notice_posted([legit])
+    assert standin_notice_posted([outsider, legit])
+    assert not standin_notice_posted([])
+    # マーカーの無い bot コメントは数えない
+    assert not standin_notice_posted([("ただのコメント", GATE_ACTIONS_LOGIN)])
 
 
 def test_l1_補償の基準時刻はマージ成功の後に取る(monkeypatch) -> None:

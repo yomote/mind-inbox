@@ -146,6 +146,11 @@ STANDIN_REVIEW_MARKER = "<!-- standin-review -->"
 STANDIN_MARKER_LINE_RE = re.compile(r"^\s*<!--\s*standin-review\s*-->")
 # 代役 judge で門を通した PR に 1 回だけ貼る degrade 告知の冪等マーカー (#400 D3-2)
 STANDIN_PASS_MARKER = "<!-- standin-pass-notice -->"
+# 正規の告知の投稿者 (workflow の GITHUB_TOKEN)。**告知済みの判定は本文の
+# マーカーだけでなく投稿者もこの login に限る** (Codex round 2 P2 / PR #404):
+# public リポジトリでは第三者が不可視のマーカーだけを先に投稿でき、本文だけで
+# 判定すると正規の degrade 告知が「投稿済み」扱いで永久に抑止される。
+GATE_ACTIONS_LOGIN = "github-actions[bot]"
 SHORT_SHA_LEN = 7
 
 # ---- pm-accept の引き継ぎ / merge_group (ADR 0042) ----
@@ -257,8 +262,26 @@ def should_notice_standin_pass(
     「黙って代役で通る」を潰す — 代役の投稿は実装者と同じアカウントから出るため
     独立性は回復しておらず (#400 D4)、それが status の 1 行以外に痕跡なく流れると
     PO は degrade に気づけない。1 PR 1 回だけ (marker 冪等 — advisory と同じ)。
+    marker_posted は standin_notice_posted (投稿者を見る) で判定して渡すこと。
     """
     return verdict_ok and reviewer == REVIEWER_STANDIN and not marker_posted
+
+
+def standin_notice_posted(comments: list[tuple[str, str]]) -> bool:
+    """(本文, 投稿者 login) の列に**正規の**代役通過告知が既にあるか。
+
+    本文のマーカーだけで判定しない (Codex round 2 P2 / PR #404): public
+    リポジトリでは第三者が不可視の `<!-- standin-pass-notice -->` を先に
+    投稿でき、本文だけの判定だと正規の告知が「投稿済み」扱いになって
+    可視の degrade 痕跡が永久に残らない。正規の告知は workflow
+    (GITHUB_TOKEN = github-actions[bot]) だけが投稿するので、投稿者も縛る。
+    他の advisory (再トリガー依頼等) は抑止されても合否・痕跡の保証に
+    関わらないため、この縛りは告知マーカーだけに掛ける (門を重くしない)。
+    """
+    return any(
+        STANDIN_PASS_MARKER in body and login == GATE_ACTIONS_LOGIN
+        for body, login in comments
+    )
 
 
 def still_unposted(marker: str, comment_bodies: list[str]) -> bool:
@@ -697,6 +720,9 @@ class GateEval:
     comment_pairs: list[tuple[str, str]]  # (本文, author_association)
     code_pr: bool
     codex_present: bool
+    # 正規の代役通過告知 (github-actions[bot] 投稿) が既にあるか (#400 D3-2 /
+    # Codex round 2 P2 — 本文マーカーだけでなく投稿者で判定した結果)
+    standin_notice_posted: bool = False
 
 
 def is_code_pr(changed_paths: list[str]) -> bool:
@@ -720,10 +746,12 @@ def _machine_lines(body: str) -> list[str]:
       GitHub Markdown でコードになる 3 形式すべてを外す (Codex P1 / PR #404 —
       ``` フェンスだけ外しても ~~~ フェンスとインデントコードが残る):
       ``` フェンス / ~~~ フェンス / 行頭 4 スペース以上・タブのインデントコード。
-      フェンスの閉じは**開いたのと同じ文字かつ同数以上** (CommonMark §fenced
-      code blocks / PR #404 代役レビュー major-1: 文字だけ見ると、```` で包んで
-      ``` 込みの例文を引用したとき中の ``` 行が閉じ扱いになり、以降のブロック
-      内容が判定対象に漏れる)。``` の中の ~~~ 行も中身。
+      フェンスの閉じは**開いたのと同じ文字・同数以上・後続が空白のみ**
+      (CommonMark §fenced code blocks / PR #404 代役レビュー major-1 と
+      Codex round 2 P1: 文字だけ見ると ```` 包みの中の ``` 行が、長さまで見ても
+      ``` の中の ```python 行 (info string 付き — CommonMark では閉じにならない)
+      が閉じ扱いになり、以降のブロック内容が判定対象に漏れる)。
+      ``` の中の ~~~ 行も中身。
       インデントコードの厳密な文法 (直前に空行が要る等) は追わず、4 スペース
       以上は一律で外す — 過剰除外は門が閉じる側 (安全側) にしか倒れない
       (正典の書式はどちらも行頭から書く)。
@@ -736,9 +764,13 @@ def _machine_lines(body: str) -> list[str]:
         if stripped.startswith("```") or stripped.startswith("~~~"):
             char = stripped[0]
             run = len(stripped) - len(stripped.lstrip(char))
+            rest = stripped[run:]
             if fence is None:
+                # 開きは info string (```python 等) を許す (CommonMark)
                 fence, fence_len = char, run
-            elif char == fence and run >= fence_len:
+            elif char == fence and run >= fence_len and not rest.strip():
+                # 閉じは同じ文字・同数以上・後続が空白のみ。info string 付きの
+                # 同文字行は閉じではなくブロックの中身 (Codex round 2 P1)
                 fence, fence_len = None, 0
             continue
         if fence is not None or stripped.startswith(">"):
@@ -1158,7 +1190,7 @@ def post_advisory_once(repo: str, number: int, marker: str, body: str) -> bool:
 
 
 def maybe_post_standin_notice(
-    repo: str, number: int, verdict: Verdict, comment_bodies: list[str]
+    repo: str, number: int, verdict: Verdict, notice_posted: bool
 ) -> None:
     """代役 judge で門を通した PR に degrade 告知を 1 回だけ貼る (Issue #400 D3-2)。
 
@@ -1168,25 +1200,34 @@ def maybe_post_standin_notice(
     マージし「代役で通った痕跡」が永久に残らない)。投稿失敗の例外はここで
     握らない — 呼び出し元 (sweep の隔離 / evaluate_pr の run 赤) が失敗として
     数え、マージは次の周回に譲られる (痕跡なしのマージより遅いマージを取る)。
+
+    notice_posted は standin_notice_posted (投稿者 = github-actions[bot] に
+    限った判定 / Codex round 2 P2) の結果。投稿直前の再フェッチ確認も同じ
+    投稿者縛りで行う — 本文だけの確認 (post_advisory_once) を使うと、第三者の
+    不可視マーカーが正規の告知を「投稿済み」に見せかけて抑止できる。
     """
     if not should_notice_standin_pass(
         verdict_ok=verdict.ok,
         reviewer=verdict.reviewer,
-        marker_posted=not still_unposted(STANDIN_PASS_MARKER, comment_bodies),
+        marker_posted=notice_posted,
     ):
         return
-    posted = post_advisory_once(
+    # 投稿直前の再フェッチ確認 (2 重投稿レースの防御 b — post_advisory_once と
+    # 同じ規律を、投稿者を見る判定で行う)
+    fresh = fetch_comments_with_times(repo, number)
+    if standin_notice_posted([(body, login) for body, _t, login in fresh]):
+        print("advisory: 再確認で正規の standin-pass-notice を検出 — 投稿しない")
+        return
+    post_comment(
         repo,
         number,
-        STANDIN_PASS_MARKER,
         f"{STANDIN_PASS_MARKER}\n"
         "🟡 **この PR の独立レビュー条件は代役 judge (standin review) で"
         "満たされました。** 代役の投稿は実装者と同じアカウントから出るため、"
         "Codex のような別アカウントによる構造的な独立性は回復していません"
         " (Issue #400 D3 / D4)。担い手は review-gate status の文言にも出ます。",
     )
-    if posted:
-        print("advisory: 代役 judge で通過 — degrade 告知を投稿した (#400 D3-2)")
+    print("advisory: 代役 judge で通過 — degrade 告知を投稿した (#400 D3-2)")
 
 
 def maybe_post_advisories(
@@ -1379,6 +1420,15 @@ def evaluate_gate(
         comment_pairs=comment_pairs,
         code_pr=code_pr,
         codex_present=codex_present,
+        standin_notice_posted=standin_notice_posted(
+            [
+                (
+                    (c.get("body") or ""),  # type: ignore[union-attr]
+                    ((c.get("user") or {}).get("login", "")),  # type: ignore[union-attr]
+                )
+                for c in comments
+            ]
+        ),
     )
 
 
@@ -1403,9 +1453,7 @@ def reverify_and_merge(repo: str, number: int, head_sha: str) -> bool:
     # 代役で通っているなら告知をマージより先に (Codex P2 / PR #404): イベント
     # 経路の投稿が失敗していた場合、ここが最後の砦。投稿失敗は例外で上へ —
     # sweep_one_pr の隔離が失敗として数え、マージは次の周回 (≤30 分) に譲る
-    maybe_post_standin_notice(
-        repo, number, ev.verdict, [body for body, _ in ev.comment_pairs]
-    )
+    maybe_post_standin_notice(repo, number, ev.verdict, ev.standin_notice_posted)
     merged, _ = try_merge(repo, number, head_sha)
     if merged:
         # 補償の基準時刻は**マージ成功の後**に取る (Codex P1 / PR #258): 再評価の
@@ -2010,9 +2058,7 @@ def evaluate_pr(
     # **マージ執行より前**に貼る: 執行が即マージすると advisory 段に到達せず、
     # 「代役で通ってそのままマージされた」痕跡が status にしか残らなくなる
     if advisories:
-        maybe_post_standin_notice(
-            repo, number, verdict, [body for body, _ in ev.comment_pairs]
-        )
+        maybe_post_standin_notice(repo, number, verdict, ev.standin_notice_posted)
     if verdict.ok and execute_merge:
         # マージ執行 (ADR 0040 D1 / #253): この success status が「最後の required
         # check の緑」だった場合、GITHUB_TOKEN 起点のため GitHub の auto-merge は
