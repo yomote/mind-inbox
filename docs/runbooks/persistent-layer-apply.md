@@ -59,29 +59,29 @@
 
 ## Verification
 
-- [ ] デプロイが `Succeeded`
+実行後、次がすべて満たされていることを確認:
 
-      ```bash
-      az deployment group show -g rg-shared-mindbox -n main-shared --query properties.provisioningState -o tsv
-      ```
+- [ ] デプロイが `Succeeded` (下の 1)
+- [ ] **作ったリソース全部に層タグが付いている** (下の 2) — このタグが撤収ガードの判定入力なので、**付いていないものは環境層と見なされて撤収で消えます**
+- [ ] 鍵が**エクスポート不可**で作られている (下の 3 が `false` を返すこと)
+- [ ] **撤収ガードが持続層 RG を拒否する** (下の 4 が exit 3 で、何も消えないこと)
 
-- [ ] **作ったリソース全部に層タグが付いている** — このタグが撤収ガードの判定入力なので、付いていないものは環境層と見なされて消えます
+```bash
+# 1. デプロイの結果
+az deployment group show -g rg-shared-mindbox -n main-shared \
+  --query properties.provisioningState -o tsv
 
-      ```bash
-      az resource list -g rg-shared-mindbox --query "[].{name:name,layer:tags.mindInboxLayer}" -o table
-      ```
+# 2. 層タグ (layer 列が空のものは撤収ガードから見えていない)
+az resource list -g rg-shared-mindbox \
+  --query "[].{name:name,layer:tags.mindInboxLayer}" -o table
 
-- [ ] 鍵が**エクスポート不可**で作られている (`false` が返ること)
+# 3. 鍵がエクスポート不可か
+az keyvault key show --vault-name kv-dev-mindbox -n e2e-artifacts \
+  --query key.exportable -o tsv
 
-      ```bash
-      az keyvault key show --vault-name kv-dev-mindbox -n e2e-artifacts --query key.exportable -o tsv
-      ```
-
-- [ ] **撤収ガードが持続層 RG を拒否する** (exit 3 で、何も消えないこと)
-
-      ```bash
-      cd cicd && RG=rg-shared-mindbox ./scripts/env/cleanup-env.sh; echo "exit=$?"
-      ```
+# 4. 撤収ガードが持続層 RG を拒否するか
+cd cicd && RG=rg-shared-mindbox ./scripts/env/cleanup-env.sh; echo "exit=$?"
+```
 
 ## Rollback
 
