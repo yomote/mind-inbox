@@ -13,13 +13,13 @@ PURGE_DELETED_KEYVAULTS="${PURGE_DELETED_KEYVAULTS:-false}"
 PURGE_DELETED_COGNITIVE_SERVICES="${PURGE_DELETED_COGNITIVE_SERVICES:-false}"
 FORCE_DELETE_LOG_ANALYTICS="${FORCE_DELETE_LOG_ANALYTICS:-false}"
 PURGE_WAIT_SECONDS="${PURGE_WAIT_SECONDS:-1800}"
-# 持続層 RG (ADR 0046 D1 / #302)。撤収の対象は環境層だけで、ここは**削除できない**。
+# 管理系 RG (ADR 0046 D1 / #302)。撤収の対象はアプリ系だけで、ここは**削除できない**。
 # 判定は persistent_layer_guard.py が持つ (このスクリプトは材料を集めるだけ)。
-PERSISTENT_RG="${PERSISTENT_RG:-rg-shared-mindbox}"
-ALLOW_PERSISTENT_DELETE="${ALLOW_PERSISTENT_DELETE:-false}"
-# 層タグ (mindInboxLayer=persistent) の付いていない持続層リソースを名指しで守る。
-# 空白区切り。移行前の (shared bicep をまだ流していない) Storage / Log Analytics 用。
-PERSISTENT_RESOURCE_NAMES="${PERSISTENT_RESOURCE_NAMES:-}"
+MGMT_RG="${MGMT_RG:-rg-mgmt-mindbox}"
+ALLOW_PROTECTED_DELETE="${ALLOW_PROTECTED_DELETE:-false}"
+# 層タグ (mindInboxLayer=management) の付いていない管理系リソースを名指しで守る。
+# 空白区切り。移行前の (mgmt bicep をまだ流していない) Storage / Log Analytics 用。
+PROTECTED_RESOURCE_NAMES="${PROTECTED_RESOURCE_NAMES:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -51,25 +51,32 @@ Environment variables:
   PURGE_DELETED_KEYVAULTS         true|false. Purge soft-deleted Key Vaults after RG deletion (default: false)
   PURGE_DELETED_COGNITIVE_SERVICES true|false. Purge soft-deleted CS / OpenAI accounts after RG deletion (default: false)
   PURGE_WAIT_SECONDS              Max seconds to wait for RG deletion / soft-deleted state (default: 1800)
-  PERSISTENT_RG                   Persistent-layer RG that must never be torn down (default: rg-shared-mindbox)
-  PERSISTENT_RESOURCE_NAMES       Space-separated resource names to treat as persistent even without the layer tag (default: empty)
-  ALLOW_PERSISTENT_DELETE         true|false. Proceed even though persistent resources are in the target RG (default: false)
+  MGMT_RG                         Management-layer RG that must never be torn down (default: rg-mgmt-mindbox)
+  PROTECTED_RESOURCE_NAMES        Space-separated resource names to treat as management even without the layer tag (default: empty)
+  ALLOW_PROTECTED_DELETE          true|false. Proceed even though protected resources are in the target RG (default: false)
 
-This script refuses to run when the target RG is the persistent layer, when the
-target RG still holds persistent resources, or when either the RG's existence or
-its contents could not be determined (ADR 0046 D1 / #302). "Could not check" is
-treated as "do not delete" -- not as "nothing to protect".
+This script refuses to run when the target RG is the management layer, when the
+target RG still holds management resources, when it holds data whose restore has
+never been proven, or when either the RG's existence or its contents could not be
+determined (ADR 0046 D1 / #302). "Could not check" is treated as "do not delete"
+-- not as "nothing to protect".
 
 Soft-deleted resources do NOT show up in "az resource list", so when a purge flag
 is on, "list-deleted" for that type is fed to the guard as well. Purging a
-persistent soft-deleted twin destroys the only recovery path, so it is refused.
+protected soft-deleted twin destroys the only recovery path, so it is refused.
 
-A resource counts as persistent when (1) it carries the layer tag
-mindInboxLayer=persistent stamped by main-shared.bicep, (2) its name is listed in
-PERSISTENT_RESOURCE_NAMES, or (3) its type has no disposable twin in the
-environment layer (Cosmos DB / Cognitive Services). Key Vault, Storage and Log
-Analytics exist in BOTH layers, so type alone does not make them persistent --
-they need the tag or the name. Untagged ones are reported before deletion.
+A resource counts as management when (1) it carries the layer tag
+mindInboxLayer=management stamped by main-mgmt.bicep, or (2) its name is listed
+in PROTECTED_RESOURCE_NAMES. Key Vault, Storage and Log Analytics exist in BOTH
+layers, so type alone does not make them management -- they need the tag or the
+name. Untagged ones are reported before deletion.
+
+Cosmos DB is app-layer by design (PO ruling on #302) but is still refused for now:
+the backup/restore round-trip (ADR 0046 D9) has never been run, and "a backup you
+have never restored is not a backup" (ADR 0018). Once the restore is proven, that
+blanket refusal is replaced by a backup-freshness check -- see
+docs/runbooks/mgmt-layer-apply.md. OpenAI / Speech do NOT block teardown (they hold
+no data); what they cost to lose is printed instead of silently ignored.
 
 Destructive options default to OFF (ADR 0046 D5/D6). Purging soft-deleted resources
 removes the only recovery path, so it must be asked for explicitly. Turn it on when
@@ -102,7 +109,7 @@ if ! command -v az >/dev/null 2>&1; then
   exit 1
 fi
 
-# 持続層ガードの判定は python の純粋関数が持つ (pytest で押さえてある)。
+# 層ガードの判定は python の純粋関数が持つ (pytest で押さえてある)。
 # 無いと判定できない = 削除に進めない、なので存在チェックは必須扱いにする。
 if ! command -v python3 >/dev/null 2>&1; then
   echo "ERROR: python3 command not found (needed by persistent_layer_guard.py)" >&2
@@ -113,7 +120,7 @@ az account show >/dev/null
 
 # RG の存在を 3 値で返す: true / false / unknown。
 # **unknown を false (不在) に潰さない** — 「確かめられなかった」を「消すものが無い」と
-# 読み替えると、持続層ガードが inventory を一度も検証しないまま通過し、後段の再確認が
+# 読み替えると、層ガードが inventory を一度も検証しないまま通過し、後段の再確認が
 # 成功したときに az group delete まで進む経路ができる。az の stderr は握り潰さず出す。
 rg_exists_state() {
   local out err_file rc=0
@@ -159,13 +166,13 @@ declare -a GUARD_PREVIOUS_CODES=()
 
 # 撤収してよい RG かを判定する。判定そのものは持たず、材料 (RG の中身) を集めて
 # persistent_layer_guard.py に渡すだけ。**呼ぶたびに材料を取り直す** (使い回さない)。
-run_persistent_layer_guard() {
+run_layer_guard() {
   local guard="${SCRIPT_DIR}/persistent_layer_guard.py"
-  local -a guard_args=(--target-rg "$RG" --persistent-rg "$PERSISTENT_RG")
+  local -a guard_args=(--target-rg "$RG" --mgmt-rg "$MGMT_RG")
   local inventory deleted err_file rg_state name code rc=0
 
-  if [[ "$ALLOW_PERSISTENT_DELETE" == "true" ]]; then
-    guard_args+=(--allow-persistent)
+  if [[ "$ALLOW_PROTECTED_DELETE" == "true" ]]; then
+    guard_args+=(--allow-protected)
   fi
 
   # これまでの判定を材料として渡す (状態遷移の判定は guard 側)。
@@ -175,12 +182,12 @@ run_persistent_layer_guard() {
     done
   fi
 
-  # 層タグの無い持続層リソースの名指し (移行前の Storage / Log Analytics 向け)。
-  for name in $PERSISTENT_RESOURCE_NAMES; do
-    guard_args+=(--persistent-name "$name")
+  # 層タグの無い管理系リソースの名指し (移行前の Storage / Log Analytics 向け)。
+  for name in $PROTECTED_RESOURCE_NAMES; do
+    guard_args+=(--protected-name "$name")
   done
 
-  # soft-delete 済みの持続層は `az resource list` に出ない。**purge は soft-delete
+  # soft-delete 済みの保護対象は `az resource list` に出ない。**purge は soft-delete
   # という唯一の復旧手段を恒久的に消す**ので、purge を有効にした種類だけ list-deleted
   # も判定材料に渡す (有効にしていない種類は触らないので渡さない = 無関係な soft-delete
   # で撤収が止まらない)。
@@ -220,11 +227,11 @@ run_persistent_layer_guard() {
     guard_args+=(--rg-missing)
   else
     err_file="$(mktemp)"
-    # az の失敗を握り潰さない: 失敗したら「持続層は無い」ではなく
+    # az の失敗を握り潰さない: 失敗したら「保護対象は無い」ではなく
     # 「確かめられなかった」として渡す (guard 側が拒否する)。
     # stderr は捨てずに下で表示する — 権限不足かログイン切れかを見えるようにするため。
-    # type だけでなく name / tags も渡す: 型だけでは環境層の Key Vault / Storage /
-    # Log Analytics と持続層のそれを区別できない (判定は guard 側の 3 段)。
+    # type だけでなく name / tags も渡す: 型だけではアプリ系の Key Vault / Storage /
+    # Log Analytics と管理系のそれを区別できない (判定は guard 側)。
     if inventory="$(az resource list -g "$RG" --query "[].{type:type,name:name,tags:tags}" -o json 2>"$err_file")"; then
       guard_args+=(--inventory "$inventory")
     else
@@ -255,15 +262,17 @@ assert_safe_to_destroy() {
 
   # 「不在だから通した」あとに RG が現れた場合も、この判定 (rg-reappeared-after-absent)
   # として guard 側から返る。**このシェルは比較しない** — 判定は 1 か所に置く。
-  if ! run_persistent_layer_guard; then
+  if ! run_layer_guard; then
     echo "" >&2
     echo "Nothing was deleted (refused before ${phase}). See the guard line above:" >&2
-    echo "  - persistent resources still in the RG -> move them to ${PERSISTENT_RG} first (Issue #302)" >&2
+    echo "  - management resources still in the RG -> move them to ${MGMT_RG} first (Issue #302)" >&2
+    echo "  - data whose restore is unproven (Cosmos) -> provisional refusal until the backup" >&2
+    echo "    and restore round-trip has been run once (ADR 0046 D9)" >&2
     echo "  - could not check (existence or contents) -> fix az login / permissions and re-run" >&2
-    echo "  - target IS the persistent RG -> there is no flag for this, on purpose" >&2
+    echo "  - target IS the management RG -> there is no flag for this, on purpose" >&2
     echo "  - the RG was absent earlier in this run but is not now -> a concurrent provision" >&2
     echo "    re-created it; nothing was deleted. Re-run from the start if you still want it gone" >&2
-    echo "ALLOW_PERSISTENT_DELETE=true overrides the first two only, and what it destroys" >&2
+    echo "ALLOW_PROTECTED_DELETE=true overrides all but the last two, and what it destroys" >&2
     echo "does not come back." >&2
     exit 3
   fi
@@ -630,7 +639,7 @@ fi
 
 # purge は「soft-delete という唯一の復旧手段を恒久的に消す」処理なので、ここでも
 # 直前に判定を取り直す。この時点では RG は既に消えている (rg-absent) が、ガードは
-# **soft-delete 済みの持続層を RG の存在とは独立に**見るので素通りしない。
+# **soft-delete 済みの保護対象を RG の存在とは独立に**見るので素通りしない。
 if [[ "$PURGE_DELETED_KEYVAULTS" == "true" || "$PURGE_DELETED_COGNITIVE_SERVICES" == "true" ]]; then
   assert_safe_to_destroy "the soft-deleted resource purge"
 fi
