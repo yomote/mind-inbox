@@ -1,20 +1,32 @@
-"""[単体] persistent_layer_guard の判定テスト。
+"""[単体] 層ガード (persistent_layer_guard) の判定テスト。
+
+守るものは 2 種類で、**意味が違う**ことをテストでも分けている:
+  - 管理系 (management) … 恒久。管理系 RG はどのフラグでも消せない
+  - 復元未実証データ (data) … 暫定。ADR 0046 D9 の復元実証が済んだら鮮度確認に差し替える
 
 各テストの「無いと何が静かに通るか」:
-  - test_refuses_persistent_rg_itself       … 持続層 RG そのものが削除される
-  - test_override_cannot_delete_persistent_rg … override を付けるだけで持続層 RG が消える
-  - test_refuses_when_persistent_resources_present … Cosmos ごと環境層と一緒に消える
-  - test_refuses_when_inventory_unavailable … 「調べられなかった」が「持続層なし」として通る
+  - test_refuses_management_rg_itself       … 管理系 RG そのものが削除される
+  - test_override_cannot_delete_management_rg … override を付けるだけで管理系 RG が消える
+  - test_default_management_rg_*            … MGMT_RG を別名に向けるだけで既定の管理系 RG
+                                              (rg-mgmt-mindbox) が保護から外れ、override
+                                              と組み合わせると実際に削除まで通る
+  - test_refuses_when_data_restore_unproven … 復元を通していない Cosmos ごと消える
+  - test_data_and_management_codes_differ   … 暫定の拒否と恒久の拒否が同じコードになり、
+                                              復元実証後にどちらを緩めてよいか読めなくなる
+  - test_cognitive_services_do_not_block_*  … アプリ系と決めた OpenAI / Speech で撤収が
+                                              常に拒否され、override 常用でガードが死ぬ
+  - test_cognitive_services_are_reported    … 「止めないという判断」が記録から消える
+  - test_refuses_when_inventory_unavailable … 「調べられなかった」が「保護対象なし」として通る
   - test_refuses_when_rg_existence_unknown  … 存在確認の失敗が「RG 不在」として通り、
                                               中身を一度も見ないまま削除へ進む
   - test_allows_app_layer_only              … 撤収そのものが常に拒否され、down が使えなくなる
   - test_allows_when_rg_absent              … 冪等な再実行 (RG 不在) が拒否で落ちる
-  - test_override_allows_with_findings      … 明示許可の逃げ道が消え、移行前に down できない
+  - test_override_allows_with_findings      … 明示許可の逃げ道が消え、復元実証前に down できない
   - test_case_insensitive_*                 … 大文字小文字違いで判定をすり抜ける
-  - test_layer_tag_*                        … 持続層の Storage / LAW / KV が型で拾えず黙って消える
-  - test_env_layer_*                        … 環境層の KV / Storage / LAW で撤収が常に拒否される
+  - test_layer_tag_*                        … 管理系の Storage / LAW / KV が型で拾えず黙って消える
+  - test_app_layer_*                        … アプリ系の KV / Storage / LAW で撤収が常に拒否される
                                               (= override 常用でガードが死ぬ)
-  - test_persistent_name_*                  … 層タグの無い移行前リソースを守る手段が消える
+  - test_protected_name_*                   … 層タグの無い移行前リソースを守る手段が消える
   - test_rg_reappeared_*                    … 「不在」で通した RG が再出現しても、中身を
                                               一度も検証しないまま削除へ進む
 """
@@ -26,9 +38,10 @@ import pytest
 from persistent_layer_guard import (
     CODE_RG_ABSENT,
     CODE_RG_REAPPEARED,
-    DEFAULT_PERSISTENT_RG,
+    DEFAULT_MANAGEMENT_RG,
     decide,
     main,
+    management_rg_set,
 )
 
 APP_LAYER_TYPES = [
@@ -39,9 +52,9 @@ APP_LAYER_TYPES = [
     "Microsoft.App/containerApps",
 ]
 
-# 環境層に**必ず**居る両層型 (bootstrap-core.bicep)。
+# アプリ系に**必ず**居る両層型 (bootstrap-core.bicep)。
 # Function App の実行 storage と ops workspace は環境を作り直すたびに作られる。
-ENV_LAYER_AMBIGUOUS = [
+APP_LAYER_AMBIGUOUS = [
     {"type": "Microsoft.Storage/storageAccounts", "name": "stdevmindbox", "tags": {}},
     {
         "type": "Microsoft.OperationalInsights/workspaces",
@@ -50,30 +63,115 @@ ENV_LAYER_AMBIGUOUS = [
     },
 ]
 
-PERSISTENT_TAGS = {"mindInboxLayer": "persistent", "mindInboxEnvironment": "dev"}
+MANAGEMENT_TAGS = {"mindInboxLayer": "management", "mindInboxEnvironment": "dev"}
+
+COSMOS = {
+    "type": "Microsoft.DocumentDB/databaseAccounts",
+    "name": "cosmos-dev-mindbox",
+    "tags": {},
+}
+OPENAI = {
+    "type": "Microsoft.CognitiveServices/accounts",
+    "name": "oai-dev-mindbox",
+    "tags": {},
+}
 
 
-def test_refuses_persistent_rg_itself() -> None:
-    d = decide(target_rg=DEFAULT_PERSISTENT_RG, resources=[])
+def test_refuses_management_rg_itself() -> None:
+    d = decide(target_rg=DEFAULT_MANAGEMENT_RG, resources=[])
     assert not d.allowed
-    assert d.code == "target-is-persistent-rg"
+    assert d.code == "target-is-management-rg"
 
 
-def test_override_cannot_delete_persistent_rg() -> None:
-    """持続層 RG だけは override でも通らない — ここが層分断の実体。"""
+def test_override_cannot_delete_management_rg() -> None:
+    """管理系 RG だけは override でも通らない — ここが層分断の実体。"""
     d = decide(
-        target_rg=DEFAULT_PERSISTENT_RG,
+        target_rg=DEFAULT_MANAGEMENT_RG,
         resources=APP_LAYER_TYPES,
-        allow_persistent=True,
+        allow_protected=True,
     )
     assert not d.allowed
-    assert d.code == "target-is-persistent-rg"
+    assert d.code == "target-is-management-rg"
 
 
-def test_case_insensitive_persistent_rg_match() -> None:
-    d = decide(target_rg="RG-Shared-MindBox", resources=[])
+def test_case_insensitive_management_rg_match() -> None:
+    d = decide(target_rg="RG-Mgmt-MindBox", resources=[])
     assert not d.allowed
-    assert d.code == "target-is-persistent-rg"
+    assert d.code == "target-is-management-rg"
+
+
+# ---- 既定の管理系 RG は「外せない」(逃げ道が可変値 1 つに依存しない) ----
+#
+# 2026-08-14 の内部 judge が実測した経路の再現:
+#   MGMT_RG を別名に向ける → rg-mgmt-mindbox が target-is-management-rg に落ちない
+#   → 層タグの findings は ALLOW_PROTECTED_DELETE=true で override
+#   → az group delete -n rg-mgmt-mindbox が 1 回走って exit 0
+# 「どのフラグでも消せない」は、可変値 1 つで消える保護であってはならない。
+
+
+def test_default_management_rg_is_protected_even_when_mgmt_rg_points_elsewhere() -> None:
+    """`--mgmt-rg` を別名に向けても既定の管理系 RG は守られる。
+
+    無いと: MGMT_RG の指し先を変えるだけで rg-mgmt-mindbox がただの RG に落ちる。
+    """
+    d = decide(
+        target_rg=DEFAULT_MANAGEMENT_RG,
+        extra_management_rgs=["rg-somewhere-else"],
+        resources=[],
+    )
+    assert not d.allowed
+    assert d.code == "target-is-management-rg"
+
+
+def test_default_management_rg_survives_override_with_redirected_mgmt_rg() -> None:
+    """再現テスト: 別名 + override でも既定の管理系 RG は削除に進めない。
+
+    無いと: judge が実測した「層タグごと override されて az group delete が走る」
+    経路がそのまま残る。
+    """
+    d = decide(
+        target_rg=DEFAULT_MANAGEMENT_RG,
+        extra_management_rgs=["rg-somewhere-else"],
+        resources=[
+            {
+                "type": "Microsoft.KeyVault/vaults",
+                "name": "kv-dev-mindbox",
+                "tags": MANAGEMENT_TAGS,
+            }
+        ],
+        allow_protected=True,
+    )
+    assert not d.allowed
+    assert d.code == "target-is-management-rg"
+
+
+def test_extra_management_rgs_are_additive() -> None:
+    """`--mgmt-rg` は「足す」だけ。足した名前も既定名もどちらも守られる。"""
+    protected = management_rg_set(["rg-ops-mindbox"])
+    assert protected == {DEFAULT_MANAGEMENT_RG, "rg-ops-mindbox"}
+
+    added = decide(
+        target_rg="rg-ops-mindbox", extra_management_rgs=["rg-ops-mindbox"], resources=[]
+    )
+    assert not added.allowed
+    assert added.code == "target-is-management-rg"
+
+    # 足していない RG は普通に撤収できる (常に拒否ではないことの対照)。
+    other = decide(target_rg="rg-dev-mind-inbox", resources=APP_LAYER_TYPES)
+    assert other.allowed
+
+
+def test_management_rg_refusal_names_what_is_protected() -> None:
+    """何が恒久保護なのかを黙らない (既定名が外せないことを含めて出す)。"""
+    d = decide(
+        target_rg=DEFAULT_MANAGEMENT_RG,
+        extra_management_rgs=["rg-ops-mindbox"],
+        resources=[],
+    )
+    assert not d.allowed
+    joined = " ".join(d.notes)
+    assert DEFAULT_MANAGEMENT_RG in joined
+    assert "rg-ops-mindbox" in joined
 
 
 def test_allows_app_layer_only() -> None:
@@ -110,16 +208,16 @@ def test_rg_existence_unknown_beats_inventory_that_looks_clean() -> None:
 
 
 def test_rg_existence_unknown_is_overridable() -> None:
-    d = decide(target_rg="rg-dev-mind-inbox", rg_exists=None, allow_persistent=True)
+    d = decide(target_rg="rg-dev-mind-inbox", rg_exists=None, allow_protected=True)
     assert d.allowed
     assert d.code == "rg-existence-unknown-overridden"
 
 
-def test_persistent_rg_wins_over_existence_unknown() -> None:
-    """持続層 RG は「存在すら確かめられない」状況でも override で通らない。"""
-    d = decide(target_rg=DEFAULT_PERSISTENT_RG, rg_exists=None, allow_persistent=True)
+def test_management_rg_wins_over_existence_unknown() -> None:
+    """管理系 RG は「存在すら確かめられない」状況でも override で通らない。"""
+    d = decide(target_rg=DEFAULT_MANAGEMENT_RG, rg_exists=None, allow_protected=True)
     assert not d.allowed
-    assert d.code == "target-is-persistent-rg"
+    assert d.code == "target-is-management-rg"
 
 
 # ---- 状態遷移 (不在で通したあとに RG が現れた) ----
@@ -147,9 +245,9 @@ def test_rg_reappeared_after_absent_is_refused() -> None:
 
 
 def test_rg_reappeared_after_absent_is_not_overridable() -> None:
-    """再出現だけは ALLOW_PERSISTENT_DELETE でも通さない。
+    """再出現だけは ALLOW_PROTECTED_DELETE でも通さない。
 
-    無いと: override は「持続層を承知で捨てる」ためのものなのに、**他人の RG を
+    無いと: override は「保護対象を承知で捨てる」ためのものなのに、**他人の RG を
     無検証で消す**ためにも効いてしまう。
     """
     d = decide(
@@ -157,7 +255,7 @@ def test_rg_reappeared_after_absent_is_not_overridable() -> None:
         rg_exists=True,
         resources=APP_LAYER_TYPES,
         previous_codes=[CODE_RG_ABSENT],
-        allow_persistent=True,
+        allow_protected=True,
     )
     assert not d.allowed
     assert d.code == CODE_RG_REAPPEARED
@@ -173,7 +271,7 @@ def test_rg_reappeared_refuses_when_existence_becomes_unknown() -> None:
         target_rg="rg-dev-mind-inbox",
         rg_exists=None,
         previous_codes=[CODE_RG_ABSENT],
-        allow_persistent=True,
+        allow_protected=True,
     )
     assert not d.allowed
     assert d.code == CODE_RG_REAPPEARED
@@ -201,26 +299,26 @@ def test_absent_after_delete_is_not_treated_as_reappearance() -> None:
         target_rg="rg-dev-mind-inbox",
         rg_exists=False,
         resources=None,
-        deleted_resources=[DELETED_ENV_KV],
+        deleted_resources=[DELETED_APP_KV],
         previous_codes=["ok"],
     )
     assert d.allowed
     assert d.code == CODE_RG_ABSENT
 
 
-def test_persistent_rg_refusal_wins_over_reappearance() -> None:
-    """持続層 RG は遷移に関係なく持続層 RG として拒否する (理由を上書きしない)。"""
+def test_management_rg_refusal_wins_over_reappearance() -> None:
+    """管理系 RG は遷移に関係なく管理系 RG として拒否する (理由を上書きしない)。"""
     d = decide(
-        target_rg=DEFAULT_PERSISTENT_RG,
+        target_rg=DEFAULT_MANAGEMENT_RG,
         rg_exists=True,
         resources=[],
         previous_codes=[CODE_RG_ABSENT],
     )
     assert not d.allowed
-    assert d.code == "target-is-persistent-rg"
+    assert d.code == "target-is-management-rg"
 
 
-def test_persistent_resources_refusal_wins_over_reappearance() -> None:
+def test_data_refusal_wins_over_reappearance() -> None:
     """今の材料で既に拒否なら、そちらの理由を残す (findings が消えると追えない)。"""
     d = decide(
         target_rg="rg-dev-mind-inbox",
@@ -229,7 +327,7 @@ def test_persistent_resources_refusal_wins_over_reappearance() -> None:
         previous_codes=[CODE_RG_ABSENT],
     )
     assert not d.allowed
-    assert d.code == "persistent-resources-present"
+    assert d.code == "data-restore-unproven"
     assert d.findings
 
 
@@ -245,26 +343,30 @@ def test_previous_codes_without_absent_do_not_block() -> None:
     assert d.code == "ok"
 
 
-# ---- 型だけで確定するもの (環境層に使い捨ての同型が無い) ----
+# ---- 復元未実証データ (暫定 / ADR 0046 D9 が済むまで) ----
 
 
-@pytest.mark.parametrize(
-    ("resource_type", "expected_fragment"),
-    [
-        ("Microsoft.DocumentDB/databaseAccounts", "Cosmos DB"),
-        ("Microsoft.CognitiveServices/accounts", "Cognitive Services"),
-    ],
-)
-def test_refuses_when_persistent_resources_present(
-    resource_type: str, expected_fragment: str
-) -> None:
-    d = decide(
-        target_rg="rg-dev-mind-inbox",
-        resources=[*APP_LAYER_TYPES, resource_type],
-    )
+def test_refuses_when_data_restore_unproven() -> None:
+    """Cosmos が居る RG の撤収を止める。
+
+    無いと: 「アプリ系 RG は使い捨て」を先に受け入れてしまい、**復元を 1 回も
+    通していない**まま Problem / Mention が裸で消える (ADR 0018)。
+    """
+    d = decide(target_rg="rg-dev-mind-inbox", resources=[*APP_LAYER_TYPES, COSMOS])
     assert not d.allowed
-    assert d.code == "persistent-resources-present"
-    assert any(expected_fragment in f for f in d.findings)
+    assert d.code == "data-restore-unproven"
+    assert any("Cosmos DB" in f for f in d.findings)
+
+
+def test_data_refusal_says_it_is_provisional() -> None:
+    """暫定であること (何が済んだら緩むか) を拒否メッセージに残す。
+
+    無いと: 復元実証が済んでも「そういうルールだった」として残り続け、
+    週次プロビジョンテストが毎回 override を要求する = 逃げ道が常用になる。
+    """
+    d = decide(target_rg="rg-dev-mind-inbox", resources=[COSMOS])
+    assert not d.allowed
+    assert "ADR 0046 D9" in d.reason
 
 
 def test_case_insensitive_resource_type_match() -> None:
@@ -274,10 +376,84 @@ def test_case_insensitive_resource_type_match() -> None:
         resources=["microsoft.documentdb/databaseaccounts"],
     )
     assert not d.allowed
-    assert d.code == "persistent-resources-present"
+    assert d.code == "data-restore-unproven"
 
 
-# ---- 両層に出る型は層タグ / 名指しでのみ持続層 ----
+def test_data_and_management_codes_differ() -> None:
+    """恒久 (管理系) と暫定 (データ) を同じコードにしない。
+
+    無いと: 復元実証が済んだときに「どの拒否を緩めてよいか」がコードから読めず、
+    緩めるつもりのない管理系まで一緒に外れる事故が起きる。
+    """
+    data_only = decide(target_rg="rg-dev-mind-inbox", resources=[COSMOS])
+    mgmt_only = decide(
+        target_rg="rg-dev-mind-inbox",
+        resources=[
+            {
+                "type": "Microsoft.Storage/storageAccounts",
+                "name": "stdevmindboxbak",
+                "tags": MANAGEMENT_TAGS,
+            }
+        ],
+    )
+    assert not data_only.allowed
+    assert not mgmt_only.allowed
+    assert data_only.code != mgmt_only.code
+
+
+def test_management_is_reported_before_data() -> None:
+    """両方居るときは管理系の理由を出す (恒久のほうが強い)。"""
+    d = decide(
+        target_rg="rg-dev-mind-inbox",
+        resources=[
+            COSMOS,
+            {
+                "type": "Microsoft.KeyVault/vaults",
+                "name": "kv-dev-mindbox",
+                "tags": MANAGEMENT_TAGS,
+            },
+        ],
+    )
+    assert not d.allowed
+    assert d.code == "management-resources-present"
+
+
+# ---- アプリ系と決めたもの (止めないが黙らない) ----
+
+
+def test_cognitive_services_do_not_block_teardown() -> None:
+    """OpenAI / Speech で撤収を止めない (PO 整理: アプリそのもの / #302)。
+
+    無いと: アプリ系 RG の撤収が OpenAI の存在だけで常に拒否され、実行するには
+    ALLOW_PROTECTED_DELETE=true が要る (= 逃げ道が常用になり、ガードが意味を失う)。
+    """
+    d = decide(target_rg="rg-dev-mind-inbox", resources=[*APP_LAYER_TYPES, OPENAI])
+    assert d.allowed
+    assert d.code == "ok"
+
+
+def test_cognitive_services_are_reported_not_silent() -> None:
+    """止めない代わりに「何を失うか」を出す。
+
+    無いと: 「OpenAI は消してよい」という判断が記録から消え、後から見て
+    見落としだったのか判断だったのかが区別できない。
+    """
+    d = decide(target_rg="rg-dev-mind-inbox", resources=[OPENAI])
+    assert d.allowed
+    assert any("oai-dev-mindbox" in n for n in d.notes)
+
+
+def test_tagged_cognitive_services_still_blocks() -> None:
+    """層タグが付いていれば型に関係なく管理系 (誤った RG へ mgmt を流した場合)。"""
+    d = decide(
+        target_rg="rg-dev-mind-inbox",
+        resources=[{**OPENAI, "tags": MANAGEMENT_TAGS}],
+    )
+    assert not d.allowed
+    assert d.code == "management-resources-present"
+
+
+# ---- 両層に出る型は層タグ / 名指しでのみ管理系 ----
 
 
 @pytest.mark.parametrize(
@@ -288,23 +464,23 @@ def test_case_insensitive_resource_type_match() -> None:
         ("Microsoft.OperationalInsights/workspaces", "law-dev-mindbox-ops"),
     ],
 )
-def test_layer_tag_makes_ambiguous_types_persistent(
+def test_layer_tag_makes_ambiguous_types_management(
     resource_type: str, name: str
 ) -> None:
-    """層タグの付いた Storage / LAW / KV は持続層として拒否する。
+    """層タグの付いた Storage / LAW / KV は管理系として拒否する。
 
-    無いと: 誤った RG へ shared を流した後の撤収で、バックアップ Storage と
+    無いと: 誤った RG へ mgmt を流した後の撤収で、バックアップ Storage と
     監査履歴が型に載っていないという理由だけで黙って消える。
     """
     d = decide(
         target_rg="rg-dev-mind-inbox",
         resources=[
             *APP_LAYER_TYPES,
-            {"type": resource_type, "name": name, "tags": PERSISTENT_TAGS},
+            {"type": resource_type, "name": name, "tags": MANAGEMENT_TAGS},
         ],
     )
     assert not d.allowed
-    assert d.code == "persistent-resources-present"
+    assert d.code == "management-resources-present"
     assert any(name in f and "層タグ" in f for f in d.findings)
 
 
@@ -316,35 +492,55 @@ def test_layer_tag_key_is_case_insensitive() -> None:
             {
                 "type": "Microsoft.Storage/storageAccounts",
                 "name": "stdevmindboxbak",
-                "tags": {"MINDINBOXLAYER": "Persistent"},
+                "tags": {"MINDINBOXLAYER": "Management"},
             }
         ],
     )
     assert not d.allowed
-    assert d.code == "persistent-resources-present"
+    assert d.code == "management-resources-present"
 
 
 def test_layer_tag_wins_regardless_of_type() -> None:
-    """層タグは型より強い — 型表に無いものでも持続層として拒否する。"""
+    """層タグは型より強い — 型表に無いものでも管理系として拒否する。"""
     d = decide(
         target_rg="rg-dev-mind-inbox",
         resources=[
             {
                 "type": "Microsoft.SomethingNew/things",
                 "name": "future-resource",
-                "tags": PERSISTENT_TAGS,
+                "tags": MANAGEMENT_TAGS,
             }
         ],
     )
     assert not d.allowed
-    assert d.code == "persistent-resources-present"
+    assert d.code == "management-resources-present"
 
 
-def test_env_layer_key_vault_does_not_block_teardown() -> None:
-    """環境層の SQL 管理者用 Key Vault で撤収を拒否しない。
+def test_stale_persistent_tag_does_not_protect() -> None:
+    """旧タグ値 (`persistent`) はもう管理系にしない。
+
+    無いと: 値を `management` に変えた main-mgmt.bicep と、判定側が別々の値を
+    見ている状態に気づけない (どちらか片方だけ直しても緑のまま)。
+    """
+    d = decide(
+        target_rg="rg-dev-mind-inbox",
+        resources=[
+            {
+                "type": "Microsoft.Storage/storageAccounts",
+                "name": "stdevmindboxbak",
+                "tags": {"mindInboxLayer": "persistent"},
+            }
+        ],
+    )
+    assert d.allowed
+    assert d.notes
+
+
+def test_app_layer_key_vault_does_not_block_teardown() -> None:
+    """アプリ系の SQL 管理者用 Key Vault で撤収を拒否しない。
 
     無いと: `enableSql=true` の環境で正当な撤収が常に拒否され、実行するには
-    他の持続層まで一括で許可する ALLOW_PERSISTENT_DELETE=true が要る
+    他の保護対象まで一括で許可する ALLOW_PROTECTED_DELETE=true が要る
     (= 逃げ道が常用になり、ガードが意味を失う)。
     """
     d = decide(
@@ -362,9 +558,9 @@ def test_env_layer_key_vault_does_not_block_teardown() -> None:
     assert d.code == "ok"
 
 
-def test_env_layer_ambiguous_types_are_reported_not_silent() -> None:
-    """環境層として通すときも、何をそう見なしたかは黙らない。"""
-    d = decide(target_rg="rg-dev-mind-inbox", resources=ENV_LAYER_AMBIGUOUS)
+def test_app_layer_ambiguous_types_are_reported_not_silent() -> None:
+    """アプリ系として通すときも、何をそう見なしたかは黙らない。"""
+    d = decide(target_rg="rg-dev-mind-inbox", resources=APP_LAYER_AMBIGUOUS)
     assert d.allowed
     assert d.code == "ok"
     assert len(d.notes) == 2
@@ -372,7 +568,7 @@ def test_env_layer_ambiguous_types_are_reported_not_silent() -> None:
     assert any("law-dev-mindbox-ops" in n for n in d.notes)
 
 
-def test_type_only_inventory_does_not_make_ambiguous_types_persistent() -> None:
+def test_type_only_inventory_does_not_make_ambiguous_types_management() -> None:
     """name/tags の無い素朴な `[].type` 出力でも、両層型は型だけで拒否しない。"""
     d = decide(
         target_rg="rg-dev-mind-inbox",
@@ -385,42 +581,42 @@ def test_type_only_inventory_does_not_make_ambiguous_types_persistent() -> None:
 # ---- 名指し (層タグの無い移行前リソース) ----
 
 
-def test_persistent_name_blocks_teardown() -> None:
+def test_protected_name_blocks_teardown() -> None:
     """タグの無いバックアップ Storage を名指しで守れる。
 
-    無いと: shared をまだ流していない (= タグの無い) 持続層リソースを守る手段が
+    無いと: mgmt をまだ流していない (= タグの無い) 管理系リソースを守る手段が
     層タグしかなく、移行途中に守れない窓が空く。
     """
     d = decide(
         target_rg="rg-dev-mind-inbox",
-        resources=ENV_LAYER_AMBIGUOUS,
-        persistent_names=["law-dev-mindbox-ops"],
+        resources=APP_LAYER_AMBIGUOUS,
+        protected_names=["law-dev-mindbox-ops"],
     )
     assert not d.allowed
-    assert d.code == "persistent-resources-present"
+    assert d.code == "management-resources-present"
     assert any("law-dev-mindbox-ops" in f and "名指し" in f for f in d.findings)
-    # 名指ししていない storage は環境層のまま (notes に残る)。
+    # 名指ししていない storage はアプリ系のまま (notes に残る)。
     assert any("stdevmindbox" in n for n in d.notes)
 
 
-def test_persistent_name_is_case_insensitive() -> None:
+def test_protected_name_is_case_insensitive() -> None:
     d = decide(
         target_rg="rg-dev-mind-inbox",
-        resources=ENV_LAYER_AMBIGUOUS,
-        persistent_names=["LAW-DEV-MINDBOX-OPS"],
+        resources=APP_LAYER_AMBIGUOUS,
+        protected_names=["LAW-DEV-MINDBOX-OPS"],
     )
     assert not d.allowed
-    assert d.code == "persistent-resources-present"
+    assert d.code == "management-resources-present"
 
 
 # ---- soft-delete 済み (purge = 唯一の復旧手段を恒久的に消す) ----
 
-DELETED_PERSISTENT_KV = {
+DELETED_MANAGEMENT_KV = {
     "type": "Microsoft.KeyVault/vaults",
     "name": "kv-dev-mindbox",
-    "tags": PERSISTENT_TAGS,
+    "tags": MANAGEMENT_TAGS,
 }
-DELETED_ENV_KV = {
+DELETED_APP_KV = {
     "type": "Microsoft.KeyVault/vaults",
     "name": "kv-dev-mindbox-sql2",
     "tags": {},
@@ -432,8 +628,8 @@ DELETED_OPENAI = {
 }
 
 
-def test_refuses_persistent_soft_deleted_even_when_live_inventory_is_clean() -> None:
-    """soft-delete 済みの持続層を purge しようとしたら止める。
+def test_refuses_management_soft_deleted_even_when_live_inventory_is_clean() -> None:
+    """soft-delete 済みの管理系を purge しようとしたら止める。
 
     無いと: `az resource list` は live しか返さないので判定は ok になり、
     PURGE_DELETED_* を立てた実行が復旧手段を恒久的に消す。
@@ -441,11 +637,11 @@ def test_refuses_persistent_soft_deleted_even_when_live_inventory_is_clean() -> 
     d = decide(
         target_rg="rg-dev-mind-inbox",
         resources=APP_LAYER_TYPES,
-        deleted_resources=[DELETED_OPENAI],
+        deleted_resources=[DELETED_MANAGEMENT_KV],
     )
     assert not d.allowed
-    assert d.code == "persistent-soft-deleted-present"
-    assert any("oai-dev-mindbox" in f for f in d.findings)
+    assert d.code == "protected-soft-deleted-present"
+    assert any("kv-dev-mindbox" in f for f in d.findings)
 
 
 def test_soft_deleted_check_survives_rg_absent() -> None:
@@ -458,47 +654,47 @@ def test_soft_deleted_check_survives_rg_absent() -> None:
         target_rg="rg-dev-mind-inbox",
         rg_exists=False,
         resources=None,
-        deleted_resources=[DELETED_PERSISTENT_KV],
+        deleted_resources=[DELETED_MANAGEMENT_KV],
     )
     assert not d.allowed
-    assert d.code == "persistent-soft-deleted-present"
+    assert d.code == "protected-soft-deleted-present"
 
 
-def test_env_layer_soft_deleted_does_not_block_purge() -> None:
-    """環境層の soft-delete (SQL 管理者用 vault) は purge を止めない。
+def test_app_layer_soft_deleted_does_not_block_purge() -> None:
+    """アプリ系の soft-delete (SQL 管理者用 vault / OpenAI) は purge を止めない。
 
     無いと: 名前衝突の手当てとしての purge が常に拒否され、逃げ道が常用になる。
     """
     d = decide(
         target_rg="rg-dev-mind-inbox",
         resources=APP_LAYER_TYPES,
-        deleted_resources=[DELETED_ENV_KV],
+        deleted_resources=[DELETED_APP_KV, DELETED_OPENAI],
     )
     assert d.allowed
     assert d.code == "ok"
 
 
-def test_soft_deleted_persistent_is_overridable() -> None:
+def test_soft_deleted_management_is_overridable() -> None:
     d = decide(
         target_rg="rg-dev-mind-inbox",
         resources=APP_LAYER_TYPES,
-        deleted_resources=[DELETED_OPENAI],
-        allow_persistent=True,
+        deleted_resources=[DELETED_MANAGEMENT_KV],
+        allow_protected=True,
     )
     assert d.allowed
-    assert d.code == "persistent-soft-deleted-overridden"
+    assert d.code == "protected-soft-deleted-overridden"
     assert d.findings
 
 
-def test_persistent_rg_wins_over_soft_deleted() -> None:
+def test_management_rg_wins_over_soft_deleted() -> None:
     d = decide(
-        target_rg=DEFAULT_PERSISTENT_RG,
+        target_rg=DEFAULT_MANAGEMENT_RG,
         resources=[],
-        deleted_resources=[DELETED_OPENAI],
-        allow_persistent=True,
+        deleted_resources=[DELETED_MANAGEMENT_KV],
+        allow_protected=True,
     )
     assert not d.allowed
-    assert d.code == "target-is-persistent-rg"
+    assert d.code == "target-is-management-rg"
 
 
 def test_no_deleted_inventory_means_purge_is_off() -> None:
@@ -508,23 +704,23 @@ def test_no_deleted_inventory_means_purge_is_off() -> None:
     assert d.code == "ok"
 
 
-def test_cli_deleted_inventory_refuses_persistent() -> None:
+def test_cli_deleted_inventory_refuses_management() -> None:
     inventory = '["Microsoft.Web/sites"]'
-    env_only = (
-        '[{"type": "Microsoft.KeyVault/vaults", '
-        '"name": "kv-dev-mindbox-sql2", "tags": null}]'
-    )
-    persistent = (
+    app_only = (
         '[{"type": "Microsoft.CognitiveServices/accounts", '
         '"name": "oai-dev-mindbox", "tags": null}]'
     )
+    management = (
+        '[{"type": "Microsoft.KeyVault/vaults", "name": "kv-dev-mindbox", '
+        '"tags": {"mindInboxLayer": "management"}}]'
+    )
     base = ["--target-rg", "rg-dev-mind-inbox", "--inventory", inventory]
-    assert main([*base, "--deleted-inventory", env_only]) == 0
-    assert main([*base, "--deleted-inventory", persistent]) == 3
+    assert main([*base, "--deleted-inventory", app_only]) == 0
+    assert main([*base, "--deleted-inventory", management]) == 3
 
 
 def test_cli_deleted_inventory_unavailable_is_refused() -> None:
-    """soft-delete 一覧を取れなかったのを「持続層は無い」に読み替えない。"""
+    """soft-delete 一覧を取れなかったのを「保護対象は無い」に読み替えない。"""
     code = main(
         [
             "--target-rg",
@@ -569,16 +765,33 @@ def test_override_allows_with_findings() -> None:
     d = decide(
         target_rg="rg-dev-mind-inbox",
         resources=["Microsoft.DocumentDB/databaseAccounts"],
-        allow_persistent=True,
+        allow_protected=True,
     )
     assert d.allowed
-    assert d.code == "persistent-resources-present-overridden"
+    assert d.code == "data-restore-unproven-overridden"
     # 何を消そうとしているかはログに出し続ける (許可 = 黙るではない)。
     assert d.findings
 
 
+def test_override_allows_management_with_findings() -> None:
+    d = decide(
+        target_rg="rg-dev-mind-inbox",
+        resources=[
+            {
+                "type": "Microsoft.KeyVault/vaults",
+                "name": "kv-dev-mindbox",
+                "tags": MANAGEMENT_TAGS,
+            }
+        ],
+        allow_protected=True,
+    )
+    assert d.allowed
+    assert d.code == "management-resources-present-overridden"
+    assert d.findings
+
+
 def test_override_allows_when_inventory_unavailable() -> None:
-    d = decide(target_rg="rg-dev-mind-inbox", resources=None, allow_persistent=True)
+    d = decide(target_rg="rg-dev-mind-inbox", resources=None, allow_protected=True)
     assert d.allowed
     assert d.code == "inventory-unavailable-overridden"
 
@@ -587,8 +800,8 @@ def test_findings_are_deduplicated() -> None:
     d = decide(
         target_rg="rg-dev-mind-inbox",
         resources=[
-            "Microsoft.CognitiveServices/accounts",
-            "Microsoft.CognitiveServices/accounts",
+            "Microsoft.DocumentDB/databaseAccounts",
+            "Microsoft.DocumentDB/databaseAccounts",
         ],
     )
     assert len(d.findings) == 1
@@ -599,7 +812,7 @@ def test_render_shows_findings_and_notes() -> None:
         target_rg="rg-dev-mind-inbox",
         resources=[
             "Microsoft.DocumentDB/databaseAccounts",
-            *ENV_LAYER_AMBIGUOUS,
+            *APP_LAYER_AMBIGUOUS,
         ],
     )
     rendered = d.render()
@@ -642,7 +855,7 @@ def test_cli_rejects_missing_and_unknown_together() -> None:
     assert exc.value.code == 2
 
 
-def test_cli_persistent_name_flag() -> None:
+def test_cli_protected_name_flag() -> None:
     inventory = (
         '[{"type": "Microsoft.Storage/storageAccounts", '
         '"name": "stdevmindboxbak", "tags": null}]'
@@ -655,8 +868,46 @@ def test_cli_persistent_name_flag() -> None:
                 "rg-dev-mind-inbox",
                 "--inventory",
                 inventory,
-                "--persistent-name",
+                "--protected-name",
                 "stdevmindboxbak",
+            ]
+        )
+        == 3
+    )
+
+
+def test_cli_mgmt_rg_flag_adds_without_replacing_default() -> None:
+    """`--mgmt-rg` は保護を**足す**だけで、既定名を置き換えない。
+
+    無いと: (1) 呼び出し側 (cleanup-env.sh) の MGMT_RG が guard に届かなくなっても
+    誰も気づかず、既定名以外に置いた管理系 RG が消せてしまう。(2) 逆に MGMT_RG を
+    別名に向けるだけで rg-mgmt-mindbox の恒久保護が外れる (judge 実測の経路)。
+    """
+    # 足した名前は守られる。
+    assert (
+        main(
+            [
+                "--target-rg",
+                "rg-ops-mindbox",
+                "--mgmt-rg",
+                "rg-ops-mindbox",
+                "--rg-missing",
+            ]
+        )
+        == 3
+    )
+    # 足していない名前は守られない (常に拒否ではないことの対照)。
+    assert main(["--target-rg", "rg-ops-mindbox", "--rg-missing"]) == 0
+    # **既定名は --mgmt-rg を別名に向けても、override を足しても守られる。**
+    assert (
+        main(
+            [
+                "--target-rg",
+                "rg-mgmt-mindbox",
+                "--mgmt-rg",
+                "rg-somewhere-else",
+                "--rg-missing",
+                "--allow-protected",
             ]
         )
         == 3
@@ -667,7 +918,7 @@ def test_cli_layer_tag_from_az_output() -> None:
     """`az resource list --query "[].{type:type,name:name,tags:tags}"` の実形。"""
     inventory = (
         '[{"type": "Microsoft.Storage/storageAccounts", "name": "stdevmindboxbak", '
-        '"tags": {"mindInboxLayer": "persistent", "mindInboxEnvironment": "dev"}}]'
+        '"tags": {"mindInboxLayer": "management", "mindInboxEnvironment": "dev"}}]'
     )
     assert main(["--target-rg", "rg-dev-mind-inbox", "--inventory", inventory]) == 3
 
@@ -695,8 +946,8 @@ def test_cli_prints_decision_code_on_stdout(capsys: pytest.CaptureFixture[str]) 
     )
     assert capsys.readouterr().out.strip() == "ok"
 
-    assert main(["--target-rg", "rg-shared-mindbox", "--rg-missing"]) == 3
-    assert capsys.readouterr().out.strip() == "target-is-persistent-rg"
+    assert main(["--target-rg", "rg-mgmt-mindbox", "--rg-missing"]) == 3
+    assert capsys.readouterr().out.strip() == "target-is-management-rg"
 
 
 def test_cli_previous_code_blocks_reappeared_rg(
@@ -720,7 +971,7 @@ def test_cli_previous_code_blocks_reappeared_rg(
     assert capsys.readouterr().out.strip() == CODE_RG_REAPPEARED
 
     # override でも通らない。
-    assert main([*base, "--previous-code", CODE_RG_ABSENT, "--allow-persistent"]) == 3
+    assert main([*base, "--previous-code", CODE_RG_ABSENT, "--allow-protected"]) == 3
 
 
 def test_cli_previous_absent_still_absent_is_allowed() -> None:
@@ -740,7 +991,7 @@ def test_cli_previous_absent_still_absent_is_allowed() -> None:
 
 
 def test_cli_broken_inventory_is_refused_not_treated_as_empty() -> None:
-    """壊れた JSON を「空 = 持続層なし」に読み替えない。"""
+    """壊れた JSON を「空 = 保護対象なし」に読み替えない。"""
     code = main(["--target-rg", "rg-dev-mind-inbox", "--inventory", "not-json"])
     assert code == 3
 

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
   "contentVersion": "1.0.0.0",
-  "_comment": "持続層 (ADR 0046 D1 / #302)。適用先は rg-shared-mindbox。Cosmos / OpenAI / Speech / Log Analytics は移行が済むまで false のまま (理由は main-shared.bicep 冒頭)。",
+  "_comment": "管理系レイヤ (ADR 0056 D1 / #302)。適用先は rg-mgmt-mindbox。中身は運用のためのものだけ (Key Vault / バックアップ Storage / Log Analytics / 予算) で、Cosmos / OpenAI / Speech はアプリ系 RG に残す。Log Analytics はアプリ系に実在するため移行が済むまで false。",
   "parameters": {
     "appName": {
       "value": "mind-box"
@@ -25,15 +25,6 @@
       "value": "japaneast"
     },
     "enableLogAnalytics": {
-      "value": false
-    },
-    "enableCosmos": {
-      "value": false
-    },
-    "enableOpenAi": {
-      "value": false
-    },
-    "enableSpeech": {
       "value": false
     },
     "enableBudgetAlert": {

@@ -8,13 +8,17 @@ IaC (Bicep) / デプロイスクリプト / 運用スクリプト。運用手順
 
 [ADR 0003](../docs/adr/0003-two-phase-bicep.md)。順序を入れ替えない (config は bootstrap の出力に依存する)。
 
-0. **shared (持続層)** — `cicd/iac/main-shared.bicep`: **別 RG (`rg-shared-mindbox`) に一度きり**。Key Vault (E2E trace の非エクスポート鍵) / バックアップ Storage / Cosmos / OpenAI / Speech / Log Analytics ([ADR 0046](../docs/adr/0046-environment-rebuildable-from-declaration.md) D1)
-1. **bootstrap** — `cicd/iac/main-bootstrap.bicep`: SWA / Function App / Key Vault / Log Analytics / Container App environment を作る (SQL 一式は `enableSql=true` のときだけ。ACR は無い)
+0. **mgmt (管理系)** — `cicd/iac/main-mgmt.bicep`: **別 RG (`rg-mgmt-mindbox`) に一度きり**。Key Vault (E2E trace の非エクスポート鍵) / バックアップ Storage / Log Analytics / 予算 ([ADR 0056](../docs/adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D1)
+1. **bootstrap** — `cicd/iac/main-bootstrap.bicep`: SWA / Function App / Cosmos / OpenAI / Speech / Container App environment / **Log Analytics** / **Key Vault (`enableSql=true` のときだけ)** を作る (SQL 一式も同条件。ACR は無い)
 2. **config** — `cicd/iac/main-config.bicep`: Entra ID 認証とシークレットを配線する (bootstrap の後に流す)
 
-**持続層と環境層は RG をまたぐ resource 参照をしない** — 持続層の output を環境層の parameter に渡す。**撤収 (`cleanup-env.sh`) の対象は環境層だけ**で、持続層 RG は削除できない (判定は `cicd/scripts/env/persistent_layer_guard.py`)。
+**層の軸は「消えると困るか」ではなく「運用のためか / アプリそのものか」** ([ADR 0056](../docs/adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D1 — Proposed。Accept され次第 ADR 0046 D1 を supersede) — Cosmos / OpenAI / Speech は**アプリ系に残す**。Cosmos のデータは RG を移して守るのではなく、管理系 RG の非公開 Storage へバックアップして戻せるようにする (ADR 0056 D2 / 経路の実装は ADR 0046 D9。**public リポジトリなので git データブランチには出さない**)。
 
-**持続層のリソースには層タグ `mindInboxLayer=persistent` を刻む** — Key Vault / Storage / Log Analytics は環境層にも同じ型が居るので、撤収ガードは**型ではなくこのタグ**で層を見分ける。`main-shared.bicep` にリソースを足したら `tags: persistentLayerTags` も付ける (付け忘れると撤収で黙って消える)。
+**管理系とアプリ系は RG をまたぐ resource 参照をしない** — 管理系の output をアプリ系の parameter に渡す。**撤収 (`cleanup-env.sh`) の対象はアプリ系だけ**で、管理系 RG は削除できない (判定は `cicd/scripts/env/persistent_layer_guard.py`)。**`rg-mgmt-mindbox` の保護は設定で外せない** — `MGMT_RG` は保護対象を足すだけで、既定名を置き換えられない (置き換えられると `MGMT_RG` を逸らすだけで恒久保護が消える)。
+
+**管理系のリソースには層タグ `mindInboxLayer=management` を刻む** — **Key Vault / Storage / Log Analytics は両層に同じ型が居る** (bootstrap 側にも無条件の `law` と `enableSql` 時の KV、Function App の実行 storage がある) ので、**撤収判定は型ではなくこのタグで行う**。`main-mgmt.bicep` にリソースを足したら `tags: managementLayerTags` も付ける (付け忘れると撤収で黙って消える。宣言側とガード側の値のズレは `cicd/scripts/env/test_mgmt_layer_tag_contract.py` が落とす)。
+
+**Cosmos が居る RG の撤収は当面拒否される** (`data-restore-unproven`)。置き場所の誤りではなく、**復元を 1 回も通していない**ための暫定措置 (ADR 0056 D3 / ADR 0018)。復元を通したら、この一律拒否をバックアップ鮮度の確認に差し替える — **差し替えないと週次プロビジョンテストが毎回 override を要求し、逃げ道が常用になってガードが死ぬ** ([Runbook](../docs/runbooks/mgmt-layer-apply.md))。
 
 **リソース命名**: `{resourcetype}-{env}-{appname}` — 例 `func-dev-mindbox` / `swa-dev-mindbox`。環境は `dev` / `stg` / `prod`、既定の appName は `mind-box`。
 
