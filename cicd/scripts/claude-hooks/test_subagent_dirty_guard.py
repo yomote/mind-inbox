@@ -17,6 +17,7 @@ from pathlib import Path
 
 from subagent_dirty_guard import (
     fingerprint,
+    git_dirty_paths,
     format_reason,
     handle,
     load_entries,
@@ -30,8 +31,16 @@ HOOK_DIR = Path(__file__).resolve().parent
 
 
 def test_単体_porcelain_を解釈する() -> None:
-    text = " M apps/bff/src/a.ts\n?? new.txt\nR  old.md -> new.md\nA  docs/x.md\n"
+    # `--porcelain -z`: NUL 区切り / rename は <new>\0<old>\0 の 2 フィールド
+    text = " M apps/bff/src/a.ts\0?? new.txt\0R  new.md\0old.md\0A  docs/x.md\0"
     assert parse_porcelain(text) == {"apps/bff/src/a.ts", "new.txt", "new.md", "docs/x.md"}
+
+
+def test_単体_非_ASCII_の_path_を引用のまま取り込まない() -> None:
+    # 既定の porcelain は `"\346\227..."` と C 形式で引用する。引用符を外すだけだと
+    # 実在しない path になり、指紋が両側とも "missing" になって変更を見逃す。
+    # `-z` は引用しないので、そのまま実在する path として読めること。
+    assert parse_porcelain(" M 日本語.txt\0?? 改\n行.txt\0") == {"日本語.txt", "改\n行.txt"}
 
 
 def test_単体_控えがあれば_subagent_が増やした分だけ咎める() -> None:
@@ -128,11 +137,56 @@ def test_単体_並列起動では最古の控えを基準にして見落とさ�
     assert mode == "diff-concurrent", "並行起動であることを文言に出せなくなる"
     now = {"parent.ts": p, "a1.ts": a1, "a2.ts": "sha256:a2"}
     assert select_paths_to_report(now, baseline) == ["a1.ts", "a2.ts"]
-    # 取り出した控えは列から落ちる (同じ控えを 2 回使わない)
-    assert remaining == [{"cwd": "/r", "prints": {"parent.ts": p, "a1.ts": a1}}]
+    # 落ちるのは**最も新しい**控え。最古はグループの最後の停止まで残る
+    # (最古を落とすと、後から止まる subagent に「a1.ts 込み」の基準が当たる)
+    assert remaining == [{"cwd": "/r", "prints": {"parent.ts": p}, "concurrent": True}]
     baseline2, remaining2, mode2 = take_baseline(remaining, "/r")
-    assert baseline2 == {"parent.ts": p, "a1.ts": a1}
-    assert (remaining2, mode2) == ([], "diff")
+    assert baseline2 == {"parent.ts": p}
+    assert mode2 == "diff-concurrent", "並行グループの残りで diff と言うと精度を偽る"
+    assert remaining2 == []
+
+
+def test_単体_並列グループは停止の順序に関係なく最古の基準を共有する() -> None:
+    # A 起動 → A が a.ts を作る → B 起動 (B の控えに a.ts が入る) → **B が先に停止**。
+    # ここで最古を消費すると、後から止まる A には a.ts を含む B の控えが当たり、
+    # 指紋まで一致するので **A の置き去りが無警告で通る**。
+    fp_a = "sha256:a"
+    entries = [
+        {"cwd": "/r", "prints": {}},  # A 起動時 (まだ何も無い)
+        {"cwd": "/r", "prints": {"a.ts": fp_a}},  # B 起動時 (A の a.ts が写る)
+    ]
+    baseline_b, remaining, mode_b = take_baseline(entries, "/r")
+    assert baseline_b == {}, "最古を基準にしないと B の報告が過小になる"
+    assert mode_b == "diff-concurrent"
+
+    baseline_a, remaining_a, mode_a = take_baseline(remaining, "/r")
+    assert baseline_a == {}, "最古を消費すると、後から止まる A の置き去りを見落とす"
+    assert select_paths_to_report({"a.ts": fp_a}, baseline_a) == ["a.ts"]
+    assert mode_a == "diff-concurrent", (
+        "並行グループの残りなのに diff と言うと、混入の可能性を隠して精度を偽る"
+    )
+    assert remaining_a == [], "全員が停止したら控えは残さない"
+
+
+def test_単体_実際の_git_から非_ASCII_の_path_を実在する形で取る(tmp_path: Path) -> None:
+    """`git status --porcelain` から `-z` を落とすと何が静かに通るか、を実物で押さえる。
+
+    parse_porcelain 単体のテストでは**呼び出し側の引数 (`-z` の有無) を固定できない**。
+    `-z` が無いと git は `日本語.txt` を `"\346\227..."` と C 形式で引用して返し、
+    fingerprint() が実在しない path を見て "missing" を返すので、そのファイルへの
+    subagent の編集が指紋比較をすり抜ける。
+    """
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, timeout=30)
+    (tmp_path / "日本語.txt").write_text("x", encoding="utf-8")
+
+    prints, failure = git_dirty_paths(str(tmp_path))
+    assert failure is None, failure
+    assert "日本語.txt" in prints, f"C 形式引用のまま返っている: {sorted(prints)}"
+    assert prints["日本語.txt"].startswith("sha256:"), (
+        "実在しない path を見て missing になっている (指紋比較がすり抜ける)"
+    )
 
 
 def test_単体_控えの置き場はセッションごとに分かれる() -> None:
@@ -219,19 +273,24 @@ def test_単体_停止のたびに控えを_1_件ずつ消費する(monkeypatch,
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(guard, "git_dirty_paths", lambda cwd: ({"a.ts": "sha256:a", "b.ts": "sha256:b"}, None))
+    monkeypatch.setattr(
+        guard, "git_dirty_paths", lambda cwd: ({"a.ts": "sha256:a", "b.ts": "sha256:b"}, None)
+    )
     monkeypatch.setattr(guard, "snapshot_path", lambda sid: target)
 
     event = {"hook_event_name": "SubagentStop", "cwd": "/repo", "session_id": "s"}
     first = handle(event)
     assert "a.ts" in first["reason"] and "b.ts" in first["reason"]
+    # 停止 1 回につき控えは 1 件だけ減る。**残るのは最古**
+    # (最古を落とすと、後から止まる側に a.ts 込みの基準が当たって見落とす)
     assert json.loads(target.read_text(encoding="utf-8")) == [
-        {"cwd": "/repo", "prints": {"a.ts": "sha256:a"}}
+        {"cwd": "/repo", "prints": {}, "concurrent": True}
     ]
 
     second = handle(event)
-    assert "b.ts" in second["reason"]
-    assert "a.ts" not in second["reason"], "消費済みの控えを使い回している"
+    assert "a.ts" in second["reason"] and "b.ts" in second["reason"], (
+        "並列グループの全員が同じ最古の基準と突き合わせること"
+    )
     assert not target.exists(), "列が空になったら控えは残さない"
 
 

@@ -134,21 +134,31 @@ def locked(target: Path) -> Iterator[None]:
 
 
 def parse_porcelain(text: str) -> set[str]:
-    """`git status --porcelain` の出力から path 集合を作る。
+    """`git status --porcelain -z` の出力から path 集合を作る。
 
-    rename (`R  old -> new`) は new 側を採る。`-z` を使わないので path に改行を含む
-    ファイルは取りこぼす — 実運用で出ない形なので許容し、ここに明記しておく。
+    **`-z` を使う理由** (これが無いと何が静かに通るか):
+        既定の porcelain は非 ASCII や特殊文字を含む path を C 形式で引用する
+        (`日本語.txt` → `"\\346\\227\\245..."`)。外側の引用符を外すだけでは
+        **実在しない path** になり、`fingerprint()` が起動前後とも "missing" を返す。
+        指紋が一致するので、そのファイルへの subagent の編集は**無警告で通る**。
+        `-z` なら引用されず、path に改行が含まれていても取りこぼさない。
+
+    形式: `XY <path>\\0` の並び。rename / copy (`R` / `C`) だけは
+    `XY <new>\\0<old>\\0` と 2 フィールドで来るので、new を採って old は読み飛ばす。
     """
+    fields = text.split("\0")
     paths: set[str] = set()
-    for raw in text.splitlines():
-        if len(raw) < 4:
+    index = 0
+    while index < len(fields):
+        entry = fields[index]
+        index += 1
+        if len(entry) < 4:
             continue
-        entry = raw[3:]
-        if " -> " in entry:
-            entry = entry.split(" -> ", 1)[1]
-        entry = entry.strip().strip('"')
-        if entry:
-            paths.add(entry)
+        status, path = entry[:2], entry[3:]
+        if "R" in status or "C" in status:
+            index += 1  # 直後の old path を読み飛ばす
+        if path:
+            paths.add(path)
     return paths
 
 
@@ -193,7 +203,7 @@ def git_dirty_paths(cwd: str) -> tuple[dict[str, str], str | None]:
     """({dirty な path: 指紋}, 失敗理由)。失敗理由が非 None なら**検査していない**。"""
     try:
         proc = subprocess.run(
-            ["git", "status", "--porcelain"],
+            ["git", "status", "--porcelain", "-z"],
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -271,19 +281,34 @@ def take_baseline(
 ) -> tuple[dict[str, str | None] | None, list[dict[str, Any]], str]:
     """今停止した subagent の基準を 1 件取り出す。(基準, 残りの列, 根拠) を返す。
 
-    同じ cwd の控えのうち**最も古いもの**を採る。並列起動では控えと subagent を
+    同じ cwd の控えのうち**最も古いもの**を基準にする。並列起動では控えと subagent を
     対応付けられない (PreToolUse(Agent) に agent_id が無い) ので、最古を採って
     **見落としを起こさない**側に倒す。cwd が違う控えは使わない
     (worktree 分離された subagent に親の控えを流用しないため)。
+
+    **落とすのは最古ではなく最も新しい控え** (これが無いと何が静かに通るか):
+        A 起動 → A が a.ts を変更 → B 起動 (B の控えには a.ts が入る) → **B が先に停止**、
+        という順で最古を消費すると、後から止まる A には**a.ts を既に含む B の控え**が
+        当たる。A の置き去りは指紋まで一致するので無警告で通る。最古を最後の停止まで
+        残せば、並列グループの全員が同じ基準 (最初の起動前) と突き合わせるので、
+        **停止の順序に依存しなくなる**。
+
+    残した最古の控えには `concurrent` の印を付ける。これが無いと最後の停止が
+    `mode="diff"` になり、他の subagent の差分が混ざっているのに
+    「あなたが作った差分です」と**精度を偽る**。
     """
     matched = [i for i, entry in enumerate(entries) if entry.get("cwd") == cwd]
     if not matched:
         return None, entries, "all"
-    index = matched[0]
-    baseline = entry_prints(entries[index])
-    remaining = entries[:index] + entries[index + 1 :]
-    mode = "diff-concurrent" if len(matched) > 1 else "diff"
-    return baseline, remaining, mode
+    oldest = matched[0]
+    baseline = entry_prints(entries[oldest])
+    concurrent = len(matched) > 1 or bool(entries[oldest].get("concurrent"))
+    drop = matched[-1]
+    remaining = [entry for i, entry in enumerate(entries) if i != drop]
+    if concurrent and drop != oldest:
+        keep = oldest if drop > oldest else oldest - 1
+        remaining[keep] = {**remaining[keep], "concurrent": True}
+    return baseline, remaining, "diff-concurrent" if concurrent else "diff"
 
 
 def format_reason(paths: list[str], mode: str) -> str:
