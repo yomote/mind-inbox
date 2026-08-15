@@ -170,42 +170,49 @@ class TestFrameworkLogRedaction:
     #417 の暫定対策はロガー直付けの Filter で、`agent_framework` 直の record しか
     見ていなかった。子ロガー経由 / % 引数の例外 / `exc_info=True` の 3 経路が
     素通しだったのは修正前の実測で確認済み (PR に記載)。
+
+    **`canary` は実秘密ではない**: SENSITIVE_VALUES 由来の合成カナリア値を
+    **わざと生のまま** MAF と同じ形でログへ流し、出口で消えている
+    (`canary not in formatted`) ことを検査する。ここでログに出ているのは
+    検出器であって秘密そのものではない — 変数名を secret にすると CodeQL が
+    「本物の秘密の平文ログ」として警告する (PR #463 alert #5) ため、
+    役割 (漏えい検出カナリア) を名前で表している。
     """
 
-    @pytest.mark.parametrize("secret", SENSITIVE_VALUES)
-    def test_単体_子ロガーからの_payload_行も指紋になる(self, secret, caplog):
+    @pytest.mark.parametrize("canary", SENSITIVE_VALUES)
+    def test_単体_子ロガーからの_payload_行も指紋になる(self, canary, caplog):
         # 無いと: Filter 方式 (record が emit されたロガーにしか掛からない) に
         # 戻す変更が緑のまま通り、上流がロガーを分けた瞬間
         # (`agent_framework.x`) に例外原文の素通しへ戻る。
         redact_framework_logs()
         with caplog.at_level(logging.ERROR):
             logging.getLogger("agent_framework.future_module").error(
-                f"Function failed. Error: {secret}"
+                f"Function failed. Error: {canary}"
             )
 
         formatted = _formatted(caplog)
-        assert secret not in formatted
+        assert canary not in formatted
         assert "Function failed." in formatted  # 失敗の事実は残る (行ごと消さない)
 
-    @pytest.mark.parametrize("secret", SENSITIVE_VALUES)
-    def test_単体_引数に載った例外オブジェクトは型名と指紋になる(self, secret, caplog):
+    @pytest.mark.parametrize("canary", SENSITIVE_VALUES)
+    def test_単体_引数に載った例外オブジェクトは型名と指紋になる(self, canary, caplog):
         # 無いと: MAF が実際に使う `logger.error("...: %s", exc)` の形
         # (agent_framework._mcp:2131 等) で、% 展開の瞬間に例外原文が出る。
         redact_framework_logs()
         with caplog.at_level(logging.ERROR):
             logging.getLogger("agent_framework._mcp").error(
                 "MCP connection closed unexpectedly after reconnection: %s",
-                RuntimeError(secret),
+                RuntimeError(canary),
             )
 
         formatted = _formatted(caplog)
-        assert secret not in formatted
+        assert canary not in formatted
         assert "RuntimeError" in formatted  # 何が起きたか (型名) は残る
         assert "MCP connection closed" in formatted  # どの行かも残る
 
-    @pytest.mark.parametrize("secret", SENSITIVE_VALUES)
+    @pytest.mark.parametrize("canary", SENSITIVE_VALUES)
     def test_単体_exc_info_の_traceback_からも例外文が消えフレームは残る(
-        self, secret, caplog
+        self, canary, caplog
     ):
         # 無いと: MAF の `logger.warning(..., exc_info=True)`
         # (agent_framework._mcp:1670 等) で、Formatter が整形する traceback の
@@ -213,21 +220,21 @@ class TestFrameworkLogRedaction:
         redact_framework_logs()
         with caplog.at_level(logging.WARNING):
             try:
-                _raise_deep(secret)
+                _raise_deep(canary)
             except ValueError:
                 logging.getLogger("agent_framework._mcp").warning(
                     "Background MCP reload failed", exc_info=True
                 )
 
         formatted = _formatted(caplog)
-        assert secret not in formatted
+        assert canary not in formatted
         assert "Background MCP reload failed" in formatted
         assert "ValueError" in formatted  # 型名は残る
         assert "inner" in formatted  # どこで壊れたか (フレーム) も残る
 
-    @pytest.mark.parametrize("secret", SENSITIVE_VALUES)
+    @pytest.mark.parametrize("canary", SENSITIVE_VALUES)
     def test_単体_redaction_自体が壊れたら原文ごと落ちて失敗が残る(
-        self, secret, caplog, monkeypatch
+        self, canary, caplog, monkeypatch
     ):
         # 無いと: redaction 内の例外で (a) 原文がそのまま通る (最悪) か
         # (b) logging 機構へ例外が漏れて元の障害が消える。fail-closed —
@@ -240,11 +247,11 @@ class TestFrameworkLogRedaction:
         monkeypatch.setattr(observability, "fingerprint", _boom)
         with caplog.at_level(logging.ERROR):
             logging.getLogger("agent_framework").error(
-                f"Function failed. Error: {secret}"
+                f"Function failed. Error: {canary}"
             )
 
         formatted = _formatted(caplog)
-        assert secret not in formatted
+        assert canary not in formatted
         assert "redaction failed" in formatted
         assert "RuntimeError" in formatted  # 何で失敗したか (型名) は残る
 
