@@ -184,7 +184,7 @@ class TestToolFailureClassification:
         # 流れる。層が 2 つあるので対策も 2 つ要る:
         #   1. `tool_boundary` middleware が例外を ref だけに一般化する
         #      (FunctionTool.invoke の**外側** = 呼び出しループのログを塞ぐ)
-        #   2. `redact_framework_tool_logs` のフィルタが payload 行を指紋に替える
+        #   2. `redact_framework_logs` の handler が payload 行を指紋に替える
         #      (invoke の**内側**のログはアプリの middleware より先に走るため)
         # どちらかを外すとこのテストが赤になる。
         secret = "https://upstream.example/patient-9931 相談内容そのもの"

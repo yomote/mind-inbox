@@ -153,49 +153,127 @@ _FRAMEWORK_PAYLOAD_PREFIXES = (
 )
 
 
-class _FrameworkPayloadRedactor(logging.Filter):
-    """`agent_framework` ロガーの payload 行を指紋に差し替える。
+def _redact_exception_arg(value: object) -> object:
+    """% 引数に**例外オブジェクトそのもの**が載っていたら型名 + 指紋へ。
+
+    MAF は `logger.error("...: %s", exc)` の形も使う (agent_framework._mcp が実例)。
+    例外文はユーザー入力・上流応答を含みうるので、原文の代わりに
+    `exception_kind` + `fingerprint` を残す。例外以外の引数には触らない —
+    どのログ行か判別する定型文まで潰すと、redaction 自体のデバッグができなくなる。
+    """
+    if isinstance(value, BaseException):
+        return f"{exception_kind(value)} <redacted {fingerprint(str(value))}>"
+    return value
+
+
+def _redact_record(record: logging.LogRecord) -> None:
+    """1 つの LogRecord から例外原文の出口を全部落とす (in-place)。
 
     **行そのものは消さない** — 消すと「ツールが失敗した」という事実まで見えなく
     なる (このリポジトリで最も繰り返している事故 = 取れなかったものを異常なしに
-    しない)。level も logger 名も残したまま、本文だけを `fingerprint` に替える。
+    しない)。level も logger 名も残したまま、本文だけを指紋・フレームに替える。
+    """
+    # 1) % 引数に載った例外オブジェクト → 型名 + 指紋
+    if record.args:
+        if isinstance(record.args, tuple):
+            record.args = tuple(_redact_exception_arg(a) for a in record.args)
+        elif isinstance(record.args, dict):
+            # logging は引数 1 個の dict をマッピング引数として許す
+            record.args = {
+                key: _redact_exception_arg(value) for key, value in record.args.items()
+            }
+
+    # 2) 既知の payload 行 (f-string で本文が埋め込み済み) → 本文を指紋へ
+    message = record.getMessage()
+    for prefix in _FRAMEWORK_PAYLOAD_PREFIXES:
+        if message.startswith(prefix):
+            payload = message[len(prefix) :].strip()
+            message = f"{prefix} <redacted {fingerprint(payload)}>"
+            record.msg = message
+            record.args = ()
+            break
+
+    # 3) exc_info → traceback の最終行 (`Type: 例外文`) を出さず、frames + 指紋だけ残す。
+    #    exc_text は Formatter が一度整形した traceback のキャッシュ — 残すと
+    #    exc_info を消しても次の handler がキャッシュから原文を書いてしまう。
+    if record.exc_info:
+        exc = record.exc_info[1]
+        note = " exc_info=<dropped>"
+        if exc is not None:
+            note = f" exc={exception_frames(exc)} <redacted {fingerprint(str(exc))}>"
+        record.msg = record.getMessage() + note
+        record.args = ()
+        record.exc_info = None
+        record.exc_text = None
+
+
+class _FrameworkRedactionHandler(logging.Handler):
+    """record を**書き換えるためだけ**の handler (emit しない)。
+
+    logging の Filter は「その record が emit されたロガー自身」にしか掛からず、
+    子ロガー (`agent_framework.*`) から propagate してくる record を素通しする
+    (#417 の暫定 filter の穴 / Issue #418 の実測)。一方 **handler は propagate の
+    経路上で必ず呼ばれる** — `agent_framework.x` の record は root の出力 handler に
+    届く前に `agent_framework` に付いた handler を通る。そこで record を in-place に
+    書き換えれば、後段の出力 handler (uvicorn / Azure Monitor など、アプリが
+    所有しないものを含む) にはすでに redact 済みの record しか渡らない。
     """
 
-    def filter(self, record: logging.LogRecord) -> bool:
-        message = record.getMessage()
-        for prefix in _FRAMEWORK_PAYLOAD_PREFIXES:
-            if message.startswith(prefix):
-                payload = message[len(prefix) :].strip()
-                record.msg = f"{prefix} <redacted {fingerprint(payload)}>"
-                record.args = ()
-                break
+    def handle(self, record: logging.LogRecord) -> bool:
+        try:
+            _redact_record(record)
+        except Exception as redaction_error:  # noqa: BLE001
+            # fail-closed: redaction が壊れたとき原文を通すのが最悪なので、
+            # 本文ごと落として「redaction が失敗した」ことだけを残す。
+            # 元の行の内容は失われる — それが見えなくなる代償として、失敗の
+            # 事実 (型名) を成功と区別できる形で残す (静かに素通しへ戻さない)。
+            record.msg = (
+                f"<framework log redaction failed: {type(redaction_error).__name__}>"
+            )
+            record.args = ()
+            record.exc_info = None
+            record.exc_text = None
         return True
 
+    def emit(self, record: logging.LogRecord) -> None:  # pragma: no cover
+        """呼ばれない (handle を override しているため)。出力は後段の handler の仕事。"""
 
-def redact_framework_tool_logs() -> None:
-    """MAF が自前でツール payload を出すログ行を指紋化する (冪等)。
+
+def redact_framework_logs() -> None:
+    """MAF (`agent_framework` 階層) のログから例外原文・payload を落とす (冪等)。
 
     **なぜ middleware だけでは足りないか** (#417 P2 の実測): アプリの
     `tool_boundary` middleware が例外を一般化できるのは `FunctionTool.invoke` の
     **外側**だけで、`invoke` の内側にある `logger.error(f"Function failed. Error:
     {exception}")` はそれより先に走る。つまり middleware での一般化と、この
-    フィルタの両方が要る (層が違う)。
+    handler の両方が要る (層が違う)。
 
-    **効かない範囲**: logging のフィルタは「そのロガーに直接出た record」にしか
-    掛からず、子ロガー (`agent_framework.*`) から propagate してくる record には
-    掛からない。今 payload を載せているのは `agent_framework` ロガー自身なので
-    足りているが、**上流がロガーを分けたら静かに漏れ始める** — そのため
-    tests/test_workflow_tools.py が MAF の実ループを通して pin している。
+    **#417 の暫定 filter から変えたこと** (Issue #418):
+
+    - ロガー直付けの Filter → `agent_framework` に付ける mutating Handler。
+      子ロガー (`agent_framework.*`) から propagate してくる record も通るので、
+      上流がロガーを分けても素通しに戻らない
+    - `exc_info` を frames + 指紋に置換 (traceback の最終行 = 例外文が出口だった)
+    - % 引数に載った例外オブジェクトを型名 + 指紋に置換 (`_mcp.py` が使う形)
+
+    **効かない範囲** (残る前提):
+
+    - 子ロガーが `propagate=False` + 自前 handler を持つ場合はこの経路を通らない
+      (MAF 1.13 にそのようなロガーは無い — 出力 handler を足すのはアプリ側だけ)
+    - 未知の f-string 行に例外文が**文字列として**埋め込まれた場合、既知 prefix
+      以外は検出できない (上流へ例外文を丸ごとログに書かない改善を出す価値がある)
 
     **塞いでいないもの**: MAF は同じ例外を OTel span にも記録する
-    (`capture_exception`)。このサービスは exporter を 1 つも構成していないので
-    今は出口が無いが、**Application Insights 等を有効化したらそこが新しい出口に
-    なる** (ログとは別の経路なのでこのフィルタでは掛からない)。Issue #418。
+    (`capture_exception` = `record_exception` + `repr(exception)`。SENSITIVE_DATA
+    フラグと**無関係に**原文が載る)。このサービスは exporter を 1 つも構成して
+    いないので今は出口が無く、tests/test_observability.py が「span は非記録の
+    まま」を pin している — Application Insights 等を配線するとそのテストが赤に
+    なり、span 側の redaction (SpanProcessor) を足すことを強制する。
     """
     framework_logger = logging.getLogger(_FRAMEWORK_LOGGER)
     if any(
-        isinstance(existing, _FrameworkPayloadRedactor)
-        for existing in framework_logger.filters
+        isinstance(existing, _FrameworkRedactionHandler)
+        for existing in framework_logger.handlers
     ):
         return
-    framework_logger.addFilter(_FrameworkPayloadRedactor())
+    framework_logger.addHandler(_FrameworkRedactionHandler())
