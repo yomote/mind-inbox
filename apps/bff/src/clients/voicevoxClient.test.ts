@@ -1,5 +1,5 @@
 /**
- * [L2] voicevoxClient — wrapper へ渡すリクエスト body の形。
+ * [単体] voicevoxClient — wrapper へ渡すリクエスト body の形。
  *
  * 無いと何が静かに通るか: wrapper (FastAPI + pydantic) の `SynthesizeRequest` は
  * **知らないフィールドを黙って捨てる**。`speed_scale` を `speedScale` (camelCase) で
