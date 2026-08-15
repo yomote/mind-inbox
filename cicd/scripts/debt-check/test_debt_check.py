@@ -6,22 +6,37 @@
     - 逆に、実在しないファイルへのリンクを見逃して docs が静かに腐る (偽陰性)
     - 0 件のときに「カバーしていない領域」の明示が落ち、
       **「0 件 = 全部健全」という嘘が緑色の顔をして通る** (silent caps)
+    - 走査対象が docs/ に閉じたまま cicd/ 配下のリンクが腐り、
+      **見ていないだけの場所が「壊れていない」ことにされる** (Issue #421)
 """
 
 import json
 from pathlib import Path
 
 from detect import (
+    EXCLUDED_DIR_NAMES,
+    LINK_SCAN_DIRS,
+    UNCOVERED,
     detect_all,
     detect_broken_doc_links,
     detect_placeholder_test_scripts,
     is_checkable_relative,
     iter_inline_links,
+    iter_scanned_markdown,
+    main,
 )
 
 
 def _repo(tmp_path: Path) -> Path:
+    """走査対象のディレクトリを揃えた最小のリポジトリ。
+
+    LINK_SCAN_DIRS から自動生成しない — 定数を書き換える変異でも fixture が
+    追従してしまい、走査範囲のテストが「常に自分と一致する」空テストになる。
+    走査対象を足したらここも足す (足し忘れは未検査として全テストが落ちる)。
+    """
+    assert set(LINK_SCAN_DIRS) == {"docs", "cicd"}, "走査対象が変わっている"
     (tmp_path / "docs").mkdir()
+    (tmp_path / "cicd").mkdir()
     return tmp_path
 
 
@@ -101,6 +116,105 @@ def test_l1_ルート相対リンクはリポジトリルートに解決して�
     )
     findings = detect_broken_doc_links(root)
     assert {f["target"] for f in findings} == {"/nope/gone.md"}
+
+
+def test_l1_cicd配下の壊れたリンクも検出する(tmp_path) -> None:
+    """走査対象が docs/ に閉じていないこと (Issue #421)。
+
+    無いと何が静かに通るか:
+        `cicd/keys/README.md` のように他ディレクトリを `../../` 越しに指す md が
+        あるのに、走査対象が docs/ だけだと参照先が動いてもリンク切れが検出されず、
+        週次 debt-check は「0 件」で緑のまま。**見ていないだけの場所が
+        「壊れていない」ことにされる。**
+    """
+    root = _repo(tmp_path)
+    (root / "docs" / "runbooks").mkdir()
+    (root / "docs" / "runbooks" / "live.md").write_text("# live", encoding="utf-8")
+    (root / "cicd" / "keys").mkdir()
+    (root / "cicd" / "keys" / "README.md").write_text(
+        "[生きてる](../../docs/runbooks/live.md) / [移動済み](../../docs/runbooks/moved.md)",
+        encoding="utf-8",
+    )
+    findings = detect_broken_doc_links(root)
+    assert [(f["file"], f["target"]) for f in findings] == [
+        ("cicd/keys/README.md", "../../docs/runbooks/moved.md")
+    ]
+
+
+def test_l1_リポジトリ直下のmdも走査するが未対象ツリーは走査しない(tmp_path) -> None:
+    """走査範囲の線引きそのものを固定する (Issue #421)。
+
+    無いと何が静かに通るか:
+        - 直下: CLAUDE.md / README.md は最も読まれる入口なのに、走査対象から
+          外れていると参照先が動いても誰も気づかない
+        - 未対象ツリー: apps/ や .claude/ を無自覚に巻き込むと node_modules や
+          worktree の md まで検査対象になり、**他人の未完成リンクを毎週報告して**
+          Issue がノイズで埋まる (偽陽性は検出器の死)。広げるなら実測してから
+        - 除外ディレクトリ: 走査対象の中に居る `.venv` / `node_modules` を拾うと、
+          **同じコミットでも実行場所 (CI / ローカル) で結果が変わる**検出器になる
+    """
+    root = _repo(tmp_path)
+    (root / "CLAUDE.md").write_text("[壊れ](docs/gone.md)", encoding="utf-8")
+    (root / "apps" / "frontend").mkdir(parents=True)
+    (root / "apps" / "frontend" / "README.md").write_text(
+        "[壊れ](nope.md)", encoding="utf-8"
+    )
+    # 除外名は直書きする — EXCLUDED_DIR_NAMES から生成すると、集合から名前を
+    # 落とす変異で fixture も一緒に消え、「常に自分と一致する」空テストになる
+    assert EXCLUDED_DIR_NAMES == {"node_modules", ".venv", "worktrees", ".git"}
+    for excluded in ("node_modules", ".venv", "worktrees", ".git"):
+        # 走査対象 (cicd/) の**中に**現れた依存物・worktree・仮想環境。
+        # .venv は CI に無くローカルにだけあるので、拾うと同じコミットでも
+        # 実行場所で結果が変わる (実測: ai-agent の .venv 配下に md 38 本)
+        nested = root / "cicd" / "scripts" / excluded / "dep"
+        nested.mkdir(parents=True)
+        (nested / "README.md").write_text("[壊れ](nope.md)", encoding="utf-8")
+    findings = detect_broken_doc_links(root)
+    assert [(f["file"], f["target"]) for f in findings] == [
+        ("CLAUDE.md", "docs/gone.md")
+    ]
+    scanned = {p.relative_to(root).as_posix() for p in iter_scanned_markdown(root)}
+    assert scanned == {"CLAUDE.md"}
+
+
+def test_l1_走査対象が欠けていたら実行経路が前提不足で落ちる(tmp_path, capsys) -> None:
+    """workflow と同じ入口 (main) を通す (PR #438 の Codex 指摘)。
+
+    無いと何が静かに通るか:
+        走査対象のディレクトリが (改名・移動で) 消えると、検査していないのに
+        findings が 0 件になり「異常なし」として緑の run が出る。レポート内の
+        finding として出すだけでは「検出処理は走った」ことになってしまうので、
+        **run 自体を落とす**。関数を直接呼ぶテストだけだと、この実行経路が
+        本当に落ちるかを見ていない。
+    """
+    root = _repo(tmp_path)
+    (root / "cicd").rmdir()
+    assert main(["detect.py", str(root)]) == 1
+    captured = capsys.readouterr()
+    assert "cicd" in captured.err
+    assert captured.out == "", "前提不足なのにレポート JSON を出している"
+
+
+def test_l1_走査対象が揃っていれば実行経路はレポートJSONを出す(
+    tmp_path, capsys
+) -> None:
+    """上の前提不足判定が「常に 1 を返すだけ」になっていないことを押さえる。"""
+    root = _repo(tmp_path)
+    (root / "cicd" / "keys").mkdir()
+    (root / "cicd" / "keys" / "README.md").write_text(
+        "[壊れ](../../docs/gone.md)", encoding="utf-8"
+    )
+    assert main(["detect.py", str(root)]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["total"] == 1
+    assert "`cicd/keys/README.md`" in report["markdown"]
+
+
+def test_l1_走査対象外のツリーはカバー外領域として明示される() -> None:
+    """silent caps 禁止。走査範囲を広げても「見ていない場所」は残るので本文に出す。"""
+    uncovered_text = "\n".join(UNCOVERED)
+    assert "apps/**" in uncovered_text
+    assert ".claude/**" in uncovered_text
 
 
 def test_l1_リンク書式のバリエーションを拾う() -> None:
