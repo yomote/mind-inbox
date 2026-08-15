@@ -1,7 +1,6 @@
-import { Alert, Box, Button, Chip, LinearProgress, Paper, Stack, Typography } from "@mui/material";
+import { Box, Chip, Paper, Stack, Typography } from "@mui/material";
 import FiberNewIcon from "@mui/icons-material/FiberNew";
 import RepeatIcon from "@mui/icons-material/Repeat";
-import AutoAwesomeRoundedIcon from "@mui/icons-material/AutoAwesomeRounded";
 import type { ExtractionResult } from "../../api";
 import { AFFECT_COLOR } from "../screens/problemShared";
 
@@ -11,8 +10,6 @@ type LivePreviewPaneProps = {
   /** 揮発する下書き (#187 / ADR 0039 D1)。null = まだ一度も整理していない。 */
   preview: ExtractionResult | null;
   status: PreviewStatus;
-  /** 手動「今すぐ整理」(ADR 0039 D2)。 */
-  onRefresh: () => void;
 };
 
 /**
@@ -21,8 +18,11 @@ type LivePreviewPaneProps = {
  * 読み取り専用の下書き表示 — ここに出ているものはまだどこにも保存されていない。
  * カードの見た目は extract-review.mdx のカードの縮約版 (確定前の予告編なので
  * トリアージ操作は持たない)。
+ *
+ * 「今すぐ整理」と更新中 / 失敗の表示は器 (OrganizingPane) が持つ (#433) —
+ * マップと下書きは同じ 1 回の preview で一緒に届くので、タブごとに分けない。
  */
-export function LivePreviewPane({ preview, status, onRefresh }: LivePreviewPaneProps) {
+export function LivePreviewPane({ preview, status }: LivePreviewPaneProps) {
   const items = preview?.items ?? [];
 
   return (
@@ -32,32 +32,9 @@ export function LivePreviewPane({ preview, status, onRefresh }: LivePreviewPaneP
       sx={{ p: 2.5, borderRadius: 3 }}
     >
       <Stack spacing={1.5}>
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Typography fontWeight={700} sx={{ flex: 1 }}>
-            整理されつつある困りごと
-          </Typography>
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<AutoAwesomeRoundedIcon />}
-            onClick={onRefresh}
-            disabled={status === "updating"}
-          >
-            今すぐ整理
-          </Button>
-        </Stack>
-
         <Typography variant="caption" color="text.secondary">
           確定していない下書きです — 確定せずにセッションを閉じると消えます
         </Typography>
-
-        {status === "updating" && <LinearProgress aria-label="下書きを更新中" />}
-
-        {status === "error" && (
-          <Alert severity="warning" variant="outlined">
-            下書きを更新できませんでした。会話はそのまま続けられます。「今すぐ整理」でやり直せます。
-          </Alert>
-        )}
 
         {items.length === 0 && status !== "updating" ? (
           <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>

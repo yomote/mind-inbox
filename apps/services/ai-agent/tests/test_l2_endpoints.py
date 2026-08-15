@@ -271,6 +271,59 @@ class TestExtract:
         assert item["mention"]["proposedTheme"] == "仕事・キャリア"
         assert item["mention"]["problemId"] == item["grouping"]["problemId"]
 
+    async def test_l2_extract_serializes_thinking_map_in_camelcase(
+        self, client, monkeypatch, make_client, session_repo
+    ):
+        # 無いと: 整理マップ (#433) の alias 直列化 (thinkingMap / parentId / problemId) が
+        #         snake_case のまま出ても Python 側のテストは全部緑のまま通り、
+        #         BFF の zod parse で初めて落ちる (= 右ペインが実環境でだけ空になる)。
+        history = ChatHistory()
+        history.add_user_message("転職しようか迷ってて")
+        await session_repo.save("s1", history)
+
+        client_mock = make_client(
+            json.dumps(
+                {
+                    "mentions": [],
+                    "thinkingMap": {
+                        "nodes": [
+                            {
+                                "id": "n1",
+                                "kind": "topic",
+                                "label": "転職の不安",
+                                "status": "confirmed",
+                                "parentId": None,
+                            },
+                            {
+                                "id": "n2",
+                                "kind": "hypothesis",
+                                "label": "失敗が怖い",
+                                "status": "tentative",
+                                "parentId": "n1",
+                            },
+                        ]
+                    },
+                }
+            )
+        )
+        monkeypatch.setattr(app_main, "get_chat_client", lambda: client_mock)
+
+        res = await client.post(
+            "/extract", json={"sessionId": "s1", "existingProblems": []}
+        )
+
+        assert res.status_code == 200
+        nodes = res.json()["thinkingMap"]["nodes"]
+        assert nodes[0] == {
+            "id": "n1",
+            "kind": "topic",
+            "label": "転職の不安",
+            "status": "confirmed",
+            "parentId": None,
+            "problemId": None,
+        }
+        assert nodes[1]["parentId"] == "n1"
+
     async def test_l2_extract_returns_404_when_session_not_found(
         self, client, monkeypatch, make_client
     ):

@@ -243,6 +243,10 @@ components:
         sessionId:
           title: Sessionid
           type: string
+        thinkingMap:
+          anyOf:
+          - $ref: '#/components/schemas/ThinkingMap'
+          - type: 'null'
         updatedProblemCount:
           minimum: 0.0
           title: Updatedproblemcount
@@ -427,6 +431,62 @@ components:
       required:
       - title
       title: PlanResponse
+      type: object
+    ThinkingMap:
+      description: 1 セッション分の整理マップ。揮発する (ADR 0039 D1 — preview は何も保存しない)。
+      properties:
+        nodes:
+          default: []
+          items:
+            $ref: '#/components/schemas/ThinkingNode'
+          title: Nodes
+          type: array
+      title: ThinkingMap
+      type: object
+    ThinkingNode:
+      description: '整理マップの 1 ノード。kind (何か) × status (どれだけ確か) の 2 軸 (裁定 4)。
+
+
+        2 軸に分けているのは「AI の仮説をユーザーが認めた」(hypothesis × confirmed) を
+
+        表せるようにするため — #432 の仮説提示が当たったかどうかが地図の上で見える。'
+      properties:
+        id:
+          title: Id
+          type: string
+        kind:
+          enum:
+          - topic
+          - hypothesis
+          - unknown
+          title: Kind
+          type: string
+        label:
+          title: Label
+          type: string
+        parentId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Parentid
+        problemId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Problemid
+        status:
+          enum:
+          - confirmed
+          - tentative
+          - unexplored
+          title: Status
+          type: string
+      required:
+      - id
+      - kind
+      - label
+      - status
+      title: ThinkingNode
       type: object
     ValidationError:
       properties:

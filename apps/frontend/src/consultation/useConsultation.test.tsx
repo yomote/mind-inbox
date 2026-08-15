@@ -35,6 +35,7 @@ vi.mock("../api", async (importOriginal) => ({
     items: [],
     newProblemCount: 0,
     updatedProblemCount: 0,
+    thinkingMap: null,
   })),
   commitPreview: vi.fn(),
 }));
@@ -339,6 +340,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
       items: [],
       newProblemCount: 0,
       updatedProblemCount: 0,
+      thinkingMap: null,
     };
     vi.mocked(previewExtraction).mockResolvedValue(draft);
     const { result } = setup();
@@ -370,6 +372,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
       items: [draftItem],
       newProblemCount: 0,
       updatedProblemCount: 1,
+      thinkingMap: null,
     };
     vi.mocked(previewExtraction).mockImplementation(async (_sessionId, messages) => {
       calls.push(messages.length);
@@ -399,6 +402,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
         items: [],
         newProblemCount: 0,
         updatedProblemCount: 0,
+        thinkingMap: null,
       } as never);
     });
 
@@ -431,7 +435,13 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
     expect(result.current.session?.messages.length).toBeGreaterThan(5);
   });
 
-  const emptyDraft = { sessionId: "s1", items: [], newProblemCount: 0, updatedProblemCount: 0 };
+  const emptyDraft = {
+    sessionId: "s1",
+    items: [],
+    newProblemCount: 0,
+    updatedProblemCount: 0,
+    thinkingMap: null,
+  };
 
   it("手動「今すぐ整理」は往復数と無関係に更新する", async () => {
     vi.mocked(startNewConsultation).mockResolvedValue(session());
@@ -462,6 +472,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
       items: [draftItem],
       newProblemCount: 0,
       updatedProblemCount: 1,
+      thinkingMap: null,
     };
     vi.mocked(previewExtraction).mockResolvedValue(draft);
     const committed = { ...draft, sessionId: "s1" };
@@ -495,6 +506,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
       items: [draftItem],
       newProblemCount: 0,
       updatedProblemCount: 1,
+      thinkingMap: null,
     };
     vi.mocked(previewExtraction).mockResolvedValue(shown);
     vi.mocked(commitPreview).mockImplementation(async (_id, drafts) => ({
@@ -502,6 +514,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
       items: drafts,
       newProblemCount: 0,
       updatedProblemCount: 1,
+      thinkingMap: null,
     }));
     const { result } = setup();
     await act(async () => {
@@ -518,6 +531,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
       items: [draftItem, { mention: { id: "m-late" }, grouping: { kind: "new", problemId: "p2" } }],
       newProblemCount: 1,
       updatedProblemCount: 1,
+      thinkingMap: null,
     } as never;
     vi.mocked(previewExtraction).mockImplementation(
       () => new Promise((resolve) => (resolveLate = resolve)),
@@ -568,6 +582,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
       items: [draftItem],
       newProblemCount: 0,
       updatedProblemCount: 1,
+      thinkingMap: null,
     };
     vi.mocked(previewExtraction).mockResolvedValue(draft);
     vi.mocked(commitPreview).mockRejectedValue(new Error("commit down"));
@@ -600,6 +615,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
       items: [draftItem],
       newProblemCount: 0,
       updatedProblemCount: 1,
+      thinkingMap: null,
     };
     vi.mocked(previewExtraction).mockImplementation(
       () => new Promise((resolve) => (resolveStale = resolve)),
@@ -700,6 +716,7 @@ describe("[L1] useConsultation — 抽出の失敗をユーザーに見せる (#
       items: [],
       newProblemCount: 0,
       updatedProblemCount: 0,
+      thinkingMap: null,
     });
     const transition = vi.fn();
     const { result } = renderHook(() => useConsultation(transition));

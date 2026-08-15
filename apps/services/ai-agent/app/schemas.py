@@ -215,6 +215,52 @@ class ExtractedItem(BaseModel):
     grouping: GroupingOutcome
 
 
+# ── 思考整理マップ (Issue #433 段階 1 / 2026-08-15 PO 裁定) ────────────────────
+#
+# 「AI が今この会話をどう整理しているか」を右ペインに出すためのデータ。
+# **preview (/extract) の出力に相乗りする** — 追加の LLM 呼び出しは 0 (裁定 2)。
+#
+# ここに **% や進捗率のフィールドを足さないこと**。整理度合いは「ノードを数えた実数」
+# だけで表す (裁定 3)。分母 (= 悩みが出きった状態) を誰も測っていないので、率を出すと
+# 測っていない数字を画面に出すことになる。契約に無ければ画面にも作れない。
+
+# それが何か: 話題 / AI の仮説 / まだ聞けていない穴
+ThinkingNodeKind = Literal["topic", "hypothesis", "unknown"]
+# どれだけ確かか: ユーザーが認めた / AI がそう思っているだけ / まだ触れていない
+ThinkingNodeStatus = Literal["confirmed", "tentative", "unexplored"]
+
+
+class ThinkingNode(BaseModel):
+    """整理マップの 1 ノード。kind (何か) × status (どれだけ確か) の 2 軸 (裁定 4)。
+
+    2 軸に分けているのは「AI の仮説をユーザーが認めた」(hypothesis × confirmed) を
+    表せるようにするため — #432 の仮説提示が当たったかどうかが地図の上で見える。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    kind: ThinkingNodeKind
+    label: str
+    status: ThinkingNodeStatus
+    # 箇条書きツリーの親 (段階 1 の構造)。null = 根。
+    # グラフの辺 (causes / relates など) は段階 2 で足す — 段階 1 で描かないものを
+    # 契約に置くと、誰も検証していないフィールドが増えるだけになる。
+    parent_id: Optional[str] = Field(default=None, alias="parentId")
+    # #321 (題材再定義) との接続穴。**段階 1 では常に null で返す** — LLM が推測した
+    # Problem id を載せると「AI が既存の悩みと紐づけた」と誤読されるため、extractor が
+    # 必ず落とす。フィールドだけ空けておけば #321 の後に契約を壊さず繋がる (裁定 4)。
+    problem_id: Optional[str] = Field(default=None, alias="problemId")
+
+
+class ThinkingMap(BaseModel):
+    """1 セッション分の整理マップ。揮発する (ADR 0039 D1 — preview は何も保存しない)。"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    nodes: list[ThinkingNode] = []
+
+
 class ExtractionResult(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -222,6 +268,9 @@ class ExtractionResult(BaseModel):
     items: list[ExtractedItem] = []
     new_problem_count: int = Field(alias="newProblemCount", ge=0)
     updated_problem_count: int = Field(alias="updatedProblemCount", ge=0)
+    # 整理マップ (#433)。null = LLM が返さなかった / 使える節が 1 つも無かった。
+    # 「マップが無い」と「空のマップ」を画面で区別しないので同じ null に潰す。
+    thinking_map: Optional[ThinkingMap] = Field(default=None, alias="thinkingMap")
 
 
 class ExistingProblemRef(BaseModel):

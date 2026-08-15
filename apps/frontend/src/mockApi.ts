@@ -511,6 +511,8 @@ export async function extractMentions(sessionId: string): Promise<ExtractionResu
     ],
     newProblemCount: 1,
     updatedProblemCount: career ? 1 : 0,
+    // 確定 (抽出) の結果に整理マップは載らない (#433 — マップは対話中だけの作業机)。
+    thinkingMap: null,
   };
 }
 
@@ -598,7 +600,102 @@ export async function previewExtraction(
     items,
     newProblemCount: countProblems(items, "new"),
     updatedProblemCount: countProblems(items, "existing"),
+    thinkingMap: mockThinkingMap(userTexts.length),
   };
+}
+
+/**
+ * 「AI の整理」(思考整理マップ) の mock (#433 段階 1)。
+ *
+ * real では ai-agent が preview と同じ 1 回の LLM 出力に載せて返す (追加呼び出し 0)。
+ * mock は**会話が進むと地図が育つ**様子を決定的に再現する:
+ *   1 往復〜: 話題 1 本 + まだ聞けていない枝 1 本
+ *   2 往復〜: AI の見立て (hypothesis / tentative) が枝として増える
+ *   3 往復〜: 話題がもう 1 本増え、**未探索の枝も増える** (減る一方ではない)
+ *   4 往復〜: 見立てが本人の発話で裏取りされて confirmed に変わる
+ *
+ * **未探索の枝が増える往復 (3) を必ず含める**のが要点 — 単調に減る前提で組んだ UI
+ * (プログレスバー等) は、ここを通すと辻褄が合わなくなる。
+ */
+function mockThinkingMap(turns: number): ExtractionResult["thinkingMap"] {
+  if (turns < 1) return null;
+  const nodes: NonNullable<ExtractionResult["thinkingMap"]>["nodes"] = [
+    {
+      id: "tm-career",
+      kind: "topic",
+      label: "転職するかどうか",
+      status: "confirmed",
+      parentId: null,
+      problemId: null,
+    },
+    {
+      id: "tm-career-meeting",
+      kind: "unknown",
+      label: "面談だけ受ける選択肢",
+      status: "unexplored",
+      parentId: "tm-career",
+      problemId: null,
+    },
+  ];
+
+  if (turns >= 2) {
+    nodes.push({
+      id: "tm-career-fear",
+      kind: "hypothesis",
+      // AI の見立て。4 往復目に本人の発話で裏が取れて confirmed になる。
+      label: "失敗が怖いのが本体?",
+      status: turns >= 4 ? "confirmed" : "tentative",
+      parentId: "tm-career",
+      problemId: null,
+    });
+  }
+
+  if (turns >= 3) {
+    nodes.push(
+      {
+        id: "tm-presentation",
+        kind: "topic",
+        label: "来週のプレゼン",
+        status: "confirmed",
+        parentId: null,
+        problemId: null,
+      },
+      {
+        id: "tm-presentation-time",
+        kind: "unknown",
+        label: "準備の時間が取れるか",
+        status: "unexplored",
+        parentId: "tm-presentation",
+        problemId: null,
+      },
+    );
+  }
+
+  if (turns >= 4) {
+    nodes.push(
+      {
+        id: "tm-sleep",
+        kind: "unknown",
+        label: "眠れていないのは関係?",
+        status: "unexplored",
+        parentId: null,
+        problemId: null,
+      },
+      // 裏取り済みの見立て (tm-career-fear) が confirmed に移るので、**その時点でも
+      // tentative の節が残る**ように新しい見立てを 1 つ足す。残さないと 4 往復目以降の
+      // デモが「仮説 0」になり、3 状態の色分けが画面から消える。
+      {
+        id: "tm-presentation-link",
+        kind: "hypothesis",
+        label: "睡眠不足がプレゼン不安を増幅?",
+        status: "tentative",
+        parentId: "tm-presentation",
+        problemId: null,
+      },
+    );
+  }
+
+  return { nodes };
 }
 
 /**
@@ -675,6 +772,8 @@ export async function commitPreview(
     items,
     newProblemCount: countProblems(items, "new"),
     updatedProblemCount: countProblems(items, "existing"),
+    // 確定の結果に整理マップは載らない (#433 / BFF の commit 経路と同形)。
+    thinkingMap: null,
   };
 }
 

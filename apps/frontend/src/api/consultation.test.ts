@@ -43,6 +43,7 @@ import {
   startNewConsultation,
 } from "./consultation";
 import { clearStreamingReply, getStreamingReply } from "./streamingReply";
+import { resetSpeedScaleForTest, setSpeedScale } from "../voice/speedScale";
 import { getStubbedResponse, reportStubbedResponse, resetStubbedResponse } from "./stubStatus";
 
 function sseResponse(events: object[]): Response {
@@ -65,6 +66,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   clearStreamingReply();
   resetStubbedResponse();
+  // モジュールのストアはテスト間で持ち越される (#242)。
+  resetSpeedScaleForTest();
 });
 
 describe("[L2] sendMessage — ストリーミング経路", () => {
@@ -216,6 +219,28 @@ describe("[L2] sendMessage — ストリーミング経路", () => {
     await startNewConsultation("仕事が辛い");
 
     expect(getStubbedResponse()).toBe(true);
+  });
+});
+
+describe("[単体] 先行合成の読み上げ速度 (#242)", () => {
+  it("プリフェッチは現在の読み上げ速度で焼かせる", async () => {
+    // 無いと: 先行合成だけ等倍で焼き、本合成が設定速度を要求して BFF のキャッシュを
+    // 全ミスする。音は普通に鳴るので、体感の待ち時間が #185 以前へ戻ったことしか
+    // 症状に出ない (どのテストも E2E も緑のまま)。
+    setSpeedScale(1.35);
+    vi.mocked(chatStreamFetch).mockResolvedValue(
+      sseResponse([
+        { type: "delta", text: "一つ目の文はこれです。二つ目" },
+        { type: "delta", text: "の文はこちらです。" },
+        { type: "done", response: { reply: "一つ目の文はこれです。二つ目の文はこちらです。" } },
+      ]),
+    );
+
+    await sendMessage("s1", "m");
+
+    const speeds = vi.mocked(ttsPrefetchFetch).mock.calls.map((call) => call[2]);
+    expect(speeds.length).toBeGreaterThan(0);
+    expect(new Set(speeds)).toEqual(new Set([1.35]));
   });
 });
 

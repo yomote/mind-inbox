@@ -690,6 +690,8 @@ const consultationRouter = router({
             items: input.draft.items,
             newProblemCount: 0,
             updatedProblemCount: 0,
+            // 確定経路は整理マップを返さない (#433 / 下の return も同じ)。
+            thinkingMap: null,
             // draft 経路は ai-agent を呼ばないので応答由来の stub フラグを持てない。
             // **サーバ側の条件 (AI_AGENT_BASE_URL の有無) で判定する** (#283 / #146)。
             // クライアント申告を信じるとフラグを落とす偽装で「本物のふりをした stub」が
@@ -708,7 +710,10 @@ const consultationRouter = router({
       // 確定前に対象 Problem が消えていれば「既存に追加」は新規作成に化けるため、
       // 件数だけ直してもカードのバッジが「既存に追加」のままだと画面の中で食い違う。
       const items = await materializeExtraction(extracted, ctx.problemRepo);
-      return { ...extracted, items, ...countProblems(items) };
+      // **整理マップは preview だけが返す** (#433)。確定は「保存された結果」を返す面で、
+      // マップはどこにも保存されない対話中の作業机 — ここで返すとレビュー画面が
+      // 保存物として地図を受け取り、「保存されている」という誤解が UI に生まれる。
+      return { ...extracted, items, ...countProblems(items), thinkingMap: null };
     }),
 
   approve: publicProcedure
