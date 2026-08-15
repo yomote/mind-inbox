@@ -10,6 +10,9 @@
     - `stop_hook_active` を見落として無限に差し戻す
     - `git status` が失敗したときに「未コミット差分なし」と答える
       (取れなかったものを「異常なし」と書く — このリポジトリ最優先の禁止事項)
+    - **起動前にあった差分が消えたことを見落とす** — 共有 worktree の subagent が親の
+      未コミット作業を `git restore` / `git reset --hard` で捨てても、path が `now` から
+      居なくなるので 1 件も咎めない。restore/reset で消した内容はもう戻せない
     - **`isolation: "worktree"` の停止で控えを回収せず、親側の列に溜め続ける** —
       このリポジトリの subagent は既定で worktree 起動なので、使うたびに 1 件ずつ増え、
       後続の親 cwd 起動が古い控えを基準に引いて無関係な親の変更を咎め続けたあと、
@@ -31,6 +34,7 @@ from subagent_dirty_guard import (
     parse_ls_files_stage,
     parse_porcelain,
     select_paths_to_report,
+    select_paths_vanished,
     snapshot_path,
     take_baseline,
     worktree_parent,
@@ -630,3 +634,82 @@ def test_単体_並列に控えを積んでも_1_件も失われない(tmp_path:
     assert len(entries) == 12, (
         f"控えが {12 - len(entries)} 件消えた — 並列 hook の read-modify-write が競合している"
     )
+
+
+def test_単体_起動前にあった差分が消えていたら咎める() -> None:
+    # 共有 worktree の subagent が親の未コミット差分を restore / reset / commit で
+    # clean にする形。`now` 側しか走査しないと path が居なくなって 1 件も咎めない。
+    before = {"parent.py": "sha256:aaa", "keep.py": "sha256:bbb"}
+    now = {"keep.py": "sha256:bbb"}
+    assert select_paths_to_report(now, before) == [], "残っている方は 1 件も無い前提"
+    assert select_paths_vanished(now, before) == ["parent.py"]
+
+
+def test_単体_消失は指紋を持たない旧形式の控えでも判定する() -> None:
+    # 消失は「控えに居た」「now に居ない」だけで決まる。指紋の有無に依らない。
+    assert select_paths_vanished({}, {"parent.py": None}) == ["parent.py"]
+    # 控えそのものが無いときは起動前の状態を知らないので判定しない
+    assert select_paths_vanished({}, None) == []
+
+
+def test_単体_置き去りと消失は別の文言で言い分ける() -> None:
+    left = format_reason(["a.ts"], "diff")
+    assert "commit と push まで完遂" in left
+    assert "もう戻せません" not in left
+
+    gone = format_reason([], "diff", ["parent.py"])
+    # 消した側に「commit してから終われ」と言わない (消失は置き去りではない)
+    assert "残ったまま終わろうとしています" not in gone
+    assert "parent.py" in gone
+    assert "あなたが起動する前から在った差分です" in gone
+    assert "もう戻せません" in gone
+
+    both = format_reason(["a.ts"], "diff", ["parent.py"])
+    assert "a.ts" in both and "parent.py" in both
+    assert "commit と push まで完遂" in both and "もう戻せません" in both
+
+
+def test_単体_消失だけでもブロックする(monkeypatch, tmp_path: Path) -> None:
+    # 置き去りが 0 件でも、消失があれば止まること (`if not paths` で早期 return しない)
+    import subagent_dirty_guard as guard
+
+    target = tmp_path / "snap.json"
+    target.write_text(
+        json.dumps([{"cwd": "/repo", "prints": {"parent.py": "sha256:aaa"}}]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(guard, "git_dirty_paths", lambda cwd: ({}, None))
+    monkeypatch.setattr(guard, "snapshot_path", lambda sid: target)
+    result = handle({"hook_event_name": "SubagentStop", "cwd": "/repo", "session_id": "s"})
+    assert result["decision"] == "block"
+    assert "parent.py" in result["reason"]
+
+
+def test_単体_実際の_git_で_親の差分を_restore_すると咎める(tmp_path: Path) -> None:
+    # ご指摘の再現条件そのもの。親の未コミット差分を subagent が `git restore` で
+    # 捨てると、その内容は git のどこにも残らない (置き去りより重い事故)。
+    import subprocess
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, timeout=30,
+                       capture_output=True, text=True)
+
+    git("init", "-q")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    (tmp_path / "parent.py").write_text("committed\n", encoding="utf-8")
+    git("add", "parent.py")
+    git("commit", "-qm", "base")
+
+    (tmp_path / "parent.py").write_text("親の未コミット作業\n", encoding="utf-8")
+    before, failure = git_dirty_paths(str(tmp_path))
+    assert failure is None, failure
+    assert "parent.py" in before, "前提が崩れている (親が dirty でない)"
+
+    git("restore", "parent.py")  # subagent が親の作業を捨てる
+    after, failure = git_dirty_paths(str(tmp_path))
+    assert failure is None, failure
+    assert after == {}, "前提が崩れている (clean になっていない)"
+
+    assert select_paths_to_report(after, before) == [], "残っている方では検出できない前提"
+    assert select_paths_vanished(after, before) == ["parent.py"]

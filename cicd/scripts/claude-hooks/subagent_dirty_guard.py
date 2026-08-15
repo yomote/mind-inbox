@@ -54,6 +54,14 @@
     ステージすると、**XY は `MM` のまま・作業ツリーの内容も同一**なので、`XY|内容`
     だけでは一致してしまう (`parse_ls_files_stage` を参照)。
 
+**増えた分だけでなく、消えた分も見る** (`select_paths_vanished`):
+    指紋の比較は `now` 側にある path しか走査しないので、**起動前は dirty だったのに
+    今は clean な path** が丸ごと抜ける。共有 worktree の subagent が親の未コミット
+    作業を `git restore` / `git reset --hard` / commit で消すとこの形になり、1 件も
+    咎めずに停止できてしまう。**restore / reset で消した内容はどこにも残らない**ので、
+    置き去り (親が拾えば済む) より重い。置き去りとは文言を分ける — 消した側に
+    「commit と push まで完遂しろ」と言っても意味がないため (`format_reason` を参照)。
+
 指紋と排他で**残る**穴 (取れていないものを「異常なし」と書かないための明示):
     - 5MiB 超のファイルは内容ハッシュではなく `size:mtime_ns` — サイズと mtime が
       両方とも元に戻る書き換えは見えない
@@ -64,6 +72,13 @@
       更新した場合) は全 path の指紋が食い違い、**過剰報告**になる。見落とし側には
       倒れないので、そのまま置く (揃えるには控えに書式版を持たせることになるが、
       版が読めない控えの扱いをまた決めることになり穴が増える)
+    - 消失 (`select_paths_vanished`) を判定できるのは控えが取れた回だけ。"all" モード
+      (控えが無い) では起動前の状態を知らないので**消失は 1 件も出ない** — 控えが
+      取れなかったことは文言に出るが、消失については沈黙する
+    - 消失の判定は「誰の差分だったか」を区別しない。subagent が自分で作った差分を
+      commit した場合でも、その path が起動前から dirty だったなら消失として出る
+      (**過剰報告**)。commit なら内容は git に残るので、文言で「commit したなら
+      その commit を書く」と申告させる形にしてある
     - `git ls-files` が失敗すると index 指紋が取れないので、その回は控えごと
       取れなかったことにして "all" モードに落ちる (過剰報告)。**index が読めない
       ことを「index に変化なし」と読み替えない** — 読み替えると部分ステージの
@@ -370,6 +385,25 @@ def select_paths_to_report(
     return report
 
 
+def select_paths_vanished(
+    now: dict[str, str], snapshot: dict[str, str | None] | None
+) -> list[str]:
+    """**起動前は dirty だったのに、今は clean な path**。
+
+    `select_paths_to_report` は `now` 側しか走査しないので、この形が抜ける —
+    共有 worktree の subagent が親の未コミット差分を `git restore` / `git reset --hard`
+    / commit で消すと、path が `now` から居なくなって 1 件も咎められない。
+    **restore / reset なら親の作業はもう戻せない**ので、残す方 (置き去り) より重い。
+
+    指紋が無い旧形式の控え (値が None) でも判定できる — 「控えに居た = 起動前は
+    dirty だった」「now に居ない = 今は clean」だけで消失は決まり、指紋を見る必要が
+    ないため。控えそのものが無い (None) ときだけ判定できないので空を返す。
+    """
+    if snapshot is None:
+        return []
+    return sorted(p for p in snapshot if p not in now)
+
+
 def load_entries(path: Path) -> list[dict[str, Any]]:
     """控えの列を読む。読めない / 壊れているときは空リスト (= 控え無し扱い)。
 
@@ -485,14 +519,27 @@ def drop_worktree_entry(entries: list[dict[str, Any]], parent_cwd: str) -> list[
     return remaining
 
 
-def format_reason(paths: list[str], mode: str) -> str:
+def _listed(paths: list[str]) -> str:
     shown = paths[:20]
     listed = "\n".join(f"  {p}" for p in shown)
     if len(paths) > len(shown):
         listed += f"\n  ... 他 {len(paths) - len(shown)} 件"
+    return listed
+
+
+def format_reason(paths: list[str], mode: str, vanished: list[str] | None = None) -> str:
+    """`paths` = 置き去りの差分 / `vanished` = 起動前にあったのに消えた差分。
+
+    2 つは**別の事故**なので文言を分ける — 置き去りは「commit して完遂しろ」、
+    消失は「あなたのものでない差分を消した (restore/reset なら戻せない)」。
+    同じ数え上げに混ぜると、消した側に「commit してから終われ」と言うことになる。
+    """
+    vanished = list(vanished or [])
+    listed = _listed(paths)
     if mode == "worktree":
         # worktree は起動時に空 (親の未コミット差分を引き継がない) — 実測はモジュール
         # docstring。だから「作業ツリー全体」でも混入の可能性が無く、断定できる。
+        # 基準が空 = 消えうる path がそもそも無いので、ここに vanished は来ない。
         return (
             f"未コミットの変更が {len(paths)} 件、あなたの worktree に残ったまま"
             "終わろうとしています。\n"
@@ -517,15 +564,29 @@ def format_reason(paths: list[str], mode: str) -> str:
             "あなたが作っていないものが混ざっている可能性があります "
             "(その場合はそう述べて先に進んでください)。"
         )
-    return (
-        f"未コミットの変更が {len(paths)} 件、作業ツリーに残ったまま終わろうとしています。\n"
-        f"{listed}\n"
-        f"{basis}\n"
-        "subagent は親と作業ツリーを共有します。ここで置き去りにすると、"
-        "この差分の始末は親セッションに回り、誰の変更か分からないまま捨てられます。\n"
-        "commit と push まで完遂してから終了してください。"
-        "意図的に残すなら、何をなぜ残したかを最終回答に書いてください。"
-    )
+    blocks = []
+    if paths:
+        blocks.append(
+            f"未コミットの変更が {len(paths)} 件、作業ツリーに残ったまま終わろうとしています。\n"
+            f"{listed}\n"
+            f"{basis}\n"
+            "subagent は親と作業ツリーを共有します。ここで置き去りにすると、"
+            "この差分の始末は親セッションに回り、誰の変更か分からないまま捨てられます。\n"
+            "commit と push まで完遂してから終了してください。"
+            "意図的に残すなら、何をなぜ残したかを最終回答に書いてください。"
+        )
+    if vanished:
+        blocks.append(
+            f"起動前にあった未コミットの変更が {len(vanished)} 件、"
+            "作業ツリーから消えています。\n"
+            f"{_listed(vanished)}\n"
+            "**これは、あなたが起動する前から在った差分です** — 親か他の subagent の作業で、"
+            "あなたのものではありません。`git restore` / `git reset --hard` / `git checkout --` で"
+            "消したのなら、その内容はもう戻せません (commit や stash なら戻せます)。\n"
+            "何をして消したのかを最終回答に書いてください "
+            "(commit に取り込んだなら、その commit を書く)。"
+        )
+    return "\n\n".join(blocks)
 
 
 def handle(event: dict[str, Any]) -> dict[str, Any] | None:
@@ -594,9 +655,10 @@ def _check(event: dict[str, Any], cwd: str, session_id: str) -> dict[str, Any] |
             baseline, remaining, mode = {}, drop_worktree_entry(entries, parent), "worktree"
         _consume(target, remaining)
     paths = select_paths_to_report(now, baseline)
-    if not paths:
+    vanished = select_paths_vanished(now, baseline)
+    if not paths and not vanished:
         return None
-    return hook_io.block(format_reason(paths, mode))
+    return hook_io.block(format_reason(paths, mode, vanished))
 
 
 def _consume(target: Path, remaining: list[dict[str, Any]]) -> None:
