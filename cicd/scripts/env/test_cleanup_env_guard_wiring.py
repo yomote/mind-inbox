@@ -28,8 +28,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
-
 SCRIPT = Path(__file__).resolve().parent / "cleanup-env.sh"
 
 # 1 回目の `az group exists` だけ false を返し、2 回目以降は true にする
@@ -66,6 +64,16 @@ def _run(
     *,
     extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    # bash があることを**前提として assert する** (skip しない)。
+    # skip だとこれが静かに通る: bash 欠如の環境で 4 本全部が skip に落ち、
+    # cleanup-env.sh の配線を一度も走らせていない job が exit 0 で緑になる
+    # (#445 — PR #437 で塞いだ穴と同型)。このテストが走る CI job
+    # (test.yml の test / ubuntu-latest) には bash が常在し、本番側も
+    # deploy.yml が bash 前提で cleanup-env.sh を呼ぶので、無いのは
+    # 環境の欠陥として落とす。
+    assert shutil.which("bash"), (
+        "前提: bash がある (cleanup-env.sh の実行に必須。無い環境は未検証ではなく欠陥)"
+    )
     tmp_path.mkdir(parents=True, exist_ok=True)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -93,13 +101,6 @@ def _run(
         timeout=120,
     )
     return proc, log.read_text(encoding="utf-8").splitlines()
-
-
-pytestmark = pytest.mark.skipif(
-    shutil.which("bash") is None,
-    # スキップは「通った」ではない: bash が無い環境ではこの層は**未検証**。
-    reason="bash が無いのでスクリプトを走らせられない (この層は未検証)",
-)
 
 
 def test_refuses_when_rg_reappears_between_checks(tmp_path: Path) -> None:
