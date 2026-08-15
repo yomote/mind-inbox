@@ -165,7 +165,12 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     clearTransient: clearTtsTransient,
     toggleEnabled: toggleTtsEnabled,
   } = tts;
-  const { reset: resetConsultation, startConsultation, sendDraftMessage } = consultation;
+  const {
+    reset: resetConsultation,
+    startConsultation,
+    sendDraftMessage,
+    sendChoice,
+  } = consultation;
 
   // iOS は最初のユーザージェスチャ内で一度発話しておかないと、以降の自動読み上げが無音になる。
   // 相談フロー (consultation) と読み上げ (tts) は互いを知らないので、「どのタップが音声の
@@ -189,6 +194,17 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     unlock();
     return sendDraftMessage();
   }, [sendDraftMessage, unlock]);
+
+  // 選択肢のタップも「発話を送るユーザージェスチャ」(#432-b)。**unlock を通す経路を
+  // 分けない** — 選択肢だけで会話を進めたセッションで iOS の読み上げが無音になる
+  // (最初のジェスチャで解錠していないため / #141 と同じ罠)。
+  const sendChoiceWithAudio = React.useCallback(
+    (choice: string) => {
+      unlock();
+      return sendChoice(choice);
+    },
+    [sendChoice, unlock],
+  );
 
   const toggleTtsEnabledWithAudio = React.useCallback(() => {
     unlock();
@@ -411,6 +427,8 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
                 handleRespondToApproval={(approved) =>
                   void consultation.respondToPendingApproval(approved)
                 }
+                offeredChoices={consultation.offeredChoices}
+                handleSelectChoice={(choice) => void sendChoiceWithAudio(choice)}
                 themeMode={themeMode}
                 onToggleTheme={onToggleTheme}
                 speedScale={speedScale}

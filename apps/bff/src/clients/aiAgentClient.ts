@@ -208,6 +208,7 @@ export async function sendChatMessage(req: ChatRequest): Promise<StubMarked<Chat
         requires_approval?: boolean;
         approval_request_id?: string | null;
         citations?: string[];
+        choices?: string[];
       };
 
       return {
@@ -215,6 +216,10 @@ export async function sendChatMessage(req: ChatRequest): Promise<StubMarked<Chat
         requiresApproval: Boolean(json.requires_approval),
         approvalRequestId: json.approval_request_id ?? null,
         citations: json.citations ?? [],
+        // 旧 ai-agent (choices を返さない版) は選択肢なしとして扱う (#432-b)。
+        // 配備スキューの窓で undefined が UI まで流れると、フロントの
+        // 「選択肢があるか」判定が配列以外を踏む
+        choices: json.choices ?? [],
       };
     },
     (result) => ({ chars: result.reply.length, kind: result.requiresApproval ? "approval" : "ok" }),
@@ -462,6 +467,7 @@ function stubChatResponse(req: ChatRequest): StubMarked<ChatResponse> {
     requiresApproval: false,
     approvalRequestId: null,
     citations: [],
+    choices: [],
     // 本物のふりをさせない (#146): フロントはこのフラグで警告バナーを出す。
     stubbed: true,
   };

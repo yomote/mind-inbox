@@ -177,6 +177,14 @@ const ChatReplySchema = z.object({
   approvalRequestId: z.string().nullable(),
   citations: z.array(z.string()),
   /**
+   * AI が提示した選択肢 (#432-b / dialogue-session.mdx §5.10)。空 = 選択肢なし。
+   *
+   * **承認 (`requiresApproval`) とは別物**: 選択肢は押さなくても会話を進められる
+   * 「会話の分岐」で、サーバ側に待ち状態は残らない (完了型)。押した文言は**次の
+   * 発話として**送られるだけなので、`consultation.approve` のような専用の口は無い。
+   */
+  choices: z.array(z.string()),
+  /**
    * stub フォールバック応答の機械判別フラグ (#146 / ADR 0039 D6)。
    * AI_AGENT_BASE_URL 未設定で stub に落ちたときだけ true。実応答では付かない
    * (optional なので後方互換)。フロントはこれで警告バナーを出す。
@@ -618,6 +626,7 @@ const consultationRouter = router({
         requiresApproval: chatRes.requiresApproval,
         approvalRequestId: chatRes.approvalRequestId,
         citations: chatRes.citations,
+        choices: chatRes.choices,
         stubbed: chatRes.stubbed,
       };
     }),

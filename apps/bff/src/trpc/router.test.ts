@@ -146,6 +146,7 @@ describe("[L2] consultation.start", () => {
       requiresApproval: false,
       approvalRequestId: null,
       citations: [],
+      choices: [],
     });
 
     const result = await makeCaller().consultation.start({
@@ -191,6 +192,7 @@ describe("[L2] consultation.start", () => {
       requiresApproval: false,
       approvalRequestId: null,
       citations: [],
+      choices: [],
       stubbed: true,
     });
 
@@ -209,6 +211,7 @@ describe("[L2] consultation.sendMessage", () => {
       requiresApproval: true,
       approvalRequestId: "appr-1",
       citations: ["doc-a", "doc-b"],
+      choices: [],
     });
 
     const result = await makeCaller().consultation.sendMessage({
@@ -221,7 +224,30 @@ describe("[L2] consultation.sendMessage", () => {
       requiresApproval: true,
       approvalRequestId: "appr-1",
       citations: ["doc-a", "doc-b"],
+      choices: [],
     });
+  });
+
+  it("選択肢 (#432-b) を承認フラグと混ぜずにそのまま通す", async () => {
+    // 無いと: 選択肢を requiresApproval に畳む / 落とす実装が通る。畳むと
+    // 「押さなくても進める会話の分岐」に承認カード (「承認するまで実行されません」)
+    // が出て、押さないと会話が止まるとユーザーに誤解させる
+    vi.mocked(sendChatMessage).mockResolvedValue({
+      reply: "どれか近いものはありますか。",
+      requiresApproval: false,
+      approvalRequestId: null,
+      citations: [],
+      choices: ["仕事のこと", "家族のこと"],
+    });
+
+    const result = await makeCaller().consultation.sendMessage({
+      sessionId: "s1",
+      message: "うまく言えない",
+    });
+
+    expect(result.choices).toEqual(["仕事のこと", "家族のこと"]);
+    expect(result.requiresApproval).toBe(false);
+    expect(result.approvalRequestId).toBeNull();
   });
 
   it("marks the reply as stubbed on the stub path and leaves the flag absent on the real path", async () => {
@@ -232,6 +258,7 @@ describe("[L2] consultation.sendMessage", () => {
       requiresApproval: false,
       approvalRequestId: null,
       citations: [],
+      choices: [],
       stubbed: true,
     });
     const stubReply = await makeCaller().consultation.sendMessage({
@@ -245,6 +272,7 @@ describe("[L2] consultation.sendMessage", () => {
       requiresApproval: false,
       approvalRequestId: null,
       citations: [],
+      choices: [],
     });
     const realReply = await makeCaller().consultation.sendMessage({
       sessionId: "s1",
@@ -367,6 +395,7 @@ describe("[L2] flow: start → sendMessage → extract → problem.createPlan �
       requiresApproval: false,
       approvalRequestId: null,
       citations: [],
+      choices: [],
     });
     vi.mocked(extractAiAgent).mockResolvedValue(newExtraction("prob-1"));
     vi.mocked(createPlanAiAgent).mockResolvedValue({
@@ -1647,6 +1676,7 @@ describe("[単体] consultation の procedure ログ — sessionId を生のま�
       requiresApproval: false,
       approvalRequestId: null,
       citations: [],
+      choices: [],
     });
     vi.mocked(extractAiAgent).mockResolvedValue(newExtraction());
     const lines: string[] = [];

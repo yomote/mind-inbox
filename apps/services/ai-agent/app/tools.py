@@ -66,6 +66,9 @@ class ToolContext:
       ツール側で ContextVar を **再代入** しても呼び出し側には伝わらない。同じ
       list オブジェクトを共有して append する形だけが並列実行を跨いで届く
       (tests/test_tools.py が並列 2 本で pin する)。
+    - `choices`: `offer_choices` が積んだ選択肢 (#432-b)。citations と同じ理由で
+      mutable。**このターンで 1 度だけ埋まる** — 空でないことが「すでに提示済み」の
+      判定そのものになっている (`offer_choices` を参照)。
     - `executions`: **MAF が実際に実行した**ツール呼び出しの記録 (`tool_boundary`
       middleware が積む)。citations と同じ理由で mutable。用途は
       `ToolExecution` の docstring を参照。
@@ -74,6 +77,7 @@ class ToolContext:
     session_id: str
     user_id: Optional[str] = None
     citations: list[str] = field(default_factory=list)
+    choices: list[str] = field(default_factory=list)
     executions: list["ToolExecution"] = field(default_factory=list)
 
 
@@ -195,6 +199,109 @@ async def get_inbox_stats() -> str:
     return "[stub] Inbox: 5 unread, 2 flagged, 0 urgent."
 
 
+# ── 対話ツール (副作用なし / #432-b) ──────────────────────────────────────────
+#
+# **選択肢は「会話の分岐」であって「実行の可否」ではない** (#432 design-gate /
+# PO 裁定 2026-08-15 の 2)。承認 (`always_require`) の中断 + checkpoint 機構は
+# あえて再利用しない — 選択肢を出したターンはそのまま完結し、サーバに待ち状態を
+# 残さない。ユーザーの選択は**次の発話**として普通に届く (完了型)。
+#
+# 再利用すると、承認が抱えている問題群 (TTL 失効 / 404 の多義性 / 却下の送り忘れ /
+# in-memory の checkpoint 滞留) を、**それが 1 つも要らない機能**に丸ごと持ち込む
+# ことになる。「選択肢を無視して自由に書く」は正常な操作なので、そのたびにサーバへ
+# 却下相当を送る形にしてはいけない。
+
+# 1 ターンに出せる選択肢の上限 (docs/frontend/ui_specs/dialogue-session.mdx §5.10)。
+# 読み上げと画面の両方で「選ぶ」より「読む」が重くならない範囲に縛る。
+MAX_CHOICES = 3
+# 選択肢 1 つの最大文字数。**タップした文言がそのまま次の発話として送られる**ので、
+# 切り詰めは「ユーザーが送っていない中途半端な発話」を作る = 絶対にしない。
+# 超えたら提示そのものを断り、モデルに短く作り直させる。
+MAX_CHOICE_LENGTH = 40
+
+# **そのターンが完了して初めて意味を持つ**ツール (#432-b / PR #448 Codex P2)。
+#
+# `offer_choices` の成果は応答 payload (`ChatResponse.choices`) にしか現れず、副作用は
+# 何も無い。**ターンが途中で落ちたときに実行を履歴へ残してはいけない**:
+#
+#   1. ストリーミングが done の前に切れる → `_flush_partial_tool_outcomes` が
+#      「N 件の選択肢を提示しました」を履歴に積む。**payload は捨てられている**
+#   2. フロントは非ストリーミング `/chat` へフォールバックして同じ発話を送り直す
+#   3. モデルは履歴を読んで「もう提示した」と判断し、ツールを呼び直さない
+#   4. 結果: 本文は「近いものを選んでください」なのに、画面にボタンが 1 つも無い
+#
+# 副作用ツール (#417 P1) が「実行したのに履歴に無い」を恐れるのとちょうど逆で、
+# こちらは**実行していないことにするのが安全側**。判定をここに集約しておかないと、
+# 将来 payload だけのツールを足した人が同じ穴を踏む。
+TURN_LOCAL_TOOLS = frozenset({"offer_choices"})
+
+
+@tool(
+    name="offer_choices",
+    description=(
+        "Offer the user up to 3 short, tappable choices to pick from when an open "
+        "question is unlikely to move the conversation forward. Each choice is sent "
+        "verbatim as the user's next message if tapped. The user can always ignore "
+        "them and answer freely, so never use this to force a decision."
+    ),
+    approval_mode="never_require",
+)
+async def offer_choices(options: list[str]) -> str:
+    """選択肢を応答に添える (副作用なし / 承認不要)。
+
+    戻り値は**モデルへの指示**であって画面に出るものではない。実際に画面へ届くのは
+    `ToolContext.choices` に積んだ側で、これが `ChatResponse.choices` になる。
+
+    **不正な引数は例外にせず、断りの文字列を返す**。例外にすると `tool_boundary` が
+    ref だけの `ToolExecutionFailed` に一般化するので、モデルには「失敗した」しか
+    見えず直しようがない (同じ引数で呼び直す)。断りの文で条件を伝えれば作り直せる。
+    """
+    ctx = current_tool_context()
+    # 選択肢の文言は会話内容から作られる = 相談の中身なので**本文はログに出さない**
+    # (件数だけ / Issue #313)。
+    logger.info(
+        "Tool[offer_choices] invoked session=%s count=%d", ctx.session_id, len(options)
+    )
+
+    if ctx.choices:
+        # 同じターンで 2 回呼ばれた。2 回目を足すと上限 (MAX_CHOICES) を超えた帯が
+        # 画面に出る。**先に提示したものを黙って置き換えない** — モデルが 1 回目の
+        # 結果を前提に本文を書いている可能性があるため
+        logger.warning("Tool[offer_choices] このターンではすでに提示済み — 追加しない")
+        return (
+            "このターンではすでに選択肢を提示しています。"
+            "追加はできないので、本文の作成に進んでください。"
+        )
+
+    normalized: list[str] = []
+    for option in options:
+        text = option.strip()
+        if not text or text in normalized:
+            continue
+        normalized.append(text)
+
+    if not normalized:
+        return "選択肢が空でした。提示していません。選択肢なしで応答してください。"
+    if len(normalized) > MAX_CHOICES:
+        return (
+            f"選択肢は {MAX_CHOICES} 件までです ({len(normalized)} 件受け取りました)。"
+            f"提示していません。{MAX_CHOICES} 件までに絞って呼び直してください。"
+        )
+    too_long = [text for text in normalized if len(text) > MAX_CHOICE_LENGTH]
+    if too_long:
+        # 文言は出さない (相談内容)。長さだけで何を直せばよいか伝わる
+        return (
+            f"選択肢は 1 つ {MAX_CHOICE_LENGTH} 文字までです "
+            f"({len(too_long)} 件が超過)。提示していません。短くして呼び直してください。"
+        )
+
+    ctx.choices.extend(normalized)
+    return (
+        f"{len(normalized)} 件の選択肢を提示しました。"
+        "本文では選択肢を列挙せず、選んでも自由に書いてもよいことが伝わる短い一文にしてください。"
+    )
+
+
 # ── Side-effecting tools ──────────────────────────────────────────────────────
 
 
@@ -224,7 +331,8 @@ async def archive_message(message_id: str) -> str:
 # ── Registry — single source of truth for callable + approval metadata ────────
 
 _REGISTRY: dict[str, FunctionTool] = {
-    t.name: t for t in (search_faq, get_inbox_stats, send_reply, archive_message)
+    t.name: t
+    for t in (search_faq, get_inbox_stats, offer_choices, send_reply, archive_message)
 }
 
 
@@ -237,25 +345,34 @@ class UnknownExposedTool(ValueError):
     """LLM_EXPOSED_TOOLS に registry に無い名前が入っていた。"""
 
 
-def exposed_tools() -> tuple[FunctionTool, ...]:
+def exposed_tools(exclude: frozenset[str] = frozenset()) -> tuple[FunctionTool, ...]:
     """この構成で LLM に見せるツール (= `options["tools"]` に載るもの)。
 
     既定は空。`LLM_EXPOSED_TOOLS` の書式と既定オフの理由は config.py を参照。
     ここが registry から導出されているので、**registry に 1 本足せば LLM に渡る
     tools も増える** (tests/test_tools.py が pin する)。
+
+    `exclude` は「この呼び出しでは成果を運べないツール」を落とすためのもの
+    (PR #448 Codex P2)。**運べないなら呼ばせない**のが要点 — 呼ばせてから結果を
+    捨てると、モデルは提示したつもりで本文を書き、画面には何も出ない。今の用途は
+    `/approve` の再開経路 (応答型が reply しか運べない / workflow.py を参照)。
     """
     raw = get_settings().llm_exposed_tools.strip()
     if not raw:
         return ()
     if raw == "*":
-        return tuple(_REGISTRY.values())
-    names = [name.strip() for name in raw.split(",") if name.strip()]
-    unknown = [name for name in names if name not in _REGISTRY]
-    if unknown:
-        raise UnknownExposedTool(
-            f"LLM_EXPOSED_TOOLS に registry に無いツール名が含まれています: {unknown}"
-        )
-    return tuple(_REGISTRY[name] for name in names)
+        selected: tuple[FunctionTool, ...] = tuple(_REGISTRY.values())
+    else:
+        names = [name.strip() for name in raw.split(",") if name.strip()]
+        unknown = [name for name in names if name not in _REGISTRY]
+        if unknown:
+            raise UnknownExposedTool(
+                f"LLM_EXPOSED_TOOLS に registry に無いツール名が含まれています: {unknown}"
+            )
+        selected = tuple(_REGISTRY[name] for name in names)
+    if not exclude:
+        return selected
+    return tuple(t for t in selected if t.name not in exclude)
 
 
 # ── ツール境界 (実行の記録 + 例外の一般化) ───────────────────────────────────

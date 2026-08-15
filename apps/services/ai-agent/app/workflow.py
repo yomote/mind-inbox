@@ -70,6 +70,7 @@ from .schemas import (
     Plan,
 )
 from .tools import (
+    TURN_LOCAL_TOOLS,
     ToolContext,
     ToolExecution,
     exposed_tools,
@@ -281,6 +282,7 @@ def _record_tool_outcomes(
     response: MafChatResponse,
     call_names: Optional[dict[str, str]] = None,
     executions: Sequence[ToolExecution] = (),
+    drop_tools: frozenset[str] = frozenset(),
 ) -> None:
     """MAF が実行したツールの結果 / 失敗を履歴に写す。
 
@@ -302,6 +304,10 @@ def _record_tool_outcomes(
     **応答に function_result が現れないケースがある**ため必要になる (#417 P1 /
     `ToolExecution` の docstring)。応答にも現れているものは call_id で除いて
     二重に積まない。
+
+    `drop_tools` に挙げたツールの実行は**履歴に残さない**。落ちたターンの部分結果を
+    書き戻す経路 (`_flush_partial_tool_outcomes`) だけが使う — 理由と、これを外すと
+    何が静かに起きるかは `tools.TURN_LOCAL_TOOLS` の説明を参照。
     """
     # 承認再開のターンでは function_call は checkpoint 側 (pending_messages) にあり、
     # 応答には function_result しか来ない。呼び出し側が名前の手がかりを渡す。
@@ -312,6 +318,8 @@ def _record_tool_outcomes(
             continue
         recorded.add(content.call_id or "")
         name = names.get(content.call_id or "", "?")
+        if name in drop_tools:
+            continue
         result = content.result
         if content.exception is None:
             history.add_system_message(f"Tool result ({name}): {result}")
@@ -348,7 +356,7 @@ def _record_tool_outcomes(
 
     # 応答から落ちた実行分 (承認要求で打ち切られたターンで起きる / #417 P1)
     for execution in executions:
-        if execution.call_id in recorded:
+        if execution.call_id in recorded or execution.name in drop_tools:
             continue
         if execution.error_ref is not None:
             history.add_system_message(
@@ -397,6 +405,10 @@ class FinalReply(BaseModel):
     session_id: str
     reply: str
     citations: list[str] = []
+    # `offer_choices` が提示した選択肢 (#432-b)。承認要求のターンでは運ばない
+    # (`_request_approval` は choices を見ない) — 承認カードと選択肢が同時に出る
+    # 画面を作らないため。
+    choices: list[str] = []
 
 
 # ── Executors ─────────────────────────────────────────────────────────────────
@@ -447,6 +459,7 @@ class ConverseExecutor(Executor):
         stream: bool,
         updates: list,
         tool_context: ToolContext,
+        exclude_tools: frozenset[str] = frozenset(),
     ) -> MafChatResponse:
         """ツールを載せて LLM を 1 回呼ぶ。stream 時はテキスト差分を intermediate output へ。
 
@@ -454,7 +467,7 @@ class ConverseExecutor(Executor):
         そこまでの update と実行記録が残る**ようにしてある — ツールは既に実行済み
         かもしれず、その事実を握り潰すと「実行されたのに履歴に無い」が生まれる。
         """
-        tools = exposed_tools()
+        tools = exposed_tools(exclude_tools)
         client = _resolve_client(self._client)
         logger.info(
             "Workflow[CONVERSE] session=%s tools=%s%s",
@@ -482,6 +495,11 @@ class ConverseExecutor(Executor):
         無いと: ストリーミングが応答生成中に落ちたターンで、**ツールは実行済みなのに
         履歴には何も残らない**。フロントは非ストリーミングへ自動フォールバックするので、
         同じツールがもう一度呼ばれうる (副作用ツールなら二重実行)。
+
+        **`TURN_LOCAL_TOOLS` だけは逆に「残さない」** (PR #448 Codex P2)。成果が
+        応答 payload にしか無いツールをここで履歴に残すと、フォールバックしたターンで
+        モデルが「もう提示した」と読み、payload は捨てられているので**本文だけが
+        選択を促して画面にはボタンが無い**状態になる。
         """
         if not updates and not tool_context.executions:
             return
@@ -490,6 +508,7 @@ class ConverseExecutor(Executor):
             history,
             MafChatResponse.from_updates(updates),
             executions=tool_context.executions,
+            drop_tools=TURN_LOCAL_TOOLS,
         )
         await self._session_repo.save(session_id, history)
 
@@ -587,6 +606,7 @@ class ConverseExecutor(Executor):
                 session_id=session_id,
                 reply=reply,
                 citations=list(tool_context.citations),
+                choices=list(tool_context.choices),
             )
         )
 
@@ -667,6 +687,13 @@ class ConverseExecutor(Executor):
                 stream=False,
                 updates=updates,
                 tool_context=tool_context,
+                # **この経路では選択肢を呼ばせない** (PR #448 Codex P2)。
+                # `/approve` の応答型 (ApproveResponse) は reply しか運べないので、
+                # ここで提示された選択肢はクライアントに届かない。呼ばせてから
+                # 捨てると、モデルは提示したつもりで「近いものを選んでください」と
+                # 書き、画面にはボタンが 1 つも無い応答になる。運べないなら
+                # 見せない (`exposed_tools` の exclude)
+                exclude_tools=TURN_LOCAL_TOOLS,
             )
         except Exception:
             # `converse` と同じ扱いにする (judge #417)。**再開経路の方が損害が大きい** —
@@ -709,7 +736,9 @@ class FinishExecutor(Executor):
     async def finish(
         self, msg: FinalReply, ctx: WorkflowContext[Never, ChatResponse]
     ) -> None:
-        await ctx.yield_output(ChatResponse(reply=msg.reply, citations=msg.citations))
+        await ctx.yield_output(
+            ChatResponse(reply=msg.reply, citations=msg.citations, choices=msg.choices)
+        )
 
 
 def _build_chat_workflow(
@@ -777,6 +806,9 @@ async def _record_approval_request(
         # in-memory 構成のみ: 承認待ちの run だけ storage を生かしておく
         # (/approve の解決で解放)。Cosmos 構成は共有ストアなので registry 不要
         _pending_run_storages[record.id] = storage
+    # **choices は載せない** (#432-b): 承認カードは「承認するまで実行されません」と
+    # 言う画面で、そこに「会話の分岐」の選択肢を並べると、押した文言が実行の可否に
+    # 効くのか会話に効くのかが読めなくなる。承認要求のターンは承認だけを出す。
     return ChatResponse(
         reply=f"「{request.plan.tool_name}」を実行するには承認が必要です。実行してよろしいですか？",
         requires_approval=True,
@@ -971,6 +1003,18 @@ async def _resume_claimed_run(
     outputs = result.get_outputs()
     if not outputs:
         raise RuntimeError("Chat workflow resume completed without a response")
+
+    if outputs[-1].choices:
+        # ここは**到達しないはず** (PR #448 Codex P2): 再開経路では `offer_choices` を
+        # LLM に見せていない (`on_approval_decision` の exclude_tools)。それでも
+        # 選択肢が載っていたら、除外が効いていない = 「モデルは提示したのに画面には
+        # 出ない」が起きている。**黙って落とさず**、除外が壊れたことに気づける形で
+        # 残す (件数だけ / 文言は相談内容なので出さない)
+        logger.error(
+            "Workflow[APPROVAL_IF_NEEDED] 再開ターンに選択肢が %d 件載っている — "
+            "除外 (exclude_tools) が効いていない。/approve の応答型では運べない",
+            len(outputs[-1].choices),
+        )
 
     if _cosmos_enabled():
         # 解決時 delete (#188): 解決済みの pending checkpoint は TTL を待たずに消す。

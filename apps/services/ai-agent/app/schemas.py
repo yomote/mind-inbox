@@ -13,10 +13,23 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    """1 ターン分の応答。/chat と /chat/stream の done イベントが同じ形を運ぶ。
+
+    `choices` は `offer_choices` ツール (#432-b) が提示した選択肢。**空 = 選択肢なし**
+    で、これが既定 (`LLM_EXPOSED_TOOLS` が空ならツール自体が LLM に見えない)。
+
+    **`requires_approval` に相乗りさせていないのが要点**: 承認カードの文言は
+    「承認するまで、この操作は行われません」で、選択肢に付くと嘘になる。選択肢は
+    「会話の分岐」であって「実行の可否」ではないので、承認とは別のフィールド・
+    別の UI にする (#432 design-gate)。承認要求のターンでは choices は空のまま
+    (workflow の `_record_approval_request` は choices を積まない)。
+    """
+
     reply: str
     requires_approval: bool = False
     approval_request_id: Optional[str] = None
     citations: list[str] = []
+    choices: list[str] = []
 
 
 class ChatStreamDelta(BaseModel):

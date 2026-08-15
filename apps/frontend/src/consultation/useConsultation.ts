@@ -70,6 +70,16 @@ export type Consultation = {
   /** 承認 (true) / 却下 (false) をサーバへ返す。 */
   respondToPendingApproval: (approved: boolean) => Promise<void>;
 
+  /**
+   * 直近の応答が提示した選択肢 (#432-b / §5.10)。空 = 選択肢なし。
+   *
+   * **承認と違い「待ち」ではない** — サーバ側に保留状態は無いので、押さずに次の発話を
+   * 送っても何も送り返す必要がない (却下に相当する通知は存在しない)。
+   */
+  offeredChoices: string[];
+  /** 選択肢をタップする = **その文言をそのまま次の発話として送る** (専用 API は無い)。 */
+  sendChoice: (choice: string) => Promise<void>;
+
   startConsultation: () => Promise<void>;
   sendDraftMessage: () => Promise<void>;
   extract: () => Promise<void>;
@@ -289,6 +299,12 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
   // 実行しない側に倒れる。実行が起きるのは respondToPendingApproval(true) だけ。
   const [pendingApproval, setPendingApproval] = React.useState<ApprovalRequest | null>(null);
 
+  // 直近の応答が提示した選択肢 (#432-b / §5.10)。**承認と対称にしない** — こちらは
+  // サーバに待ち状態が無いので、消えるときにサーバへ知らせる必要が無い (完了型 /
+  // PO 裁定 2026-08-15)。「押さずに自由記述で答える」は正常な操作で、そのたびに
+  // サーバを叩く実装にすると承認 UI の規律をコピーした無駄な往復が生まれる。
+  const [offeredChoices, setOfferedChoices] = React.useState<string[]>([]);
+
   const [preview, setPreview] = React.useState<ExtractionResult | null>(null);
   const [previewStatus, setPreviewStatus] = React.useState<"idle" | "updating" | "error">("idle");
   // preview の世代トークン (PR #282 Codex P2): セッションが変わったら +1 し、飛行中だった
@@ -451,95 +467,143 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     // 新規相談はこの後も画面が生きているので待たない (fire-and-forget)。
     if (abandoned) void discardApprovalOnServer(abandoned.id);
     setPendingApproval(null);
+    // 前セッションの選択肢も持ち込まない (別の会話の分岐を新しい会話で押させない)。
+    // **サーバへは何も送らない** — 承認と違い保留状態が無いので送る先が無い (#432-b)
+    setOfferedChoices([]);
     transition("session");
   }, [invalidatePreview, pendingApproval, runAction, transition]);
 
-  const sendDraftMessage = React.useCallback(async () => {
-    if (!session || !draftMessage.trim() || loadingRef.current) return;
+  /**
+   * 発話を 1 通送る (入力欄からでも選択肢のタップからでも通る唯一の経路)。
+   *
+   * **選択肢のタップを別経路にしない** (#432-b): 選択肢は「その文言を次の発話として
+   * 送る」だけなので、承認待ちの却下・タイトル自動生成・下書きの自動更新といった
+   * 発話に付随する処理は全部同じでなければならない。分けると、選択肢から送った
+   * ときだけ承認待ちが宙に浮く / 下書きが更新されない、が静かに起きる。
+   *
+   * @param fromDraft 入力欄からの送信か。選択肢のタップでは**入力欄に触らない** —
+   *                  ユーザーが書きかけの文章を消してしまうため。
+   */
+  const submitMessage = React.useCallback(
+    async (text: string, fromDraft: boolean) => {
+      if (!session || !text.trim() || loadingRef.current) return;
 
-    const userMessage = {
-      id: `u-${Date.now()}`,
-      role: "user" as const,
-      text: draftMessage.trim(),
-      createdAt: new Date().toISOString(),
-    };
+      const userMessage = {
+        id: `u-${Date.now()}`,
+        role: "user" as const,
+        text: text.trim(),
+        createdAt: new Date().toISOString(),
+      };
 
-    // 承認待ちのまま会話を続ける = **却下** (§5.9 / PR #416 Codex P2)。
-    //
-    // ローカル state を消すだけにすると、ai-agent 側の `ApprovalRecord` と checkpoint は
-    // pending のまま残る (in-memory 構成の `_pending_run_storages` には TTL が無いので、
-    // 繰り返すほど保持領域が増える)。「実行しない」はサーバにも伝える。
-    // 却下が届かなかったら**発話を送らずここで止める** — 入力もカードも残るので、
-    // やり直すか承認/却下ボタンを押し直せる (握り潰して次へ進まない / ADR 0018)。
-    let baseSession = session;
-    if (pendingApproval) {
-      const discarded = await runAction(FAILURE_MESSAGE.approvalReject, () =>
-        respondOrExpire(pendingApproval.id, false),
-      );
-      if (!discarded.ok) return;
+      // 承認待ちのまま会話を続ける = **却下** (§5.9 / PR #416 Codex P2)。
+      //
+      // ローカル state を消すだけにすると、ai-agent 側の `ApprovalRecord` と checkpoint は
+      // pending のまま残る (in-memory 構成の `_pending_run_storages` には TTL が無いので、
+      // 繰り返すほど保持領域が増える)。「実行しない」はサーバにも伝える。
+      // 却下が届かなかったら**発話を送らずここで止める** — 入力もカードも残るので、
+      // やり直すか承認/却下ボタンを押し直せる (握り潰して次へ進まない / ADR 0018)。
+      //
+      // **選択肢にはこれに相当する処理が無い** (#432-b): サーバに待ち状態が無いので、
+      // 送るべきものがそもそも無い。ここに選択肢の「却下」を足さないこと
+      let baseSession = session;
+      if (pendingApproval) {
+        const discarded = await runAction(FAILURE_MESSAGE.approvalReject, () =>
+          respondOrExpire(pendingApproval.id, false),
+        );
+        if (!discarded.ok) return;
 
-      if (discarded.value.kind === "expired") {
-        // 承認レコードがもう無い (期限切れ / ai-agent 再起動 / checkpoint 消失)。
-        // **却下できないことは発話を止める理由にならない** — この ID へ却下を送り直しても
-        // 永久に 404 なので、カードを閉じてそのまま送る (ここで止めると会話が永久に詰む /
-        // judge major-1)。ただし**「実行されなかった」とは言えない** (Codex P1) ので、
-        // 文面は approvalExpired 側で断定しない。
-        setPendingApproval(null);
-        setActionError(FAILURE_MESSAGE.approvalExpired);
-      } else if (discarded.value.kind === "processed") {
-        // すでに解決済みの承認だった (#82)。同じくカードを閉じて発話は進めるが、
-        // **受け付けられた決定は伝える** — 却下済みなら未実行と言い切れ、承認済みなら
-        // 会話を続けて結果を確かめる導線になる (期限切れの「記録が失われた」とは別物)。
-        setPendingApproval(null);
-        setActionError(approvalAlreadyProcessedMessage(discarded.value.status));
-      } else {
-        baseSession = {
-          ...baseSession,
-          messages: [...baseSession.messages, discarded.value.message],
-        };
-        setPendingApproval(null);
-        setSession(baseSession);
+        if (discarded.value.kind === "expired") {
+          // 承認レコードがもう無い (期限切れ / ai-agent 再起動 / checkpoint 消失)。
+          // **却下できないことは発話を止める理由にならない** — この ID へ却下を送り直しても
+          // 永久に 404 なので、カードを閉じてそのまま送る (ここで止めると会話が永久に詰む /
+          // judge major-1)。ただし**「実行されなかった」とは言えない** (Codex P1) ので、
+          // 文面は approvalExpired 側で断定しない。
+          setPendingApproval(null);
+          setActionError(FAILURE_MESSAGE.approvalExpired);
+        } else if (discarded.value.kind === "processed") {
+          // すでに解決済みの承認だった (#82)。同じくカードを閉じて発話は進めるが、
+          // **受け付けられた決定は伝える** — 却下済みなら未実行と言い切れ、承認済みなら
+          // 会話を続けて結果を確かめる導線になる (期限切れの「記録が失われた」とは別物)。
+          setPendingApproval(null);
+          setActionError(approvalAlreadyProcessedMessage(discarded.value.status));
+        } else {
+          baseSession = {
+            ...baseSession,
+            messages: [...baseSession.messages, discarded.value.message],
+          };
+          setPendingApproval(null);
+          setSession(baseSession);
+        }
       }
-    }
 
-    setDraftMessage("");
-    // 最初のユーザー発話でタイトルを内容から自動生成 (開始時は聞かない)。
-    const isFirstUserMessage = !baseSession.messages.some((m) => m.role === "user");
-    const nextTitle = isFirstUserMessage ? deriveSessionTitle(userMessage.text) : baseSession.title;
-    setSession({
-      ...baseSession,
-      title: nextTitle,
-      messages: [...baseSession.messages, userMessage],
-    });
+      if (fromDraft) setDraftMessage("");
+      // 送信中は前の選択肢を消す (答えたあとの選択肢を押せる状態で残さない)。
+      // 失敗したら戻す — 送る前の画面に完全に巻き戻すため
+      const previousChoices = offeredChoices;
+      setOfferedChoices([]);
+      // 最初のユーザー発話でタイトルを内容から自動生成 (開始時は聞かない)。
+      const isFirstUserMessage = !baseSession.messages.some((m) => m.role === "user");
+      const nextTitle = isFirstUserMessage
+        ? deriveSessionTitle(userMessage.text)
+        : baseSession.title;
+      setSession({
+        ...baseSession,
+        title: nextTitle,
+        messages: [...baseSession.messages, userMessage],
+      });
 
-    const outcome = await runAction(sendMessageFailureMessage, () =>
-      sendMessage(baseSession.id, userMessage.text),
-    );
+      const outcome = await runAction(sendMessageFailureMessage, () =>
+        sendMessage(baseSession.id, userMessage.text),
+      );
 
-    if (!outcome.ok) {
-      // 楽観更新を巻き戻して送信前の状態に戻す。返事が来ないまま自分の発話だけが
-      // 残る状態は「送れたのに無視された」と読めてしまい、かつ入力し直しを強いる。
-      // (却下は既に成立しているので、その結果は残したまま戻す)
-      setSession(baseSession);
-      setDraftMessage(userMessage.text);
-      return;
-    }
+      if (!outcome.ok) {
+        // 楽観更新を巻き戻して送信前の状態に戻す。返事が来ないまま自分の発話だけが
+        // 残る状態は「送れたのに無視された」と読めてしまい、かつ入力し直しを強いる。
+        // (却下は既に成立しているので、その結果は残したまま戻す)
+        setSession(baseSession);
+        setOfferedChoices(previousChoices);
+        // 選択肢のタップで失敗したときに入力欄へ書き戻さない — 書きかけの文章を
+        // 上書きしてしまう。押し直せる状態 (選択肢を戻す) までで十分
+        if (fromDraft) setDraftMessage(userMessage.text);
+        return;
+      }
 
-    setSession((prev) =>
-      prev ? { ...prev, messages: [...prev.messages, outcome.value.message] } : prev,
-    );
-    // 承認要求は応答と同じ往復で届く (#82)。ここで拾わないと、サーバは承認待ちのまま
-    // 画面には普通の返事だけが出て「止まっているのに止まって見えない」状態になる。
-    setPendingApproval(outcome.value.approval);
+      setSession((prev) =>
+        prev ? { ...prev, messages: [...prev.messages, outcome.value.message] } : prev,
+      );
+      // 承認要求は応答と同じ往復で届く (#82)。ここで拾わないと、サーバは承認待ちのまま
+      // 画面には普通の返事だけが出て「止まっているのに止まって見えない」状態になる。
+      setPendingApproval(outcome.value.approval);
+      // 選択肢も同じ往復で届く (#432-b)。落とすと「AI は選ばせるつもりで書いた文面
+      // なのに、画面には選ぶものが無い」応答になる
+      setOfferedChoices(outcome.value.choices);
 
-    // ユーザー発話 2 往復ごとに下書きプレビューを自動更新する (#187 / ADR 0039 D2)。
-    // 毎ターンは LLM 呼び出しが倍増するため間引く。fire-and-forget — 会話を待たせない。
-    const messagesAfterReply = [...baseSession.messages, userMessage, outcome.value.message];
-    const userTurnCount = messagesAfterReply.filter((m) => m.role === "user").length;
-    if (userTurnCount > 0 && userTurnCount % 2 === 0) {
-      void runPreview(baseSession.id, messagesAfterReply);
-    }
-  }, [draftMessage, pendingApproval, runAction, runPreview, session]);
+      // ユーザー発話 2 往復ごとに下書きプレビューを自動更新する (#187 / ADR 0039 D2)。
+      // 毎ターンは LLM 呼び出しが倍増するため間引く。fire-and-forget — 会話を待たせない。
+      const messagesAfterReply = [...baseSession.messages, userMessage, outcome.value.message];
+      const userTurnCount = messagesAfterReply.filter((m) => m.role === "user").length;
+      if (userTurnCount > 0 && userTurnCount % 2 === 0) {
+        void runPreview(baseSession.id, messagesAfterReply);
+      }
+    },
+    [offeredChoices, pendingApproval, runAction, runPreview, session],
+  );
+
+  const sendDraftMessage = React.useCallback(
+    () => submitMessage(draftMessage, true),
+    [draftMessage, submitMessage],
+  );
+
+  /**
+   * 選択肢のタップ (#432-b / §5.10)。**その文言をそのまま次の発話として送る**。
+   *
+   * 専用の API を持たないのが仕様の芯 — サーバは選択肢を出したターンで完結して
+   * いるので、選ばれたことを知らせる先が無い (完了型 / PO 裁定 2026-08-15)。
+   */
+  const sendChoice = React.useCallback(
+    (choice: string) => submitMessage(choice, false),
+    [submitMessage],
+  );
 
   /**
    * 承認 / 却下をサーバへ返す (#82 / G1 / §5.9)。
@@ -726,6 +790,7 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     setProblems([]);
     setSelectedProblem(null);
     setPendingApproval(null);
+    setOfferedChoices([]);
     invalidatePreview();
     return discarded;
   }, [invalidatePreview, pendingApproval, setBusy]);
@@ -745,6 +810,8 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     refreshPreview,
     pendingApproval,
     respondToPendingApproval,
+    offeredChoices,
+    sendChoice,
     startConsultation,
     sendDraftMessage,
     extract,

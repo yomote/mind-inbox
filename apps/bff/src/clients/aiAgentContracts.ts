@@ -25,11 +25,22 @@ export const ChatRequestSchema = z.object({
 });
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 
+/**
+ * 1 ターン分の応答 (`/chat` と `/chat/stream` の done が同じ形を運ぶ)。
+ *
+ * `choices` は ai-agent の `offer_choices` ツールが提示した選択肢 (#432-b)。
+ * **空配列 = 選択肢なし**が既定で、`LLM_EXPOSED_TOOLS` が空 (既定) の構成では常に空。
+ *
+ * **`requiresApproval` とは別フィールドであること自体が仕様**: 承認カードは
+ * 「承認するまで、この操作は行われません」と言う画面で、会話の分岐 (押さなくても
+ * 進める) をそこに混ぜると嘘になる。相乗りさせるとフロントは両者を区別できない。
+ */
 export const ChatResponseSchema = z.object({
   reply: z.string(),
   requiresApproval: z.boolean(),
   approvalRequestId: z.string().nullable(),
   citations: z.array(z.string()),
+  choices: z.array(z.string()),
 });
 export type ChatResponse = z.infer<typeof ChatResponseSchema>;
 

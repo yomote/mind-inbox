@@ -118,6 +118,7 @@ describe("[L1] useConsultation — 相談の開始と発話", () => {
         createdAt: "2026-01-01",
       },
       approval: null,
+      choices: [],
     });
     const { result } = setup();
     await act(async () => {
@@ -316,6 +317,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
       createdAt: "2026-01-01",
     },
     approval: null,
+    choices: [],
   });
 
   async function sendTimes(result: ReturnType<typeof setup>["result"], texts: string[]) {
@@ -775,6 +777,7 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
       createdAt: "2026-01-01",
     },
     approval: { id: "appr-1", description: "「send_reply」を実行するには承認が必要です。" },
+    choices: [],
   };
 
   async function startAndAskForApproval() {
@@ -940,6 +943,7 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
     vi.mocked(sendMessage).mockResolvedValue({
       message: { id: "a-3", role: "assistant", text: "受け止めました", createdAt: "2026-01-01" },
       approval: null,
+      choices: [],
     });
 
     act(() => result.current.setDraftMessage("やっぱり別の話をしたい"));
@@ -964,6 +968,7 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
     vi.mocked(sendMessage).mockResolvedValue({
       message: { id: "a-3", role: "assistant", text: "受け止めました", createdAt: "2026-01-01" },
       approval: null,
+      choices: [],
     });
     act(() => result.current.setDraftMessage("やっぱり別の話をしたい"));
     await act(async () => await result.current.sendDraftMessage());
@@ -1052,6 +1057,7 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
     vi.mocked(sendMessage).mockResolvedValue({
       message: { id: "a-3", role: "assistant", text: "受け止めました", createdAt: "2026-01-01" },
       approval: null,
+      choices: [],
     });
     act(() => result.current.setDraftMessage("やっぱりやめておく"));
     await act(async () => await result.current.sendDraftMessage());
@@ -1098,5 +1104,102 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
 
     expect(result.current.actionError).toContain("承認できない応答");
     expect(result.current.pendingApproval).toBeNull();
+  });
+});
+
+describe("[L1] useConsultation — AI が提示した選択肢 (#432-b / §5.10)", () => {
+  const reply = (text: string, choices: string[] = []) => ({
+    message: {
+      id: `a-${text}`,
+      role: "assistant" as const,
+      text,
+      createdAt: "2026-01-01",
+    },
+    approval: null,
+    choices,
+  });
+
+  async function startWithChoices(choices = ["仕事のこと", "家族のこと"]) {
+    vi.mocked(startNewConsultation).mockResolvedValue(session());
+    vi.mocked(sendMessage).mockResolvedValue(reply("近いものはありますか。", choices));
+    const { result } = setup();
+    await act(async () => await result.current.startConsultation());
+    act(() => result.current.setDraftMessage("うまく言えない"));
+    await act(async () => await result.current.sendDraftMessage());
+    return result;
+  }
+
+  it("応答に載ってきた選択肢を画面の状態として持つ", async () => {
+    // 無いと: api 層が拾った選択肢を hook が捨てる。応答文は「選んでみてください」と
+    // 出るのに選ぶものが無い会話になり、どこで落ちたかは画面から見えない
+    const result = await startWithChoices();
+
+    expect(result.current.offeredChoices).toEqual(["仕事のこと", "家族のこと"]);
+  });
+
+  it("選択肢をタップするとその文言がそのまま次の発話として送られる", async () => {
+    // 無いと: 選択肢に専用 API を持たせる実装 (承認と同じ形) に戻る。サーバ側には
+    // 待ち状態が無いので受け口が無く、「押しても会話が進まない」になる (完了型 / 裁定 2)
+    const result = await startWithChoices();
+    vi.mocked(sendMessage).mockResolvedValue(reply("もう少し聞かせてください。"));
+
+    await act(async () => await result.current.sendChoice("家族のこと"));
+
+    expect(sendMessage).toHaveBeenLastCalledWith("s1", "家族のこと");
+    // ユーザーの発話として会話に残る (AI が勝手に決めたことにしない)
+    const texts = result.current.session?.messages.map((m) => m.text) ?? [];
+    expect(texts).toContain("家族のこと");
+    // 押した後の選択肢は残さない (答え済みの分岐をもう一度押せる状態にしない)
+    expect(result.current.offeredChoices).toEqual([]);
+  });
+
+  it("選択肢のタップは入力欄の書きかけを消さない", async () => {
+    // 無いと: 選択肢を押した瞬間に、それまで打っていた文章が消える
+    const result = await startWithChoices();
+    vi.mocked(sendMessage).mockResolvedValue(reply("はい。"));
+    act(() => result.current.setDraftMessage("書きかけの文章"));
+
+    await act(async () => await result.current.sendChoice("仕事のこと"));
+
+    expect(result.current.draftMessage).toBe("書きかけの文章");
+  });
+
+  it("選択肢を無視して自由記述を送っても、サーバへ却下相当のリクエストを送らない", async () => {
+    // **この test が 432-b の裁定 2 (完了型) そのもの**。無いと: 承認 UI (§5.9) の
+    // 規律をコピーした実装が入り込み、「選ばずに書く」という正常な操作のたびに
+    // サーバを叩く (存在しない待ち状態を解除しようとする) ようになる
+    const result = await startWithChoices();
+    vi.mocked(sendMessage).mockResolvedValue(reply("なるほど。"));
+
+    act(() => result.current.setDraftMessage("自分で書きます"));
+    await act(async () => await result.current.sendDraftMessage());
+
+    expect(respondToApproval).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenLastCalledWith("s1", "自分で書きます");
+    expect(result.current.offeredChoices).toEqual([]);
+  });
+
+  it("送信に失敗したら選択肢を戻す (押し直せる状態に巻き戻す)", async () => {
+    // 無いと: 通信に失敗したターンで選択肢だけが消え、押し直す手段がなくなる
+    // (楽観更新の巻き戻しが会話だけで、選択肢に及んでいない状態)
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await startWithChoices();
+    vi.mocked(sendMessage).mockRejectedValue(new Error("network"));
+
+    await act(async () => await result.current.sendChoice("仕事のこと"));
+
+    expect(result.current.actionError).not.toBeNull();
+    expect(result.current.offeredChoices).toEqual(["仕事のこと", "家族のこと"]);
+  });
+
+  it("新しい相談を始めたら前セッションの選択肢を持ち込まない", async () => {
+    const result = await startWithChoices();
+    vi.mocked(startNewConsultation).mockResolvedValue(session({ id: "s2" }));
+
+    await act(async () => await result.current.startConsultation());
+
+    expect(result.current.offeredChoices).toEqual([]);
+    // 承認と違い、捨てるときにサーバへ知らせる必要は無い (待ち状態が無い)
+    expect(respondToApproval).not.toHaveBeenCalled();
   });
 });

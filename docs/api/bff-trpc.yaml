@@ -682,6 +682,10 @@ paths:
                     type: array
                     items:
                       type: string
+                  choices:
+                    type: array
+                    items:
+                      type: string
                   stubbed:
                     type: boolean
                 required:
@@ -689,6 +693,7 @@ paths:
                   - requiresApproval
                   - approvalRequestId
                   - citations
+                  - choices
                 additionalProperties: false
       requestBody:
         required: true

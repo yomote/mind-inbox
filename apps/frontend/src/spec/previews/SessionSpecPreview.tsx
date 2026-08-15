@@ -140,6 +140,11 @@ export function SessionSpecPreview() {
         description: "「send_reply」を実行するには承認が必要です。実行してよろしいですか？",
       }}
       onRespondToApproval={() => {}}
+      // 選択肢 (#432-b / §5.10) も「AI が提示したターン」でしか出ないので、同じ理由で
+      // 常設する。**実際の会話では承認カードと同時には出ない** (ai-agent が承認要求の
+      // ターンに choices を積まない) — ここは見本市なので並べているだけ
+      offeredChoices={["仕事のこと", "家族やパートナーのこと", "自分の体調のこと"]}
+      onSelectChoice={() => {}}
       onDraftMessageChange={setDraftMessage}
       onSendMessage={() => {}}
       onToggleTtsEnabled={() => {}}

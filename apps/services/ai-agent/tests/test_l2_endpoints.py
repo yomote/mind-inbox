@@ -87,6 +87,8 @@ class TestChat:
             "requires_approval": True,
             "approval_request_id": "appr-1",
             "citations": ["doc-a"],
+            # 承認要求のターンに選択肢は載らない (#432-b / workflow が積まない)
+            "choices": [],
         }
 
     async def test_l2_chat_returns_500_on_workflow_exception(self, client, monkeypatch):
