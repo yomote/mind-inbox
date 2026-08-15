@@ -167,8 +167,10 @@ Mind Inbox は **コーディングエージェント駆動の高速開発** を
 
 単体テストは**例ではなく性質で書く**のを既定にする。道具は TypeScript が
 [`fast-check`](https://fast-check.dev/) (vitest と同居 / BFF・frontend とも導入済み)、
-Python が `hypothesis` (未着手)。
-1 本目の実例: `apps/bff/src/domain/sentences.property.test.ts` (TTS 文分割)。
+Python が [`hypothesis`](https://hypothesis.readthedocs.io/) (ai-agent の uv dev 依存。
+**`cicd/scripts/` の pytest も同じ venv で回る**ので、Python の PBT はここに乗る)。
+1 本目の実例: TS が `apps/bff/src/domain/sentences.property.test.ts` (TTS 文分割)、
+Python が `cicd/scripts/review-gate/test_check_property.py` (レビュー門の機械行抽出)。
 
 > ✅ **2026-08-11 (#259) に導入済み。有効だった** — 1 本目 (文分割の往復) を書く過程で
 > 仕様の穴が 3 つ見つかった (往復は空白のみ断片の破棄を除いてしか成り立たない /
@@ -180,6 +182,12 @@ Python が `hypothesis` (未着手)。
 > **実績の一覧・有効性の評価・落とし穴・フロントエンド (React) 適用可否の調査結論は
 > [`property-based-testing.md`](./property-based-testing.md)** (真実はそちら。ここには再掲しない)。
 > フロントエンドは**純粋ロジック層のみ適用** (hooks / コンポーネントには入れない — 判断根拠は同 doc §4)。
+>
+> ✅ **2026-08-15 (#431) に Python 側 (hypothesis) も導入済み** — 対象は
+> `cicd/scripts/` の**門と保護**の判定 2 本 (レビュー門の機械行抽出 / 環境撤収の層ガード)。
+> どちらも「壊れても赤くならず、静かに門が開く / 保護が外れる」層。**実バグは出なかったが、
+> 意図的にバグを仕込む実験で「例ベースが素通しし PBT だけが捕まえる」欠陥を 4 種類実測**した
+> (同 doc §6)。
 
 ### 3.1 いつ使う
 
@@ -205,6 +213,8 @@ Python が `hypothesis` (未着手)。
 - **arbitrary は入力ドメインを狭めすぎない**。対象が意味を持つ文字・値 (文分割なら区切り記号・空白・改行・通常文字の混合) を `fc.constantFrom` 等で混ぜ、境界が自然に生成されるようにする。「都合のいい入力」だけを生成すると例テストと同じになる
 - 失敗時は fast-check が**最小反例 (shrinking) と再現 seed** を出力する。直したら、その反例を**例ベースのテストとして固定化**してから修正する (バグ修正の再現テスト / §4.2 と同じ運用)
 - 実行回数は既定 (100 runs) から始める。遅くなったら `numRuns` を絞るのではなく、まず対象が単体の入場条件を満たしているか (I/O が in-memory だけか) を疑う
+
+**Python (hypothesis) の流儀は [`property-based-testing.md`](./property-based-testing.md) §6.2** — `settings(max_examples=200, deadline=None)` をファイル先頭の定数にしてデコレータで使い回す / 反例 DB (`.hypothesis/`) は commit しない / 例ベースと `test_*_property.py` を並置する。**seed を固定しないのは TS 側と同じ**で、再現は「反例を例ベーステストとして固定化する」で担保する。
 
 ### 3.4 プロパティが書けないとき
 
