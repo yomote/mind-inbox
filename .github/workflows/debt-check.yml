@@ -1,7 +1,8 @@
 # 週次の技術負債チェック (ADR 0037 / 旧 maint-check Routine の機械部分)。
 #
 # 分担: LLM を Actions で走らせる経路は却下済み (ADR 0008/0009/0035 D5)。ここは
-#   **機械検出できる負債だけ**を洗う — docs の壊れた相対リンク / placeholder のままの
+#   **機械検出できる負債だけ**を洗う — 壊れた相対リンク (走査対象は detect.py の
+#   LINK_SCAN_DIRS が定義。docs/ + cicd/ + リポジトリ直下の *.md) / placeholder のままの
 #   テスト script。検出器は「静かに嘘をつかない」ものに絞り、カバーできていない領域
 #   (意味的な docs 陳腐化・デッドコード等) は run のログと Issue 本文に毎回明示する。
 #   「0 件 = 全部健全」と読ませない (silent caps 禁止)。
@@ -84,4 +85,4 @@ jobs:
           job-status: ${{ job.status }}
           # 検出が走れば仕事は済んでいる (0 件で post が skip されても「復旧」と言える)
           work-ran: ${{ steps.detect.outcome == 'success' }}
-          what: "**週次の技術負債チェック (debt-check) が実行できていません。** 壊れた docs リンク等の検出が止まっており、負債が静かに積もります。"
+          what: "**週次の技術負債チェック (debt-check) が実行できていません。** 壊れた相対リンク等の検出が止まっており、負債が静かに積もります。"
