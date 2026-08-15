@@ -57,7 +57,7 @@ a { color:var(--accent); }
 </style></head><body><div class="wrap">
 
 <h1>Mind Inbox — いまの状況</h1>
-<div class="stamp">2026-08-16 06:33 JST 時点。GitHub の実データから毎回作り直しています（手で書いている欄はありません）。</div>
+<div class="stamp">2026-08-16 06:43 JST 時点。GitHub の実データから毎回作り直しています（手で書いている欄はありません）。</div>
 
 <div class="headline ok">全部動いています</div>
 
@@ -73,7 +73,7 @@ a { color:var(--accent); }
 <li>⬜ <a href="https://github.com/yomote/mind-inbox/issues/2">#2</a> [test][L1] BFF / Frontend に vitest 導入 + Python サービスのカバレッジ拡張</li>
 <li>✅ <a href="https://github.com/yomote/mind-inbox/issues/1">#1</a> [test][L0] tRPC ↔ AI Agent 契約テスト導入</li></ul>
 <h3>いま dev で触れるもの</h3>
-<p>dev は 08-16 05:25 JST の commit <code>e9b4d21</code> の状態 (以降 1 本のマージが未反映)</p>
+<p>dev は 08-16 06:33 JST の commit <code>74524b7</code> の状態 (最新の main が反映済み)</p>
 <h3>進行中</h3>
 <div class="cols"><div><h4>プロダクト (apps/ を触る)</h4><ul><li class="sub">ありません</li></ul></div><div><h4>工場 (開発体制)</h4><ul><li class="sub">ありません</li></ul></div></div>
 <h3>🙋 あなたの番</h3>
@@ -101,24 +101,24 @@ a { color:var(--accent); }
 <div class="tablewrap"><table><tr><td colspan="4" class="none">ありません</td></tr></table></div>
 
 <h2>自動で動くもの (CI)</h2>
-<div class="tablewrap"><table><tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31906664067">自動デプロイ (main → dev)</a></div><div class="sub">main が動いたら dev に配って、実環境で通るところまで確かめる</div></td><td class="when">1 時間前</td><td class="detail"></td></tr>
+<div class="tablewrap"><table><tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31909742089">自動デプロイ (main → dev)</a></div><div class="sub">main が動いたら dev に配って、実環境で通るところまで確かめる</div></td><td class="when">10 分前</td><td class="detail"></td></tr>
 <tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31846521149">毎朝の実環境チェック</a></div><div class="sub">毎朝 07:00 JST に相談ユースケースを実環境で通し、体験を記録する</div></td><td class="when">23 時間前</td><td class="detail"></td></tr>
-<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31850995003">毎朝の UX 機械計測</a></div><div class="sub">毎朝のプローブ記録からレイテンシ統計・往復数・警告数をシナリオごとに抽出してデータブランチ data/ux-observations に積む (ADR 0041。LLM 採点は PM tick — traces 欄)</div></td><td class="when">21 時間前</td><td class="detail"></td></tr>
+<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31850995003">毎朝の UX 機械計測</a></div><div class="sub">毎朝のプローブ記録からレイテンシ統計・往復数・警告数をシナリオごとに抽出してデータブランチ data/ux-observations に積む (ADR 0041。LLM 採点は PM tick — traces 欄)</div></td><td class="when">22 時間前</td><td class="detail"></td></tr>
 <tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31478984675">UX 観測の過去データ移行 (one-shot)</a></div><div class="sub">旧蓄積 (#162/#127 のコメント) をデータブランチの JSONL に取り込む (ADR 0041 D7。初期移行の 1 回きり)</div></td><td class="when">4 日前</td><td class="detail"></td></tr>
 <tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31628629882">GitHub 設定の点検 / 適用 (宣言 → 現実)</a></div><div class="sub">宣言 (cicd/github/settings.yml) と実際のリポジトリ設定を突き合わせ、事実をデータブランチ data/github-settings に記録する。ズレがあれば Issue に積み、apply で適用する (#344。device-code 認証なので PO 本人の承認が要る = 手動)</div></td><td class="when">3 日前</td><td class="detail"></td></tr>
 <tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31787362263">GitHub 設定の Terraform 宣言の検証 (fmt / validate)</a></div><div class="sub">cicd/github/terraform/ の宣言を PR で fmt / init / validate する (#390 A-1)。**terraform plan は実行していない** — トークンの置き場が未決定 (needs-human) のため、この run は「宣言と現実が一致している」ことを何も言っていない。plan が回るまで、現実の点検は github-settings.yml が担い続ける</div></td><td class="when">36 時間前</td><td class="detail"></td></tr>
 <tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31404361966">週次の技術負債チェック</a></div><div class="sub">壊れた相対リンク・placeholder テスト等を機械検出して Issue に積む (**走査範囲は Issue 本文の検出器名が持つ** — ここに書き写すと二重管理になり、範囲を広げてもこの行だけ古いまま残る。カバー外領域も本文に明示)</div></td><td class="when">5 日前</td><td class="detail"></td></tr>
-<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31909591355">SAST (CodeQL default setup)</a></div><div class="sub">自分たちが書いたコードの injection / SSRF 等を PR / push(main) で解析し、Security タブの alert に積む (依存の CVE は security-sweep の担当)</div></td><td class="when">3 分前</td><td class="detail"></td></tr>
+<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31909741576">SAST (CodeQL default setup)</a></div><div class="sub">自分たちが書いたコードの injection / SSRF 等を PR / push(main) で解析し、Security タブの alert に積む (依存の CVE は security-sweep の担当)</div></td><td class="when">10 分前</td><td class="detail"></td></tr>
 <tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31577460483">週次のセキュリティスキャン</a></div><div class="sub">npm audit / pip-audit / gitleaks を回し、依存の既知 CVE とコミットされた秘密を Issue に積む (カバー外領域は本文に明示)</div></td><td class="when">3 日前</td><td class="detail"></td></tr>
-<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31909592072">テスト (L0〜L3)</a></div><div class="sub">PR ごとに契約・単体・結合・画面テストを回す</div></td><td class="when">3 分前</td><td class="detail"></td></tr>
-<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31887722919">コンテナ image の事前ビルド</a></div><div class="sub">main の image を ghcr に積んでおく (デプロイは sha タグ差し替えだけ)</div></td><td class="when">7 時間前</td><td class="detail"></td></tr>
-<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31909592118">bicep の検証</a></div><div class="sub">インフラ定義がビルドできるかを PR で見る</div></td><td class="when">3 分前</td><td class="detail"></td></tr>
-<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31909047833">マージの門 (review-gate)</a></div><div class="sub">PM 受け入れ・スレッド解決・(コード PR は) Codex レビューが揃うまで PR のマージを止め、揃って auto-merge 武装済みならマージまで執行する。30 分毎の sweep がマージ再試行とストール検知 (🟢のまま 2h / needs-human・Proposed ADR の 48h) を回す</div></td><td class="when">15 分前</td><td class="detail"></td></tr>
-<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31909592141">ADR 採番の衝突ガード</a></div><div class="sub">同じ ADR 番号を 2 本足していないか PR で見る</div></td><td class="when">3 分前</td><td class="detail"></td></tr>
-<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31909592109">自動改変の範囲ガード</a></div><div class="sub">自動 PR が触ってよいファイルの外に出ていないか見る</div></td><td class="when">3 分前</td><td class="detail"></td></tr>
+<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31909742054">テスト (L0〜L3)</a></div><div class="sub">PR ごとに契約・単体・結合・画面テストを回す</div></td><td class="when">10 分前</td><td class="detail"></td></tr>
+<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31887722919">コンテナ image の事前ビルド</a></div><div class="sub">main の image を ghcr に積んでおく (デプロイは sha タグ差し替えだけ)</div></td><td class="when">8 時間前</td><td class="detail"></td></tr>
+<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31909742049">bicep の検証</a></div><div class="sub">インフラ定義がビルドできるかを PR で見る</div></td><td class="when">10 分前</td><td class="detail"></td></tr>
+<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31909047833">マージの門 (review-gate)</a></div><div class="sub">PM 受け入れ・スレッド解決・(コード PR は) Codex レビューが揃うまで PR のマージを止め、揃って auto-merge 武装済みならマージまで執行する。30 分毎の sweep がマージ再試行とストール検知 (🟢のまま 2h / needs-human・Proposed ADR の 48h) を回す</div></td><td class="when">25 分前</td><td class="detail"></td></tr>
+<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31909592141">ADR 採番の衝突ガード</a></div><div class="sub">同じ ADR 番号を 2 本足していないか PR で見る</div></td><td class="when">13 分前</td><td class="detail"></td></tr>
+<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31909592109">自動改変の範囲ガード</a></div><div class="sub">自動 PR が触ってよいファイルの外に出ていないか見る</div></td><td class="when">13 分前</td><td class="detail"></td></tr>
 <tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31457923443">構成図の再生成</a></div><div class="sub">週次で実環境から構成図を描き直し、差分があれば PR を開く</div></td><td class="when">4 日前</td><td class="detail"></td></tr>
 <tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31861834109">外の事実を取る (read-only)</a></div><div class="sub">エージェントが Azure の実態などをサンドボックスの外から読む</div></td><td class="when">18 時間前</td><td class="detail"></td></tr>
-<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31907109288">このページ自身</a></div><div class="sub">GitHub の実データから、このページを組み立て直す</div></td><td class="when">57 分前</td><td class="detail"></td></tr></table></div>
+<tr class="ok"><td class="mark">🟢</td><td><div class="nm"><a href="https://github.com/yomote/mind-inbox/actions/runs/31909742078">このページ自身</a></div><div class="sub">GitHub の実データから、このページを組み立て直す</div></td><td class="when">10 分前</td><td class="detail"></td></tr></table></div>
 
 <h2>無人で回るもの (Routine)</h2>
 <div class="tablewrap"><table><tr class="ok"><td class="mark">🟢</td><td><div class="nm">当番 PM tick (1 日 1 回)</div><div class="sub">claude.ai の Routine が毎回新セッションで発火し、open PR の掃き出し (受け入れ済みのマージ)・レビュー滞留の追従・needs-human の集計を回して Issue #254 に巡回レポートを残す (ADR 0040 D2)</div></td><td class="when">3 時間前</td><td class="detail">Issue #254 のコメント (`🙋 あなたの番` を含むもの)</td></tr>
