@@ -36,11 +36,19 @@ envelope との往復を実 module で検証している (片方だけ直すと�
 
 使い方:
     ux_eval.py <data_dir>
-      data_dir = データブランチ (data/ux-observations) の checkout。
-                 probes/*.jsonl を読み、evals/*.jsonl で評価済み (runId, scenarioId) を確認して
-                 再評価を拒否する — 鮮度 26h は前日 07:00 の記録 (約 25h 前) を通して
-                 しまうため、時刻だけでは「今朝の記録が欠けた朝」を検出できない
-                 (Codex レビュー指摘 / PR #224)
+      本体。data_dir = データブランチ (data/ux-observations) の checkout。
+    ux_eval.py --step-outcome <rc>
+      本体の終了コード <rc> を呼び出し側 (ux-eval.yml の eval step) の振る舞いへ
+      変換する: annotation (::error::) を stdout に、「追記後に赤」へ倒すフラグを
+      $GITHUB_OUTPUT に書き、step の終了コードで exit する。判定は
+      eval_step_directives (テスト済みの純関数) が持つ — YAML の if 連鎖に埋めると
+      出力名や条件式の退行を定期 workflow の実行までテストで検出できない
+      (#440 / security-sweep の sast_annotation と同じ理由。Codex P1 PR #462)
+
+    data_dir の読み方: probes/*.jsonl を読み、evals/*.jsonl で評価済み
+                 (runId, scenarioId) を確認して再評価を拒否する — 鮮度 26h は
+                 前日 07:00 の記録 (約 25h 前) を通してしまうため、時刻だけでは
+                 「今朝の記録が欠けた朝」を検出できない (Codex レビュー指摘 / PR #224)
       環境変数: UX_EVAL_MAX_AGE_HOURS (既定 26) /
                 UX_EVAL_EXPECTED_WINDOW_HOURS (既定 168 = 7 日 — 「前回まで積めていた
                 シナリオ集合」を evals の実績から作る窓) /
@@ -55,6 +63,10 @@ envelope との往復を実 module で検証している (片方だけ直すと�
     0 = 前回までの全シナリオを計測できた (payload を stdout に JSONL で出力)
     5 = 計測はできた (payload は stdout に出力済み) が、前回まで積めていたシナリオ集合
         より減っている — 呼び出し側は **payload を追記したうえで** run を赤にする (#443)
+    6 = 計測はできた (payload は stdout に出力済み) が、turns 0 件の空記録がある —
+        呼び出し側は **payload を追記したうえで** run を赤にする (#401)。行は積む
+        (時系列の欠落も情報) が、「計測が成功した」とは言わない。採点側
+        (inspect-probe-artifact.py の exit 4 = 採点する材料がない) と判定を揃える
     3 = 鮮度内の記録が 1 件も無い (記録ゼロ / 全部古い) — 呼び出し側は run を赤にする
     4 = 鮮度内の記録はあるが全部評価済み (今朝の新しい記録が来ていない) — 同じく赤にする
     1 = 前提不足・想定外 (ディレクトリが無い / JSON が壊れている)
@@ -94,6 +106,7 @@ EXIT_UNEXPECTED = 1
 EXIT_NO_FRESH_RECORD = 3
 EXIT_ALREADY_EVALUATED = 4
 EXIT_SCENARIO_SET_SHRUNK = 5
+EXIT_EMPTY_RECORD = 6
 
 
 def log(message: str) -> None:
@@ -357,6 +370,7 @@ def run(data_dir: Path, now: datetime | None = None) -> int:
     measured: list[str] = []
     stale: list[str] = []
     already: list[str] = []
+    empty: list[str] = []
 
     for scenario_id, (envelope, recorded_at) in sorted(found.items()):
         age_hours = (now - recorded_at).total_seconds() / 3600
@@ -393,6 +407,18 @@ def run(data_dir: Path, now: datetime | None = None) -> int:
             build_payload(envelope, recorded_at, metrics, now, run_id, run_url)
         )
         measured.append(scenario_id)
+        # 中身が空 (往復 0 件) の記録は「計測が成功した」とは言わない (#401)。
+        # 記録は 1 往復ごとに書き出す設計 (ADR 0037) なので、プローブが送信前に
+        # 自滅しても turns: [] の record が書かれ、鮮度チェックだけでは素通りする。
+        # 行は積む (時系列の欠落も情報) が、run は赤にする — 採点側
+        # (inspect-probe-artifact.py の exit 4 = 採点する材料がない) と判定を揃える。
+        # 0 < completedTurns < plannedTurns の部分記録は正常な産物なので落とさない
+        if metrics["completedTurns"] == 0:
+            empty.append(scenario_id)
+            log(
+                f"[{scenario_id}] 記録に往復が 1 件もありません (turns 0 件) — "
+                "行は積みますが、計測が成功したことにはしません。"
+            )
 
     if not payloads:
         # 全シナリオが古い / 全シナリオが評価済み — 入力が止まっているので赤にする。
@@ -431,6 +457,15 @@ def run(data_dir: Path, now: datetime | None = None) -> int:
     missing = sorted(
         expected_scenario_ids(evals, now, expected_window_hours) - covered
     )
+    if empty:
+        # 縮小 (exit 5) と同時に起きた朝も、空記録の存在は必ず stderr に残す —
+        # 終了コードは 1 つしか返せないので、ここで黙るともう片方の異常が消える
+        log(
+            f"エラー: プローブが 1 往復も完了しないまま書き出した空記録があります "
+            f"(シナリオ: {', '.join(empty)})。"
+        )
+        log("  → 行は追記してよいが、この run は赤にすること (exit 6)。")
+        log("     プローブ側 (golden-path-monitor) の同朝 run を確認してください (#401)。")
     if missing:
         log(
             f"エラー: 前回まで積めていたシナリオのうち {', '.join(missing)} が"
@@ -439,12 +474,110 @@ def run(data_dir: Path, now: datetime | None = None) -> int:
         log("  → 取れた計測は追記してよいが、この run は赤にすること (exit 5)。")
         log("     プローブ側 (golden-path-monitor) と封筒化・追記の経路を確認してください。")
         return EXIT_SCENARIO_SET_SHRUNK
+    if empty:
+        return EXIT_EMPTY_RECORD
     return EXIT_OK
 
 
+def eval_step_directives(rc: int) -> dict:
+    """本体の終了コードを、呼び出し側 (ux-eval.yml の eval step) の振る舞いへ変換する
+    (純粋関数 / Codex P1 PR #462)。
+
+    この変換を YAML の if 連鎖に埋めると、出力名 (`empty_record=true`) や条件式が
+    退行しても定期 workflow を実行するまで検出できない (#440 / security-sweep の
+    sast_annotation と同じ理由)。「exit 6 = payload を追記したうえで run を赤にする」
+    の接続はここが持ち、test_ux_eval.py が固定する。
+
+    返り値:
+        annotation: step ログに出す ::error:: 行 ("" = 出さない)
+        outputs:    $GITHUB_OUTPUT に書く行。追記 step の**後**に run を赤へ倒す
+                    フラグ (ux-eval.yml の該当 step の if と名前を揃える)
+        exit:       eval step の終了コード (0 = 追記へ進む)
+    """
+    if rc == EXIT_OK:
+        return {"annotation": "", "outputs": [], "exit": 0}
+    if rc == EXIT_NO_FRESH_RECORD:
+        # 鮮度切れ / 記録なしは**この run の赤で表現する** (ADR 0037 D1)。
+        # 黙って skip すると「プローブが止まったまま計測も静かに止まる」が再発する
+        return {
+            "annotation": (
+                "::error::26 時間以内のプローブ記録がありません — "
+                "golden-path-monitor か記録の追記が止まっています (詳細は上のログ)"
+            ),
+            "outputs": [],
+            "exit": 1,
+        }
+    if rc == EXIT_ALREADY_EVALUATED:
+        # 前日の記録しか無い朝 — 重複を積まず、入力が止まったことを赤で表現する
+        return {
+            "annotation": (
+                "::error::鮮度内のプローブ記録はすべて評価済みです — "
+                "今朝の新しい記録が来ていません (golden-path-monitor の停止か追記失敗。"
+                "詳細は上のログ)"
+            ),
+            "outputs": [],
+            "exit": 1,
+        }
+    if rc == EXIT_SCENARIO_SET_SHRUNK:
+        # 前回まで積めていたシナリオの一部が今朝は計測できていない (#443)。
+        # payload は出ているので取れた分は積み、追記の後の step で run を赤にする —
+        # 「取れた計測を捨てない」と「減ったことを黙らせない」を両立させる
+        return {
+            "annotation": (
+                "::error::前回まで積めていたシナリオの一部が今朝は計測できていません "
+                "(詳細は上のログ) — 取れた分を追記したうえで run を赤にします"
+            ),
+            "outputs": ["scenario_set_shrunk=true"],
+            "exit": 0,
+        }
+    if rc == EXIT_EMPTY_RECORD:
+        # turns 0 件の空記録 (#401)。行は積む (時系列の欠落も情報) が、
+        # 「計測が成功した」ことにはしない — 追記の後の step で run を赤にする
+        return {
+            "annotation": (
+                "::error::turns 0 件の空記録があります — プローブが 1 往復も完了して"
+                "いません (詳細は上のログ)。行を追記したうえで run を赤にします"
+            ),
+            "outputs": ["empty_record=true"],
+            "exit": 0,
+        }
+    # 想定外 (1 = 前提不足 など) はそのまま即赤 — 解釈できない状態を緑で通さない
+    return {"annotation": "", "outputs": [], "exit": rc}
+
+
+def step_outcome(rc_text: str) -> int:
+    """--step-outcome モード: 判定 (eval_step_directives) を実環境へ適用する。"""
+    try:
+        rc = int(rc_text)
+    except ValueError:
+        log(f"--step-outcome の引数が整数ではありません: {rc_text!r}")
+        return EXIT_UNEXPECTED
+    directives = eval_step_directives(rc)
+    if directives["annotation"]:
+        # annotation は stdout に出す — Actions が ::error:: を拾うのは step ログ
+        print(directives["annotation"])
+    if directives["outputs"]:
+        output_path = os.environ.get("GITHUB_OUTPUT")
+        if not output_path:
+            # フラグを黙って落とすと「追記後に赤」の step が発火せず、
+            # 空記録 (#401) や集合縮小 (#443) がまた緑で通る。書けないなら赤にする
+            log(
+                "GITHUB_OUTPUT が未設定のためフラグを書けません: "
+                f"{directives['outputs']} — 「追記後に赤」が発火しないので、"
+                "ここで赤にします。"
+            )
+            return EXIT_UNEXPECTED
+        with open(output_path, "a", encoding="utf-8") as fh:
+            for line in directives["outputs"]:
+                fh.write(line + "\n")
+    return directives["exit"]
+
+
 def main(argv: list[str]) -> int:
+    if len(argv) == 3 and argv[1] == "--step-outcome":
+        return step_outcome(argv[2])
     if len(argv) != 2:
-        log(f"使い方: {Path(argv[0]).name} <data_dir>")
+        log(f"使い方: {Path(argv[0]).name} <data_dir> | --step-outcome <rc>")
         return EXIT_UNEXPECTED
     return run(Path(argv[1]))
 

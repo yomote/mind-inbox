@@ -3,6 +3,9 @@
 無いと何が静かに通るか:
     - 古い記録が「今日の計測」として積まれ、プローブが止まっているのに
       トレンドが伸び続ける (鮮度チェックの穴)
+    - turns 0 件の空記録が「成功した計測」として緑のまま時系列に入り、
+      プローブ全滅の朝も「計測は回っている」に見える (#401 — 鮮度チェックは
+      「記録は書かれたが中身が空」を素通りさせる)
     - 欠測 (null) が 0ms として平均に混ざり、レイテンシが実際より良く見える
     - 封筒の形 (probe-record-comment.py envelope) が変わったとき、こちらだけ
       古いまま「記録なし」と誤報する — round-trip テストが実 module で結合を検証する
@@ -17,14 +20,18 @@ from pathlib import Path
 
 from ux_eval import (
     EXIT_ALREADY_EVALUATED,
+    EXIT_EMPTY_RECORD,
     EXIT_NO_FRESH_RECORD,
     EXIT_OK,
     EXIT_SCENARIO_SET_SHRUNK,
+    EXIT_UNEXPECTED,
     build_payload,
+    eval_step_directives,
     evaluated_probe_keys,
     expected_scenario_ids,
     is_fresh,
     latest_records_by_scenario,
+    main,
     measure,
     read_observations,
     run,
@@ -497,3 +504,139 @@ def test_l1_全シナリオが評価済みなら赤(tmp_path, capsys) -> None:
         "".join(line + "\n" for line in previous), encoding="utf-8"
     )
     assert run(data, now=NOW) == EXIT_ALREADY_EVALUATED
+
+
+def test_単体_turns0件の空記録は行を積みつつ赤(tmp_path, capsys) -> None:
+    """#401 回帰: 2026-08-13 の実測 (probeId: ux-probe-2026-08-12T22-45-07-419Z /
+    run 31648071011) — プローブが 1 往復も完了しないまま書いた記録で ux-eval が緑になった。
+
+    無いと何が静かに通るか:
+        鮮度チェックは「記録は書かれたが中身が空」を素通りさせる。プローブ全滅の朝も
+        run が緑のままなので、ステータスページの UX トレンドは「計測は回っている」に
+        見え、沈黙と正常が区別できない (monitor 赤 → ux-eval 緑が実際に起きた)。
+    """
+    empty = _envelope(
+        _record(
+            turns=[],
+            probe_id="ux-probe-2026-08-12T22-45-07-419Z",
+            run_id="31648071011",
+        ),
+        "2026-08-09T22:37:35Z",
+    )
+    data = _data_dir(tmp_path, probes=[empty])
+    capsys.readouterr()
+    assert run(data, now=NOW) == EXIT_EMPTY_RECORD
+    captured = capsys.readouterr()
+    # 行は積む (時系列の欠落も情報) — payload は出力したうえで赤にする
+    payloads = [json.loads(l) for l in captured.out.strip().splitlines()]
+    assert [p["metrics"]["completedTurns"] for p in payloads] == [0]
+    assert payloads[0]["probeRunId"] == "31648071011"
+    assert "turns 0 件" in captured.err
+
+
+def test_単体_片方が空記録でも両方の行を積んで赤(tmp_path, capsys) -> None:
+    """2 シナリオのうち 1 本だけ空だった朝 — 取れた計測は捨てず、run は赤にする。"""
+    probes = [
+        _envelope(
+            _record(scenario_id="work-overwhelm-v1", probe_id="p-work"),
+            "2026-08-09T22:37:35Z",
+        ),
+        _envelope(
+            _record(
+                turns=[], scenario_id="hypothesis-pushback-v1", probe_id="p-push"
+            ),
+            "2026-08-09T22:37:35Z",
+        ),
+    ]
+    data = _data_dir(tmp_path, probes=probes)
+    capsys.readouterr()
+    assert run(data, now=NOW) == EXIT_EMPTY_RECORD
+    captured = capsys.readouterr()
+    payloads = [json.loads(l) for l in captured.out.strip().splitlines()]
+    assert len(payloads) == 2
+    # 空だったシナリオが名指しされること (どちらを調べればよいか分かる)
+    assert "hypothesis-pushback-v1" in captured.err
+
+
+def test_単体_空記録と集合縮小が同時の朝は縮小の赤を返しつつ両方をstderrに残す(
+    tmp_path, capsys
+) -> None:
+    """終了コードは 1 つしか返せない — exit 5 を優先しても、空記録の存在が
+    stderr から消えないこと (黙るともう片方の異常が見えなくなる)。"""
+    probes = [
+        _envelope(
+            _record(turns=[], scenario_id="work-overwhelm-v1", probe_id="p-work"),
+            "2026-08-09T22:37:35Z",
+        ),
+        # hypothesis-pushback-v1 は今朝の記録そのものが無い (縮小)
+    ]
+    evals = [
+        {
+            "kind": "ux-eval-mech",
+            "probeRunId": "prev-run",
+            "scenarioId": sid,
+            "recordedAt": "2026-08-08T23:20:00Z",
+        }
+        for sid in ("work-overwhelm-v1", "hypothesis-pushback-v1")
+    ]
+    data = _data_dir(tmp_path, probes=probes, evals=evals)
+    capsys.readouterr()
+    assert run(data, now=NOW) == EXIT_SCENARIO_SET_SHRUNK
+    err = capsys.readouterr().err
+    assert "turns 0 件" in err
+    assert "hypothesis-pushback-v1" in err
+
+
+def test_単体_終了コードから呼び出し側の振る舞いへの変換(capsys) -> None:
+    """exit 6 が「payload を追記したうえで run を赤にする」経路に接続される pin (#401)。
+
+    無いと何が静かに通るか:
+        この変換が YAML の if 連鎖にしかないと、出力名 (`empty_record=true`) や
+        条件式が退行してもテストでは検出できず、定期 workflow が実際に空記録を
+        踏む朝まで気づけない — #401 の穴が wiring の層で再発する。
+    """
+    assert eval_step_directives(EXIT_OK) == {"annotation": "", "outputs": [], "exit": 0}
+
+    empty = eval_step_directives(EXIT_EMPTY_RECORD)
+    assert empty["outputs"] == ["empty_record=true"]  # ux-eval.yml の if と同名
+    assert empty["exit"] == 0  # 追記 step へ進む — 赤は追記の**後** (行は積む)
+    assert empty["annotation"].startswith("::error::")
+
+    shrunk = eval_step_directives(EXIT_SCENARIO_SET_SHRUNK)
+    assert shrunk["outputs"] == ["scenario_set_shrunk=true"]
+    assert shrunk["exit"] == 0
+    assert shrunk["annotation"].startswith("::error::")
+
+    # 入力停止系は追記へ進まず即赤
+    for rc in (EXIT_NO_FRESH_RECORD, EXIT_ALREADY_EVALUATED):
+        directives = eval_step_directives(rc)
+        assert directives["exit"] == 1
+        assert directives["outputs"] == []
+        assert directives["annotation"].startswith("::error::")
+
+    # 想定外の終了コードを緑に丸めない
+    assert eval_step_directives(EXIT_UNEXPECTED)["exit"] == EXIT_UNEXPECTED
+
+
+def test_単体_step_outcomeはフラグをGITHUB_OUTPUTへ書き注釈をstdoutに出す(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """--step-outcome の実環境適用 (CLI 経由) — 判定と反映の結合を実物で確かめる。"""
+    gh_output = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(gh_output))
+    assert main(["ux_eval.py", "--step-outcome", str(EXIT_EMPTY_RECORD)]) == 0
+    assert gh_output.read_text(encoding="utf-8") == "empty_record=true\n"
+    # annotation は stdout — Actions が ::error:: を拾うのは step ログ
+    assert capsys.readouterr().out.startswith("::error::")
+
+
+def test_単体_step_outcomeはGITHUB_OUTPUT未設定ならフラグを落とさず赤(
+    capsys, monkeypatch
+) -> None:
+    """無いと何が静かに通るか:
+        フラグを黙って落として exit 0 を返すと、「追記後に赤」の step が発火せず、
+        空記録 (#401) や集合縮小 (#443) がまた緑で通る — 書けないなら赤にする。
+    """
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    assert main(["ux_eval.py", "--step-outcome", str(EXIT_EMPTY_RECORD)]) != 0
+    assert "GITHUB_OUTPUT" in capsys.readouterr().err
