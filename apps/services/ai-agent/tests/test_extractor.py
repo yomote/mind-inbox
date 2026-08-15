@@ -521,6 +521,36 @@ class TestThinkingMap:
 
         assert [n.id for n in result.thinking_map.nodes] == ["n1", "n3"]
 
+    async def test_l1_non_string_labels_are_dropped(self, session_repo, make_client):
+        # label が文字列でない節も捨てる (Codex P2 / PR #444)。
+        # 無いと: `str(None)` = "None" / `str({})` = "{}" のような**非空文字列**に化けて
+        #         空ラベル判定をすり抜け、検証できない値が「話題」として実数に加算され
+        #         画面にも 1 行出る (数えただけ、という誠実さが崩れる)。
+        await _seed(session_repo)
+        payload = json.loads(json.dumps(_MAP_PAYLOAD))
+        payload["thinkingMap"]["nodes"][0]["label"] = None
+        payload["thinkingMap"]["nodes"][1]["label"] = {"text": "オブジェクト"}
+        client_mock = make_client(json.dumps(payload))
+
+        result = await extract("s1", [], session_repo, client_mock)
+
+        assert [n.id for n in result.thinking_map.nodes] == ["n3"]
+
+    async def test_l1_non_string_id_falls_back_to_generated_id(
+        self, session_repo, make_client
+    ):
+        # id が文字列でなければ採番し直す (親の参照先が壊れた文字列になるのを防ぐ)。
+        # 無いと: `str({...})` のような id が親子の突き合わせに使われ、
+        #         親子関係が黙って壊れる (節は出るのでツリーが平らになるだけ)。
+        await _seed(session_repo)
+        payload = json.loads(json.dumps(_MAP_PAYLOAD))
+        payload["thinkingMap"]["nodes"][0]["id"] = None
+        client_mock = make_client(json.dumps(payload))
+
+        result = await extract("s1", [], session_repo, client_mock)
+
+        assert result.thinking_map.nodes[0].id == "node-0"
+
     async def test_l1_missing_thinking_map_is_none(self, session_repo, make_client):
         # マップを返さない LLM 応答でも抽出は成立する (旧プロンプト / 応答の欠落)。
         # 無いと: マップが無いだけで抽出全体が落ち、右ペインの下書きまで消える。

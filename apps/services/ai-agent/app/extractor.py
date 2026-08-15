@@ -203,10 +203,15 @@ def _coerce_thinking_map(raw: object, session_id: str) -> ThinkingMap | None:
     for index, item in enumerate(raw_nodes):
         if not isinstance(item, dict):
             continue
-        label = str(item.get("label", "")).strip()
+        # **文字列でない label は空ラベルと同じく捨てる** (Codex P2)。`str()` に通すと
+        # `None` → "None" / `{}` → "{}" のような**非空文字列**に化け、直後の空判定を
+        # すり抜けて「検証できない値が正常な話題として件数に加算される」。
+        raw_label = item.get("label")
+        label = raw_label.strip() if isinstance(raw_label, str) else ""
         if not label:
             continue
-        node_id = str(item.get("id") or f"node-{index}")
+        raw_id = item.get("id")
+        node_id = raw_id if isinstance(raw_id, str) and raw_id else f"node-{index}"
         if (
             node_id in parents
         ):  # id の重複は後勝ちにせず先勝ちで捨てる (親の指す先が割れる)

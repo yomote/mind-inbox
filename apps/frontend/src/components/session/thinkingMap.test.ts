@@ -98,10 +98,25 @@ describe("[単体] buildThinkingTree", () => {
       node({ id: "b", parentId: "a" }),
       node({ id: "c", parentId: "missing" }),
       node({ id: "d", parentId: "d" }),
+      // **重複 id を必ず混ぜる** (Codex P2 / PR #444)。混ぜないと、数える側と描く側で
+      // 重複の扱いが割れた実装 (サマリは全件・ツリーは 1 件) をこのテストが素通しする。
+      node({ id: "a", label: "重複" }),
     ];
     const count = (list: ReturnType<typeof buildThinkingTree>): number =>
       list.reduce((acc, n) => acc + 1 + count(n.children), 0);
 
     expect(count(buildThinkingTree(map(nodes)))).toBe(summarizeThinkingMap(map(nodes)).total);
+  });
+
+  it("重複 id はサマリとツリーで同じように 1 つに潰れる", () => {
+    // 無いと: 契約 (zod) は id の一意性を見ないので重複が素通りし、
+    //         「話題 2」と表示しながらツリーは 1 行、という食い違いが出る。
+    //         画面は普通に描画されるので気づけない (Codex P2)。
+    const nodes = [node({ id: "a", label: "先勝ち" }), node({ id: "a", label: "後" })];
+
+    const roots = buildThinkingTree(map(nodes));
+
+    expect(roots.map((n) => n.label)).toEqual(["先勝ち"]);
+    expect(summarizeThinkingMap(map(nodes)).total).toBe(1);
   });
 });

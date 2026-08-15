@@ -17,8 +17,25 @@ export type ThinkingMapSummary = {
   unexplored: number;
 };
 
+/**
+ * サマリとツリーが**同じ集合**を見るための正規化 (Codex P2 / #433)。
+ *
+ * 契約 (`ThinkingMapSchema`) は id の一意性を検証しないので、重複 id を含む応答も
+ * 素通りする。数える側と描く側が別々に配列を扱うと、**「話題 2」と出しながらツリーは
+ * 1 行**という食い違いが起きる — 画面は普通に描画されるので気づけない。
+ * id の重複は**先勝ち**で 1 つに潰す (後勝ちにすると親の指す先が割れる。ai-agent 側の
+ * 健全化と同じ規則)。
+ */
+function normalizeNodes(map: ThinkingMap | null | undefined): ThinkingNode[] {
+  const byId = new Map<string, ThinkingNode>();
+  for (const node of map?.nodes ?? []) {
+    if (!byId.has(node.id)) byId.set(node.id, node);
+  }
+  return [...byId.values()];
+}
+
 export function summarizeThinkingMap(map: ThinkingMap | null | undefined): ThinkingMapSummary {
-  const nodes = map?.nodes ?? [];
+  const nodes = normalizeNodes(map);
   return {
     total: nodes.length,
     confirmed: nodes.filter((n) => n.status === "confirmed").length,
@@ -38,11 +55,11 @@ export type ThinkingTreeNode = ThinkingNode & { children: ThinkingTreeNode[] };
  * 画面は LLM 出力の最後の砦なので二重に持つ)。
  */
 export function buildThinkingTree(map: ThinkingMap | null | undefined): ThinkingTreeNode[] {
-  const nodes = map?.nodes ?? [];
+  // **サマリと同じ正規化済み集合**から組む。ここだけで重複 id を捨てると、
+  // 「話題 2」と数えながらツリーは 1 行、という食い違いが出る (Codex P2)。
   const byId = new Map<string, ThinkingTreeNode>();
-  for (const node of nodes) {
-    // id が重複していたら先勝ち (後勝ちにすると親の指す先が途中で入れ替わる)。
-    if (!byId.has(node.id)) byId.set(node.id, { ...node, children: [] });
+  for (const node of normalizeNodes(map)) {
+    byId.set(node.id, { ...node, children: [] });
   }
 
   const roots: ThinkingTreeNode[] = [];
