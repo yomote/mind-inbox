@@ -8,7 +8,7 @@ import {
   type ThinkingGraphBox,
   type ThinkingGraphLayout,
 } from "./thinkingMapLayout";
-import { KIND_LABEL, STATUS_LABEL, statusStyle } from "./thinkingMapStyle";
+import { KIND_LABEL, STATUS_LABEL, labelColor, statusStyle } from "./thinkingMapStyle";
 
 type ThinkingMapGraphProps = {
   layout: ThinkingGraphLayout;
@@ -25,7 +25,11 @@ type ThinkingMapGraphProps = {
  *
  * 2 軸 (裁定 4) の見せ方:
  * - **形 = kind** (話題 = 角丸 / AI の見立て = 錠剤形 / 確かめたいこと = 六角形)
- * - **色と線 = status** (確定 = 実線・濃 / 仮説 = 破線・警告色 / 未探索 = 点線・淡)
+ * - **枠線の色と線種 = status** (確定 = 実線・濃 / 仮説 = 破線・警告色 / 未探索 = 点線・淡)
+ *
+ * **ラベル本文は status で色を変えない** (Codex P2 / WCAG 1.4.3)。12px の本文を
+ * `warning.main` (白背景で約 3.1:1) で塗ると、仮説の話題名が弱視の人に読めなくなる。
+ * 読めないことは画面に出ないので気づけない。status は枠線・線種・凡例が持つ。
  *
  * 中心の「この会話」は**データ上の節ではない** (LLM の生成物ではない器) ので、
  * `thinking-map-node` を名乗らせない — 名乗らせるとサマリの実数より箱が 1 個多く数えられる。
@@ -55,9 +59,10 @@ export function ThinkingMapGraph({ layout, ariaLabel }: ThinkingMapGraphProps) {
               key={edge.id}
               data-testid="thinking-map-edge"
               data-edge-status={edge.status}
+              data-edge-from={edge.fromNodeId ?? "center"}
               d={edge.path}
               fill="none"
-              stroke={style.color}
+              stroke={style.strokeColor}
               strokeWidth={style.strokeWidth}
               strokeDasharray={style.dash}
               strokeOpacity={0.7}
@@ -79,7 +84,7 @@ export function ThinkingMapGraph({ layout, ariaLabel }: ThinkingMapGraphProps) {
             stroke={theme.palette.primary.main}
             strokeWidth={1.5}
           />
-          <NodeLabel node={layout.center} color={theme.palette.primary.main} bold />
+          <NodeLabel node={layout.center} color={labelColor(theme)} bold />
         </g>
 
         {layout.nodes.map((node) => {
@@ -101,11 +106,13 @@ export function ThinkingMapGraph({ layout, ariaLabel }: ThinkingMapGraphProps) {
                 data-testid="thinking-map-node-shape"
                 d={nodeShapePath(node.kind, node.x, node.y, node.width, node.height)}
                 fill={theme.palette.background.paper}
-                stroke={style.color}
+                stroke={style.strokeColor}
                 strokeWidth={style.strokeWidth}
                 strokeDasharray={style.dash}
               />
-              <NodeLabel node={node} color={style.color} bold={status === "confirmed"} />
+              {/* 太さだけ status で変える (確定を太字に)。**色は変えない** — 色を薄くすると
+                  本文コントラストを割る (Codex P2)。 */}
+              <NodeLabel node={node} color={labelColor(theme)} bold={status === "confirmed"} />
             </g>
           );
         })}
@@ -132,11 +139,9 @@ function NodeLabel({
       fill={color}
     >
       {node.lines.map((line, index) => (
-        <tspan
-          key={`${node.id}-${index}`}
-          x={node.x + node.width / 2}
-          y={lineBaselineY(node, index)}
-        >
+        // 1 つの <text> の中だけの並びなので、行番号で一意 (箱の id には依存させない —
+        // 中心は id を持たない / Codex P2)。
+        <tspan key={index} x={node.x + node.width / 2} y={lineBaselineY(node, index)}>
           {line}
         </tspan>
       ))}

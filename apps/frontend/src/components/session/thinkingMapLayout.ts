@@ -27,21 +27,33 @@ const COLUMN_GAP = 34;
 const ROW_STRIDE = 52;
 const CANVAS_PAD = 10;
 
-/** 中心の節はデータではなく「この会話そのもの」を表す器。LLM の生成物ではない。 */
-export const CENTER_ID = "__conversation__";
+/** 中心の箱はデータではなく「この会話そのもの」を表す器。LLM の生成物ではない。 */
 export const CENTER_LABEL = "この会話";
 
 /**
  * 図にする節数の上限。**超えたら箇条書きへ落とす** (段階 1 の資産は消さない)。
  *
- * 上限が無いと、LLM が節を大量に吐いたときに図の高さが青天井に伸び、
- * 「描画はされているが誰にも読めない」状態になる。読めないことは画面に出ないので気づけない。
+ * **これは上流 (`extractor.py` の `_MAX_MAP_NODES = 24`) と同値の二重化**で、
+ * 一次防衛は上流にある。したがって通常の preview 経路では**発火しない** —
+ * 発火しうるのは (a) 上流の cap が緩む / 消える、(b) preview を通らない経路
+ * (mock / 別クライアント / 将来の別供給元) から地図が来る、のどちらか。
+ * 「上流が守っているから画面側は無条件に信じる」にすると、上流が緩んだ日に
+ * **読めない高さの図が黙って出る** (読めないことは画面に出ないので気づけない)。
+ * 上流と同値にしてあるのは、**画面側が独自の締めを持つと「上流は通したのに画面が落とす」**
+ * という、どちらが正しいか誰も判断できない状態を作らないため。
  */
-export const MAX_GRAPH_NODES = 40;
+export const MAX_GRAPH_NODES = 24;
 
-/** 図の上の箱 (中心もデータ上の節も共通で持つ幾何)。 */
+/**
+ * 図の上の箱 (中心もデータ上の節も共通で持つ幾何)。
+ *
+ * **`id` を持たない**のが要点 (Codex P2 / #433)。中心に予約 id (`__conversation__` 等) を
+ * 与えると、LLM が同じ文字列を節の id として返した瞬間に中心と節が同一視され、
+ * 根への枝が**自分自身への自己ループ**に化ける。しかも節数と枝数は一致するので
+ * `graphFallbackReason` は正常と判定し、**壊れた図が「正常」として出る**。
+ * 中心は id を持たず、参照でしか辿れない = **データ id の名前空間に存在しない**。
+ */
 export type ThinkingGraphBox = {
-  id: string;
   /** 折り返し済みのラベル (最大 2 行 / 溢れは「…」で切る)。 */
   lines: string[];
   x: number;
@@ -55,14 +67,17 @@ export type ThinkingGraphBox = {
  * 「status が無いときの既定色」という握り潰しが生まれ、割り当ての事故が色に化ける)。
  */
 export type ThinkingGraphNode = ThinkingGraphBox & {
+  id: string;
   source: ThinkingTreeNode;
   kind: ThinkingNodeKind;
   status: ThinkingNodeStatus;
 };
 
 export type ThinkingGraphEdge = {
+  /** 入り枝は節ごとにちょうど 1 本なので、**行き先の id がそのまま枝の id**になる。 */
   id: string;
-  fromId: string;
+  /** **null = 中心から生えた枝** (根)。データ id ではないので、どんな id とも衝突しない。 */
+  fromNodeId: string | null;
   toId: string;
   /** SVG の `d`。曲線にしているのは枝が広がる見え方 (マインドマップ) に寄せるため。 */
   path: string;
@@ -137,15 +152,23 @@ export function lineBaselineY(box: ThinkingGraphBox, index: number): number {
  */
 export function layoutThinkingGraph(roots: ThinkingTreeNode[]): ThinkingGraphLayout {
   const placed: ThinkingGraphNode[] = [];
+  // **節の実体 (オブジェクト参照) で引く** — id 文字列では引かない (Codex P2)。
+  // id を鍵にすると、LLM が中心の予約 id を返したときに中心と節が同一視される。
+  const boxByNode = new Map<ThinkingTreeNode, ThinkingGraphNode>();
   // 枝は**組み上がった木の親子**から張る (節の `parentId` からではない)。
   // `buildThinkingTree` は親を辿れない / 循環している節を根へ上げるが `parentId` は残すので、
   // parentId を信じると「根なのに親から線が出ている」図になり、木と図が食い違う。
-  const edgeSpecs: { fromId: string; toId: string; status: ThinkingNodeStatus }[] = [];
+  // parent が null = 根 = 中心から生やす。
+  const edgeSpecs: { parent: ThinkingTreeNode | null; node: ThinkingTreeNode }[] = [];
   let nextLeafRow = 0;
   let maxDepth = 0;
 
-  const visit = (node: ThinkingTreeNode, depth: number, parentId: string): number => {
-    edgeSpecs.push({ fromId: parentId, toId: node.id, status: node.status });
+  const visit = (
+    node: ThinkingTreeNode,
+    depth: number,
+    parent: ThinkingTreeNode | null,
+  ): number => {
+    edgeSpecs.push({ parent, node });
     maxDepth = Math.max(maxDepth, depth);
     // **先に自分の枠を予約する** — 配列の順序を木の順序 (親 → 子) に合わせるため。
     // 順序が崩れると、各節の kind / status を並びで検証しているテストが意味を失う。
@@ -157,7 +180,7 @@ export function layoutThinkingGraph(roots: ThinkingTreeNode[]): ThinkingGraphLay
       row = nextLeafRow;
       nextLeafRow += 1;
     } else {
-      const childRows = node.children.map((child) => visit(child, depth + 1, node.id));
+      const childRows = node.children.map((child) => visit(child, depth + 1, node));
       row = (childRows[0] + childRows[childRows.length - 1]) / 2;
     }
 
@@ -174,16 +197,16 @@ export function layoutThinkingGraph(roots: ThinkingTreeNode[]): ThinkingGraphLay
       width: NODE_WIDTH,
       height,
     };
+    boxByNode.set(node, placed[slot]);
     return row;
   };
 
-  const rootRows = roots.map((root) => visit(root, 1, CENTER_ID));
+  const rootRows = roots.map((root) => visit(root, 1, null));
 
   const centerRow = rootRows.length === 0 ? 0 : (rootRows[0] + rootRows[rootRows.length - 1]) / 2;
   const centerLines = wrapLabel(CENTER_LABEL);
   const centerHeight = nodeHeight(centerLines);
   const center: ThinkingGraphBox = {
-    id: CENTER_ID,
     lines: centerLines,
     x: CANVAS_PAD,
     y: rowCenterY(centerRow) - centerHeight / 2,
@@ -194,20 +217,19 @@ export function layoutThinkingGraph(roots: ThinkingTreeNode[]): ThinkingGraphLay
   // **すべての節にちょうど 1 本の入り枝**を張る (根は中心から生やす)。
   // 枝を張らずに浮かせると、図の上で「どこにも繋がらない箱」になり、
   // 親を取りこぼしたのか根なのかが読み手に区別できない。
-  const byId = new Map<string, ThinkingGraphBox>([center, ...placed].map((box) => [box.id, box]));
   const edges: ThinkingGraphEdge[] = [];
   for (const spec of edgeSpecs) {
-    const from = byId.get(spec.fromId);
-    const to = byId.get(spec.toId);
+    const to = boxByNode.get(spec.node);
+    const from = spec.parent === null ? center : boxByNode.get(spec.parent);
     if (from === undefined || to === undefined) continue;
     edges.push({
-      id: `${spec.fromId}->${spec.toId}`,
-      fromId: spec.fromId,
-      toId: spec.toId,
+      id: to.id,
+      fromNodeId: spec.parent === null ? null : spec.parent.id,
+      toId: to.id,
       path: edgePath(from, to),
       // 枝の見た目は**行き先の status**。未探索の枝が点線で見えることが
       // 「どこがまだ聞けていないか」の一次情報になる。
-      status: spec.status,
+      status: spec.node.status,
     });
   }
 
@@ -288,6 +310,14 @@ function roundedRectPath(x: number, y: number, w: number, h: number, r: number):
  * **「描けなかった」を黙って空白にしない**ための判定 (CLAUDE.md / 取れなかったものを
  * 「異常なし」と書かない)。ここが null を返し続けるようになると、節を取りこぼした図が
  * そのまま出て、サマリの実数と図の中身が食い違ったまま気づけなくなる。
+ *
+ * **条件は 2 種類あり、発火する場面が違う** (Codex P2 / どちらも「死んだ経路」ではない):
+ *   1. **節数の上限** = 上流 (`extractor.py` の 24 節 cap) の**二重化**。
+ *      通常の preview 経路では上流が先に切るので発火しない。発火するのは上流の cap が
+ *      緩んだとき / preview を通らない供給元から地図が来たとき (`MAX_GRAPH_NODES` 参照)。
+ *   2. **件数不一致・枝の欠け・非有限座標** = この直前に走った**配置処理の内部不変条件**。
+ *      正常な配置では起きない = 起きたら配置のバグ。バグでも**サマリと食い違う図を出さない**
+ *      ための最後の門で、上流の入力とは無関係に効く。
  */
 export function graphFallbackReason(
   layout: ThinkingGraphLayout,

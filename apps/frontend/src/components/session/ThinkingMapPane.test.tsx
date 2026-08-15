@@ -9,8 +9,10 @@
  *   PO の原意向 (この対話いつまで続くんだろう) への唯一の答えが消える (裁定 3)。
  * - **図とデータの一致**: 図の箱・線がデータより少なくても図は普通に描かれる。
  *   サマリは「話題 4」と言い続けるので、**見ても食い違いに気づけない**。
- * - **status → 色の割り当て**: 確定と未探索が同じ色で描かれても図は成立する。
+ * - **status → 枠線色の割り当て**: 確定と未探索が同じ色で描かれても図は成立する。
  *   「どれが確かで、どこがまだ聞けていないか」という図の唯一の情報が消えるのに気づけない。
+ * - **ラベル本文の色**: status 色を本文に載せると、仮説・未探索の話題名が
+ *   コントラスト 4.5:1 を割る (Codex P2)。**色が付いて見えてはいる**ので画面上は気づけない。
  * - **箇条書きへの落とし先**: 図にできない地図でも図を出し続けるようになると、
  *   空白または読めない図が出るだけになる (段階 1 の資産が死んでいることに気づけない)。
  */
@@ -71,7 +73,7 @@ const map: ThinkingMap = {
  */
 const sentinelTheme = createTheme({
   palette: {
-    text: { primary: "#111111", disabled: "#999999" },
+    text: { primary: "#111111", secondary: "#666666" },
     warning: { main: "#ff8800" },
   },
 });
@@ -155,7 +157,7 @@ describe("[単体] ThinkingMapPane", () => {
     ]);
   });
 
-  it("図の色は status ごとに別 (確定 / 仮説 / 未探索 が同じ色にならない)", () => {
+  it("図の枠線の色は status ごとに別 (確定 / 仮説 / 未探索 が同じ色にならない)", () => {
     renderWithSentinelTheme(map);
 
     const strokeOf = (status: string) => {
@@ -167,7 +169,19 @@ describe("[単体] ThinkingMapPane", () => {
 
     expect(strokeOf("confirmed")).toBe("#111111"); // text.primary
     expect(strokeOf("tentative")).toBe("#ff8800"); // warning.main
-    expect(strokeOf("unexplored")).toBe("#999999"); // text.disabled
+    expect(strokeOf("unexplored")).toBe("#666666"); // text.secondary
+  });
+
+  it("ラベル本文の色は status で変えない (薄い色で本文を塗らない / WCAG 1.4.3)", () => {
+    renderWithSentinelTheme(map);
+
+    const fills = screen
+      .getAllByTestId("thinking-map-node")
+      .map((n) => n.querySelector("text")?.getAttribute("fill"));
+
+    // 3 つの status が混ざった地図でも、本文の色は 1 種類だけ = 本文用の色。
+    expect(new Set(fills).size).toBe(1);
+    expect(fills[0]).toBe("#111111"); // text.primary (枠線の warning / secondary ではない)
   });
 
   it("図の枝も行き先の status で色と線が変わる (未探索の枝が見分けられる)", () => {
@@ -177,7 +191,7 @@ describe("[単体] ThinkingMapPane", () => {
     const unexplored = edges.find((e) => e.getAttribute("data-edge-status") === "unexplored");
     const confirmed = edges.find((e) => e.getAttribute("data-edge-status") === "confirmed");
 
-    expect(unexplored?.getAttribute("stroke")).toBe("#999999");
+    expect(unexplored?.getAttribute("stroke")).toBe("#666666");
     expect(unexplored?.getAttribute("stroke-dasharray")).toBeTruthy();
     expect(confirmed?.getAttribute("stroke")).toBe("#111111");
     // 確定は実線 — 破線にすると「確かさ = 線の途切れ」の意味が崩れる。
@@ -239,6 +253,46 @@ describe("[単体] ThinkingMapPane", () => {
     expect(screen.getByTestId("thinking-map-view-graph").getAttribute("disabled")).not.toBeNull();
     // 節は 1 つも落とさない。
     expect(screen.getAllByTestId("thinking-map-node").length).toBe(MAX_GRAPH_NODES + 1);
+  });
+
+  it("中心の予約名を LLM が節 id に使ってきても図が壊れない", () => {
+    // 中心が節に上書きされると根の枝が自己ループに化けるが、節数と枝数は一致したままなので
+    // フォールバック判定は正常と答える = **壊れた図が「正常」として出る** (Codex P2)。
+    render(
+      <ThinkingMapPane
+        map={{
+          nodes: [
+            {
+              id: "__conversation__",
+              kind: "topic",
+              label: "中心を名乗る節",
+              status: "confirmed",
+              parentId: null,
+              problemId: null,
+            },
+            {
+              id: "n2",
+              kind: "unknown",
+              label: "その子",
+              status: "unexplored",
+              parentId: "__conversation__",
+              problemId: null,
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("thinking-map-pane").getAttribute("data-view")).toBe("graph");
+    expect(screen.getAllByTestId("thinking-map-node").length).toBe(2);
+    expect(screen.getAllByTestId("thinking-map-center").length).toBe(1);
+    const edges = screen.getAllByTestId("thinking-map-edge");
+    expect(edges.length).toBe(2);
+    // 根は中心 (center) から。自分自身から生えている枝が無いことを見る。
+    expect(edges.map((e) => e.getAttribute("data-edge-from"))).toEqual([
+      "center",
+      "__conversation__",
+    ]);
   });
 
   it("マップがまだ無いときは空状態を出す (数字を作らない)", () => {

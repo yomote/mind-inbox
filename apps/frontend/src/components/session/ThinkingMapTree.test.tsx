@@ -9,6 +9,8 @@
  *   「どの話題の下の枝か」が失われたことに画面上で気づけない。
  * - **kind × status の 2 軸**: どちらかの表示が落ちても行は出るので、
  *   「AI の仮説をユーザーが認めた」が読めなくなったことに気づけない (裁定 4)。
+ * - **ラベル本文の色**: ここは「図が読めない人の経路」なので、その本文が status 色
+ *   (白背景で 3.1:1 / 5.5:1) で塗られていたら経路として成立しない (Codex P2 / WCAG 1.4.3)。
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
@@ -80,6 +82,21 @@ describe("[単体] ThinkingMapTree", () => {
       "unexplored",
       "tentative",
     ]);
+  });
+
+  it("ラベル本文は status で色を変えない (薄い色で本文を塗らない / WCAG 1.4.3)", () => {
+    render(<ThinkingMapTree roots={buildThinkingTree(map)} />);
+
+    const labelOf = (status: string) =>
+      screen
+        .getAllByTestId("thinking-map-node")
+        .find((n) => n.getAttribute("data-node-status") === status)
+        ?.querySelector("[data-testid='thinking-map-node-label']")?.className;
+
+    // 仮説 (warning) と未探索 (secondary) は太さも同じなので、**本文に色を足すと
+    // ここで class が割れる**。同じなら本文の色は status に依存していない。
+    expect(labelOf("tentative")).toBe(labelOf("unexplored"));
+    expect(labelOf("tentative")).toBeTruthy();
   });
 
   it("status と kind を文字でも出す (色と記号だけに頼らない)", () => {

@@ -11,13 +11,15 @@
  *   実ブラウザでラベルが重なる。
  * - **フォールバック判定**: 節が何個あっても図を描き続けるようになっても画面は成立するが、
  *   読めない図が出るだけになる (読めないことは画面に出ない)。
+ * - **中心とデータ id の衝突**: LLM が中心の予約 id を返すと、中心が節に上書きされて
+ *   根への枝が**自己ループ**に化ける。節数と枝数は一致したままなので
+ *   `graphFallbackReason` も正常と判定し、**壊れた図が「正常」として出る** (Codex P2)。
  */
 
 import { describe, expect, it } from "vitest";
 import type { ThinkingMap } from "../../api";
 import { buildThinkingTree } from "./thinkingMap";
 import {
-  CENTER_ID,
   MAX_GRAPH_NODES,
   graphFallbackReason,
   layoutThinkingGraph,
@@ -71,12 +73,37 @@ describe("[単体] layoutThinkingGraph", () => {
     const layout = layoutThinkingGraph(buildThinkingTree(sample));
 
     expect(layout.edges.length).toBe(layout.nodes.length);
-    const incoming = new Map(layout.edges.map((e) => [e.toId, e.fromId]));
+    const incoming = new Map(layout.edges.map((e) => [e.toId, e.fromNodeId]));
     expect(incoming.size).toBe(layout.nodes.length);
-    expect(incoming.get("a")).toBe(CENTER_ID);
-    expect(incoming.get("b")).toBe(CENTER_ID);
+    // 根の出どころは **null = 中心**。データ id ではないので、どんな id とも衝突しない。
+    expect(incoming.get("a")).toBeNull();
+    expect(incoming.get("b")).toBeNull();
     expect(incoming.get("a1")).toBe("a");
     expect(incoming.get("b1")).toBe("b");
+  });
+
+  it("中心はデータ id の名前空間に居ない (予約 id を LLM が返しても壊れない)", () => {
+    // LLM が中心の器と同じ名前を節 id に使ってきた場合。契約 (`ThinkingNodeSchema`) は
+    // 任意の文字列 id を許し、ai-agent の健全化もこの名前を拒否しない。
+    const collided = mapOf([
+      { id: "__conversation__", label: "中心を名乗る節" },
+      { id: "child", label: "その子", parentId: "__conversation__" },
+      { id: "other", label: "別の根" },
+    ]);
+    const layout = layoutThinkingGraph(buildThinkingTree(collided));
+
+    expect(layout.nodes.length).toBe(3);
+    expect(layout.edges.length).toBe(3);
+    // **自己ループが 1 本も無いこと**が要点 (中心が節に化けると根が自分自身に繋がる)。
+    for (const edge of layout.edges) expect(edge.fromNodeId).not.toBe(edge.toId);
+    // 「中心を名乗る節」も普通の根として中心から生える。
+    const incoming = new Map(layout.edges.map((e) => [e.toId, e.fromNodeId]));
+    expect(incoming.get("__conversation__")).toBeNull();
+    expect(incoming.get("other")).toBeNull();
+    expect(incoming.get("child")).toBe("__conversation__");
+    // 中心の箱は別に存在し続ける (節に食われない)。
+    expect(layout.center.lines).toEqual(["この会話"]);
+    expect(graphFallbackReason(layout, 3)).toBeNull();
   });
 
   it("枝の見た目は行き先の status で決まる (未探索の枝が図の上で見分けられる)", () => {
@@ -156,9 +183,9 @@ describe("[単体] layoutThinkingGraph", () => {
     expect(layout.nodes.length).toBe(3);
     expect(layout.edges.length).toBe(3);
     expect(graphFallbackReason(layout, 3)).toBeNull();
-    // 循環していた側も、図の上では中心か木の親から 1 本だけ線が来る。
+    // 循環していた側も、図の上では中心から 1 本だけ線が来る (根に上がっているため)。
     const incoming = layout.edges.filter((e) => e.toId === "orphan");
-    expect(incoming.map((e) => e.fromId)).toEqual([CENTER_ID]);
+    expect(incoming.map((e) => e.fromNodeId)).toEqual([null]);
   });
 
   it("節が 1 つも無くても座標計算が壊れない", () => {
@@ -197,6 +224,12 @@ describe("[単体] graphFallbackReason", () => {
 
   it("節が 0 なら図にしない", () => {
     expect(graphFallbackReason(layoutThinkingGraph([]), 0)).not.toBeNull();
+  });
+
+  it("上限は上流 (extractor の 24 節 cap) と同値にしてある (画面が独自の締めを持たない)", () => {
+    // ここがずれると「上流は通したのに画面が落とす」/「上流が緩んだのに画面が素通し」の
+    // どちらかが起き、どちらが正しいか誰も判断できなくなる。
+    expect(MAX_GRAPH_NODES).toBe(24);
   });
 
   it(`節が ${MAX_GRAPH_NODES} 個までは図、超えたら箇条書きへ落とす`, () => {
