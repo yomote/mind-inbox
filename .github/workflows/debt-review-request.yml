@@ -1,0 +1,110 @@
+# 週次 AI 負債審査の引き手 (#410)。
+#
+# 分担: LLM を Actions で走らせる経路は却下済み (debt-check.yml 冒頭と同じ判断 —
+#   API キー = 従量課金 / OAuth = 長期クレデンシャル)。審査本体 (debt-reviewer
+#   subagent × .github/claude/debt-rubric.md D1〜D7) は当番 PM tick / 窓口 PM が
+#   新品コンテキストで回す。この workflow が持つのは**依頼と痕跡**だけ:
+#     - 週替わりの審査範囲を決めて台帳 Issue に依頼コメントを投稿する
+#       (範囲決めと文面は cicd/scripts/debt-review/weekly_call.py — 判定ロジックを
+#       YAML に埋めない)
+#     - 前回の依頼に審査結果が付いていなければ、依頼にそれを明示する —
+#       「呼ばれなかった週」と「呼ばれて 0 件の週」を外形で区別する (#410 の核)
+#
+# 審査結果の生死は status-page の trace (labeled_issue_comment — 台帳の
+#   「🔍 …」で始まるコメントの最終時刻) が見る。watchers.json 参照。
+#
+# 起票規則: 台帳 Issue ([debt-review] / label: debt-review) は 1 本だけ。無ければ
+#   初回 run が作る。依頼は毎週コメントで追記する (Issue の氾濫防止 — debt-check と同じ)。
+name: debt-review-request
+
+on:
+  schedule:
+    - cron: "0 22 * * 0" # 月曜 07:00 JST (= 日曜 22:00 UTC)。debt-check (21:00 UTC) の 1 時間後
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  request:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: 台帳 Issue を見つける / 無ければ作る
+        id: ledger
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # ラベル作成は既存なら失敗するのが正常なので握り潰す。見えなくなるのは
+          # 「権限不足などによる恒久失敗」だが、その場合は直後の issue create /
+          # comment が同じ権限で落ちて run が赤くなるため、静かには通らない
+          gh label create debt-review -R "$GITHUB_REPOSITORY" --color 5319e7 \
+            --description "週次 AI 負債審査 (debt-reviewer × rubric D1〜D7) の台帳 (#410)" \
+            2>/dev/null || true
+
+          NUMBER=$(gh issue list -R "$GITHUB_REPOSITORY" --label debt-review --state open \
+                     --json number,title --limit 50 \
+                     --jq '[.[] | select(.title | startswith("[debt-review]")) | .number] | first // empty')
+
+          if [ -z "$NUMBER" ]; then
+            python3 cicd/scripts/debt-review/weekly_call.py ledger-body > /tmp/ledger-body.md
+            URL=$(gh issue create -R "$GITHUB_REPOSITORY" \
+              --title "[debt-review] 週次 AI 全面審査の台帳 (依頼と結果)" \
+              --label debt-review --label stream:factory \
+              -F /tmp/ledger-body.md) || {
+              # ここで黙って終わると「依頼したつもり」になる (debt-check と同じ理由)
+              echo "::error::台帳 Issue を作成できなかった (permissions: issues: write を確認)"
+              exit 1
+            }
+            NUMBER="${URL##*/}"
+            echo "台帳 Issue を新規作成した: #$NUMBER"
+          else
+            echo "既存の台帳 Issue: #$NUMBER"
+          fi
+          echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: 台帳の既存コメントを取得 (前回依頼の未実施検知)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ steps.ledger.outputs.number }}
+        run: |
+          # 先頭 200 文字あればマーカー判定 (startswith) には足りる。全文を持ち回らない
+          gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$NUMBER/comments?per_page=100" \
+            --jq '.[] | {body: ((.body // "")[0:200]), created_at: .created_at}' \
+            > /tmp/ledger-comments.jsonl
+          wc -l /tmp/ledger-comments.jsonl
+
+      - name: 依頼コメントを組み立てて投稿
+        id: post
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ steps.ledger.outputs.number }}
+        run: |
+          # 範囲ディレクトリが実在しなければここで落ちる (実在しない範囲への依頼を
+          # 「審査済みの顔」で積まないため — weekly_call.py 参照)
+          python3 cicd/scripts/debt-review/weekly_call.py request \
+            --repo-root . \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --comments /tmp/ledger-comments.jsonl > /tmp/request.md
+
+          cat /tmp/request.md
+          cat /tmp/request.md >> "$GITHUB_STEP_SUMMARY"
+
+          gh issue comment "$NUMBER" -R "$GITHUB_REPOSITORY" -F /tmp/request.md || {
+            echo "::error::依頼コメントを投稿できなかった — 依頼が出ていないのに run を緑にしない"
+            exit 1
+          }
+          echo "台帳 #$NUMBER に今週の依頼を投稿した"
+
+      # 落ちたことに気づける唯一の経路 (ADR 0035 D2)。
+      - name: 失敗を Issue にする / 復旧したら閉じる
+        if: always()
+        uses: ./.github/actions/report-failure
+        with:
+          job-status: ${{ job.status }}
+          # 依頼コメントの投稿まで到達して初めて「仕事をした」と言える
+          work-ran: ${{ steps.post.outcome == 'success' }}
+          what: "**週次 AI 負債審査の依頼 (debt-review-request) が投稿できていません。** debt-reviewer への引き手が止まっており、AI 側の負債審査が誰にも依頼されないまま週が過ぎます。"

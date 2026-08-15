@@ -246,6 +246,41 @@ def trace_time(trace: dict) -> tuple[datetime | None, str, bool]:
         ]
         times = [t for t in times if t is not None]
         return (max(times) if times else None), where, True
+    if kind == "labeled_issue_comment":
+        # 台帳 Issue の番号を固定できない自動化 (debt-review #410 — 台帳は workflow が
+        # 初回 run で作るので、この定義を書く時点で番号が存在しない) のための kind。
+        # ラベルで台帳 Issue を見つけ、**先頭がマーカーのコメント**だけを心拍に数える。
+        # `issue_comment` の contains ではなく startswith なのは、依頼コメント (毎週の
+        # 自動投稿) が本文中で結果マーカーを引用するため — contains だと依頼自身が
+        # 心拍に化け、審査が止まっていても 🟢 が続く (沈黙 = 未発火 の前提が壊れる)。
+        # state=all なのは、台帳が誤って閉じられても過去の心拍を失わないため。
+        label = trace["label"]
+        marker = trace["body_startswith"]
+        where = f"`{label}` ラベルの Issue の `{marker}` で始まるコメント"
+        numbers = gh_lines(
+            "api",
+            "--paginate",
+            f"repos/{{owner}}/{{repo}}/issues?state=all&per_page=100&labels={label}",
+            "--jq",
+            ".[].number",
+        )
+        if numbers is None:
+            return None, where, False
+        stamps: list[datetime] = []
+        for n in numbers:
+            lines = gh_lines(
+                "api",
+                "--paginate",
+                f"repos/{{owner}}/{{repo}}/issues/{n}/comments?per_page=100",
+                "--jq",
+                f'.[] | select(.body | startswith("{marker}")) | .created_at',
+            )
+            if lines is None:
+                # 1 つでも取れなければ全体を未検証にする — 一部だけ黙って捨てると
+                # 「取れなかった」が「痕跡なし (🔴)」や古い緑に化ける
+                return None, where, False
+            stamps += [t for t in (parse(ln) for ln in lines) if t is not None]
+        return (max(stamps) if stamps else None), where, True
     if kind == "issue_comment":
         # 心拍を数える対象を **絞れる** ようにしてある (`body_contains`)。
         # 絞らないと、人間や別の自動化が同じ Issue にコメントしただけで時刻が進み、

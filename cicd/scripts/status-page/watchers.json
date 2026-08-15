@@ -49,6 +49,12 @@
       "expect_hours": 192
     },
     {
+      "id": "debt-review-request.yml",
+      "name": "週次 AI 負債審査の依頼 (debt-review)",
+      "what": "毎週月曜 07:00 JST に週替わりの審査範囲を決め、台帳 Issue (label: debt-review) に依頼コメントを投稿する (#410)。審査本体は CI では走らせない (LLM を Actions で走らせる経路は却下済み — debt-check.yml 冒頭) — 依頼を受けて当番 PM tick / 窓口 PM が debt-reviewer subagent (rubric D1〜D7) を新品コンテキストで回す。前回依頼に結果が無ければ依頼に明示する",
+      "expect_hours": 192
+    },
+    {
       "id": "333008403",
       "name": "SAST (CodeQL default setup)",
       "what": "自分たちが書いたコードの injection / SSRF 等を PR / push(main) で解析し、Security タブの alert に積む (依存の CVE は security-sweep の担当)",
@@ -152,6 +158,17 @@
       },
       "expect_hours": 50,
       "note": "expect 50h は週末スキップ許容。kind で絞って判定するため、機械計測 (ux-eval-mech) だけ動いて LLM 採点が止まった状態も検出できる (Issue コメント時代の既知の穴 — ADR 0037 Negative Consequences — は ADR 0041 D6 で解消)。"
+    },
+    {
+      "name": "週次 AI 負債審査の結果 (debt-reviewer → 台帳 Issue)",
+      "what": "debt-review-request.yml の依頼を受けて、当番 PM tick / 窓口 PM が debt-reviewer subagent (.github/claude/debt-rubric.md D1〜D7) を新品コンテキストで回し、審査結果を台帳 Issue にマーカー付きコメントで残す (#410)",
+      "trace": {
+        "kind": "labeled_issue_comment",
+        "label": "debt-review",
+        "body_startswith": "🔍 debt-review 審査結果"
+      },
+      "expect_hours": 216,
+      "note": "依頼 (📮) と結果 (🔍) は同じ台帳 Issue に載るため、Issue の updated_at では「依頼だけ動いて審査が止まった」を検出できない — **結果マーカーで始まるコメントだけ**を心拍に数える (先頭一致。部分一致だと結果マーカーを引用する毎週の依頼コメントが心拍に化ける)。台帳 Issue の番号を書かないのは、台帳は workflow が初回 run で作るので定義時点で番号が存在しないため (ラベルで引く。誤って閉じられても state=all で心拍は残る)。expect 216h = 週次 168h + 依頼 (月 07:00 JST) から審査完了まで最大 2 日。**マージ直後〜初回審査までは『痕跡が 1 件もありません』の 🔴 が出るが、それは事実** (まだ一度も審査していない) — 偽の初期データで消さない。マーカー文字列と台帳ラベルの正典は cicd/scripts/debt-review/weekly_call.py で、この行とのズレは test_weekly_call.py の契約テストが落とす。"
     }
   ]
 }

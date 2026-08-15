@@ -85,6 +85,10 @@ elif "pulls" in url:
             print(json.dumps({"n": i, "t": f"PR {i}", "d": "2099-01-01T00:00:00Z"}))
 elif "needs-human" in url:
     emit([])
+elif "labels=debt-review" in url:
+    # 週次 AI 負債審査 (labeled_issue_comment) の台帳 Issue 一覧。
+    # jq `.[].number` はスカラー行で返る (行が URL に入るので数字であること)
+    print("77")
 elif "/comments" in url or "labels=" in url or "select(.title" in jqf:
     emit({"t": "2099-01-01T00:00:00Z"} if jqf.startswith("{") else "2099-01-01T00:00:00Z")
 else:
@@ -446,6 +450,99 @@ def test_L1_issue_comment_は全ページを見る(tmp_path):
     # stub は --paginate が無いと失敗する (= ❓ 未検証)。取得できていれば
     # 新しい方 (2099) が拾えて 🟢 になる
     assert "🟢" in html, "--paginate を付けずに取得している (1 ページ目だけ)"
+
+
+# 週次 AI 負債審査 (labeled_issue_comment / #410) 用の gh stub。
+# 台帳 Issue #77 のコメントは 2 件:
+#   - 古い審査結果 (マーカー **で始まる** / 2020) — これだけが心拍
+#   - 新しい自動依頼 (本文中でマーカーを**引用するだけ** / 2099)
+# 判定が startswith でなく contains に退行すると、毎週の自動依頼が心拍に化けて
+# 新しい方 (2099) を拾い、審査が止まっていても 🟢 になる — その退行でこの stub は
+# 「両方のコメント」を返すので、テストが赤くなる (mutation で検証すること)。
+DEBT_REVIEW_STUB = r"""#!/usr/bin/env python3
+import sys, json
+args = sys.argv[1:]
+positional = [a for a in args if not a.startswith("-")]
+url = positional[1] if len(positional) > 1 else ""
+jqf = args[args.index("--jq") + 1].strip() if "--jq" in args else ""
+
+def emit(value):
+    if jqf.startswith(("[", "{")):
+        print(json.dumps(value))
+    else:
+        print(value if isinstance(value, str) else json.dumps(value))
+
+if "labels=debt-review" in url:
+    if "--paginate" not in args:
+        print("stub: --paginate 無しの取得は許さない", file=sys.stderr)
+        sys.exit(1)
+    print("77")
+elif "/comments" in url:
+    if "--paginate" not in args:
+        print("stub: --paginate 無しの取得は許さない", file=sys.stderr)
+        sys.exit(1)
+    marked = "startswith(" in jqf
+    print("2020-01-01T00:00:00Z")          # 審査結果 (マーカーで始まる・古い)
+    if not marked:
+        print("2099-01-01T00:00:00Z")      # 自動依頼 (引用のみ・新しい)
+elif "/runs" in url:
+    emit([])
+elif "pulls" in url:
+    pass
+elif "needs-human" in url:
+    emit([])
+else:
+    emit("null")
+"""
+
+# /comments だけ落ちる変種 — 「取れなかった」を「痕跡なし (🔴)」に化けさせない側を見る
+DEBT_REVIEW_FAIL_STUB = DEBT_REVIEW_STUB.replace(
+    'marked = "startswith(" in jqf',
+    'sys.exit(1)\n    marked = False',
+)
+
+_DEBT_REVIEW_DEFS = {
+    "workflows": [],
+    "routines": [],
+    "traces": [
+        {
+            "name": "週次 AI 負債審査の結果",
+            "what": "審査結果を台帳 Issue にマーカー付きコメントで残す",
+            "trace": {
+                "kind": "labeled_issue_comment",
+                "label": "debt-review",
+                "body_startswith": "🔍 debt-review 審査結果",
+            },
+            "expect_hours": 216,
+        }
+    ],
+}
+
+
+def test_L1_labeled_issue_comment_は先頭一致のコメントだけを心拍に数える(tmp_path):
+    """依頼コメントによる結果マーカーの引用で心拍が進まないこと。
+
+    無いと何が静かに通るか (#410):
+        依頼 (毎週の自動投稿) は「このマーカーで始めて」と本文中で結果マーカーを
+        引用する。判定が contains だと依頼自身が審査の痕跡として数えられ、
+        **審査が一度も走っていなくても毎週 🟢 が更新され続ける** — 「呼ばれなかった
+        週と 0 件の週が外形上同じ」という #410 が潰そうとしている穴の再発。
+    """
+    html = _run(tmp_path, defs=_DEBT_REVIEW_DEFS, stub=DEBT_REVIEW_STUB)
+    assert "🔴" in html, "自動依頼のマーカー引用を心拍として数えている"
+    assert "🟢" not in html
+
+
+def test_L1_labeled_issue_comment_の取得失敗は未検証として出す(tmp_path):
+    """無いと何が静かに通るか:
+        コメント取得の失敗を「痕跡なし」に畳むと、GitHub API の一時失敗のたびに
+        🔴 (審査停止) の誤報が出る。逆に成功に畳むと止まった審査が緑に見える。
+        どちらでもなく ❓ 未検証として区別して出すこと。
+    """
+    html = _run(tmp_path, defs=_DEBT_REVIEW_DEFS, stub=DEBT_REVIEW_FAIL_STUB)
+    assert "未検証" in html
+    assert "🔴" not in html, "取得失敗を「痕跡なし」として赤にしている"
+    assert "🟢" not in html
 
 
 def test_l1_LLM採点行はシナリオごとに分かれ表示窓は各7件(tmp_path, monkeypatch) -> None:
