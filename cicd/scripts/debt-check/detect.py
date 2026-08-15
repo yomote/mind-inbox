@@ -118,9 +118,8 @@ def iter_scanned_markdown(root: Path) -> list[Path]:
     for scan_dir in LINK_SCAN_DIRS:
         target = root / scan_dir
         if not target.is_dir():
-            # 対象ディレクトリが無いのを黙って飛ばすと「0 件 = 健全」に化ける。
-            # main() が repo root を検証済みなので通常は起きないが、起きたら
-            # 読めないファイルと同じく findings 側で報告する (下の呼び出し元)
+            # 走査対象が無いのを黙って飛ばすと「0 件 = 健全」に化ける。
+            # ここでは列挙を続け、実行経路 (main) が前提不足として run を落とす
             continue
         md_files.extend(target.rglob("*.md"))
     md_files.extend(root.glob(LINK_SCAN_ROOT_FILES))
@@ -134,22 +133,22 @@ def iter_scanned_markdown(root: Path) -> list[Path]:
 
 
 def missing_scan_dirs(root: Path) -> list[str]:
-    """LINK_SCAN_DIRS のうち実在しないもの (走査したつもりで 0 件になるのを防ぐ)。"""
+    """LINK_SCAN_DIRS のうち実在しないもの。
+
+    走査対象が (改名・移動で) 消えると、検査していないのに 0 件になり
+    「異常なし」として緑になる。main() がこれを**前提不足 (exit 1)** として扱い、
+    run を落とすことで沈黙と健全を区別する — レポート内の finding にすると
+    「検出処理は走った」ことになってしまう。
+    """
     return [d for d in LINK_SCAN_DIRS if not (root / d).is_dir()]
 
 
 def detect_broken_doc_links(root: Path) -> list[dict]:
-    """走査対象 (LINK_SCAN_DIRS + リポジトリ直下) の md のインライン相対リンク切れ。"""
+    """走査対象 (LINK_SCAN_DIRS + リポジトリ直下) の md のインライン相対リンク切れ。
+
+    走査対象の実在は main() が事前に検査する (missing_scan_dirs)。
+    """
     findings = []
-    for missing in missing_scan_dirs(root):
-        # 走査対象が消えている = 検査していないのに 0 件になる状態。
-        # 黙って緑にせず、負債として報告する
-        findings.append(
-            {
-                "file": missing,
-                "target": "(走査対象のディレクトリがありません — 未検査)",
-            }
-        )
     for md_file in iter_scanned_markdown(root):
         if md_file.name == "template.md":
             # 雛形の NNNN-xxx.md は意図した placeholder。毎週誤報すると
@@ -261,8 +260,14 @@ def main(argv: list[str]) -> int:
         log(f"使い方: {Path(argv[0]).name} <repo_root>")
         return 1
     root = Path(argv[1]).resolve()
-    if not (root / "docs").is_dir():
-        log(f"repo root に見えません (docs/ がありません): {root}")
+    missing = missing_scan_dirs(root)
+    if missing:
+        # 走査対象が欠けたまま検出を走らせると「検査していないのに 0 件」の
+        # レポートが出る。前提不足として run を落とし、沈黙を緑にしない
+        log(
+            "repo root に見えません / リンク検査の走査対象がありません "
+            f"({' / '.join(missing)}): {root}"
+        )
         return 1
     report = detect_all(root)
     log(

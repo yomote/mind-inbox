@@ -22,6 +22,7 @@ from detect import (
     is_checkable_relative,
     iter_inline_links,
     iter_scanned_markdown,
+    main,
 )
 
 
@@ -167,18 +168,37 @@ def test_l1_リポジトリ直下のmdも走査するが未対象ツリーは走
     assert scanned == {"CLAUDE.md"}
 
 
-def test_l1_走査対象のディレクトリが消えたら未検査として報告する(tmp_path) -> None:
-    """無いと何が静かに通るか:
+def test_l1_走査対象が欠けていたら実行経路が前提不足で落ちる(tmp_path, capsys) -> None:
+    """workflow と同じ入口 (main) を通す (PR #438 の Codex 指摘)。
 
-    走査対象のディレクトリが (改名・移動で) 消えると、検査していないのに
-    findings が 0 件になり「異常なし」として緑になる。取れなかったものを
-    「異常なし」と書かないため、欠けていること自体を負債として出す。
+    無いと何が静かに通るか:
+        走査対象のディレクトリが (改名・移動で) 消えると、検査していないのに
+        findings が 0 件になり「異常なし」として緑の run が出る。レポート内の
+        finding として出すだけでは「検出処理は走った」ことになってしまうので、
+        **run 自体を落とす**。関数を直接呼ぶテストだけだと、この実行経路が
+        本当に落ちるかを見ていない。
     """
     root = _repo(tmp_path)
     (root / "cicd").rmdir()
-    findings = detect_broken_doc_links(root)
-    assert [f["file"] for f in findings] == ["cicd"]
-    assert "未検査" in findings[0]["target"]
+    assert main(["detect.py", str(root)]) == 1
+    captured = capsys.readouterr()
+    assert "cicd" in captured.err
+    assert captured.out == "", "前提不足なのにレポート JSON を出している"
+
+
+def test_l1_走査対象が揃っていれば実行経路はレポートJSONを出す(
+    tmp_path, capsys
+) -> None:
+    """上の前提不足判定が「常に 1 を返すだけ」になっていないことを押さえる。"""
+    root = _repo(tmp_path)
+    (root / "cicd" / "keys").mkdir()
+    (root / "cicd" / "keys" / "README.md").write_text(
+        "[壊れ](../../docs/gone.md)", encoding="utf-8"
+    )
+    assert main(["detect.py", str(root)]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["total"] == 1
+    assert "`cicd/keys/README.md`" in report["markdown"]
 
 
 def test_l1_走査対象外のツリーはカバー外領域として明示される() -> None:
