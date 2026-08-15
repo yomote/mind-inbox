@@ -10,6 +10,9 @@ from datetime import datetime as real_datetime
 from datetime import timezone
 
 import check
+
+# check が sys.path に足す adr-number-guard 側の module (Issue #381 の共有純関数)
+import adr_guard  # noqa: E402
 from check import (
     CODEX_RETRIGGER_MARKER,
     HUMAN_STALL_MARKER,
@@ -90,6 +93,62 @@ def test_l1_未解決スレッドがあると赤() -> None:
     v = decide(HEAD, [], [ACCEPT_OK], 2, False, False)
     assert not v.ok
     assert any("2 件" in m for m in v.missing)
+
+
+# ---- ADR 採番衝突の再判定 (Issue #381) ----
+# 無いと何が静かに通るか: CI の adr-number-guard は PR push 時点の判定で、その後
+# main に同じ番号が着地しても緑のまま腐る (PR #222 で 0048 が二重化寸前)。門の
+# 最後の再判定はここ — 壊れると同じ番号の ADR が 2 つ main に入る。
+
+
+def test_l1_adr衝突があると受け入れ済みでも門が閉じる() -> None:
+    conflict = "ADR 0048 が今の main と衝突 (docs/adr/0048-child.md)"
+    v = decide(
+        HEAD, ["docs/adr/0048-x.md"], [ACCEPT_OK], 0, False, False,
+        adr_conflicts=[conflict],
+    )
+    assert not v.ok
+    assert conflict in v.missing
+
+
+def test_l1_adr衝突なしなら従来どおりの判定() -> None:
+    v = decide(
+        HEAD, ["docs/adr/0048-x.md"], [ACCEPT_OK], 0, False, False,
+        adr_conflicts=(),
+    )
+    assert v.ok
+
+
+def test_l1_adr変更のないprはmainのsnapshotを読まない() -> None:
+    def boom() -> tuple[list[str], set[int]]:
+        raise AssertionError("ADR 変更なしの PR で main snapshot を読んだ")
+
+    files = [{"filename": "apps/bff/x.ts", "status": "modified"}]
+    assert check.adr_gate_conflicts(files, load_snapshot=boom) == []
+
+
+def test_l1_adr追加は今のmainのsnapshotと照合される() -> None:
+    # PR #222 の腐り方の再現: guard が緑を出した後に main へ 0048 が着地しても、
+    # この照合は評価のたびに「今の main」を読むので捕まえる
+    def snapshot() -> tuple[list[str], set[int]]:
+        return (["docs/adr/0048-child.md"], set())
+
+    files = [{"filename": "docs/adr/0048-readonly.md", "status": "added"}]
+    messages = check.adr_gate_conflicts(files, load_snapshot=snapshot)
+    assert messages == ["ADR 0048 が今の main と衝突 (docs/adr/0048-child.md)"]
+
+
+def test_l1_snapshotが読めないときは未検証として門を閉じる() -> None:
+    # 取れなかったものを「衝突なし」と書かない — 未検証を missing に載せて赤にする
+    def broken() -> tuple[list[str], set[int]]:
+        raise adr_guard.SnapshotError("docs/adr が見えない (cwd が repo root でない?)")
+
+    files = [{"filename": "docs/adr/0048-x.md", "status": "added"}]
+    messages = check.adr_gate_conflicts(files, load_snapshot=broken)
+    assert messages == ["ADR 衝突検査 未検証 (docs/adr が見えない (cwd が repo root でない?))"]
+    assert not decide(
+        HEAD, [], [ACCEPT_OK], 0, False, False, adr_conflicts=messages
+    ).ok
 
 
 def test_l1_コード判定はappsとcicdのみ() -> None:

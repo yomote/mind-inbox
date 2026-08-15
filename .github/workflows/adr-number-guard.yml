@@ -1,15 +1,20 @@
-# ADR 採番の衝突ガード (ADR 0028 D3 / Issue #159)
+# ADR 採番の衝突ガード (ADR 0028 D3 / Issue #159 / #381)
 #
 # 採番手順は docs/adr/README.md に「origin/main の最大番号 +1」と書いてあるが、
-# **記述だけでは 2 回衝突している** (0015→0019 / 0026→0027)。どちらも並行セッションが
-# ローカルの最大値から採番したことが原因。規約ではなく機械で落とす。
+# **記述だけでは 2 回衝突している** (0015→0019 / 0026→0027)。規約ではなく機械で落とす。
 #
-# 検査は 4 つ:
-#   0. 退役番号の一覧 (docs/adr/archive/retired-numbers.txt) から行が消えている
-#      (1 行だけ消して同じ PR でその番号を足す経路を塞ぐ)
-#   1. PR 側で同一番号の ADR が複数ある (自分の中で衝突している)
-#   2. PR が追加した番号が base に既に存在する (並行採番で衝突している)
-#   3. PR が退役番号 (docs/adr/archive/ へ退避済み) を再利用している
+# 判定は cicd/scripts/adr-number-guard/adr_guard.py (純関数 + pytest) — 検査内容・
+# 設計判断はそちらの docstring が正典。ここには配線だけを置く (判定を YAML の
+# シェルに埋めない — cicd/CLAUDE.md)。
+#
+# 比較先は **run 時点の origin/main** (Issue #381):
+#   旧実装は `github.event.pull_request.base.sha` (= PR イベント発火時点の base) と
+#   比較していた。guard が緑を出した後に並行 PR が同じ番号を main に着地させても
+#   再判定されず、緑のまま腐る (PR #222 で ADR 0048 が二重化寸前)。スクリプトが
+#   run のたびに origin/main を fetch するため、re-run すればその時点の main で
+#   判定し直せる。それでも「run 後〜マージ前」の窓は残る — マージ直前の再判定は
+#   review-gate (pm-accept のたびに再評価) が同じ純関数 (gate_conflicts) で行う。
+#   Merge Queue は安全網にならない (このリポジトリでは使えない — ADR 0042 D2)。
 name: adr-number-guard
 
 on:
@@ -20,8 +25,7 @@ on:
     branches: [main]
   # merge queue の一時 branch でも required check を報告する (ADR 0042)。
   # merge_group に paths フィルタは効かない (push / pull_request 限定) ため常に走る —
-  # ADR 変更の無い merge group では「衝突なし」で緑になるだけ。副産物として、
-  # 同じ番号を採った 2 PR が同一 queue に載った場合も HEAD 側の重複検査で捕まる。
+  # ADR 変更の無い merge group では「衝突なし」で緑になるだけ。
   merge_group:
 
 permissions:
@@ -36,126 +40,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # merge-base の計算と PR head の ls-tree に履歴が要る
           fetch-depth: 0
 
-      - name: 番号の重複を検査
+      - name: 番号の重複を今の main と照合して検査
         env:
-          # merge_group では base_sha = queue の合流先 (main tip または先行 group の head)
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-        run: |
-          set -euo pipefail
-
-          nums_of() {
-            # $1 = git ref。ADR ファイル名の先頭 4 桁を並べる (template.md / README.md は除外)
-            git ls-tree -r "$1" --name-only docs/adr/ 2>/dev/null \
-              | grep -oE 'docs/adr/[0-9]{4}-' \
-              | grep -oE '[0-9]{4}' | sort
-          }
-
-          retired_of() {
-            # $1 = git ref。docs/adr/archive/ へ退避した番号 (ファイル名から番号を落として
-            # あるため nums_of では拾えない)。この一覧が無いと **退役番号が再利用される**。
-            #
-            # 末尾の `|| true` は必須。この一覧が**まだ無い ref** (機構の導入前の base) では
-            # `git show` が失敗し、`grep` も 0 件で 1 を返す。`set -euo pipefail` 下では
-            # 代入ごと失敗してガード全体が exit 1 になり、**番号を一度も検査せずに落ちる**
-            # (2026-08-13 に PR #385 自身で発生させた)。
-            #
-            # **これは握り潰しではない** — ここで空になるのは「その ref に一覧が無い」場合だけで、
-            # 「base にあったのに PR 側で消えた」は下の検査 0 が別途赤にする。
-            git show "$1:docs/adr/archive/retired-numbers.txt" 2>/dev/null \
-              | grep -oE '^[0-9]{4}$' | sort || true
-          }
-
-          git fetch --no-tags --depth=1 origin "$BASE_SHA" 2>/dev/null \
-            || git fetch --no-tags origin "$BASE_SHA"
-
-          PR_NUMS="$(nums_of HEAD)"
-          BASE_NUMS="$(nums_of "$BASE_SHA")"
-          PR_RETIRED="$(retired_of HEAD)"
-          BASE_RETIRED="$(retired_of "$BASE_SHA")"
-
-          FAILED=0
-
-          # 0. 退役番号の一覧から**行が消えていないか** (全消しだけでなく 1 行の削除も)。
-          #    「空かどうか」だけを見ていると、1 行だけ消して同じ PR でその番号を足す経路が
-          #    素通りする (2026-08-13 のレビューで指摘)。base 側の一覧を基準に差分を取る。
-          norm() { printf '%s\n' "${1:-}" | grep -E '^[0-9]{4}$' | sort -u || true; }
-          REMOVED="$(comm -23 <(norm "$BASE_RETIRED") <(norm "$PR_RETIRED") || true)"
-          if [ -n "$REMOVED" ]; then
-            FAILED=1
-            echo "::error title=退役番号が一覧から消えている::$(echo $REMOVED) が docs/adr/archive/retired-numbers.txt から削除されています。退役番号は再利用しません — 消す理由があるなら PO 裁定を取ってください"
-          fi
-
-          # 1. PR 内での重複 (同じ番号のファイルが 2 つある)
-          DUP_IN_PR="$(echo "$PR_NUMS" | uniq -d)"
-          if [ -n "$DUP_IN_PR" ]; then
-            FAILED=1
-            echo "$DUP_IN_PR" | while read -r n; do
-              [ -z "$n" ] && continue
-              echo "::error title=ADR 番号の重複::番号 $n の ADR が複数あります"
-              git ls-tree -r HEAD --name-only docs/adr/ | grep "/$n-" | sed 's/^/    /'
-            done
-          fi
-
-          # 2. PR が追加した番号が base に既存 (並行採番の衝突)
-          ADDED="$(comm -13 <(echo "$BASE_NUMS" | uniq) <(echo "$PR_NUMS" | uniq) || true)"
-          COLLIDED=""
-          for n in $ADDED; do
-            # 追加された番号のうち、base 側にも同じ番号のファイルが**別名で**存在するもの
-            if echo "$BASE_NUMS" | grep -qx "$n"; then
-              COLLIDED="${COLLIDED}${n} "
-            fi
-          done
-
-          # comm では拾えないケース (同じ番号・違うファイル名) を直接照合する
-          for n in $(echo "$PR_NUMS" | uniq); do
-            pr_file="$(git ls-tree -r HEAD --name-only docs/adr/ | grep "/$n-" | head -1)"
-            base_file="$(git ls-tree -r "$BASE_SHA" --name-only docs/adr/ | grep "/$n-" | head -1 || true)"
-            if [ -n "$base_file" ] && [ "$pr_file" != "$base_file" ]; then
-              FAILED=1
-              echo "::error file=${pr_file},title=ADR 番号が base と衝突::番号 $n は base に既に存在します"
-              echo "    PR:   $pr_file"
-              echo "    base: $base_file"
-            fi
-          done
-
-          # 3. PR が退役番号 (docs/adr/archive/ へ退避済み) を再利用していないか。
-          #    退避時にファイル名から番号を落としているため、nums_of では検出できない。
-          #
-          #    照合には base と PR の**和集合**を使う。PR 側だけを見ると「一覧から 1 行消して
-          #    その番号を足す」で門が開き、base 側だけを見ると一覧を導入する PR 自身で
-          #    検査が効かない。削除そのものは上の検査 0 が base 基準で赤にするので、
-          #    和集合にしても「消して足す」は塞がったまま。
-          RETIRED_ALL="$(printf '%s\n%s\n' "$BASE_RETIRED" "$PR_RETIRED" | grep -E '^[0-9]{4}$' | sort -u || true)"
-          for n in $(echo "$PR_NUMS" | uniq); do
-            if echo "$RETIRED_ALL" | grep -qx "$n"; then
-              FAILED=1
-              pr_file="$(git ls-tree -r HEAD --name-only docs/adr/ | grep "/$n-" | head -1)"
-              echo "::error file=${pr_file},title=退役した ADR 番号の再利用::番号 $n は docs/adr/archive/ へ退避済みです (retired-numbers.txt)"
-              echo "    PR: $pr_file"
-            fi
-          done
-
-          {
-            echo "## adr-number-guard"
-            echo
-            NEXT="$(printf '%s\n%s\n' "$BASE_NUMS" "$BASE_RETIRED" | grep -E '^[0-9]{4}$' | sort -n | tail -1)"
-            if [ -n "$NEXT" ]; then
-              printf -- "- base (origin/main) の最大番号: \`%s\` → 次に使えるのは \`%04d\`\n" \
-                "$NEXT" "$((10#$NEXT + 1))"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ "$FAILED" -ne 0 ]; then
-            {
-              echo
-              echo "🔴 **番号が衝突しています。** 採番は \`ls docs/adr/\` のローカル最大値ではなく、"
-              echo "**origin/main の最大番号 +1** で取り直してください (README.md 参照)。"
-              echo "ファイル名・本文の見出し・README の索引・参照している全ファイルを揃えて直すこと。"
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-
-          echo "::notice title=adr-number-guard::ADR 番号の衝突なし"
-          echo "🟢 衝突なし" >> "$GITHUB_STEP_SUMMARY"
+          # pull_request では checkout の HEAD (= イベント時点の base への test merge
+          # commit) ではなく **PR head そのもの**を判定対象にする — merge commit は
+          # イベント時点の base を焼き込んでおり、その分だけ判定が腐る (#381)。
+          # merge_group では github.sha (= queue の一時 branch の head) をそのまま使う
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 cicd/scripts/adr-number-guard/adr_guard.py --head "$HEAD_SHA"
