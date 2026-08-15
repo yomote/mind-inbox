@@ -75,7 +75,7 @@ Chosen option: **"Option A"**、because 層の軸を「運用のためか / ア�
 
 **アプリ系から管理系への参照はパラメータ渡し**（RG をまたぐ resource 参照はしない）。この点は [ADR 0046](0046-environment-rebuildable-from-declaration.md) D1 から変えない。
 
-**読み替え（2026-08-15 の Accept 時に PO 承認のうえ追記）**: [ADR 0046](0046-environment-rebuildable-from-declaration.md) 本文の「持続層に**バックアップと GPG 秘密鍵**が置かれる」（「受け入れる穴 — 持続層の『再構築』は検証されない」節）は、現行では「**管理系 RG (`rg-mgmt-mindbox`) の Key Vault に置かれた非エクスポートの RSA 鍵オブジェクト**」と読み替える。層の呼び名（持続層 → 管理系 RG）は本 D1 が置き換え、鍵の方式（GPG 秘密鍵 → 非エクスポート鍵オブジェクト + 封筒暗号 / 復号は Key Vault の中）は [E2E artifact は既定で秘密](archive/operations/e2e-artifacts-are-secret-by-default.md) D5 の 2026-08-12 改訂が置き換えたもので、**0046 の本文は書き換えずここで読み替えを宣言する**（過去 ADR の本文は改変しない / `/adr` skill）。鍵の実体は [`cicd/iac/main-mgmt.bicep`](../../cicd/iac/main-mgmt.bicep) の `e2eTraceKey`、運用手順は [`docs/runbooks/e2e-trace-keys.md`](../runbooks/e2e-trace-keys.md) が正典。
+**読み替え（2026-08-15 の Accept 時に PO 承認のうえ追記）**: [ADR 0046](0046-environment-rebuildable-from-declaration.md) 本文の「持続層に**バックアップと GPG 秘密鍵**が置かれる」（「受け入れる穴 — 持続層の『再構築』は検証されない」節）は、現行では「**管理系 RG (`rg-mgmt-mindbox`) のバックアップ Storage と、同 RG の Key Vault に置かれた非エクスポートの RSA 鍵オブジェクト**」と読み替える（**バックアップはバックアップのまま**で、D2 のとおり管理系 RG の非公開 Storage として存続する。置き換わるのは**層の呼び名**と**鍵の方式**の 2 点だけ）。層の呼び名（持続層 → 管理系 RG）は本 D1 が置き換え、鍵の方式（GPG 秘密鍵 → 非エクスポート鍵オブジェクト + 封筒暗号 / 復号は Key Vault の中）は [E2E artifact は既定で秘密](archive/operations/e2e-artifacts-are-secret-by-default.md) D5 の 2026-08-12 改訂が置き換えたもので、**0046 の本文は書き換えずここで読み替えを宣言する**（過去 ADR の本文は改変しない / `/adr` skill）。鍵の実体は [`cicd/iac/main-mgmt.bicep`](../../cicd/iac/main-mgmt.bicep) の `e2eTraceKey`、運用手順は [`docs/runbooks/e2e-trace-keys.md`](../runbooks/e2e-trace-keys.md) が正典。
 
 ### D2 — データは「守る」のではなく「戻せる」ようにする
 
@@ -97,11 +97,11 @@ Chosen option: **"Option A"**、because 層の軸を「運用のためか / ア�
 
 **拒否理由を 2 種類に分け、判定コードを別にする**のが判断の核:
 
-| 判定コード                     | 何を止めるか                                    | 性質                                  |
-| ------------------------------ | ----------------------------------------------- | ------------------------------------- |
-| `target-is-management-rg`      | 管理系 RG そのものの削除                        | **恒久**。どのフラグでも通さない      |
-| `management-resources-present` | 層タグ / 名指しの管理系リソースが居る RG の撤収 | **恒久**（明示 override は可）        |
-| `data-restore-unproven`        | Cosmos が居る RG の撤収                         | **暫定**（D2 の復元実証まで）         |
+| 判定コード                     | 何を止めるか                                    | 性質                             |
+| ------------------------------ | ----------------------------------------------- | -------------------------------- |
+| `target-is-management-rg`      | 管理系 RG そのものの削除                        | **恒久**。どのフラグでも通さない |
+| `management-resources-present` | 層タグ / 名指しの管理系リソースが居る RG の撤収 | **恒久**（明示 override は可）   |
+| `data-restore-unproven`        | Cosmos が居る RG の撤収                         | **暫定**（D2 の復元実証まで）    |
 
 同じコードにすると、**復元実証が済んだときに「どちらを緩めるつもりだったか」がコードからもログからも読めなくなる**。
 

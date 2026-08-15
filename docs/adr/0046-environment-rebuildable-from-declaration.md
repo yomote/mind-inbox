@@ -6,7 +6,7 @@
 - Consulted: —
 - Informed: —
 
-> **D1（層の分け方）は置き換わりました（2026-08-15 発効）。** 以下の本文の「持続層 / 環境層」という呼び方と、Cosmos / OpenAI / Speech を持続層に置くという記述は**現行ではありません** — 正は [ADR 0056](0056-management-and-app-layers-with-backup-based-data-protection.md)（管理系 / アプリ系 + バックアップによるデータ保護。**Accepted (2026-08-15, PO 裁定)**）。**D2〜D10 は現行（D9 本文の「持続層」は管理系 RG と読み替える）** — D9 の「バックアップ取得 → 破壊 → 再構築 → 復元」の流れは生きており、そこで言う持続層は管理系 RG (`rg-mgmt-mindbox`) を指します。なお本文「受け入れる穴」節の「持続層に**バックアップと GPG 秘密鍵**」は、現行では**管理系 RG の Key Vault にある非エクスポートの RSA 鍵オブジェクト**と読み替えます（読み替えの正典は [ADR 0056](0056-management-and-app-layers-with-backup-based-data-protection.md) D1）。
+> **D1（層の分け方）は置き換わりました（2026-08-15 発効）。** 以下の本文の「持続層 / 環境層」という呼び方と、Cosmos / OpenAI / Speech を持続層に置くという記述は**現行ではありません** — 正は [ADR 0056](0056-management-and-app-layers-with-backup-based-data-protection.md)（管理系 / アプリ系 + バックアップによるデータ保護。**Accepted (2026-08-15, PO 裁定)**）。**D2〜D10 は現行（D9 本文の「持続層」は管理系 RG と読み替える）** — D9 の「バックアップ取得 → 破壊 → 再構築 → 復元」の流れは生きており、そこで言う持続層は管理系 RG (`rg-mgmt-mindbox`) を指します。
 
 関連: [ADR 0013](0013-standing-low-cost-dev-env-with-auto-deploy.md)（「常設」の解釈を**追補**する / supersede しない）/ [ADR 0003](0003-two-phase-bicep.md)（2-phase Bicep — 本 ADR はこの構造の上に乗る）/ [ADR 0025](0025-deploy-container-images-by-immutable-sha-tag.md)（image は不変 sha）/ [ADR 0045](archive/operations/e2e-artifacts-are-secret-by-default.md)（「管理系 RG」の初出。本 ADR がその実体を定義する）/ [ADR 0018](archive/operations/runtime-verification-in-the-loop.md)（動作検証）/ [ADR 0006](0006-azure-access-via-device-code.md)
 
