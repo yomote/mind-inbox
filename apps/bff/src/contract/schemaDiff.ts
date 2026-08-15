@@ -19,8 +19,9 @@
  *
  * 表層差の吸収:
  *   - camelCase ↔ snake_case  … `normalizeKey()` でパスの各セグメントを snake_case へ寄せる
- *   - `Optional[T]` (anyOf + null) ↔ `z.nullable()` (`type: ["T","null"]`)
- *     … どちらも「T かつ nullable」に潰す
+ *   - `Optional[T]` (anyOf + null) ↔ `z.nullable()` (zod v4 の z.toJSONSchema も anyOf + null)
+ *     … どちらも「T かつ nullable」に潰す。`type: ["T","null"]` 形式 (draft 2020-12 の
+ *       別表現。zod-to-json-schema 時代の zod 側出力) も同じに潰す
  *   - `const` (単一 Literal) ↔ `enum` … どちらも 1 要素の enum 集合として扱う
  *   - `allOf` 1 要素ラップ (`{"allOf":[{"$ref":...}], "default":...}`)
  *     … pydantic が「`$ref` を持つフィールドに default / default_factory が付いた」ときに出す形。
@@ -161,7 +162,8 @@ export function unwrapNullable(
   node: JsonSchemaNode,
   root: JsonSchemaNode,
 ): { schema: JsonSchemaNode; nullable: boolean } {
-  // type: ["string", "null"] 形式 (zod-to-json-schema の .nullable())
+  // type: ["string", "null"] 形式 (JSON Schema の別表現。現行の zod v4 / pydantic は
+  // どちらも anyOf + null を出すが、他の生成系への頑健性として残す)
   if (Array.isArray(node["type"])) {
     const types = node["type"].filter((t): t is string => typeof t === "string");
     const nonNull = types.filter((t) => t !== "null");

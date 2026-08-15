@@ -129,7 +129,13 @@ const pydanticAllOfStyle: JsonSchemaNode = {
   required: ["dumpId"],
 };
 
-/** 同じ契約の BFF (zod) 側。`.default()` は required から外れて `default` が付き、中身はインライン */
+/**
+ * 同じ契約の BFF (zod) 側。中身はインラインで `default` が付く。
+ * ここでは required から外した形 (zod-to-json-schema 時代の出力) を使うが、
+ * zod v4 の z.toJSONSchema (io:"output") は required に残したまま `default` を付ける —
+ * どちらも「default を持つ = 欠落しても契約は壊れない (optional=false)」に潰れることが
+ * この fixture の見どころ。
+ */
 const zodDefaultStyle: JsonSchemaNode = {
   type: "object",
   properties: {

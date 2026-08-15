@@ -23,7 +23,7 @@ import { readFileSync } from "node:fs";
 import { register } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { z } from "zod";
 
 // src/*.ts は拡張子なしの相対 import を使う (tsconfig は commonjs) ので、
 // ESM 解決に `.ts` を補う hook を先に登録してから動的 import する。
@@ -228,8 +228,11 @@ function main() {
       totalIssues++;
       continue;
     }
-    // $refStrategy: "none" で内部 $ref を展開しておく (pydantic 側の $defs は比較側が解決する)
-    const bffSchema = zodToJsonSchema(zodSchema, { $refStrategy: "none" });
+    // zod v4 の z.toJSONSchema (#449)。`reused: "inline"` = 旧 zod-to-json-schema の
+    // `$refStrategy: "none"` 相当で内部 $ref を作らない (pydantic 側の $defs は比較側が解決する)。
+    // nullable は anyOf+null / default は required に残る形で出るが、どちらも
+    // src/contract/schemaDiff.ts の正規化 (unwrapNullable / hasDefault) が吸収する。
+    const bffSchema = z.toJSONSchema(zodSchema, { reused: "inline" });
     const { issues, fieldCount } = diffSchemas(bffSchema, agent);
 
     if (issues.length === 0) {
