@@ -99,8 +99,16 @@ zip -qr "$ZIP_PATH" \
   -x "node_modules/.cache/*" \
   -x "**/*.map"
 
-# ステージングが正しくても zip の作り方次第で symlink エントリは入りうるので、
-# **送るファイルそのもの**も数える (判定は同じ純粋関数側)。
+# 送るファイルそのものも数える。ただし**この検査が何を保証しないか**を明記しておく (#424):
+#   保証しない — 「ツリーに symlink が無かったこと」。上の `zip -qr` は `-y` が無いので
+#     symlink を辿って実体を格納する。symlink 入りツリーを同じフラグで固めても
+#     エントリは 0 件になるため、ここの 0 件は tree 検査の裏取りにならない。
+#     symlink が無いことを保証しているのは上の tree 検査 (実測でこちらが止める)。
+#   保証する — **アーカイバ側の前提が変わったこと**の検出。`-y` を足す / zip を別実装に
+#     替える / 実体化しないアーカイバに移る、といった変更で symlink が zip に入り始めたら
+#     ここで落ちる。
+# 検査自体が空振り (zipinfo の書式変更で恒久的に 0 件) になっていないことは、
+# `zip -y` で作った実 fixture を食わせる test_verify_deploy_tree.py が押さえる。
 python3 "$SCRIPT_DIR/../verify_deploy_tree.py" zip "$ZIP_PATH"
 
 ZIP_BYTES="$(stat -c%s "$ZIP_PATH" 2>/dev/null || stat -f%z "$ZIP_PATH")"

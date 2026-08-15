@@ -1,13 +1,22 @@
-"""BFF 配布パッケージの検査 (verify_deploy_tree.py) の回帰テスト (#420)。
+"""BFF 配布パッケージの検査 (verify_deploy_tree.py) の回帰テスト (#420 / #424)。
 
 守っている仕様: pnpm の `node_modules` は既定で symlink + 仮想ストア構造になり、
 **Azure Functions の zip deploy は symlink を復元しない**。この判定が緩むと、
 デプロイ自体は成功したまま Functions 上で require が解決できないパッケージを
 配信できてしまう (実環境でしか出ない壊れ方)。
+
+#424 で足した網 (検査そのものが空振りしていないかを見る層):
+- `scan_zip` は唯一の外部コマンド (`zipinfo`) 出力パーサなので、**実 zip** を食わせる。
+  合成データの assert だけでは、書式が変わって恒久的に 0 件を返しても緑のまま。
+- prod 依存の一覧は手写しをやめて package.json から導出した (`declared_deps`)。
+  導出が空振り / key 取り違えを起こしていないことをここで押さえる。
 """
 
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -16,22 +25,51 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))
 
 from verify_deploy_tree import (  # noqa: E402
-    REQUIRED_DEPS,
+    declared_deps,
     judge_tree,
     judge_zip,
     scan_tree,
+    scan_zip,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+BFF_MANIFEST = REPO_ROOT / "apps" / "bff" / "package.json"
 
-def _make_stage(tmp_path: Path) -> Path:
+# fixture の zip は本物の zip/zipinfo で作る (書式パーサを押さえるのが目的なので
+# 自前生成では意味が無い)。無い環境では skip — 「動かせなかった」を緑と混同しない
+# ように、握り潰さず skip 理由として出す。
+_missing_zip_tools = [t for t in ("zip", "zipinfo") if shutil.which(t) is None]
+requires_zip_tools = pytest.mark.skipif(
+    bool(_missing_zip_tools),
+    reason=f"zip 検査の fixture を作れない (missing: {', '.join(_missing_zip_tools)})",
+)
+
+_STAGE_DEPS = ("@azure/functions", "@azure/cosmos", "@trpc/server", "zod")
+
+
+def _make_stage(tmp_path: Path, deps: tuple[str, ...] = _STAGE_DEPS) -> Path:
     """symlink 無し・prod 依存が実体で入っている正常なツリーを作る。"""
+    (tmp_path / "package.json").write_text(
+        json.dumps({"dependencies": {d: "^1.0.0" for d in deps}}),
+        encoding="utf-8",
+    )
     modules = tmp_path / "node_modules"
-    for dep in REQUIRED_DEPS:
+    for dep in deps:
         pkg = modules / dep
         pkg.mkdir(parents=True)
         (pkg / "package.json").write_text("{}")
     (modules / ".pnpm").mkdir()
     (modules / ".pnpm" / "lock.yaml").write_text("")  # hoisted でも作られる
+    return tmp_path
+
+
+def _make_symlink_tree(tmp_path: Path) -> Path:
+    """pnpm 既定 (isolated) の形 — `node_modules/left-pad` が仮想ストアへの symlink。"""
+    modules = tmp_path / "node_modules"
+    real = modules / ".pnpm" / "left-pad@1.3.0" / "node_modules" / "left-pad"
+    real.mkdir(parents=True)
+    (real / "package.json").write_text("{}")
+    (modules / "left-pad").symlink_to(real)
     return tmp_path
 
 
@@ -105,12 +143,7 @@ def test_単体_正常なツリーの走査は何も問題を返さない(tmp_pa
 
 def test_単体_仮想ストア構造を走査すると_symlink_を検出する(tmp_path: Path):
     """pnpm 既定 (isolated) の形を作って、走査が実際に symlink を数えることを確認する。"""
-    stage = _make_stage(tmp_path)
-    modules = stage / "node_modules"
-    real = modules / ".pnpm" / "left-pad@1.3.0" / "node_modules" / "left-pad"
-    real.mkdir(parents=True)
-    (real / "package.json").write_text("{}")
-    (modules / "left-pad").symlink_to(real)
+    stage = _make_symlink_tree(_make_stage(tmp_path))
 
     symlinks, store, missing = scan_tree(stage)
     assert symlinks == ["node_modules/left-pad"]
@@ -122,3 +155,128 @@ def test_単体_node_modules_が無いのを_0_件と混同しない(tmp_path: P
     """無いとこれが静かに通る: 走査できなかったツリーが「symlink 0 本」に化ける。"""
     with pytest.raises(FileNotFoundError):
         scan_tree(tmp_path)
+
+
+# ── declared_deps (prod 依存の導出) ───────────────────────────────────────────
+# 手写しの REQUIRED_DEPS を廃した経緯は #424。足した依存が静かに網から外れ、
+# 改名した依存で CD が落ちる二重管理を、送る package.json からの導出で消している。
+
+
+def test_単体_prod_依存は_package_json_から導出し_dev_依存は含めない(tmp_path: Path):
+    """無いとこれが静かに通る: devDependencies まで必須扱いになり、--prod の zip が常に落ちる。"""
+    (tmp_path / "package.json").write_text(
+        json.dumps(
+            {
+                "dependencies": {"zod": "^3.23.8", "@azure/functions": "^4.16.2"},
+                "devDependencies": {"vitest": "^3.2.6"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert declared_deps(tmp_path) == ["@azure/functions", "zod"]
+
+
+def test_単体_package_json_に足した依存はそのまま検査対象になる(tmp_path: Path):
+    """無いとこれが静かに通る: 一覧の手写しを忘れた新規依存が、欠品でも止まらない。"""
+    stage = _make_stage(tmp_path, deps=("zod",))
+    manifest = stage / "package.json"
+    manifest.write_text(
+        json.dumps({"dependencies": {"zod": "^3.23.8", "@azure/cosmos": "^4.10.0"}}),
+        encoding="utf-8",
+    )
+
+    _, _, missing = scan_tree(stage)
+    assert missing == ["@azure/cosmos"]  # 実体が無いので止まる
+
+
+def test_単体_package_json_が無いのを_欠品_0_件と混同しない(tmp_path: Path):
+    """無いとこれが静かに通る: 依存一覧を読めなかったツリーが「欠品なし」で通る。"""
+    (tmp_path / "node_modules").mkdir()
+    with pytest.raises(FileNotFoundError):
+        scan_tree(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "manifest_text",
+    ['{"dependencies": {}}', '{"devDependencies": {"vitest": "1"}}', "{ not json"],
+    ids=["空", "dependencies_無し", "壊れている"],
+)
+def test_単体_依存を読めない_manifest_は落とす(tmp_path: Path, manifest_text: str):
+    """無いとこれが静かに通る: 壊れた/空の manifest が「必須依存 0 件」に化けて素通りする。"""
+    (tmp_path / "package.json").write_text(manifest_text, encoding="utf-8")
+    with pytest.raises(ValueError):
+        declared_deps(tmp_path)
+
+
+def test_単体_実際の_bff_の_package_json_から_prod_依存を導出できる():
+    """staging に cp される実物 (apps/bff/package.json) で導出が成立することを押さえる。
+
+    無いとこれが静かに通る: 実際の manifest の形 (dependencies の位置や型) が変わって
+    導出が空振りしても、合成 fixture のテストだけ緑のまま CD の欠品検査が死ぬ。
+    """
+    manifest = json.loads(BFF_MANIFEST.read_text(encoding="utf-8"))
+    derived = declared_deps(BFF_MANIFEST.parent)
+
+    assert derived == sorted(manifest["dependencies"])
+    assert derived, "prod 依存が 1 件も導出できていない (検査が空振りする)"
+    assert not set(derived) & set(manifest["devDependencies"])
+
+
+# ── scan_zip (外部コマンド zipinfo の出力パーサ) ──────────────────────────────
+# 実 zip を食わせる理由 (#424): ここは唯一の外部コマンド出力パーサで、合成データの
+# assert だけだと zipinfo の書式が変わっても恒久的に 0 件を返して緑のままになる。
+
+
+def _zip(cwd: Path, name: str, *flags: str) -> Path:
+    zip_path = cwd / name
+    subprocess.run(
+        ["zip", "-qr", *flags, str(zip_path), "node_modules"],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+    )
+    return zip_path
+
+
+@requires_zip_tools
+def test_単体_symlink_を保持した_zip_から_symlink_エントリを拾える(tmp_path: Path):
+    """無いとこれが静かに通る: zipinfo の書式変更でパーサが恒久的に 0 件を返し、
+    zip 検査が「常に合格」になっても誰も気づかない。"""
+    stage = _make_symlink_tree(tmp_path)
+    zip_path = _zip(stage, "with-symlink.zip", "-y")  # -y = symlink を実体化しない
+
+    entries = scan_zip(zip_path)
+    assert entries == ["node_modules/left-pad"]
+    assert judge_zip(entries)  # 判定まで繋いで止まることを見る
+
+
+@requires_zip_tools
+def test_単体_実体化する_zip_フラグでは_symlink_エントリが出ないことを明示する(
+    tmp_path: Path,
+):
+    """build-bff-package.sh と同じフラグ (`-y` 無し) では symlink が実体化されるため、
+    zip 側の 0 件は「ツリーに symlink が無かった」証拠にならない — この非保証を
+    仕様として固定する。無いとこれが静かに通る: 0 件を tree 検査の裏取りだと誤読し、
+    tree 検査を弱めても気づけなくなる。"""
+    stage = _make_symlink_tree(tmp_path)
+    zip_path = _zip(stage, "dereferenced.zip")
+
+    assert scan_zip(zip_path) == []
+    # 実体化されているので、リンク先の中身は zip に入っている
+    listed = subprocess.run(
+        ["zipinfo", "-1", str(zip_path)], check=True, capture_output=True, text=True
+    ).stdout
+    assert "node_modules/left-pad/package.json" in listed.splitlines()
+
+
+@requires_zip_tools
+def test_単体_symlink_の無い_zip_は_何も検出しない(tmp_path: Path):
+    """無いとこれが通る: 正常な zip を止める (パーサが行を取り違えている)。"""
+    stage = _make_stage(tmp_path)
+    assert scan_zip(_zip(stage, "clean.zip")) == []
+
+
+def test_単体_zip_が無いのを_0_件と混同しない(tmp_path: Path):
+    """無いとこれが静かに通る: 作られなかった zip が「symlink エントリ 0 件」で通る。"""
+    with pytest.raises(FileNotFoundError):
+        scan_zip(tmp_path / "missing.zip")
