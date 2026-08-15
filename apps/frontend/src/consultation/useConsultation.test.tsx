@@ -894,8 +894,11 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
     await act(async () => await result.current.respondToPendingApproval(true));
 
     expect(result.current.actionError).not.toContain("実行されました");
-    // 断定しない代わりに、確かめる導線は必ず出す (黙って閉じない)
-    expect(result.current.actionError).toContain("会話履歴");
+    // 断定しない代わりに、確かめる導線は必ず出す (黙って閉じない)。導線は
+    // **「会話を続ける」** — 過去ログだけを見る画面はこのアプリに無いので、
+    // そこへ誘導する文面は「操作できない案内」になる (judge major-3)
+    expect(result.current.actionError).toContain("会話を続けて");
+    expect(result.current.actionError).not.toContain("履歴");
   });
 
   it("却下済みの 409 は「実行されていません」と言い切る", async () => {

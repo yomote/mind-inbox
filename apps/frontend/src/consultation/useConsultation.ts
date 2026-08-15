@@ -155,10 +155,15 @@ const FAILURE_MESSAGE = {
  *   「approved なのに未実行」が残るので、**「実行されました」と断定してはいけない**
  *   (断定すると、実際には送られていないメールを「送った」と信じさせる — 逆向きの
  *   事故は「送信済みのメールをもう一度送らせる」で、どちらも同じ重さ)
+ *
+ * 確かめる導線は**「会話を続ける」**に倒す (#430 judge major-3)。過去ログだけを
+ * 見返す画面はこのアプリに無く (ルートも取得口も無い)、**次の発話をすれば
+ * アシスタントがサーバ側の履歴から状態を答えられる**。存在しない画面へ誘導すると、
+ * 案内どおりに操作できず「どこで確認するのか分からない」で行き止まりになる。
  */
 function approvalAlreadyProcessedMessage(status: "approved" | "rejected"): string {
   return status === "approved"
-    ? "この承認はすでに承認済みです (操作の結果は会話履歴でご確認ください)。"
+    ? "この承認はすでに承認済みです (操作が実行されたかは、会話を続けてご確認ください)。"
     : "この承認はすでに却下済みです (操作は実行されていません)。";
 }
 
@@ -484,7 +489,7 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
       } else if (discarded.value.kind === "processed") {
         // すでに解決済みの承認だった (#82)。同じくカードを閉じて発話は進めるが、
         // **受け付けられた決定は伝える** — 却下済みなら未実行と言い切れ、承認済みなら
-        // 会話履歴で結果を確かめる導線になる (期限切れの「記録が失われた」とは別物)。
+        // 会話を続けて結果を確かめる導線になる (期限切れの「記録が失われた」とは別物)。
         setPendingApproval(null);
         setActionError(approvalAlreadyProcessedMessage(discarded.value.status));
       } else {

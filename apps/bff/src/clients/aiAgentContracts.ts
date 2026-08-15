@@ -93,13 +93,18 @@ export type ApproveResponse = z.infer<typeof ApproveResponseSchema>;
  *
  *   - `Approval not found: '<id>'`             — 未知 ID / TTL 1h 失効 / 再起動で消えた
  *   - `Approval checkpoint not found: '<id>'`  — checkpoint が消えている
+ *   - `Approval already processed: '<status>'` — **旧 ai-agent** が返す消費済み
  *
- * **消費済み (approved / rejected) はここに来ない** (#82 / PO 裁定 2026-08-15 B 案)。
- * 二重送信は 409 + 現在状態 (`ApprovalConflictSchema`) に分離した — 404 に混ぜると
- * 「レコードが消えた」のか「もう解決済み」なのかが読めない。
- * ai-agent 側が `already processed` を再び `ValueError` に戻すと**この 404 判別に
- * 落ちてきてしまう**ので、`npm run test:contract` が 404 の detail 一覧と突き合わせて
- * 落とす (409 側は別の照合)。
+ * 現行の ai-agent は消費済みを 409 + 現在状態 (`ApprovalConflictSchema`) で返す
+ * (#82 / PO 裁定 2026-08-15 B 案)。それでも `already processed` をこの 404 判別に
+ * **残してある**のは、**配備スキューの窓**があるため: BFF だけ先に新しくなると、
+ * 旧 ai-agent は消費済みを 404 で返し続ける。パターンから外すと、その窓では
+ * 二重送信が「承認レコード由来ではない 404」= 上流障害に化け、**カードが閉じられず
+ * 会話が詰む** (404 デッドロックの再発)。残しておけば、旧新どちらの組み合わせでも
+ * 二重送信はカード閉鎖に落ちる (新しい組では 409 側が結果まで運ぶ)。
+ *
+ * **409 の判別と競合しない**: 409 は HTTP status と body の形で判別しており、
+ * この detail パターンは 404 のときしか見ない。
  *
  * **これ以外の 404 は承認レコードの状態について何も言っていない** (FastAPI 既定の
  * `Not Found` / プロキシの HTML / ベース URL 違い)。区別せず全部を「もう受け付け
@@ -108,7 +113,8 @@ export type ApproveResponse = z.infer<typeof ApproveResponseSchema>;
  * 文字列一致なので ai-agent 側の文言変更で静かに切れる — 切れたことに気づけるよう、
  * `npm run test:contract` が ai-agent のソース中の実文字列と突き合わせる。
  */
-export const APPROVAL_GONE_DETAIL = /^Approval (not found|checkpoint not found)\b/;
+export const APPROVAL_GONE_DETAIL =
+  /^Approval (not found|already processed|checkpoint not found)\b/;
 
 /**
  * `/approve` の **409** body (#82 / PO 裁定 2026-08-15 B 案 / ai-agent の
@@ -123,7 +129,7 @@ export const APPROVAL_GONE_DETAIL = /^Approval (not found|checkpoint not found)\
  *
  * それでも 404 と分ける価値があるのは、**「もう解決済み」だと分かること自体**が
  * 404 (レコードが消えた) からは得られないため — 却下済みなら未実行と言い切れ、
- * 承認済みなら「結果は会話履歴で確認」と正確に案内できる。
+ * 承認済みなら「実行されたかは会話を続けて確認」と正確に案内できる。
  *
  * `processedAt` は **受け付けた時刻** (完了時刻ではない) で、**nullable** — この項目より
  * 前に書かれた ai-agent の `ApprovalRecord` には時刻が無い。**時刻の欠落を「未処理」と

@@ -257,6 +257,17 @@ describe("[単体] /approve の 404 は「承認レコードがもう無い」�
   it.each([
     { name: "未知 ID / TTL 失効", detail: "Approval not found: 'appr-1'" },
     { name: "checkpoint が消えた", detail: "Approval checkpoint not found: 'appr-1'" },
+    // **旧 ai-agent (409 化の前) が返す消費済み**。配備スキューの窓で実際に飛んでくる。
+    //
+    // 無いと何が静かに通るか: BFF だけ先に新しくなった期間、旧 ai-agent は
+    // 二重送信を 404 で返し続ける。この detail を判別から外すと「承認レコード由来
+    // ではない 404」= 上流障害に化け、**カードが閉じられないまま会話が詰む**
+    // (404 デッドロックの再発)。判別に残しておけば、旧新どちらの組み合わせでも
+    // 二重送信はカード閉鎖に落ちる (新しい組では 409 が結果まで運ぶ)。
+    {
+      name: "旧 ai-agent の消費済み (配備スキュー)",
+      detail: "Approval already processed: 'approved'",
+    },
   ])("$name の 404 は ApprovalNotFoundError で失敗する", async ({ detail }) => {
     vi.stubGlobal(
       "fetch",

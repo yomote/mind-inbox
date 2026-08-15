@@ -890,8 +890,8 @@ async def resume_after_approval(
     else:
         # in-memory 構成: ここでは**参照するだけ**で解放しない。pop を排他の代用に
         # すると、同時に届いた 2 本目が「checkpoint が無い」(404) に化けて
-        # **二重送信が二重送信として説明されない**。解放は下の claim を獲得した
-        # 側だけが行う (排他の責務は claim に 1 本化する)。
+        # **二重送信が二重送信として説明されない**。排他の責務は下の claim に
+        # 1 本化し、解放は再開が終わってから (finally) 行う。
         storage = _pending_run_storages.get(approval_id)
         if storage is None:
             raise ValueError(f"Approval checkpoint not found: {approval_id!r}")
@@ -919,11 +919,30 @@ async def resume_after_approval(
         raise ApprovalAlreadyProcessedError(current.status, current.processed_at)
     record = claimed
 
-    if not _cosmos_enabled():
-        # 獲得できた側だけが registry を解放する (in-memory には TTL が無いので、
-        # 解決した run の checkpoint を残さない / PR #243 レビュー指摘)。
-        _pending_run_storages.pop(approval_id, None)
+    try:
+        return await _resume_claimed_run(
+            approval_id, approved, record, storage, session_repo, approval_repo, client
+        )
+    finally:
+        if not _cosmos_enabled():
+            # in-memory には TTL が無いので、解決した run の checkpoint を残さない
+            # (PR #243 レビュー指摘)。**解放は claim を獲得した側が、再開を終えてから**
+            # — 早く pop すると、同時に届いた 2 本目の checkpoint 参照が先に消えて
+            # 409 (二重送信) が 404 (checkpoint が無い) に化ける。成功・失敗どちらでも
+            # 解放するので、失敗した run の storage が残り続けることもない。
+            _pending_run_storages.pop(approval_id, None)
 
+
+async def _resume_claimed_run(
+    approval_id: str,
+    approved: bool,
+    record: ApprovalRecord,
+    storage: CheckpointStorage,
+    session_repo: SessionRepository,
+    approval_repo: ApprovalRepository,
+    client: Optional[BaseChatClient],
+) -> str:
+    """claim を獲得した 1 本だけが通る再開処理 (排他の判定は呼び出し側が済ませている)。"""
     workflow = _build_chat_workflow(
         session_repo, client, stream=False, checkpoint_storage=storage
     )

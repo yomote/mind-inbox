@@ -95,6 +95,12 @@ function fetchAiAgentSchemas() {
 // 一致なので、ai-agent 側が文言を変えると**変換が静かに効かなくなり**、失効した承認が
 // 上流障害に化けて 404 デッドロック (承認カードが閉じられず会話が進まない) が戻る。
 // pydantic schema にはエラー本文が現れないので、上の再帰比較では捕まらない。
+//
+// **BFF 側のパターンは ai-agent の現行 404 の集合より広くてよい** (#430 judge major-2):
+// `Approval already processed` は現行 ai-agent では 409 に移ったが、配備スキューの窓で
+// 旧 ai-agent が 404 で返すので判別に残してある。ここが見るのは「ai-agent が返す 404 が
+// すべて BFF に判別されるか」の一方向だけ — 逆向き (BFF にだけある古い文言) は
+// スキュー耐性なので落とさない。
 
 /** ai-agent 側で 404 の detail を作っている場所 (`main.py` が `detail=str(exc)` で載せる)。 */
 const APPROVAL_DETAIL_SOURCE = "apps/services/ai-agent/app/workflow.py";

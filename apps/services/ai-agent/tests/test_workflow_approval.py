@@ -269,22 +269,30 @@ class TestResumeAfterApproval:
 class _ConcurrentReadApprovalRepository:
     """「2 本が同時に pending を読んだ」状態を決定的に再現する薄い委譲 (PR #430 Codex P1)。
 
-    `get` は **最初の claim が起きるまで** pending の写しを返す = どちらの
-    リクエストも `resume_after_approval` 冒頭の status チェックを通過する
-    (Cosmos で同時に読んだ / レプリカの読みが遅れた状況)。claim 以降の `get` は
-    実データを返す — 競合に負けた側が現在状態を読み直す経路。
+    **pending の窓はテストが明示的に決める**: 先頭 `stale_reads` 回の `get` は
+    pending の写しを返し (= 同時に読んだ 2 本がどちらも `resume_after_approval`
+    冒頭の status チェックを通過する)、それ以降は実データを返す (= 競合に負けた
+    側が現在状態を読み直す経路)。
 
-    これが無いと、**排他が claim にあるのか冒頭の status チェックにあるのかを
-    区別できない**。チェックだけの実装 (= 二重実行する実装) でもテストが緑になる。
+    窓の閉じ方を「claim が呼ばれたら」にすると、**2 本目が早期チェックで止まり
+    claim まで到達しない** (judge 実測: 敗者分岐 0 回)。それでは
+    「排他が claim にあるのか早期チェックにあるのか」を区別できず、
+    claim を外す変異も checkpoint 解放位置の変異も検出できない。
+
+    `claim_calls` / `lost_claims` は**どの経路を通ったかの実測値**。テストは
+    これを assert して「敗者が claim まで来たこと」を証拠として残す。
     """
 
-    def __init__(self, inner, pending):
+    def __init__(self, inner, pending, stale_reads: int):
         self._inner = inner
         self._pending = pending
-        self._claim_started = False
+        self._stale_remaining = stale_reads
+        self.claim_calls = 0
+        self.lost_claims = 0
 
     async def get(self, approval_id):
-        if not self._claim_started and approval_id == self._pending.id:
+        if self._stale_remaining > 0 and approval_id == self._pending.id:
+            self._stale_remaining -= 1
             return self._pending.model_copy()
         return await self._inner.get(approval_id)
 
@@ -292,8 +300,11 @@ class _ConcurrentReadApprovalRepository:
         await self._inner.save(record)
 
     async def claim(self, approval_id, status, processed_at):
-        self._claim_started = True
-        return await self._inner.claim(approval_id, status, processed_at)
+        self.claim_calls += 1
+        claimed = await self._inner.claim(approval_id, status, processed_at)
+        if claimed is None:
+            self.lost_claims += 1
+        return claimed
 
 
 class TestConcurrentApproval:
@@ -314,7 +325,8 @@ class TestConcurrentApproval:
             "s-race", "返信して", session_repo, approval_repo, client
         )
         pending = await approval_repo.get(res.approval_request_id)
-        repo = _ConcurrentReadApprovalRepository(approval_repo, pending)
+        # 2 本とも冒頭の status チェックを通す = **排他は claim だけが持つ**状況
+        repo = _ConcurrentReadApprovalRepository(approval_repo, pending, stale_reads=2)
 
         with caplog.at_level(logging.INFO, logger="app.tools"):
             results = await asyncio.gather(
@@ -331,11 +343,19 @@ class TestConcurrentApproval:
                 return_exceptions=True,
             )
 
-        # **副作用の実行が 1 回**。ここが 2 になるのがこのテストの本体
+        # **副作用の実行が 1 回** — ここが 2 になるのがこのテストの本体
+        # (原子的な claim を条件なし save に戻すと実測 2 回になる)
         executed = [
             r for r in caplog.records if "Tool[send_reply] invoked" in r.getMessage()
         ]
         assert len(executed) == 1
+
+        # **2 本とも claim まで来て、1 本だけが獲得した** — 排他が「早期 status
+        # チェック」ではなく claim にあることの実測。敗者が claim に到達しない形
+        # (= 早期チェックで止まる / checkpoint 参照が先に消える) ではここが崩れ、
+        # 「解放位置を戻す」ような退行を取り逃がす
+        assert repo.claim_calls == 2
+        assert repo.lost_claims == 1
 
         replies = [r for r in results if isinstance(r, str)]
         conflicts = [r for r in results if isinstance(r, ApprovalAlreadyProcessedError)]
@@ -344,6 +364,9 @@ class TestConcurrentApproval:
         # 負けた側は 409 (二重送信) として説明される — 404 (もう無い) に化けない
         assert conflicts[0].status == "approved"
         assert not isinstance(conflicts[0], ValueError)
+
+        # 勝者が解放したので registry は空 (敗者が消したのではない — 下のテスト)
+        assert get_pending_checkpoint_storage(res.approval_request_id) is None
 
     async def test_単体_負けた側は_checkpoint_を解放しない(
         self, session_repo, approval_repo
@@ -360,10 +383,12 @@ class TestConcurrentApproval:
             "s-race-cleanup", "返信して", session_repo, approval_repo, client
         )
         pending = await approval_repo.get(res.approval_request_id)
-        repo = _ConcurrentReadApprovalRepository(approval_repo, pending)
+        # 敗者ぶんの 1 回だけ pending を見せる = 早期チェックを通過して claim で負ける
+        repo = _ConcurrentReadApprovalRepository(approval_repo, pending, stale_reads=1)
 
-        # 先に 1 本目を解決 (claim を取る)。以降の get は実データ = 処理済みを返す
-        await repo.claim(
+        # 勝者は既に claim を取っており、checkpoint を使って再開中とする
+        # (この時点で registry はまだ解放されていない)
+        assert await approval_repo.claim(
             res.approval_request_id, "approved", "2026-08-15T02:00:00+00:00"
         )
         assert get_pending_checkpoint_storage(res.approval_request_id) is not None
@@ -373,7 +398,10 @@ class TestConcurrentApproval:
                 res.approval_request_id, True, session_repo, repo, client
             )
 
-        # 負けた側は解放していない (勝者の再開が使う)
+        # 敗者は claim まで到達して負けた (早期チェックで止まっていない)
+        assert repo.claim_calls == 1
+        assert repo.lost_claims == 1
+        # そのうえで解放していない (勝者の再開が使う checkpoint を消さない)
         assert get_pending_checkpoint_storage(res.approval_request_id) is not None
 
 
