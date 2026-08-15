@@ -72,11 +72,17 @@ Accept も Reject もしていません (分類のやり直しであって裁定
 
 ### この退避とは無関係の欠番
 
-- **0049** — open PR [#342](https://github.com/yomote/mind-inbox/pull/342) にあり、main には未着地
+- **0049** — **分類し直して番号ごと退役した** (2026-08-15 の PO 裁定)。ブランチ運用として
+  [PR #342](https://github.com/yomote/mind-inbox/pull/342) に起案されたが、#385 の分類基準
+  (「運用・プロセスの決め事は ADR ではない」) と [#395](https://github.com/yomote/mind-inbox/pull/395)
+  の判定基準 (「覆すのに移行が要るか」) に照らして**運用ルール**と裁定された。
+  中身は [`docs/runbooks/branch-naming-and-cleanup.md`](../../runbooks/branch-naming-and-cleanup.md) が持つ。
+  **`retired-numbers.txt` には載せる** — PR #342 とその 8 スレッドが「ADR 0049」の名で
+  残っており、別の判断に振り直すと過去の議論が読めなくなるため
 - **0050 / 0051** — main に存在しない。**退役でも欠番でもなく、着地しなかった採番**
   (未マージのブランチで取られ、PR も無い)。`retired-numbers.txt` には**載せない** —
-  この一覧が持つのは退避した 30 本だけ。参照している docs はもう無い
-  (`debt-check` の `broken-doc-links` が 0 件)。番号自体は取られているので**再利用しない**
+  0049 と違って**参照している議論が無い**ため (`debt-check` の `broken-doc-links` が 0 件)。
+  番号自体は取られているので**再利用しない**
 
 ## 退避した 30 本
 

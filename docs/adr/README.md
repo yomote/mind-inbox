@@ -27,6 +27,11 @@
 - **開発設備 (CI / 資格情報 / エージェントの実行環境) の運用判断** — プロダクトの構成ではなく
   「開発を回すための設備」をどう運転するかは ADR ではない。置き場は [`docs/runbooks/`](../runbooks/README.md)。
   旧 0054 (調査用 read-only 識別) がこれに当たり、2026-08-14 の debrief で退避した
+- **リポジトリの回し方の決め事** — ブランチの命名・寿命・掃除、PR の出し方。
+  **覆すのに移行 (データ・依存・公開面・課金) が要らない**ものは ADR ではない。
+  置き場は [`docs/runbooks/`](../runbooks/README.md) (ブランチ運用は
+  [`branch-naming-and-cleanup.md`](../runbooks/branch-naming-and-cleanup.md))。
+  旧 0049 がこれに当たり、2026-08-15 の PO 裁定で番号ごと退役した
 
 ## 書き方
 
@@ -48,7 +53,8 @@ git fetch origin main -q
 ⚠️ **`ls docs/adr/` のローカル最大値を使わないこと。** 並行セッションが同じ番号を取り、過去 2 回衝突している (0015→0019 / 0026→0027)。**採番は書く瞬間に上のコマンドで取る** (セッション開始時に取っておいた値は、その間に別 PR が ADR を着地させると腐る)。取り違えは CI (`adr-number-guard`) が退役番号の再利用も含めて赤にする。
 
 ⚠️ **欠番は埋めないこと。** 0008 / 0011 / 0014 / 0018〜0022 … が飛んでいるのは、30 本
-(運用・プロセス系 29 本 + 開発設備 1 本) を [`archive/`](archive/README.md) へ退避したためです。番号は ID であって順序ではなく、振り直すと
+(運用・プロセス系 29 本 + 開発設備 1 本) を [`archive/`](archive/README.md) へ退避したためです (0049 だけは退避ではなく、
+分類し直して番号ごと退役したもの — [`archive/README.md`](archive/README.md))。番号は ID であって順序ではなく、振り直すと
 Issue / PR 本文の「ADR 0030 を見て」がすべてリンク切れになります (リポジトリ外なので機械置換が届かない)。
 **常に main の最大番号 +1 で続けてください。**
 
@@ -88,7 +94,7 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 
 エージェントが過去判断を覆さないよう、CLAUDE.md からこのディレクトリにリンクする (#13 で実施)。
 
-## 既存 ADR (24 本)
+## 既存 ADR (23 本)
 
 無印 = Accepted。それ以外は末尾に Status を明記する。
 **番号順ではなくテーマ順**に並べている (番号は ID であって順序ではない — 欠番の理由は [`archive/`](archive/README.md))。
@@ -130,10 +136,6 @@ Proposed  ─→  Accepted  ─→  Deprecated  (使われなくなった)
 - [0056](0056-management-and-app-layers-with-backup-based-data-protection.md) — 層は「管理系 / アプリ系」で分け、データは RG 移動ではなくバックアップ + 復元実証で守る (Accept され次第 0046 D1 を supersede / D2〜D10 は現行 — D9 本文の「持続層」は管理系 RG と読み替える) — **Proposed**
 - [0055](0055-bff-telemetry-on-workspace-based-app-insights.md) — BFF のサーバ側観測性を workspace-based Application Insights で持つ (保持 30 日 / 日次上限つき / 本文は名前と値の両面で落とす) — **Proposed**
 - [0009](0009-on-demand-cd-via-github-actions-oidc.md) — デプロイは GitHub Actions のオンデマンド CD（手動 up/down + 夜間 teardown, OIDC）で行う — **Superseded by 0013**
-
-### リポジトリ運用
-
-- [0049](0049-github-flow-with-conventional-branch-naming.md) — ブランチ戦略は GitHub Flow と明文化し、命名は Conventional Branch 準拠 + Issue 番号必須にする (`claim/*` `data/*` は予約名前空間) — **Proposed** (「運用・プロセスの決め事は ADR ではない」との分類整合は PO 裁定待ち — [#342](https://github.com/yomote/mind-inbox/pull/342))
 
 ## 退避された運用系 (ADR ではない)
 

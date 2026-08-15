@@ -83,11 +83,14 @@ uv run --directory apps/services/ai-agent pytest   # Python は uv
 - **アーキテクチャに関わる判断は ADR を先に書く** — `docs/adr/` に MADR 形式。
   エージェント起案は `Status: Proposed` で入れる (`Accepted` にできるのは user だけ)
 - **運用・プロセスの決め事は ADR ではない** — レビュー体制 / セッションの回し方 / CI の
-  運転ルールなどは数日で改訂されるので不変記録に載せない。置き場は `CLAUDE.md` と `.claude/skills/`。
+  運転ルールなどは数日で改訂されるので不変記録に載せない。置き場は `CLAUDE.md` と `.claude/skills/`、
+  **手順の形になるものは `docs/runbooks/`** (例: ブランチ運用 = 旧 0049 →
+  [`branch-naming-and-cleanup.md`](docs/runbooks/branch-naming-and-cleanup.md))。
   過去に ADR として書かれた 30 本 (運用・プロセス系 29 本 + 開発設備 1 本) は
   `docs/adr/archive/` にあり、**現行ルールではない**
 - **採番は `origin/main` の最大番号 +1。欠番は埋めない** — 退避で 0008 / 0011 / 0014 …
-  が飛んでいる。退役番号は `docs/adr/archive/retired-numbers.txt` にあり、
+  が飛んでいる (0049 は退避ではなく、分類し直して番号ごと退役したもの)。
+  退役番号は `docs/adr/archive/retired-numbers.txt` にあり、
   実ファイルと合算して最大を取る (`adr-number-guard` が再利用を赤にする)
 - **Accepted の ADR 本文は書き換えない。** 状態が変わったら Status 行だけ更新するか、
   新規 ADR で supersede する。索引 `docs/adr/README.md` も同じコミットで同期する
@@ -107,6 +110,13 @@ uv run --directory apps/services/ai-agent pytest   # Python は uv
   OIDC (Actions) か device-code (対話) で取る
 
 ## PR の出し方
+
+**head ブランチは `<type>/<Issue 番号>-<slug>`** (`codex/` `claude/` は Issue 番号必須 / `chore/` `docs/`
+`test/` は番号なしを許す)。判定点は **PR を出す時点**なので、作業中の名前が違っていても
+`git push origin HEAD:codex/<N>-<slug>` で切り直してから出せばよい。**`main` `release` `gh-pages`
+`data/*` `claim/*` は予約**で、作業ブランチを切らない (`data/*` は workflow が読み書きしている)。
+**CI では強制していないので破っても赤くならない** — 正典は
+[`docs/runbooks/branch-naming-and-cleanup.md`](docs/runbooks/branch-naming-and-cleanup.md)。
 
 本文は次の見出しを埋める。
 

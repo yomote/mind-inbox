@@ -32,6 +32,7 @@
 - **「無いと何が静かに通るか?」を 1 文で書けないテストは書かない** — 仕様を指せないテストも書かない。「仕様がない」と言う
 - **実行状態 (計画・進捗) の真実は GitHub Issues** — docs は「なぜ/何を」、Issues は「いつ/誰が/今どこ」。**open Issue にはちょうど 1 個の `stream:*` ラベル**を付ける (`product` / `improve-loop` / `concept` / `factory` / `infra`。迷ったら `product`)
 - **自動化の生死は <https://yomote.github.io/mind-inbox/status/>** で見る (GitHub の実データから毎回生成。手書きの台帳は作らない)。**自動化を足したら [`watchers.json`](cicd/scripts/status-page/watchers.json) に 1 行足す。足せないなら作らない**
+- **`main` `release` `gh-pages` `data/*` `claim/*` に作業ブランチを切らない** — `data/*` は 4 つの workflow が読み書きしており、踏むと**壊れてから気づく**。**PR の head は `<type>/<Issue 番号>-<slug>`** (`claude/` `codex/` は Issue 番号必須。作業中の自動生成名は問わず、PR を出す直前に `git push origin HEAD:claude/<N>-<slug>` で切り直す)。**CI では強制していないので破っても赤くならない** — 正典は [`docs/runbooks/branch-naming-and-cleanup.md`](docs/runbooks/branch-naming-and-cleanup.md)
 
 ## 索引
 
