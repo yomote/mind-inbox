@@ -63,21 +63,66 @@ def _run(tmp_path: Path, text: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_単体_満点の採点は通り正規化JSONを出す(tmp_path: Path) -> None:
+def test_単体_通った採点の_stdout_は蓄積に渡せる_JSON_単体になる(tmp_path: Path) -> None:
+    """**無いと何が静かに通るか**: stdout に診断文が 1 行でも混ざると、
+    `post-judge-score.sh` がこの出力をそのまま `append.py` へ渡す経路が壊れ、
+    その朝の採点が蓄積に入らない。診断は stderr、成果物だけを stdout という分担
+    (PR #88 で実際に踏んだ) を、出力全体が単一 JSON として parse できることで押さえる。
+
+    判定ロジックそのものの網は他のテストが張る (これは出力契約のテスト)。
+    """
     result = _run(tmp_path, _report(ALL_TWO))
     assert result.returncode == EXIT_OK, result.stderr
-    assert json.loads(result.stdout)["scores"]["U7"] == 2
+    parsed = json.loads(result.stdout)  # 混入があればここで落ちる
+    assert parsed["kind"] == "ux-judge-score"
+    assert parsed["rubricVersion"] == "0.2"
+    assert parsed["scores"] == ALL_TWO
 
 
-def test_単体_U7が欠けた採点は弾かれる(tmp_path: Path) -> None:
-    """rubric 0.2 に対し judge が 0.1 の 6 観点で返した場合。
+def test_単体_rubricVersionと観点集合がズレた採点は弾かれる(tmp_path: Path) -> None:
+    """**無いと何が静かに通るか**: `rubricVersion: "0.1"` と名乗りながら
+    U1〜U7・14 点で採点したレポートが exit 0 で蓄積される。
 
-    通すと、押し付けを一度も見ていない採点が「満点」として積まれる。
+    version は 0.1 と 0.2 の**断絶点を示す唯一のメタデータ** (max が 12 → 14 に変わる
+    ので、版をまたいだ total の比較は禁止)。ここが実際の形式とズレたまま積まれると、
+    後から版別に切り分ける手段が無くなり、トレンドの比較が黙って誤る。
     """
+    old_version = _run(tmp_path, _report(ALL_TWO, rubricVersion="0.1"))
+    assert old_version.returncode == EXIT_INVALID
+    assert "U7" in old_version.stderr
+
+    # 逆向き: 0.2 を名乗って U7 を落とすと「観点が欠けている」で弾かれる
     scores = {k: v for k, v in ALL_TWO.items() if k != "U7"}
-    result = _run(tmp_path, _report(scores))
+    new_version = _run(tmp_path, _report(scores, rubricVersion="0.2"))
+    assert new_version.returncode == EXIT_INVALID
+    assert "U7" in new_version.stderr
+
+
+def test_単体_未知のrubricVersionは受理しない(tmp_path: Path) -> None:
+    """**無いと何が静かに通るか**: rubric を改定して version だけ上げ、
+    `RUBRIC_VERSIONS` への追記を忘れた場合に、検証器が「知らない版」を
+    現行形式として採点してしまう。知らない版は通さず落とす (静かに通さない)。
+    """
+    result = _run(tmp_path, _report(ALL_TWO, rubricVersion="0.3"))
     assert result.returncode == EXIT_INVALID
-    assert "U7" in result.stderr
+    assert "rubricVersion" in result.stderr
+
+
+def test_単体_旧版_0_1_の採点は6観点のまま通る(tmp_path: Path) -> None:
+    """**無いと何が静かに通るか**: 版ごとの観点集合を持たずに現行形式へ固定すると、
+    0.1 で採点された過去のレポートが「U7 が無い」として一律に弾かれる。
+    弾くこと自体は静かではないが、**0.1 の critical は U1〜U3 まで**という
+    旧版の判定を失うと、過去データの再検証が現行の基準で上書きされてしまう。
+    """
+    old_scores = {"U1": 2, "U2": 2, "U3": 2, "U4": 2, "U5": 2, "U6": 2}
+    ok = _run(tmp_path, _report(old_scores, rubricVersion="0.1"))
+    assert ok.returncode == EXIT_OK, ok.stderr
+    assert json.loads(ok.stdout)["max"] == 12
+
+    # 0.1 では U7 が無いので、U1〜U3 だけが赤の致命観点
+    red = _run(tmp_path, _report(dict(old_scores, U1=0), rubricVersion="0.1"))
+    assert red.returncode == EXIT_INVALID
+    assert "red" in red.stderr
 
 
 @pytest.mark.parametrize("perspective", CRITICAL)
@@ -94,6 +139,11 @@ def test_単体_赤にすべき観点が0なのにgreenなら弾く(tmp_path: Pa
 
 @pytest.mark.parametrize("perspective", CRITICAL)
 def test_単体_赤にすべき観点が0でredなら通る(tmp_path: Path, perspective: str) -> None:
+    """**無いと何が静かに通るか**: 上の「green を弾く」だけだと、
+    検証器を「致命観点が 0 なら常に弾く」に壊しても気づけない。そうなると
+    **正しく red と判定した採点まで蓄積に入らなくなり、劣化の記録だけが欠ける**
+    (トレンドは良い日だけが残って上向きに見える)。門が通すべきものを通すことを押さえる。
+    """
     result = _run(tmp_path, _report(dict(ALL_TWO, **{perspective: 0}), verdict="red"))
     assert result.returncode == EXIT_OK, result.stderr
 
@@ -105,6 +155,11 @@ def test_単体_U4が0でも比率が高ければgreenのまま(tmp_path: Path) 
 
 
 def test_単体_UNKNOWNは合計とmaxから除外され理由が要る(tmp_path: Path) -> None:
+    """**無いと何が静かに通るか**: UNKNOWN を 0 点として合計に混ぜる実装に変わると、
+    **判定材料が無かっただけの朝が「劣化した朝」として記録される** (rubric は UNKNOWN を
+    合計から除外し max を減らすと定めている)。加えて理由の件数を数えないと、
+    UNKNOWN が理由なしで積まれて PO 裁定キューが空回りする。
+    """
     scores = dict(ALL_TWO, U3="UNKNOWN")
     ok = _run(tmp_path, _report(scores, unknowns=["U3: TTS 未観測で判定材料がない"]))
     assert ok.returncode == EXIT_OK, ok.stderr
@@ -116,12 +171,21 @@ def test_単体_UNKNOWNは合計とmaxから除外され理由が要る(tmp_path
 
 
 def test_単体_totalがscoresと合わない採点は弾かれる(tmp_path: Path) -> None:
+    """**無いと何が静かに通るか**: judge が集計を誤った採点がそのまま積まれる。
+    status ページのトレンドと M2 の起動判定が読むのは `total` / `max` なので、
+    **観点別スコアは正しいのに折れ線だけが嘘をつく**状態になり、
+    生の採点レポートを読み直すまで気づけない。
+    """
     result = _run(tmp_path, _report(ALL_TWO, total=99))
     assert result.returncode == EXIT_INVALID
     assert "total" in result.stderr
 
 
 def test_単体_採点ブロックが無いレポートは2で落ちる(tmp_path: Path) -> None:
+    """**無いと何が静かに通るか**: 終了コード 2 (ブロック無し) と 3 (内容が不整合) の
+    区別が消えると、「judge が出力ルールに従わなかった」のか「採点内容が壊れている」のか
+    切り分けられなくなる。runbook はこの 2 と 3 を復旧手順の分岐に使っている。
+    """
     result = _run(tmp_path, "採点ブロックを書き忘れたレポート\n")
     assert result.returncode == EXIT_NO_BLOCK
 
