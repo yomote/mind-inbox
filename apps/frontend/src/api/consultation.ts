@@ -6,6 +6,7 @@ import { parseSseJsonStream } from "./sse";
 import { appendStreamingReply, beginStreamingReply, clearStreamingReply } from "./streamingReply";
 import { reportStubbedResponse, resetStubbedResponse } from "./stubStatus";
 import { isApprovalNotFound } from "./trpcError";
+import { getSpeedScale } from "../voice/speedScale";
 
 const voicevoxSpeaker = Number(import.meta.env.VITE_VOICEVOX_SPEAKER || "3");
 
@@ -108,7 +109,10 @@ function createSentencePrefetcher() {
     if (now - lastSentAt < PREFETCH_INTERVAL_MS) return;
     lastSentAt = now;
 
-    void ttsPrefetchFetch(accumulated, voicevoxSpeaker).catch(() => {
+    // 速度は**送信のたびに読む** (#242)。ストリーミング中に設定画面で変えられても
+    // 本合成と同じ値で焼くため。ズレると BFF のキャッシュが全ミスして先行合成が
+    // 無言で無効化される (音は鳴るので気づけない)。
+    void ttsPrefetchFetch(accumulated, voicevoxSpeaker, getSpeedScale()).catch(() => {
       // プリフェッチはベストエフォート — 失敗しても最終合成が普通に走る
     });
   };

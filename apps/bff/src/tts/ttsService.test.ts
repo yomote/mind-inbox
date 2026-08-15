@@ -111,6 +111,28 @@ describe("[L2] synthesizeTts", () => {
     expect(vi.mocked(synthesize).mock.calls.map(([req]) => req.speakerId)).toEqual([3, 8]);
   });
 
+  it("読み上げ速度は voicevoxClient まで届く (#242)", async () => {
+    // 無いと: speedScale を service で落としても WAV は普通に返るため、
+    //         「設定を変えても速度が変わらない」だけが症状になる (テストは緑)。
+    vi.mocked(synthesize).mockResolvedValue(makeWav(1));
+
+    await synthesizeTts({ text: "短い一文です。", speakerId: 3, speedScale: 1.4 });
+
+    expect(vi.mocked(synthesize).mock.calls[0][0].speedScale).toBe(1.4);
+  });
+
+  it("速度が違えばキャッシュは別扱い (先行合成の音を別速度で使い回さない)", async () => {
+    // 無いと: prefetch が等倍で焼いた WAV を 1.4 倍の本合成が拾い、**設定を変えても
+    //         前の速度のまま**鳴る。キャッシュヒットなので合成ログにも出ない。
+    vi.mocked(synthesize).mockResolvedValue(makeWav(1));
+
+    await prefetchTts({ text: TWO_SENTENCES, speakerId: 3, speedScale: 1.0 });
+    await prefetchTts({ text: TWO_SENTENCES, speakerId: 3, speedScale: 1.4 });
+
+    expect(synthesize).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(synthesize).mock.calls.map(([req]) => req.speedScale)).toEqual([1.0, 1.4]);
+  });
+
   it("VOICEVOX 未構成 (stub) は null を返す — /api/tts の 204 契約を保つ", async () => {
     vi.mocked(synthesize).mockResolvedValue(null);
     expect(await synthesizeTts({ text: TWO_SENTENCES, speakerId: 3 })).toBeNull();

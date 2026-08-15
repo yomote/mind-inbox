@@ -86,7 +86,10 @@ describe("[L2] handleTts — status 表", () => {
     // plan で合成まで走ると VOICEVOX を二重に叩く (音は鳴るので他の手段では見えない)。
     vi.mocked(planTts).mockReturnValue({ status: "ok", sentences: ["あ。", "い。"] });
 
-    const res = await handleTts(postJson("http://x/api/tts", { text: "あ。い。", plan: true }), silent);
+    const res = await handleTts(
+      postJson("http://x/api/tts", { text: "あ。い。", plan: true }),
+      silent,
+    );
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ sentences: ["あ。", "い。"] });
@@ -111,6 +114,46 @@ describe("[L2] handleTts — status 表", () => {
     const res = await handleTts(postJson("http://x/api/tts", { text: "あ" }), silent);
 
     expect(res.status).toBe(502);
+  });
+
+  it("speedScale を本合成・プリフェッチの両方へそのまま渡す (#242)", async () => {
+    // 無いと: schema から speedScale を落とす / service へ渡し忘れる、のどちらでも
+    // zod は optional として黙って捨て、等倍の音が普通に返る (400 にすらならない)。
+    // 設定画面のスライダーだけが動いて音が変わらない状態が緑のまま通る。
+    vi.mocked(synthesizeTts).mockResolvedValue(new Uint8Array([1]).buffer);
+    vi.mocked(prefetchTts).mockResolvedValue({ status: "cached", sentences: 1 });
+
+    await handleTts(postJson("http://x/api/tts", { text: "あ", speedScale: 1.4 }), silent);
+    expect(synthesizeTts).toHaveBeenCalledWith(expect.objectContaining({ speedScale: 1.4 }));
+
+    await handleTts(
+      postJson("http://x/api/tts", { text: "あ。", prefetch: true, speedScale: 1.4 }),
+      silent,
+    );
+    expect(prefetchTts).toHaveBeenCalledWith(expect.objectContaining({ speedScale: 1.4 }));
+  });
+
+  it("speedScale 省略は従来どおり (旧フロントを 400 で落とさない)", async () => {
+    // 無いと: 必須にした瞬間、BFF を先にデプロイしただけで**旧フロントの読み上げが全滅**する
+    // (フロントと BFF は別デプロイ単位)。
+    vi.mocked(synthesizeTts).mockResolvedValue(new Uint8Array([1]).buffer);
+
+    const res = await handleTts(postJson("http://x/api/tts", { text: "あ" }), silent);
+
+    expect(res.status).toBe(200);
+    expect(vi.mocked(synthesizeTts).mock.calls[0][0].speedScale).toBeUndefined();
+  });
+
+  it("範囲外の speedScale は 400 で弾く (wrapper の 422 を合成失敗に化けさせない)", async () => {
+    // 無いと: 0.1 倍などがそのまま voicevox-wrapper へ流れ、pydantic が 422 を返し、
+    // フロントには「合成に失敗しました」としか出ない (原因が値だと分からない)。
+    const res = await handleTts(
+      postJson("http://x/api/tts", { text: "あ", speedScale: 9 }),
+      silent,
+    );
+
+    expect(res.status).toBe(400);
+    expect(synthesizeTts).not.toHaveBeenCalled();
   });
 
   it("distinguishes a malformed body (400 Invalid JSON body) from a schema violation", async () => {

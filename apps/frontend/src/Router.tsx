@@ -62,6 +62,9 @@ type AppRouterProps = {
   handleRespondToApproval: (approved: boolean) => void;
   themeMode: PaletteMode;
   onToggleTheme: () => void;
+  /** 読み上げ速度 (等倍 = 1.0 / #242)。設定画面で変える。 */
+  speedScale: number;
+  onChangeSpeedScale: (value: number) => void;
   transition: (next: AppRoute) => void;
   setDraftMessage: (value: string) => void;
   handleLogin: () => void;
@@ -130,6 +133,8 @@ export function AppRouter({
   handleRespondToApproval,
   themeMode,
   onToggleTheme,
+  speedScale,
+  onChangeSpeedScale,
   transition,
   setDraftMessage,
   handleLogin,
@@ -248,7 +253,12 @@ export function AppRouter({
         path={ROUTE_PATHS.settings}
         element={
           <ProtectedRoute authStatus={authStatus}>
-            <SettingsScreen themeMode={themeMode} onToggleTheme={onToggleTheme} />
+            <SettingsScreen
+              themeMode={themeMode}
+              onToggleTheme={onToggleTheme}
+              speedScale={speedScale}
+              onChangeSpeedScale={onChangeSpeedScale}
+            />
           </ProtectedRoute>
         }
       />

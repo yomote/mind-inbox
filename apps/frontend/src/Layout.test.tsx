@@ -56,6 +56,7 @@ vi.mock("./api", () => ({
 import { Layout } from "./Layout";
 import { respondToApproval, sendMessage, startNewConsultation } from "./api";
 import { disableInteractiveRecovery, logout } from "./auth/msal";
+import { resetSpeedScaleForTest } from "./voice/speedScale";
 
 /**
  * iOS の解錠は「音量 0 の空発話を speechSynthesis に流す」で表現されるので、
@@ -66,11 +67,11 @@ import { disableInteractiveRecovery, logout } from "./auth/msal";
  * `events` は speak / cancel の時系列 — cancel が解錠発話を打ち消していないかを見る用。
  */
 function speechSynthesisSpy({ autoEnd = true }: { autoEnd?: boolean } = {}) {
-  const spoken: { text: string; volume: number }[] = [];
+  const spoken: { text: string; volume: number; rate: number }[] = [];
   const events: Array<{ kind: "speak"; volume: number } | { kind: "cancel" }> = [];
   vi.stubGlobal("speechSynthesis", {
-    speak: (u: { text: string; volume: number; onend?: (() => void) | null }) => {
-      spoken.push({ text: u.text, volume: u.volume });
+    speak: (u: { text: string; volume: number; rate: number; onend?: (() => void) | null }) => {
+      spoken.push({ text: u.text, volume: u.volume, rate: u.rate });
       events.push({ kind: "speak", volume: u.volume });
       if (autoEnd) u.onend?.();
     },
@@ -112,6 +113,8 @@ beforeEach(() => {
   vi.unstubAllEnvs();
   authState.enabled = false;
   authState.account = null;
+  // 読み上げ速度はモジュールのストア (#242)。テスト間で持ち越さない。
+  resetSpeedScaleForTest();
 });
 
 // vitest は isolate:false で走るので、DOM は test 間で共有される。
@@ -223,6 +226,36 @@ describe("[L2] Layout — 新しい相談の開始で読み上げを止める (#
     await waitFor(() =>
       expect(screen.queryByText("このブラウザは音声読み上げに対応していません。")).toBeNull(),
     );
+  });
+});
+
+describe("[L2] Layout — 読み上げ速度の設定が読み上げまで届く (#242)", () => {
+  it("設定画面でスライダーを動かすと、その後の読み上げがその速度で鳴る", async () => {
+    // 無いと何が静かに通るか: 設定ストアも hook も単体では緑のまま、**設定画面 → 読み上げ**
+    // の配線 (Layout が速度を hook に渡す / Router が設定画面に渡す) が 1 本落ちても
+    // 気づけない。落ちてもスライダーは動き、音も等倍で普通に鳴る — ユーザーには
+    // 「設定が効かない」としか見えず、E2E も「喋っている」ので緑になる。
+    const { spoken } = speechSynthesisSpy();
+    renderLayout();
+
+    // アカウントメニュー → 設定
+    await userEvent.click(await screen.findByRole("button", { name: "アカウント" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "設定" }));
+
+    // スライダーはキーボードで動かす (刻み 0.05 なので 2 つ上げて 1.10)
+    const slider = await screen.findByRole("slider", { name: "読み上げ速度" });
+    (slider as HTMLElement).focus();
+    await userEvent.keyboard("{ArrowRight}{ArrowRight}");
+
+    // 相談を開始すると AI の返事が自動読み上げされる (standalone = ブラウザ読み上げ)
+    await userEvent.click(screen.getByRole("button", { name: "Mind Inbox" }));
+    await userEvent.click(await screen.findByRole("button", { name: "新しい相談を始める" }));
+
+    // 解錠用の無音発話 (volume 0) ではなく、実際の読み上げの速度を見る
+    await waitFor(() => expect(spoken.some((u) => u.volume !== 0)).toBe(true));
+    const utterance = spoken.find((u) => u.volume !== 0);
+    expect(utterance?.text).toBe("どうしましたか");
+    expect(utterance?.rate).toBeCloseTo(1.1);
   });
 });
 

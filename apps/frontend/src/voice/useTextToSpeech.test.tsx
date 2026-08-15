@@ -93,12 +93,14 @@ describe("[L1] useTextToSpeech — 合成経路の選択", () => {
     const speak = stubSpeechSynthesis();
     vi.mocked(ttsFetch).mockResolvedValue(wavResponse());
 
-    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1 }),
+    );
     await act(async () => {
       await result.current.speak("読み上げます");
     });
 
-    expect(ttsFetch).toHaveBeenCalledWith("読み上げます", 3);
+    expect(ttsFetch).toHaveBeenCalledWith("読み上げます", 3, 1);
     expect(playSpy).toHaveBeenCalledTimes(1);
     expect(speak).not.toHaveBeenCalled();
   });
@@ -109,7 +111,9 @@ describe("[L1] useTextToSpeech — 合成経路の選択", () => {
     const speak = stubSpeechSynthesis();
     vi.mocked(ttsFetch).mockResolvedValue(stubResponse());
 
-    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1 }),
+    );
     await act(async () => {
       await result.current.speak("こんにちは");
     });
@@ -132,7 +136,9 @@ describe("[L1] useTextToSpeech — 合成経路の選択", () => {
         }),
     );
 
-    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1 }),
+    );
     let speakPromise!: Promise<void>;
     act(() => {
       speakPromise = result.current.speak("旧セッションの応答");
@@ -156,7 +162,9 @@ describe("[L1] useTextToSpeech — 合成経路の選択", () => {
     // 無いと: BFF の無い mock ビルドで /api/tts の失敗を待ってから喋る (体感が死ぬ)
     const speak = stubSpeechSynthesis();
 
-    const { result } = renderHook(() => useTextToSpeech({ standalone: true, speaker: 3 }));
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: true, speaker: 3, speedScale: 1 }),
+    );
     await act(async () => {
       await result.current.speak("デモです");
     });
@@ -170,7 +178,9 @@ describe("[L1] useTextToSpeech — 合成経路の選択", () => {
     stubSpeechSynthesis();
     vi.mocked(ttsFetch).mockResolvedValue(wavResponse());
 
-    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1 }),
+    );
     await act(async () => {
       await result.current.speak("同じ文");
     });
@@ -189,7 +199,9 @@ describe("[L1] useTextToSpeech — ON/OFF と後始末", () => {
     const speak = stubSpeechSynthesis();
     vi.mocked(ttsFetch).mockResolvedValue(wavResponse());
 
-    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1 }),
+    );
     act(() => result.current.toggleEnabled());
     expect(result.current.enabled).toBe(false);
 
@@ -206,7 +218,9 @@ describe("[L1] useTextToSpeech — ON/OFF と後始末", () => {
     stubSpeechSynthesis();
     vi.mocked(ttsFetch).mockResolvedValue(wavResponse());
 
-    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1 }),
+    );
     await act(async () => {
       await result.current.speak("再生中");
     });
@@ -225,7 +239,9 @@ describe("[L1] useTextToSpeech — 自動読み上げ (speakOnce)", () => {
     stubSpeechSynthesis();
     vi.mocked(ttsFetch).mockResolvedValue(wavResponse());
 
-    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1 }),
+    );
     await act(async () => {
       result.current.speakOnce("m-1", "はじめまして");
       result.current.speakOnce("m-1", "はじめまして");
@@ -240,7 +256,9 @@ describe("[L1] useTextToSpeech — 自動読み上げ (speakOnce)", () => {
     stubSpeechSynthesis();
     vi.mocked(ttsFetch).mockResolvedValue(wavResponse());
 
-    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1 }),
+    );
     act(() => result.current.toggleEnabled()); // OFF
 
     await act(async () => {
@@ -261,7 +279,9 @@ describe("[L1] useTextToSpeech — 自動読み上げ (speakOnce)", () => {
     stubSpeechSynthesis();
     vi.mocked(ttsFetch).mockResolvedValue(wavResponse());
 
-    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1 }),
+    );
     await act(async () => {
       result.current.speakOnce("m-1", "一度目");
     });
@@ -283,7 +303,9 @@ describe("[L1] useTextToSpeech — 劣化の可視化と再生解錠 (#150)", ()
     stubSpeechSynthesis();
     vi.mocked(ttsFetch).mockResolvedValue(wavResponse());
 
-    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1 }),
+    );
     await act(async () => {
       await result.current.speak("こんにちは");
     });
@@ -299,7 +321,9 @@ describe("[L1] useTextToSpeech — 劣化の可視化と再生解錠 (#150)", ()
     vi.mocked(ttsFetch).mockResolvedValue(wavResponse());
     playSpy.mockRejectedValue(new DOMException("blocked", "NotAllowedError"));
 
-    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1 }),
+    );
     await act(async () => {
       await result.current.speak("こんにちは");
     });
@@ -316,7 +340,9 @@ describe("[L1] useTextToSpeech — 劣化の可視化と再生解錠 (#150)", ()
     stubSpeechSynthesis();
     vi.mocked(ttsFetch).mockResolvedValue({ status: 502, ok: false } as unknown as Response);
 
-    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1 }),
+    );
     await act(async () => {
       await result.current.speak("こんにちは");
     });
@@ -330,7 +356,9 @@ describe("[L1] useTextToSpeech — 劣化の可視化と再生解錠 (#150)", ()
     //         ジェスチャ文脈が切れるブラウザでは弾かれる (#150 の解錠の穴)
     const speak = stubSpeechSynthesis();
 
-    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1 }),
+    );
     await act(async () => {
       result.current.unlock();
     });
@@ -346,7 +374,9 @@ describe("[L1] useTextToSpeech — 劣化の可視化と再生解錠 (#150)", ()
     vi.mocked(ttsFetch).mockResolvedValue(wavResponse());
     playSpy.mockRejectedValue(new DOMException("blocked", "NotAllowedError"));
 
-    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1 }),
+    );
     await act(async () => {
       result.current.unlock();
     });
@@ -373,7 +403,9 @@ describe("[L1] useTextToSpeech — 逐次再生と待ち時間の可視化 (#185
     vi.mocked(ttsPlanFetch).mockResolvedValue(planResponse(["一文目です。", "二文目です。"]));
     vi.mocked(ttsFetch).mockResolvedValue(wavResponse());
 
-    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1 }),
+    );
     await act(async () => {
       await result.current.speak("一文目です。二文目です。");
     });
@@ -398,7 +430,9 @@ describe("[L1] useTextToSpeech — 逐次再生と待ち時間の可視化 (#185
       return wavResponse();
     });
 
-    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1 }),
+    );
     let speaking: Promise<void> | null = null;
     await act(async () => {
       speaking = result.current.speak("読み上げます");
@@ -422,7 +456,9 @@ describe("[L1] useTextToSpeech — 逐次再生と待ち時間の可視化 (#185
     const speak = stubSpeechSynthesis();
     vi.mocked(ttsPlanFetch).mockResolvedValue(stubResponse());
 
-    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1 }),
+    );
     await act(async () => {
       await result.current.speak("こんにちは");
     });
@@ -441,7 +477,9 @@ describe("[L1] useTextToSpeech — 逐次再生と待ち時間の可視化 (#185
       .mockResolvedValueOnce(wavResponse())
       .mockResolvedValue({ status: 502, ok: false } as unknown as Response);
 
-    const { result } = renderHook(() => useTextToSpeech({ standalone: false, speaker: 3 }));
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1 }),
+    );
     await act(async () => {
       await result.current.speak("一文目です。二文目です。");
     });
@@ -451,5 +489,65 @@ describe("[L1] useTextToSpeech — 逐次再生と待ち時間の可視化 (#185
     // 読み上げ直したのは失敗した 2 文目以降だけ
     expect(vi.mocked(speak).mock.calls[0][0].text).toBe("二文目です。");
     expect(result.current.error).toContain("合成できませんでした");
+  });
+});
+
+describe("[L1] useTextToSpeech — 読み上げ速度 (#242)", () => {
+  it("設定した速度を VOICEVOX の合成要求に載せる", async () => {
+    // 無いと: 設定画面のスライダーは動くのに body から速度が落ち、BFF は optional 扱いで
+    //         400 も返さないため**等倍のまま普通に鳴る** (壊れたことが誰にも見えない)。
+    stubSpeechSynthesis();
+    vi.mocked(ttsFetch).mockResolvedValue(wavResponse());
+
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1.4 }),
+    );
+    await act(async () => {
+      await result.current.speak("速く読んでほしいのだ");
+    });
+
+    expect(ttsFetch).toHaveBeenCalledWith("速く読んでほしいのだ", 3, 1.4);
+  });
+
+  it("速度を変えたら同じ文でも合成し直す (前の速度の音を再生しない)", async () => {
+    // 無いと: フロントの WAV キャッシュが速度を無視し、一度読んだ文は**速度を変えても
+    //         前の速度のまま**鳴る。設定は保存されているので「たまに効かない」に見える。
+    stubSpeechSynthesis();
+    vi.mocked(ttsFetch).mockResolvedValue(wavResponse());
+
+    const { result, rerender } = renderHook(
+      ({ speedScale }: { speedScale: number }) =>
+        useTextToSpeech({ standalone: false, speaker: 3, speedScale }),
+      { initialProps: { speedScale: 1 } },
+    );
+    await act(async () => {
+      await result.current.speak("同じ文です。");
+    });
+    expect(ttsFetch).toHaveBeenCalledTimes(1);
+
+    rerender({ speedScale: 1.5 });
+    await act(async () => {
+      await result.current.speak("同じ文です。");
+    });
+
+    expect(ttsFetch).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(ttsFetch).mock.calls.map((call) => call[2])).toEqual([1, 1.5]);
+  });
+
+  it("ブラウザ読み上げにフォールバックしても同じ速度で読む", async () => {
+    // 無いと: VOICEVOX が未設定・障害のときだけ速度が等倍に戻る。フォールバックは
+    //         もともと「別の声」なので、速度まで戻っていることに気づけない (§5.5)。
+    const speak = stubSpeechSynthesis();
+    vi.mocked(ttsFetch).mockResolvedValue(stubResponse());
+
+    const { result } = renderHook(() =>
+      useTextToSpeech({ standalone: false, speaker: 3, speedScale: 1.4 }),
+    );
+    await act(async () => {
+      await result.current.speak("代わりに読むのだ");
+    });
+
+    expect(speak).toHaveBeenCalledTimes(1);
+    expect((vi.mocked(speak).mock.calls[0][0] as unknown as { rate: number }).rate).toBe(1.4);
   });
 });

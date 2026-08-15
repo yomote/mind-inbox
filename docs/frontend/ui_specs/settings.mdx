@@ -6,7 +6,7 @@ status: implemented
 owner: frontend
 ---
 
-import { SettingsSpecPreview } from '../../../frontend/src/spec/previews/SettingsSpecPreview'
+import { SettingsSpecPreview } from "../../../frontend/src/spec/previews/SettingsSpecPreview";
 
 ## 設定 / プライバシー
 
@@ -15,13 +15,26 @@ import { SettingsSpecPreview } from '../../../frontend/src/spec/previews/Setting
 ## 実装対応
 
 - 画面キー: `settings`
-- 実装ファイル: `frontend/src/Layout.tsx`
+- 実装ファイル: `frontend/src/components/screens/SettingsScreen.tsx`（配線は `frontend/src/Layout.tsx`）
 
 ## UI要素
 
 - ローカルモック版に関する説明文
 - ダミー設定項目（プロフィール/通知/プライバシー）
+- ダークテーマの切り替え
+- 読み上げ速度のスライダー（下記）
 - 「ホームへ」ボタン
+
+## 読み上げ速度（Issue #242）
+
+ずんだもんの読み上げが「ちょっと遅い」（PO 2026-08-11）ため、**声の速さをユーザーが決められる**ようにする。
+
+- **スライダー 1 本**で決める。範囲は **0.75×〜2.00×**、刻みは 0.05、既定は **1.00×（等倍 = これまでと同じ音）**。現在値は「1.20×」の形で数値も出す（つまみの位置だけにしない）
+  - 上限 2.0 は VOICEVOX wrapper が受け付ける `speed_scale` の上限と一致させる。UI で通した値が下流で 422 になる状態を作らない
+- **保存はこの端末（localStorage）**。BFF には保存しないので、別の端末・別のブラウザには引き継がれない。再訪時は保存した速度から始まる
+- **設定は次の読み上げから効く**。再生中の音声を途中で速度変更しない（切り替わりの不自然さを避ける）
+- **ずんだもんの声とブラウザ読み上げの両方に同じ速度が効く**（dialogue-session.mdx §5.5）。VOICEVOX が未設定・障害でフォールバックしたときだけ速度が等倍に戻る、を作らない
+- **機械検証**: 速度の設定要素は `data-tts-speed-scale`（現在の倍率）を公開する
 
 ## 遷移
 

@@ -25,21 +25,34 @@ export async function bffAuthHeaders(): Promise<Record<string, string>> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-/** VOICEVOX 合成 (BFF /api/tts)。失敗時の判定は呼び出し側 (204 = stub 等)。 */
-export async function ttsFetch(text: string, speaker: number): Promise<Response> {
+/**
+ * VOICEVOX 合成 (BFF /api/tts)。失敗時の判定は呼び出し側 (204 = stub 等)。
+ *
+ * `speedScale` (#242) は**必須引数**にしてある。省略可能にすると、呼び出し側が
+ * 渡し忘れても等倍で普通に鳴るため「設定画面のスライダーが効かない」が型でも
+ * テストでも捕まらない (音は出るので E2E も緑)。
+ */
+export async function ttsFetch(
+  text: string,
+  speaker: number,
+  speedScale: number,
+): Promise<Response> {
   return fetch(`${bffBaseUrl()}/api/tts`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...(await bffAuthHeaders()),
     },
-    body: JSON.stringify({ text, speaker }),
+    body: JSON.stringify({ text, speaker, speedScale }),
   });
 }
 
 /**
  * 読み上げ単位の文分割だけを BFF に問い合わせる (BFF /api/tts plan=true / #185)。
  * 音声は返らない。200 = `{ sentences: string[] }` / 204 = VOICEVOX 未構成 (stub)。
+ *
+ * ここだけ `speedScale` を送らない (#242): 返るのは文字列の並びだけで、合成もキャッシュも
+ * 起きないため速度は結果に影響しない。送ると「速度が効く呼び出し」が 1 つ増えたように見える。
  */
 export async function ttsPlanFetch(text: string, speaker: number): Promise<Response> {
   return fetch(`${bffBaseUrl()}/api/tts`, {
@@ -55,15 +68,22 @@ export async function ttsPlanFetch(text: string, speaker: number): Promise<Respo
 /**
  * TTS 文単位プリフェッチ (BFF /api/tts prefetch=true / #120)。
  * ストリーミング中に確定した文を BFF 側で先行合成・キャッシュさせる。音声は返らない (202/204)。
+ *
+ * `speedScale` を**本合成と同じ値で送る** (#242)。BFF のキャッシュキーは速度込みなので、
+ * ここだけ等倍で焼くと本合成が全ミスし、先行合成が無言で無効化される。
  */
-export async function ttsPrefetchFetch(text: string, speaker: number): Promise<Response> {
+export async function ttsPrefetchFetch(
+  text: string,
+  speaker: number,
+  speedScale: number,
+): Promise<Response> {
   return fetch(`${bffBaseUrl()}/api/tts`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...(await bffAuthHeaders()),
     },
-    body: JSON.stringify({ text, speaker, prefetch: true }),
+    body: JSON.stringify({ text, speaker, speedScale, prefetch: true }),
   });
 }
 
