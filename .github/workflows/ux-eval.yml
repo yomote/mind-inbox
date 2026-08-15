@@ -55,40 +55,15 @@ jobs:
         id: eval
         run: |
           # 出力は **シナリオごとに 1 行の JSONL** (#435)。1 行だけ読むと片方の計測が静かに落ちる
-          # 終了コードは必ずコマンド単体の直後に取る (PR #157 レビュー指摘と同じ理由)
+          # 終了コードは必ずコマンド単体の直後に取る (PR #157 レビュー指摘と同じ理由)。
+          # 終了コードの解釈 (何を即赤にし、何を「追記後に赤」へ倒すか) はここに書かない —
+          # ux_eval.py の eval_step_directives (テスト済みの純関数) が持ち、--step-outcome が
+          # annotation と $GITHUB_OUTPUT への反映まで行う (#440 の規律 / Codex P1 PR #462)
           set +e
           python3 cicd/scripts/ux-eval/ux_eval.py /tmp/ux-data > /tmp/ux-eval-payload.jsonl
           rc=$?
           set -e
-          if [ "$rc" -eq 3 ]; then
-            # 鮮度切れ / 記録なしは**この run の赤で表現する** (ADR 0037 D1)。
-            # 黙って skip すると「プローブが止まったまま計測も静かに止まる」が再発する
-            echo "::error::26 時間以内のプローブ記録がありません — golden-path-monitor か記録の追記が止まっています (詳細は上のログ)"
-            exit 1
-          fi
-          if [ "$rc" -eq 4 ]; then
-            # 前日の記録しか無い朝 — 重複を積まず、入力が止まったことを赤で表現する
-            echo "::error::鮮度内のプローブ記録はすべて評価済みです — 今朝の新しい記録が来ていません (golden-path-monitor の停止か追記失敗。詳細は上のログ)"
-            exit 1
-          fi
-          if [ "$rc" -eq 5 ]; then
-            # 前回まで積めていたシナリオの一部が今朝は計測できていない (#443)。
-            # payload は出ているので取れた分は次 step で積み、最後の step で run を赤にする —
-            # 「取れた計測を捨てない」と「減ったことを黙らせない」を両立させる
-            echo "::error::前回まで積めていたシナリオの一部が今朝は計測できていません (詳細は上のログ) — 取れた分を追記したうえで run を赤にします"
-            echo "scenario_set_shrunk=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ "$rc" -eq 6 ]; then
-            # turns 0 件の空記録 (#401)。プローブが 1 往復も完了しないまま自滅した朝 —
-            # 行は積む (時系列の欠落も情報) が、「計測が成功した」ことにはしない。
-            # golden-path-monitor 側の追記ステップは「材料なしなら ux-eval が赤くなる」を
-            # 前提に warning + continue で緑のままなので、ここが唯一の赤になる
-            echo "::error::turns 0 件の空記録があります — プローブが 1 往復も完了していません (詳細は上のログ)。行を追記したうえで run を赤にします"
-            echo "empty_record=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          exit "$rc"
+          python3 cicd/scripts/ux-eval/ux_eval.py --step-outcome "$rc"
 
       - name: データブランチへ追記
         id: post

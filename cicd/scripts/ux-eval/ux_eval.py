@@ -36,11 +36,19 @@ envelope との往復を実 module で検証している (片方だけ直すと�
 
 使い方:
     ux_eval.py <data_dir>
-      data_dir = データブランチ (data/ux-observations) の checkout。
-                 probes/*.jsonl を読み、evals/*.jsonl で評価済み (runId, scenarioId) を確認して
-                 再評価を拒否する — 鮮度 26h は前日 07:00 の記録 (約 25h 前) を通して
-                 しまうため、時刻だけでは「今朝の記録が欠けた朝」を検出できない
-                 (Codex レビュー指摘 / PR #224)
+      本体。data_dir = データブランチ (data/ux-observations) の checkout。
+    ux_eval.py --step-outcome <rc>
+      本体の終了コード <rc> を呼び出し側 (ux-eval.yml の eval step) の振る舞いへ
+      変換する: annotation (::error::) を stdout に、「追記後に赤」へ倒すフラグを
+      $GITHUB_OUTPUT に書き、step の終了コードで exit する。判定は
+      eval_step_directives (テスト済みの純関数) が持つ — YAML の if 連鎖に埋めると
+      出力名や条件式の退行を定期 workflow の実行までテストで検出できない
+      (#440 / security-sweep の sast_annotation と同じ理由。Codex P1 PR #462)
+
+    data_dir の読み方: probes/*.jsonl を読み、evals/*.jsonl で評価済み
+                 (runId, scenarioId) を確認して再評価を拒否する — 鮮度 26h は
+                 前日 07:00 の記録 (約 25h 前) を通してしまうため、時刻だけでは
+                 「今朝の記録が欠けた朝」を検出できない (Codex レビュー指摘 / PR #224)
       環境変数: UX_EVAL_MAX_AGE_HOURS (既定 26) /
                 UX_EVAL_EXPECTED_WINDOW_HOURS (既定 168 = 7 日 — 「前回まで積めていた
                 シナリオ集合」を evals の実績から作る窓) /
@@ -471,9 +479,105 @@ def run(data_dir: Path, now: datetime | None = None) -> int:
     return EXIT_OK
 
 
+def eval_step_directives(rc: int) -> dict:
+    """本体の終了コードを、呼び出し側 (ux-eval.yml の eval step) の振る舞いへ変換する
+    (純粋関数 / Codex P1 PR #462)。
+
+    この変換を YAML の if 連鎖に埋めると、出力名 (`empty_record=true`) や条件式が
+    退行しても定期 workflow を実行するまで検出できない (#440 / security-sweep の
+    sast_annotation と同じ理由)。「exit 6 = payload を追記したうえで run を赤にする」
+    の接続はここが持ち、test_ux_eval.py が固定する。
+
+    返り値:
+        annotation: step ログに出す ::error:: 行 ("" = 出さない)
+        outputs:    $GITHUB_OUTPUT に書く行。追記 step の**後**に run を赤へ倒す
+                    フラグ (ux-eval.yml の該当 step の if と名前を揃える)
+        exit:       eval step の終了コード (0 = 追記へ進む)
+    """
+    if rc == EXIT_OK:
+        return {"annotation": "", "outputs": [], "exit": 0}
+    if rc == EXIT_NO_FRESH_RECORD:
+        # 鮮度切れ / 記録なしは**この run の赤で表現する** (ADR 0037 D1)。
+        # 黙って skip すると「プローブが止まったまま計測も静かに止まる」が再発する
+        return {
+            "annotation": (
+                "::error::26 時間以内のプローブ記録がありません — "
+                "golden-path-monitor か記録の追記が止まっています (詳細は上のログ)"
+            ),
+            "outputs": [],
+            "exit": 1,
+        }
+    if rc == EXIT_ALREADY_EVALUATED:
+        # 前日の記録しか無い朝 — 重複を積まず、入力が止まったことを赤で表現する
+        return {
+            "annotation": (
+                "::error::鮮度内のプローブ記録はすべて評価済みです — "
+                "今朝の新しい記録が来ていません (golden-path-monitor の停止か追記失敗。"
+                "詳細は上のログ)"
+            ),
+            "outputs": [],
+            "exit": 1,
+        }
+    if rc == EXIT_SCENARIO_SET_SHRUNK:
+        # 前回まで積めていたシナリオの一部が今朝は計測できていない (#443)。
+        # payload は出ているので取れた分は積み、追記の後の step で run を赤にする —
+        # 「取れた計測を捨てない」と「減ったことを黙らせない」を両立させる
+        return {
+            "annotation": (
+                "::error::前回まで積めていたシナリオの一部が今朝は計測できていません "
+                "(詳細は上のログ) — 取れた分を追記したうえで run を赤にします"
+            ),
+            "outputs": ["scenario_set_shrunk=true"],
+            "exit": 0,
+        }
+    if rc == EXIT_EMPTY_RECORD:
+        # turns 0 件の空記録 (#401)。行は積む (時系列の欠落も情報) が、
+        # 「計測が成功した」ことにはしない — 追記の後の step で run を赤にする
+        return {
+            "annotation": (
+                "::error::turns 0 件の空記録があります — プローブが 1 往復も完了して"
+                "いません (詳細は上のログ)。行を追記したうえで run を赤にします"
+            ),
+            "outputs": ["empty_record=true"],
+            "exit": 0,
+        }
+    # 想定外 (1 = 前提不足 など) はそのまま即赤 — 解釈できない状態を緑で通さない
+    return {"annotation": "", "outputs": [], "exit": rc}
+
+
+def step_outcome(rc_text: str) -> int:
+    """--step-outcome モード: 判定 (eval_step_directives) を実環境へ適用する。"""
+    try:
+        rc = int(rc_text)
+    except ValueError:
+        log(f"--step-outcome の引数が整数ではありません: {rc_text!r}")
+        return EXIT_UNEXPECTED
+    directives = eval_step_directives(rc)
+    if directives["annotation"]:
+        # annotation は stdout に出す — Actions が ::error:: を拾うのは step ログ
+        print(directives["annotation"])
+    if directives["outputs"]:
+        output_path = os.environ.get("GITHUB_OUTPUT")
+        if not output_path:
+            # フラグを黙って落とすと「追記後に赤」の step が発火せず、
+            # 空記録 (#401) や集合縮小 (#443) がまた緑で通る。書けないなら赤にする
+            log(
+                "GITHUB_OUTPUT が未設定のためフラグを書けません: "
+                f"{directives['outputs']} — 「追記後に赤」が発火しないので、"
+                "ここで赤にします。"
+            )
+            return EXIT_UNEXPECTED
+        with open(output_path, "a", encoding="utf-8") as fh:
+            for line in directives["outputs"]:
+                fh.write(line + "\n")
+    return directives["exit"]
+
+
 def main(argv: list[str]) -> int:
+    if len(argv) == 3 and argv[1] == "--step-outcome":
+        return step_outcome(argv[2])
     if len(argv) != 2:
-        log(f"使い方: {Path(argv[0]).name} <data_dir>")
+        log(f"使い方: {Path(argv[0]).name} <data_dir> | --step-outcome <rc>")
         return EXIT_UNEXPECTED
     return run(Path(argv[1]))
 
