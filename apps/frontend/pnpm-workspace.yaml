@@ -1,0 +1,27 @@
+# apps/frontend の pnpm 設定 (#423)。流儀は apps/bff/pnpm-workspace.yaml と揃える。
+#
+# packages: pnpm 9 はこのファイルがあると `packages` を要求する (無いと
+#   「packages field missing or empty」で install が落ちる)。frontend は単独パッケージなので "." だけ。
+#
+# ビルドスクリプトの許可: pnpm 10 以降は依存の postinstall を既定で実行しない。
+#   下の 2 つが走らないと pnpm 11 では install が ERR_PNPM_IGNORED_BUILDS で落ちる。
+#   - esbuild (vite 8 の依存): install.js が実行プラットフォーム用のネイティブバイナリを配置する。
+#     無いと vite build / vitest が esbuild を起動できない。
+#   - @swc/core (@vitejs/plugin-react-swc の依存): postinstall.js がネイティブバイナリの
+#     optional dependency を実際に load して検証し、駄目なら @swc/wasm へフォールバックする。
+#     無いと React の変換器が壊れたまま install が通る。
+#   ここは「ビルドスクリプトを持つ依存を全部許す」ではなく、上の 2 つだけを名指しする。
+#   キー名がバージョンで変わったため両方置く — pnpm 10 = onlyBuiltDependencies /
+#   pnpm 11 = allowBuilds。CI は pnpm 9 (どちらも読まず全ビルドを実行) で、
+#   ローカル開発機は pnpm 11 が入っているため、片方だけだと「CI は緑なのに
+#   手元で install できない」に分かれる。
+packages:
+  - "."
+
+allowBuilds:
+  esbuild: true
+  "@swc/core": true
+
+onlyBuiltDependencies:
+  - esbuild
+  - "@swc/core"
