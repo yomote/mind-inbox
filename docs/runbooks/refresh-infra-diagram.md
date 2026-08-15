@@ -15,9 +15,9 @@
 - リポジトリ Variables に `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` ([`azure-oidc-cd-setup.md`](azure-oidc-cd-setup.md))。**未設定なら赤くせず skip する**
 - CD 用 identity が対象 RG を Resource Graph で読めること (Reader 相当) — 2026-08-09 の初回実行で充足を実測済み
   - これは「専用の Reader identity がある」という意味ではなく、**デプロイ用 identity の権限で読めた**という記録。
-    #46 で読み取り専用 identity (`AZURE_READER_CLIENT_ID`) を用意したので、このワークフローはそちらへ移すのが本筋
-    (`viz-structure.sh` は Resource Graph の結果を RG でクライアント側フィルタするので、RG スコープの `Reader` で足りる)。
-    手順: [azure-oidc-cd-setup.md](azure-oidc-cd-setup.md) の「読み取り専用 identity へ切り替える」
+    read-only 識別 (`AZURE_CLIENT_ID_RO`) は federated credential が `ops/inspect` ブランチ紐づけのため、
+    `main` で走るこのワークフローには**流用できない** ([azure-oidc-cd-setup.md](azure-oidc-cd-setup.md) の「read-only の識別を足す」)。
+    書き込み identity を持ち歩かない形への移行は [#405](https://github.com/yomote/mind-inbox/issues/405) (GitHub Environments) が持つ
 - **PR の自動作成には** Settings → Actions → General → Workflow permissions → **「Allow GitHub Actions to create and approve pull requests」** が必要。off でもブランチ push までは動き、比較 URL を警告で出して正常終了する (下記)
 
 ## Steps
