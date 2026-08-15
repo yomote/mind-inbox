@@ -5,12 +5,15 @@ import { defineConfig } from "vitest/config";
  *
  * - 環境は `node` (現在の L1 対象は mockApi.ts と純粋関数のみで DOM 不要)
  *   → component render が必要になったら `environment: "jsdom"` に切り替える
- * - test ファイルは `src/**\/*.test.ts(x)` のみ拾う (e2e は別)
+ * - test ファイルは `src/**\/*.test.ts(x)` と `e2e-live/**\/*.test.ts` を拾う
+ *   (e2e-live 側は **Playwright を import しない純粋な定義だけ** — 台本と待受予算の
+ *   不変条件は実環境を叩かずに押さえられるので単体で見る。実環境を叩く `*.spec.ts` は
+ *   Playwright の担当で、こちらの include には入らない)
  */
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "e2e-live/**/*.test.ts"],
     /**
      * ファイルごとに環境とモジュールレジストリを分ける (#189)。
      *

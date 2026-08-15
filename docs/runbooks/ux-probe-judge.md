@@ -12,6 +12,17 @@
 ux-eval.yml は記録の鮮度も見る — **26 時間以内にプローブ記録が無ければ run が赤くなる**
 (古い記録を今日の計測として積まない)。抽出ロジックは `cicd/scripts/ux-eval/ux_eval.py`。
 
+**シナリオは複数ある** (#435): プローブは `apps/frontend/e2e-live/ux-probe-scenarios.ts` の
+台本を全部流し、**1 シナリオ = 1 記録 = 1 機械計測 = 1 採点**として積む。重複判定も鮮度判定も
+シナリオごとに独立している (`(probeRunId, scenarioId)` の組)。**一部のシナリオだけ欠けた朝は、
+取れた分を積んで ux-eval は緑のまま** — 欠けたシナリオはプローブ側 (golden-path-monitor) が
+その朝に赤くなって通報する。ux-eval のログには飛ばしたシナリオ名が残る。
+
+| シナリオ                 | 何を見るための台本か                                                                                              |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `work-overwhelm-v1`      | #123 M0 からの**継続線**。深掘りに素直に応じるパスで、応答品質とレイテンシのトレンドはこれを基準にする            |
+| `hypothesis-pushback-v1` | **否定局面** (#435)。AI の解釈を 2 度否定する台本で、rubric 0.2 の U7 (仮説の押し付け) が発火しうる唯一のシナリオ |
+
 ## 蓄積の形 — データブランチ `data/ux-observations` (ADR 0041)
 
 観測は Issue コメントではなく **git のデータブランチに JSONL で蓄積する**
@@ -27,7 +38,7 @@ ux-eval.yml は記録の鮮度も見る — **26 時間以内にプローブ記�
 
 ## Trigger
 
-- 毎朝の golden-path-monitor 実行後、UX プローブ記録 (相談 4 往復の会話 + レイテンシ) を採点したいとき (PM tick の LLM 採点)
+- 毎朝の golden-path-monitor 実行後、UX プローブ記録 (相談 4 往復の会話 + レイテンシ × シナリオ数) を採点したいとき (PM tick の LLM 採点)
 - プローブを手動で回したいとき (プロンプト変更後の確認等)
 - スコアの時系列トレンドを見たいとき
 
@@ -40,14 +51,14 @@ ux-eval.yml は記録の鮮度も見る — **26 時間以内にプローブ記�
 
 ## データの流れ (どこに何が残るか)
 
-| データ                                        | 置き場                                                                                         | 保持       |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------- |
-| 会話全文 + 区間レイテンシ (`ux-probe-record`) | **データブランチの `probes/YYYY-MM.jsonl`** (1 run = 1 行) — **採点が読む先**                  | 永続       |
-| 同上 (障害調査用の一次情報)                   | golden-path-monitor の artifact `ux-probe-<run_id>` — 人間が `gh` で取る                       | 90 日      |
-| レイテンシ閾値超過 (#120)                     | 同 run の warning annotation + step summary                                                    | run と同じ |
-| 機械計測 (`ux-eval-mech`)                     | **データブランチの `evals/YYYY-MM.jsonl`** (1 run = 1 行。ux-eval.yml が毎朝追記)              | 永続       |
-| judge 採点 (`ux-judge-score` + レポート全文)  | **データブランチの `evals/YYYY-MM.jsonl`** (1 採点 = 1 行。`report` フィールドに全文入り)      | 永続       |
-| トレンドの可視化                              | [ステータスページ](https://yomote.github.io/mind-inbox/status/) の「UX トレンド」節 (毎回生成) | 生成物     |
+| データ                                        | 置き場                                                                                                      | 保持       |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ---------- |
+| 会話全文 + 区間レイテンシ (`ux-probe-record`) | **データブランチの `probes/YYYY-MM.jsonl`** (1 シナリオ = 1 行 / 1 run = シナリオ数ぶん) — **採点が読む先** | 永続       |
+| 同上 (障害調査用の一次情報)                   | golden-path-monitor の artifact `ux-probe-<run_id>` — 人間が `gh` で取る                                    | 90 日      |
+| レイテンシ閾値超過 (#120)                     | 同 run の warning annotation + step summary                                                                 | run と同じ |
+| 機械計測 (`ux-eval-mech`)                     | **データブランチの `evals/YYYY-MM.jsonl`** (1 シナリオ = 1 行。ux-eval.yml が毎朝追記)                      | 永続       |
+| judge 採点 (`ux-judge-score` + レポート全文)  | **データブランチの `evals/YYYY-MM.jsonl`** (1 採点 = 1 行。`report` フィールドに全文入り)                   | 永続       |
+| トレンドの可視化                              | [ステータスページ](https://yomote.github.io/mind-inbox/status/) の「UX トレンド」節 (毎回生成)              | 生成物     |
 
 artifact を併存させる理由は変わらず — 人間が障害調査で生の記録を掘る経路
 ([ADR 0029](../adr/archive/operations/probe-record-transport-via-issue-comment.md) の経緯)。採点が読む「正」はデータブランチ側。
@@ -65,35 +76,53 @@ artifact を併存させる理由は変わらず — 人間が障害調査で生
 
    (agent セッションでは `gh` の代わりに GitHub MCP `actions_run_trigger`)
 
-2. 記録 JSON を取得する — データブランチから最新のプローブ記録を読む:
+2. 記録 JSON を取得する — データブランチから**シナリオごとに**最新のプローブ記録を読む
+   (#435 で台本が 2 本になった: `work-overwhelm-v1` / `hypothesis-pushback-v1`):
 
    ```bash
    git fetch origin data/ux-observations
-   mkdir -p /tmp/ux-probe
+   rm -rf /tmp/ux-probe && mkdir -p /tmp/ux-probe
    git show "$(git rev-parse FETCH_HEAD):probes/$(date -u +%Y-%m).jsonl" \
-     | python3 -c 'import json,sys; rows = [json.loads(l) for l in sys.stdin if l.strip()]; latest = max((r for r in rows if r.get("kind") == "ux-probe-record"), key=lambda r: r["recordedAt"]); print(json.dumps(latest["record"], ensure_ascii=False))' \
-     > /tmp/ux-probe/probe.json
-   PROBE_JSON="$(cicd/scripts/ux-probe/inspect-probe-artifact.py /tmp/ux-probe)"
+     | python3 -c 'import json,sys,pathlib
+   rows = [json.loads(l) for l in sys.stdin if l.strip()]
+   latest = {}
+   for r in rows:
+       if r.get("kind") != "ux-probe-record":
+           continue
+       key = r.get("scenarioId") or "unknown"
+       if key not in latest or r["recordedAt"] > latest[key]["recordedAt"]:
+           latest[key] = r
+   for key, r in latest.items():
+       pathlib.Path(f"/tmp/ux-probe/{key}.json").write_text(json.dumps(r["record"], ensure_ascii=False), encoding="utf-8")
+       print(key, r["recordedAt"], file=sys.stderr)'
+   PROBE_JSONS="$(cicd/scripts/ux-probe/inspect-probe-artifact.py /tmp/ux-probe)"
    ```
 
    末尾行 = 最新とは限らない (過去データ移行が古い観測を後から追記しうる) ので、
-   **`recordedAt` が最大の行**を選ぶ (上のワンライナーがそれ)。
+   **`recordedAt` が最大の行**を選ぶ (上のワンライナーがそれ)。**シナリオごとに**選ぶのは、
+   1 本だけ採点すると**もう片方は毎朝記録されるのに一度も採点されない**ため
+   (rubric 0.2 の U7 = 仮説の押し付けは `hypothesis-pushback-v1` でしか発火しない)。
    月初 (当月ファイルがまだ無い朝) は前月の `probes/YYYY-MM.jsonl` を読む。
-   `inspect-probe-artifact.py` の終了コード: `3` = 記録が無い / `4` = turns 0 件 /
-   `1` = 記録が壊れている。`3` と `4` は「採点する材料がない」ので、その朝は採点を
-   スキップして終わる (Common Issues 参照)。
+   `inspect-probe-artifact.py` は**採点対象のパスを 1 行 1 本**で出す。終了コード:
+   `3` = 記録が無い / `4` = 全シナリオで turns 0 件 / `1` = 記録が壊れている。
+   `3` と `4` は「採点する材料がない」ので、その朝は採点をスキップして終わる
+   (Common Issues 参照)。**一部のシナリオだけ空だった朝は stderr にその旨が出る** —
+   残りは採点する。
 
-3. UX judge で採点する — **新品コンテキストの subagent** として起動する
-   (実装セッション内で直接採点しない — 前提の混入を防ぐのが独立 judge の価値, ADR 0019/0022):
+3. UX judge で採点する — **記録 1 本につき 1 回、新品コンテキストの subagent** として
+   起動する (実装セッション内で直接採点しない — 前提の混入を防ぐのが独立 judge の価値,
+   ADR 0019/0022。シナリオをまたいで 1 回で採点しない — 採点は 1 記録 = 1 行):
 
-   > Task(ux-reviewer): `$PROBE_JSON` を採点して
+   > Task(ux-reviewer): `/tmp/ux-probe/work-overwhelm-v1.json` を採点して
+   > Task(ux-reviewer): `/tmp/ux-probe/hypothesis-pushback-v1.json` を採点して
 
-   レポートをファイルに保存する (例: `/tmp/ux-judge-report.md`)。
+   レポートはそれぞれ別ファイルに保存する (例: `/tmp/ux-judge-<scenarioId>.md`)。
 
-4. 採点を検証してデータブランチへ追記する:
+4. 採点を検証してデータブランチへ追記する (**レポート 1 本ずつ**):
 
    ```bash
-   cicd/scripts/ux-probe/post-judge-score.sh /tmp/ux-judge-report.md
+   cicd/scripts/ux-probe/post-judge-score.sh /tmp/ux-judge-work-overwhelm-v1.md
+   cicd/scripts/ux-probe/post-judge-score.sh /tmp/ux-judge-hypothesis-pushback-v1.md
    ```
 
    **検証に落ちたら追記しない** — 蓄積は時系列データで、壊れた 1 件が混ざるとトレンド判断が
@@ -140,20 +169,23 @@ Issue コメント時代の蓄積 (#162 / #127) をデータブランチへ取�
 
 ## Verification
 
-- [ ] golden-path-monitor の run に artifact `ux-probe-<run_id>` があり、JSON の `turns` が 4 件ある
+- [ ] golden-path-monitor の run に artifact `ux-probe-<run_id>` があり、**シナリオの数だけ** JSON があって `turns` が 4 件ずつある
 - [ ] **人手を介さず** `data/ux-observations` の `probes/YYYY-MM.jsonl` に行が増えている — 次の monitor 実行 (07:00 JST) で確認。**未検証**
 - [ ] レイテンシ閾値超過があれば run の Annotations に warning が出ている
 - [ ] **人手を介さず** `evals/YYYY-MM.jsonl` に機械計測 (`ux-eval-mech`) の行が増えている — ux-eval.yml の run (08:20 JST) で確認。**未検証**
 - [ ] 記録が 26 時間以上古い朝に ux-eval.yml の run が**赤くなる** (静かに古い記録を積まない)
-- [ ] PM tick の日に `evals/YYYY-MM.jsonl` に採点 (`ux-judge-score`) の行が増えている。**未検証**
+- [ ] PM tick の日に `evals/YYYY-MM.jsonl` に採点 (`ux-judge-score`) の行が**シナリオの数だけ**増えている。**未検証**
+- [ ] 押し付けをする応答 (手で作った記録) を judge に食わせると **U7 = 0 / verdict red** になる。**未検証** (#435 の受け入れ — これを 1 度通すまで「押し付けを見ている」と言わない)
 - [ ] ステータスページの「UX トレンド」節にグラフが出て、データブランチが取れないときは「未検証」表示になる。**未検証**
 
 ## Rollback
 
 - 蓄積は JSONL の追記のみで破壊的操作なし。誤った観測は行を編集・削除せず、**訂正の観測を
   追記する** (時系列の改ざんを避ける。git 履歴が監査ログとして残る)
-- シナリオを変えた場合 (`ux-probe.spec.ts` の `SCENARIO.id` 更新) はスコアの断絶点になる —
-  `scenarioId` が行ごとに残るので集計時に分離できる (区切りの明示が要るなら ADR / journal に書く)
+- シナリオを変えた場合 (`ux-probe-scenarios.ts` の `id` 更新) はスコアの断絶点になる —
+  `scenarioId` が行ごとに残るので集計時に分離できる (区切りの明示が要るなら ADR / journal に書く)。
+  **既存シナリオの台本は書き換えない** (id を上げるか別シナリオとして足す) — 継続線
+  `work-overwhelm-v1` の文言は単体テスト `ux-probe-scenarios.test.ts` が凍結している
 - データブランチが壊れた場合 (手編集など): 旧 #162 / #127 のコメントが凍結されたまま残って
   いれば `ux-data-migrate` の再実行で再構築できる (重複はスキップされる)
 
@@ -164,6 +196,13 @@ Issue コメント時代の蓄積 (#162 / #127) をデータブランチへ取�
 - 原因: プローブ手前 (curl 版 golden-path / 結線カナリア) で fail してプローブ未到達、
   または AZURE\_\* variables 未設定で全体スキップ
 - 対処: run の step summary / NG 行でホップを特定。プローブ自体の問題ではない
+
+### シナリオが 1 本ぶんしか積まれていない
+
+- 原因: そのシナリオの Playwright テストが落ちた (golden-path-monitor が赤 + Issue が立つ)、
+  または封筒化・追記に失敗した (同 run の warning annotation を見る)
+- 対処: 落ちたシナリオの E2E ログで壊れたホップを切り分ける。**ux-eval は取れた分を積んで
+  緑のまま**なので、「トレンドの片方が伸びていない」だけでは気づけない — monitor の赤を見る
 
 ### 記録はあるが turns が 4 件未満
 
@@ -195,6 +234,6 @@ Issue コメント時代の蓄積 (#162 / #127) をデータブランチへ取�
 
 - ADR: [0040 データブランチ蓄積](../adr/archive/operations/ux-observations-on-git-data-branch.md) / [0022 UX 自律改善ループ](../adr/archive/operations/autonomous-ux-improvement-loop.md) / [0037 定期評価の分担](../adr/archive/operations/scheduled-evals-split-mechanical-actions-llm-pm-tick.md) / [0029 旧: Issue コメント運搬](../adr/archive/operations/probe-record-transport-via-issue-comment.md) / [0019 独立 judge](../adr/archive/operations/independent-judge-agents-security-qa-release.md) / [0018 動作検証](../adr/archive/operations/runtime-verification-in-the-loop.md)
 - rubric: `.github/claude/ux-rubric.md` / subagent: `.claude/agents/ux-reviewer.md`
-- プローブ実装: `apps/frontend/e2e-live/ux-probe.spec.ts` / workflow: `.github/workflows/golden-path-monitor.yml` / `.github/workflows/ux-eval.yml` (機械計測: `cicd/scripts/ux-eval/ux_eval.py`) / `.github/workflows/ux-data-migrate.yml` (過去データ移行)
+- プローブ実装: `apps/frontend/e2e-live/ux-probe.spec.ts` (台本と待受予算は `ux-probe-scenarios.ts`) / workflow: `.github/workflows/golden-path-monitor.yml` / `.github/workflows/ux-eval.yml` (機械計測: `cicd/scripts/ux-eval/ux_eval.py`) / `.github/workflows/ux-data-migrate.yml` (過去データ移行)
 - 蓄積ヘルパー: `cicd/scripts/ux-data/` (append.py / append-observation.sh / migrate-issue-comments.py)
 - epic: [#123](https://github.com/yomote/mind-inbox/issues/123) / 蓄積先の検討: [#197](https://github.com/yomote/mind-inbox/issues/197) / 旧蓄積: [#162](https://github.com/yomote/mind-inbox/issues/162) / [#127](https://github.com/yomote/mind-inbox/issues/127)

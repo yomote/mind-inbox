@@ -11,12 +11,22 @@
     `data/ux-observations` へ移した — 判断は ADR 0041 (PO 裁定 2026-08-11 / #197)。
 
 責務 (LLM 判断は含めない):
-    - データブランチ checkout の probes/*.jsonl から最新の ux-probe-record を選ぶ
+    - データブランチ checkout の probes/*.jsonl から **シナリオごとに**最新の
+      ux-probe-record を選ぶ (#435 で台本が 2 本になった。1 run = 1 記録ではない)
     - 鮮度を確かめる (既定 26 時間)。**古い記録を「今日の計測」として積まない** —
       ここを黙って通すと、プローブが止まっているのにトレンドが伸び続ける
     - 記録 JSON から区間レイテンシ統計 / 往復数 / 警告・エラー数を計算する
-    - evals/*.jsonl への追記 payload (kind: "ux-eval-mech") を stdout に 1 行で出す
-      (追記そのものは append-observation.sh の責務)
+    - evals/*.jsonl への追記 payload (kind: "ux-eval-mech") を stdout に
+      **シナリオごとに 1 行ずつ** (JSONL) 出す (追記そのものは append-observation.sh の責務)
+
+シナリオが複数あるときの規律:
+    - 重複判定は (probeRunId, scenarioId) の組で行う。**同じ run から複数シナリオの記録が
+      来る**ので、runId だけで見ると 1 本目を積んだ時点で 2 本目が「評価済み」に化ける
+    - 一部のシナリオだけ記録が欠けた朝は、**取れたものを積んで exit 0** にする。
+      欠けたシナリオはプローブ側 (golden-path-monitor) がその朝に赤くなって通報する経路が
+      あり、ここで全体を落とすと**取れていた計測まで捨てる**。ただし「何を積んで何を
+      飛ばしたか」は必ず stderr に出す (黙って減らさない)
+    - 鮮度内の記録が 1 件も無い / 全部評価済み のときだけ run を赤にする (従来どおり)
 
 蓄積の形 (JSONL / 封筒) の真実は cicd/scripts/ux-data/append.py と
 cicd/scripts/ux-probe/probe-record-comment.py (envelope)。test_ux_eval.py が
@@ -25,19 +35,21 @@ envelope との往復を実 module で検証している (片方だけ直すと�
 使い方:
     ux_eval.py <data_dir>
       data_dir = データブランチ (data/ux-observations) の checkout。
-                 probes/*.jsonl を読み、evals/*.jsonl で評価済み runId を確認して
+                 probes/*.jsonl を読み、evals/*.jsonl で評価済み (runId, scenarioId) を確認して
                  再評価を拒否する — 鮮度 26h は前日 07:00 の記録 (約 25h 前) を通して
                  しまうため、時刻だけでは「今朝の記録が欠けた朝」を検出できない
                  (Codex レビュー指摘 / PR #224)
       環境変数: UX_EVAL_MAX_AGE_HOURS (既定 26) / GITHUB_RUN_ID / GITHUB_SERVER_URL /
                 GITHUB_REPOSITORY (計測 run へのリンク用・無くても動く)
 
-診断は stderr、成果物 (payload JSON 1 行) だけを stdout に出す (PR #88 で踏んだ実例と同じ規律)。
+診断は stderr、成果物 (payload JSON) だけを stdout に出す (PR #88 で踏んだ実例と同じ規律)。
+**stdout は 1 行とは限らない** — シナリオごとに 1 行の JSONL。呼び出し側 (ux-eval.yml) は
+1 行ずつ append-observation.sh に渡すこと (1 行目だけ読むと片方の計測が静かに落ちる)。
 
 終了コード:
-    0 = 計測できた (payload を stdout に出力)
-    3 = 鮮度内の記録が無い (記録ゼロ / 全部古い) — 呼び出し側は run を赤にする
-    4 = 最新の記録は評価済み (今朝の新しい記録が来ていない) — 同じく赤にする
+    0 = 1 シナリオ以上を計測できた (payload を stdout に JSONL で出力)
+    3 = 鮮度内の記録が 1 件も無い (記録ゼロ / 全部古い) — 呼び出し側は run を赤にする
+    4 = 鮮度内の記録はあるが全部評価済み (今朝の新しい記録が来ていない) — 同じく赤にする
     1 = 前提不足・想定外 (ディレクトリが無い / JSON が壊れている)
 """
 
@@ -52,6 +64,10 @@ from pathlib import Path
 RECORD_KIND = "ux-probe-record"
 OUTPUT_KIND = "ux-eval-mech"
 DEFAULT_MAX_AGE_HOURS = 26.0
+
+# scenarioId を持たない記録 (Issue コメント時代の移行データ) の置き場。
+# 捨てると過去データが黙って計測対象から外れるので、1 つのシナリオとして扱う
+UNKNOWN_SCENARIO = "(scenarioId なし)"
 
 # 記録 JSON の turns[].timings のキー (真実: apps/frontend/e2e-live/ux-probe.spec.ts の
 # TurnRecord。実コメント #162 でも確認済み — 2026-08-10)
@@ -107,13 +123,20 @@ def read_observations(subdir: Path) -> list[dict]:
     return observations
 
 
-def latest_record(observations: list[dict]) -> tuple[dict, datetime] | None:
-    """観測一覧から最新のプローブ記録 (封筒, recordedAt) を返す。無ければ None。
+def latest_records_by_scenario(
+    observations: list[dict],
+) -> dict[str, tuple[dict, datetime]]:
+    """シナリオごとの最新プローブ記録 (封筒, recordedAt) を返す (純粋関数)。
 
     recordedAt で選ぶ (ファイル内の並び順に依存しない — 移行データと実運用の
     追記が混ざっても最新を取り違えないため)。
+
+    **シナリオごとに分ける理由** (#435): 台本が 2 本になり、同じ朝に別々の記録が積まれる。
+    全体の最新 1 件だけを見ると、**もう片方のシナリオは一度も計測されない**まま
+    トレンドが「1 本ぶんしか無い」ことに誰も気づけない。
+    scenarioId が無い記録 (旧形式) は `UNKNOWN_SCENARIO` にまとめる — 捨てない。
     """
-    best: tuple[dict, datetime] | None = None
+    best: dict[str, tuple[dict, datetime]] = {}
     for obs in observations:
         if obs.get("kind") != RECORD_KIND or not isinstance(obs.get("record"), dict):
             continue
@@ -121,8 +144,11 @@ def latest_record(observations: list[dict]) -> tuple[dict, datetime] | None:
         if recorded is None:
             log(f"recordedAt の無い記録を読み飛ばします: probeId={obs.get('probeId')!r}")
             continue
-        if best is None or recorded > best[1]:
-            best = (obs, recorded)
+        scenario_id = obs.get("scenarioId")
+        key = scenario_id if isinstance(scenario_id, str) and scenario_id else UNKNOWN_SCENARIO
+        current = best.get(key)
+        if current is None or recorded > current[1]:
+            best[key] = (obs, recorded)
     return best
 
 
@@ -131,20 +157,26 @@ def is_fresh(recorded_at: datetime, now: datetime, max_age_hours: float) -> bool
     return now - recorded_at <= timedelta(hours=max_age_hours)
 
 
-def evaluated_probe_run_ids(observations: list[dict]) -> set[str]:
-    """evals の観測から評価済みプローブの runId を集める (純粋関数)。
+def evaluated_probe_keys(observations: list[dict]) -> set[tuple[str, str]]:
+    """evals の観測から評価済みプローブの (probeRunId, scenarioId) を集める (純粋関数)。
 
     自分 (kind: ux-eval-mech) の出力だけを見る — ux-judge-score 等の他 kind は
     「機械計測が積まれた」ことを意味しないので数えない。
+
+    **runId だけで見ない** (#435): 同じ run から複数シナリオの記録が来るので、
+    runId 単独だと 1 本目を積んだ時点で 2 本目が「評価済み」に化け、
+    **そのシナリオの計測が永久に積まれない**まま run は緑のままになる。
     """
-    ids: set[str] = set()
+    keys: set[tuple[str, str]] = set()
     for obs in observations:
         if not isinstance(obs, dict) or obs.get("kind") != OUTPUT_KIND:
             continue
         rid = obs.get("probeRunId")
-        if isinstance(rid, str) and rid:
-            ids.add(rid)
-    return ids
+        if not (isinstance(rid, str) and rid):
+            continue
+        sid = obs.get("scenarioId")
+        keys.add((rid, sid if isinstance(sid, str) and sid else UNKNOWN_SCENARIO))
+    return keys
 
 
 def _stats(values: list[float]) -> dict:
@@ -256,45 +288,15 @@ def run(data_dir: Path, now: datetime | None = None) -> int:
     probes = read_observations(data_dir / "probes")
     evals = read_observations(data_dir / "evals")
 
-    found = latest_record(probes)
-    if found is None:
+    found = latest_records_by_scenario(probes)
+    if not found:
         log(f"kind={RECORD_KIND} の観測が 1 件もありません。")
         log("  → golden-path-monitor の追記ステップが動いていない可能性があります。")
         return EXIT_NO_FRESH_RECORD
 
-    envelope, recorded_at = found
-    age_hours = (now - recorded_at).total_seconds() / 3600
-    if not is_fresh(recorded_at, now, max_age_hours):
-        log(
-            f"最新の記録が古すぎます: {recorded_at.isoformat()} "
-            f"({age_hours:.1f} 時間前 > 期待 {max_age_hours:g} 時間以内)。"
-        )
-        log("  → プローブ (golden-path-monitor) か記録の追記が止まっています。")
-        log("     古い記録を今日の計測として積まないため、この run は赤にします。")
-        return EXIT_NO_FRESH_RECORD
-
     # 鮮度 26h は前日 07:00 の記録 (約 25h 前) も通す。時刻だけで「今朝の記録が
-    # 欠けた朝」は検出できないので、評価済み runId の再評価をここで拒否する。
-    evaluated = evaluated_probe_run_ids(evals)
-    probe_run_id = envelope.get("runId")
-    if isinstance(probe_run_id, str) and probe_run_id in evaluated:
-        log(
-            f"最新の記録 (runId={probe_run_id}) は評価済みです。"
-            " 今朝の新しい記録が来ていません。"
-        )
-        log("  → golden-path-monitor か記録の追記が止まっています。")
-        log("     同じ記録を重複して積まないため、この run は赤にします。")
-        return EXIT_ALREADY_EVALUATED
-    if not (isinstance(probe_run_id, str) and probe_run_id):
-        log("記録に runId が無いため重複判定はできません — そのまま計測します。")
-
-    metrics = measure(envelope["record"])
-    log(
-        f"記録: probeId={envelope.get('probeId', '?')} "
-        f"scenario={envelope.get('scenarioId', '?')} "
-        f"recorded={recorded_at.isoformat()} ({age_hours:.1f} 時間前) "
-        f"turns={metrics['completedTurns']}/{metrics.get('plannedTurns') or '?'}"
-    )
+    # 欠けた朝」は検出できないので、評価済み (runId, scenarioId) の再評価をここで拒否する。
+    evaluated = evaluated_probe_keys(evals)
 
     run_id = os.environ.get("GITHUB_RUN_ID")
     server = os.environ.get("GITHUB_SERVER_URL", "")
@@ -303,8 +305,73 @@ def run(data_dir: Path, now: datetime | None = None) -> int:
         f"{server}/{repo}/actions/runs/{run_id}" if run_id and server and repo else None
     )
 
-    payload = build_payload(envelope, recorded_at, metrics, now, run_id, run_url)
-    print(json.dumps(payload, ensure_ascii=False))
+    payloads: list[dict] = []
+    stale: list[str] = []
+    already: list[str] = []
+
+    for scenario_id, (envelope, recorded_at) in sorted(found.items()):
+        age_hours = (now - recorded_at).total_seconds() / 3600
+        if not is_fresh(recorded_at, now, max_age_hours):
+            stale.append(scenario_id)
+            log(
+                f"[{scenario_id}] 最新の記録が古すぎます: {recorded_at.isoformat()} "
+                f"({age_hours:.1f} 時間前 > 期待 {max_age_hours:g} 時間以内) — 積みません。"
+            )
+            continue
+
+        probe_run_id = envelope.get("runId")
+        if isinstance(probe_run_id, str) and probe_run_id:
+            if (probe_run_id, scenario_id) in evaluated:
+                already.append(scenario_id)
+                log(
+                    f"[{scenario_id}] 最新の記録 (runId={probe_run_id}) は評価済みです — "
+                    "今朝の新しい記録が来ていません。"
+                )
+                continue
+        else:
+            log(
+                f"[{scenario_id}] 記録に runId が無いため重複判定はできません — "
+                "そのまま計測します。"
+            )
+
+        metrics = measure(envelope["record"])
+        log(
+            f"[{scenario_id}] 記録: probeId={envelope.get('probeId', '?')} "
+            f"recorded={recorded_at.isoformat()} ({age_hours:.1f} 時間前) "
+            f"turns={metrics['completedTurns']}/{metrics.get('plannedTurns') or '?'}"
+        )
+        payloads.append(
+            build_payload(envelope, recorded_at, metrics, now, run_id, run_url)
+        )
+
+    if not payloads:
+        # 全シナリオが古い / 全シナリオが評価済み — 入力が止まっているので赤にする。
+        # 「評価済み」が 1 件でもあれば、記録自体は届いているが今朝の更新が無い状態
+        if already:
+            log(
+                f"鮮度内の記録はすべて評価済みです (シナリオ: {', '.join(already)})。"
+            )
+            log("  → golden-path-monitor か記録の追記が止まっています。")
+            log("     同じ記録を重複して積まないため、この run は赤にします。")
+            return EXIT_ALREADY_EVALUATED
+        log(f"鮮度内のプローブ記録がありません (シナリオ: {', '.join(stale)})。")
+        log("  → プローブ (golden-path-monitor) か記録の追記が止まっています。")
+        log("     古い記録を今日の計測として積まないため、この run は赤にします。")
+        return EXIT_NO_FRESH_RECORD
+
+    skipped = stale + already
+    if skipped:
+        # 一部だけ積む朝は必ず名指しで残す。数だけ減って理由が残らないと、
+        # 「シナリオが 1 本しか無かった日」と区別がつかなくなる
+        log(
+            f"注意: 計測したのは {len(payloads)} シナリオで、"
+            f"{len(skipped)} シナリオ ({', '.join(skipped)}) は積んでいません "
+            "(古い記録 / 評価済み)。そのシナリオのプローブ側を確認してください。"
+        )
+
+    for payload in payloads:
+        print(json.dumps(payload, ensure_ascii=False))
+    log(f"計測を {len(payloads)} 件出力しました。")
     return EXIT_OK
 
 

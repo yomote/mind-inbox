@@ -43,12 +43,13 @@ jobs:
           git worktree add /tmp/ux-data FETCH_HEAD
           echo "probes: $(cat /tmp/ux-data/probes/*.jsonl 2>/dev/null | wc -l) 行 / evals: $(cat /tmp/ux-data/evals/*.jsonl 2>/dev/null | wc -l) 行"
 
-      - name: 機械計測を抽出 (鮮度 26h + 評価済み runId を確認)
+      - name: 機械計測を抽出 (鮮度 26h + 評価済み runId/scenarioId を確認)
         id: eval
         run: |
+          # 出力は **シナリオごとに 1 行の JSONL** (#435)。1 行だけ読むと片方の計測が静かに落ちる
           # 終了コードは必ずコマンド単体の直後に取る (PR #157 レビュー指摘と同じ理由)
           set +e
-          python3 cicd/scripts/ux-eval/ux_eval.py /tmp/ux-data > /tmp/ux-eval-payload.json
+          python3 cicd/scripts/ux-eval/ux_eval.py /tmp/ux-data > /tmp/ux-eval-payload.jsonl
           rc=$?
           set -e
           if [ "$rc" -eq 3 ]; then
@@ -59,7 +60,7 @@ jobs:
           fi
           if [ "$rc" -eq 4 ]; then
             # 前日の記録しか無い朝 — 重複を積まず、入力が止まったことを赤で表現する
-            echo "::error::最新のプローブ記録は評価済みです — 今朝の新しい記録が来ていません (golden-path-monitor の停止か追記失敗。詳細は上のログ)"
+            echo "::error::鮮度内のプローブ記録はすべて評価済みです — 今朝の新しい記録が来ていません (golden-path-monitor の停止か追記失敗。詳細は上のログ)"
             exit 1
           fi
           exit "$rc"
@@ -67,8 +68,27 @@ jobs:
       - name: データブランチへ追記
         id: post
         run: |
-          ./cicd/scripts/ux-data/append-observation.sh /tmp/ux-eval-payload.json
-          echo "$UX_DATA_BRANCH の evals/ に追記した"
+          # 1 行 = 1 シナリオの計測。**全部を 1 回の呼び出しで渡す** (push は 1 回)。
+          # ここで 1 行目だけ渡すと、そのシナリオだけトレンドが伸び続け、
+          # もう片方は「まだ積まれていません」の表示のまま気づかれない
+          PAYLOADS=()
+          i=0
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            i=$((i + 1))
+            printf '%s\n' "$line" > "/tmp/ux-eval-payload-$i.json"
+            PAYLOADS+=("/tmp/ux-eval-payload-$i.json")
+          done < /tmp/ux-eval-payload.jsonl
+
+          if [ "${#PAYLOADS[@]}" -eq 0 ]; then
+            # exit 0 なのに payload が無いのは想定外 (ux_eval.py は 1 件以上で 0 を返す)。
+            # 黙って緑にすると「計測が積まれた」と誤認されるので赤にする
+            echo "::error::機械計測の payload が 1 件も出ていません — cicd/scripts/ux-eval/ux_eval.py の出力を確認してください"
+            exit 1
+          fi
+
+          ./cicd/scripts/ux-data/append-observation.sh "${PAYLOADS[@]}"
+          echo "$UX_DATA_BRANCH の evals/ に ${#PAYLOADS[@]} 件追記した"
 
       # 落ちたことに気づける唯一の経路。別の見張りを置かず、落ちた当人が Issue を立てる
       # (ADR 0035 D2)。緑になれば同じ Issue を自分で閉じる。

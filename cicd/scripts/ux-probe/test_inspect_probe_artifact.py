@@ -39,9 +39,11 @@ def _write(directory: Path, name: str, record: object) -> Path:
     return path
 
 
-def _record(n_turns: int, scenario_id: str = "consultation-v1") -> dict:
+def _record(
+    n_turns: int, scenario_id: str = "consultation-v1", probe_id: str = "probe-1"
+) -> dict:
     return {
-        "probeId": "probe-1",
+        "probeId": probe_id,
         "scenario": {"id": scenario_id, "plannedTurns": 4},
         "turns": [{"user": f"u{i}", "assistant": f"a{i}"} for i in range(n_turns)],
     }
@@ -77,7 +79,7 @@ def test_JSON_が無ければ_exit3_で_stdout_は空(tmp_path: Path) -> None:
     assert result.stdout.strip() == ""
 
 
-def test_turns_が0件なら_exit4_で_stdout_は空(tmp_path: Path) -> None:
+def test_全シナリオのturns_が0件なら_exit4_で_stdout_は空(tmp_path: Path) -> None:
     _write(tmp_path, "probe.json", _record(0))
 
     result = _run(tmp_path)
@@ -96,15 +98,48 @@ def test_壊れた_JSON_は_exit1_で_turns0件_と区別する(tmp_path: Path) 
     assert result.stdout.strip() == ""
 
 
-def test_複数_JSON_があれば_名前順の最後を採る(tmp_path: Path) -> None:
-    _write(tmp_path, "probe-001.json", _record(4, scenario_id="old"))
-    latest = _write(tmp_path, "probe-002.json", _record(4, scenario_id="new"))
+def test_同じシナリオが複数あれば_名前順の最後を採る(tmp_path: Path) -> None:
+    _write(tmp_path, "probe-001.json", _record(4, probe_id="old"))
+    latest = _write(tmp_path, "probe-002.json", _record(4, probe_id="new"))
 
     result = _run(tmp_path)
 
     assert result.returncode == 0
     assert result.stdout.strip() == str(latest)
-    assert "scenario=new" in result.stderr
+    assert "probeId=new" in result.stderr
+
+
+def test_シナリオが複数あれば全部出す(tmp_path: Path) -> None:
+    """無いと何が静かに通るか (#435):
+
+    台本を 2 本に増やしても採点に回るのが 1 本だけになり、**もう片方は毎朝記録される
+    のに一度も採点されない**。rubric 0.2 の U7 (仮説の押し付け) は否定局面シナリオ
+    でしか発火しないので、観測器を足した意味がそのまま消える。
+    """
+    a = _write(tmp_path, "probe-push.json", _record(4, scenario_id="hypothesis-pushback-v1"))
+    b = _write(tmp_path, "probe-work.json", _record(4, scenario_id="work-overwhelm-v1"))
+
+    result = _run(tmp_path)
+
+    assert result.returncode == 0
+    # scenarioId 昇順 (パス順ではない) で安定させる
+    assert result.stdout.strip().splitlines() == [str(a), str(b)]
+
+
+def test_一部のシナリオが空でも残りを採点対象にする(tmp_path: Path) -> None:
+    """途中で壊れたシナリオがあっても、取れている会話の採点まで捨てない。
+
+    ただし外したことは stderr に残す (黙って 1 本に減ると欠測と区別できない)。
+    """
+    empty = _write(tmp_path, "probe-a.json", _record(0, scenario_id="broken-v1"))
+    ok = _write(tmp_path, "probe-b.json", _record(4, scenario_id="work-overwhelm-v1"))
+
+    result = _run(tmp_path)
+
+    assert result.returncode == 0
+    assert result.stdout.strip().splitlines() == [str(ok)]
+    assert str(empty) not in result.stdout
+    assert "broken-v1" in result.stderr
 
 
 def test_サブディレクトリ内の_JSON_も見つける(tmp_path: Path) -> None:
