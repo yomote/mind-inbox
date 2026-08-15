@@ -173,6 +173,85 @@ class TestCosmosApprovalRepository:
         assert fetched.status == "approved"
 
 
+class TestCosmosApprovalClaim:
+    """`pending` → 処理済みの遷移を **1 本だけ通す** 条件付き更新 (PR #430 Codex P1)。
+
+    無いと何が静かに通るか: 条件なしの upsert に戻すと、同じ承認 ID がほぼ同時に
+    2 本届いたとき**両方が pending を読んで両方が書き込みに成功**し、両方が
+    checkpoint 再開へ進む = **副作用 (メール送信など) が二重に実行される**。
+    409 は「2 本目が来た」ことを説明するだけで、実行そのものは止められない。
+    画面上は普通に成功して見えるので、二重送信された側の証跡が出るまで気づけない。
+    """
+
+    def _pending(self) -> ApprovalRecord:
+        return ApprovalRecord(
+            session_id="s1",
+            plan=Plan(tool_name="send_reply", is_side_effecting=True),
+            checkpoint_id="cp-1",
+        )
+
+    async def test_単体_claim_は_pending_を処理済みに進めて更新後を返す(
+        self, fake_cosmos_container
+    ):
+        repo = CosmosApprovalRepository(fake_cosmos_container)
+        record = self._pending()
+        await repo.save(record)
+
+        claimed = await repo.claim(record.id, "approved", "2026-08-15T02:00:00+00:00")
+
+        assert claimed is not None
+        assert claimed.status == "approved"
+        assert claimed.processed_at == "2026-08-15T02:00:00+00:00"
+        # 保存側にも反映されていること (返り値だけ作って書いていない、を弾く)
+        assert (await repo.get(record.id)).status == "approved"
+
+    async def test_単体_二本目の_claim_は_None(self, fake_cosmos_container):
+        repo = CosmosApprovalRepository(fake_cosmos_container)
+        record = self._pending()
+        await repo.save(record)
+
+        first = await repo.claim(record.id, "approved", "2026-08-15T02:00:00+00:00")
+        second = await repo.claim(record.id, "rejected", "2026-08-15T02:00:01+00:00")
+
+        assert first is not None
+        assert second is None
+        # 負けた側の決定で**上書きされない** (approved が rejected に化けない)
+        assert (await repo.get(record.id)).status == "approved"
+
+    async def test_単体_読んでから置換するまでに他が書いたら_claim_は_None(
+        self, fake_cosmos_container
+    ):
+        """ETag 条件が本当に効いているか (= 同時 2 本のうち片方が負けるか)。
+
+        無いと何が静かに通るか: `etag` を渡さない実装に戻しても、直列に呼ぶ限りは
+        status チェックで弾けるので上のテストは通ってしまう。**読んだあとに他者が
+        書いた**場合だけが条件付き更新の存在意義なので、その窓をここで再現する。
+        """
+        repo = CosmosApprovalRepository(fake_cosmos_container)
+        record = self._pending()
+        await repo.save(record)
+
+        original_read = fake_cosmos_container.read_item
+
+        async def read_then_let_another_win(item, partition_key):
+            doc = await original_read(item=item, partition_key=partition_key)
+            # 読んだ直後に「もう 1 本」が同じ文書を書き換えた状況 (ETag が変わる)。
+            # status は pending のままにして、**ETag だけが判定材料**になるようにする
+            if fake_cosmos_container.items[item].get("status") == "pending":
+                await fake_cosmos_container.upsert_item(
+                    body={**fake_cosmos_container.items[item]}
+                )
+            return doc
+
+        fake_cosmos_container.read_item = read_then_let_another_win
+
+        claimed = await repo.claim(record.id, "approved", "2026-08-15T02:00:00+00:00")
+
+        assert claimed is None
+        # 負けた側は 1 文字も書いていない
+        assert (await repo.get(record.id)).status == "pending"
+
+
 class TestRepositoryFactories:
     """COSMOS_ENDPOINT の有無による実装選択 (stub fallback / ADR 0030 D7 の流儀)。"""
 

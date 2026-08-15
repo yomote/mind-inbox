@@ -4,8 +4,9 @@ import { ConversationMessageSchema } from "../clients/aiAgentContracts";
 import type { ConversationMessage } from "../clients/aiAgentContracts";
 import { z } from "zod";
 import type { TrpcContext } from "./context";
-import { APPROVAL_NOT_FOUND_TOKEN } from "./errorTokens";
+import { APPROVAL_NOT_FOUND_TOKEN, encodeApprovalAlreadyProcessed } from "./errorTokens";
 import {
+  ApprovalAlreadyProcessedError,
   ApprovalNotFoundError,
   approve as approveAiAgent,
   createPlan as createPlanAiAgent,
@@ -736,7 +737,25 @@ const consultationRouter = router({
           approved: input.approved,
         });
       } catch (err) {
-        // 承認レコードがもう無い (TTL 1h 失効 / ai-agent 再起動 / 消費済み) は
+        // 二重送信 (#82 / PO 裁定 2026-08-15 B 案)。**「もう無い」(NOT_FOUND) と分ける** —
+        // 混ぜていた頃はフロントが「実行されたか分かりません」としか言えず、送信済みの
+        // メールをユーザーがもう一度送る判断をしうる状態だった。結果 (approved /
+        // rejected) を token に載せることで、UI は実行の有無まで言い切れる。
+        if (err instanceof ApprovalAlreadyProcessedError) {
+          logErrorEvent("approve.already-processed", {
+            route: "consultation.approve",
+            kind: input.approved ? "approved" : "rejected",
+            // どちらで解決済みだったか。**承認対象の中身や時刻は載せない**
+            // (ALLOWED_FIELDS の外なので出口で落ちる) — 運用が知りたいのは
+            // 「二重送信がどれだけ起きているか」だけ。
+            reason: err.status,
+          });
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: encodeApprovalAlreadyProcessed(err.status),
+          });
+        }
+        // 承認レコードがもう無い (TTL 1h 失効 / ai-agent 再起動) は
         // **回復不能な失敗として区別する** (#82 / PR #416 judge major-1)。汎用エラーで
         // 返すとフロントは「再試行してください」を出し続け、承認カードが閉じられない
         // まま会話が永久に詰む (再試行は決して成功しない)。

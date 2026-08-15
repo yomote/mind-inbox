@@ -132,7 +132,10 @@ const APPROVAL_TOOL = "send_reply";
 /** 実装の `_REJECTION_REPLY` と同一文面。 */
 const REJECTION_REPLY = "操作はキャンセルされました。他にご用件はありますか？";
 
-/** approval_request_id → status。二重解決 (実装は 404) を再現するために持つ。 */
+/**
+ * approval_request_id → { status, processedAt }。
+ * 二重解決 (実装は **409 + 現在状態** / #82) を再現するために持つ。
+ */
 const approvals = new Map();
 
 /**
@@ -169,7 +172,7 @@ function needsApproval(message) {
 /** 承認待ちの ChatResponse。実装 (`workflow.py`) と同じ形・同じ文面で返す。 */
 function approvalPending() {
   const id = nextId("appr");
-  approvals.set(id, "pending");
+  approvals.set(id, { status: "pending", processedAt: null });
   return {
     reply: `「${APPROVAL_TOOL}」を実行するには承認が必要です。実行してよろしいですか？`,
     requires_approval: true,
@@ -270,14 +273,31 @@ const routes = {
 
   /**
    * 承認 / 却下で中断していたツール実行を解決する (G1)。
-   * 未知 ID・解決済み ID は実装と同じく 404 (承認待ちが二重に消費されない)。
+   *
+   * 実装 (`workflow.py` / `main.py`) と同じ分け方にする (#82 / PO 裁定 2026-08-15 B 案):
+   * **未知 ID は 404 / 解決済み ID は 409 + 現在状態**。ここを 404 に丸めると、
+   * ハーネスだけが古い契約のままになり「実配線で確かめた」と言えなくなる。
    */
   "POST /approve": (body) => {
     const id = body.approval_request_id;
-    if (approvals.get(id) !== "pending") {
+    const record = approvals.get(id);
+    if (!record) {
       return { status: 404, json: { detail: `Approval not found: '${id}'` } };
     }
-    approvals.set(id, body.approved ? "approved" : "rejected");
+    if (record.status !== "pending") {
+      return {
+        status: 409,
+        json: {
+          detail: `Approval already processed: '${record.status}'`,
+          status: record.status,
+          processed_at: record.processedAt,
+        },
+      };
+    }
+    approvals.set(id, {
+      status: body.approved ? "approved" : "rejected",
+      processedAt: new Date().toISOString(),
+    });
     return {
       status: 200,
       json: {

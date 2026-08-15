@@ -35,6 +35,7 @@ v1 の自前 7 状態 FSM を MAF の graph Workflow に写し (ADR 0016 / M1-3)
 import logging
 import uuid
 from collections.abc import AsyncIterator, Sequence
+from datetime import datetime, timezone
 from typing import Never, Optional, Union
 
 from agent_framework import (
@@ -110,6 +111,33 @@ _APP_CHECKPOINT_TYPES = [
     "app.workflow:ChatTurn",
     "app.workflow:FinalReply",
 ]
+
+
+class ApprovalAlreadyProcessedError(Exception):
+    """同じ承認 ID が **2 回目**に送られた (#82 / PO 裁定 2026-08-15 B 案)。
+
+    `ValueError` (= main.py が 404 に写す「承認レコードがもう無い」) と**別の型**に
+    しているのが本体。二重送信とレコード消失を同じ 404 に混ぜていた頃は、
+    「もう解決済み」ということすらクライアントに伝わらず、**確実に未実行と言える
+    却下済みまで「実行されたか不明」**に落ちていた。型で分けることで main.py が
+    409 + 現在状態に写す。
+
+    **status が意味するのは「どちらの決定を受け付けたか」であって実行の完了ではない**
+    (PR #430 Codex P1)。遷移は checkpoint 再開の**前**に書くので、`approved` の記録後・
+    副作用の実行前にプロセスが落ちれば「approved なのに実行されていない」レコードが
+    残る。したがって:
+
+    - `approved` … 実行してよいと受け付けた。**実行された保証はない**
+    - `rejected` … 実行しないと受け付けた。この経路でツールは呼ばれない = **未実行と言える**
+
+    `processed_at` は**受け付けた時刻**で、完了の証拠ではない。None は「時刻を持たない
+    古いレコード」であって未処理ではない — status を無視して時刻で判定してはいけない。
+    """
+
+    def __init__(self, status: str, processed_at: Optional[str]) -> None:
+        super().__init__(f"Approval already processed: {status!r}")
+        self.status = status
+        self.processed_at = processed_at
 
 
 def _cosmos_enabled() -> bool:
@@ -839,7 +867,15 @@ async def resume_after_approval(
     if not record:
         raise ValueError(f"Approval not found: {approval_id!r}")
     if record.status != "pending":
-        raise ValueError(f"Approval already processed: {record.status!r}")
+        # **404 (レコードが無い) と混ぜない** (#82 / PO 裁定 2026-08-15 B 案)。
+        # ここに来るのは「同じ承認 ID がもう一度送られた」= 二重送信。404 に混ぜると
+        # クライアントは「レコードが消えた」のか「もう解決済み」なのかを判定できず、
+        # 却下済み (= 確実に未実行) すら案内できない。
+        #
+        # **これは早期の見切りであって排他ではない** — 実際に 1 本だけ通す判定は
+        # 下の `claim` (原子的な遷移) が持つ。ここだけだと同時リクエストは
+        # 両方素通りする (PR #430 Codex P1)。
+        raise ApprovalAlreadyProcessedError(record.status, record.processed_at)
     if not record.checkpoint_id:
         raise ValueError(f"Approval checkpoint not found: {approval_id!r}")
 
@@ -852,15 +888,61 @@ async def resume_after_approval(
         except Exception as exc:
             raise ValueError(f"Approval checkpoint not found: {approval_id!r}") from exc
     else:
-        # in-memory 構成: 解決に入る時点で registry から解放する (成功・失敗
-        # どちらでも再試行は status チェックで弾かれるため、保持し続ける理由がない)
-        storage = _pending_run_storages.pop(approval_id, None)
+        # in-memory 構成: ここでは**参照するだけ**で解放しない。pop を排他の代用に
+        # すると、同時に届いた 2 本目が「checkpoint が無い」(404) に化けて
+        # **二重送信が二重送信として説明されない**。排他の責務は下の claim に
+        # 1 本化し、解放は再開が終わってから (finally) 行う。
+        storage = _pending_run_storages.get(approval_id)
         if storage is None:
             raise ValueError(f"Approval checkpoint not found: {approval_id!r}")
 
-    record.status = "approved" if approved else "rejected"
-    await approval_repo.save(record)
+    # **ここが「1 回だけ実行する」の要** (PR #430 Codex P1)。pending からの遷移を
+    # 原子的に獲得し (Cosmos は ETag 条件付き置換 / in-memory は lock)、取れなかった
+    # 側は checkpoint を再開せずに 409 で返す。上の status チェックだけでは、
+    # 同時に届いた 2 本が**両方 pending を読んで両方が副作用を実行する**。
+    #
+    # 遷移を resume の**前**に書く順序は従来どおり: 実行中にクラッシュしたときは
+    # 「実行されたか分からない」レコードが残るが、二重実行よりそちらを選ぶ。
+    # したがって `processed_at` は **受け付けた時刻であって完了の証拠ではない**
+    # (この意味は 409 の応答と UI 文言まで一貫させてある)。
+    claimed = await approval_repo.claim(
+        approval_id,
+        "approved" if approved else "rejected",
+        datetime.now(timezone.utc).isoformat(),
+    )
+    if claimed is None:
+        current = await approval_repo.get(approval_id)
+        if current is None or current.status == "pending":
+            # 競合に負けたのに pending のまま / レコードが消えた = 承認レコードは
+            # もう当てにできない。**「処理済み」と断定せず** 404 側に倒す
+            raise ValueError(f"Approval not found: {approval_id!r}")
+        raise ApprovalAlreadyProcessedError(current.status, current.processed_at)
+    record = claimed
 
+    try:
+        return await _resume_claimed_run(
+            approval_id, approved, record, storage, session_repo, approval_repo, client
+        )
+    finally:
+        if not _cosmos_enabled():
+            # in-memory には TTL が無いので、解決した run の checkpoint を残さない
+            # (PR #243 レビュー指摘)。**解放は claim を獲得した側が、再開を終えてから**
+            # — 早く pop すると、同時に届いた 2 本目の checkpoint 参照が先に消えて
+            # 409 (二重送信) が 404 (checkpoint が無い) に化ける。成功・失敗どちらでも
+            # 解放するので、失敗した run の storage が残り続けることもない。
+            _pending_run_storages.pop(approval_id, None)
+
+
+async def _resume_claimed_run(
+    approval_id: str,
+    approved: bool,
+    record: ApprovalRecord,
+    storage: CheckpointStorage,
+    session_repo: SessionRepository,
+    approval_repo: ApprovalRepository,
+    client: Optional[BaseChatClient],
+) -> str:
+    """claim を獲得した 1 本だけが通る再開処理 (排他の判定は呼び出し側が済ませている)。"""
     workflow = _build_chat_workflow(
         session_repo, client, stream=False, checkpoint_storage=storage
     )

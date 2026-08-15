@@ -28,10 +28,14 @@ vi.mock("./http", () => ({
 }));
 
 import { TRPCClientError } from "@trpc/client";
-import { APPROVAL_NOT_FOUND_TOKEN } from "../../../bff/src/trpc/errorTokens";
+import {
+  APPROVAL_NOT_FOUND_TOKEN,
+  encodeApprovalAlreadyProcessed,
+} from "../../../bff/src/trpc/errorTokens";
 import { trpc } from "../trpc/client";
 import { chatStreamFetch, ttsPrefetchFetch } from "./http";
 import {
+  ApprovalAlreadyProcessed,
   ApprovalExpired,
   ApprovalRequestUnusable,
   respondToApproval,
@@ -378,6 +382,55 @@ describe("[単体] 副作用ツールの承認要求 (#82 / G1)", () => {
     const err = await respondToApproval("appr-1", true).catch((e: unknown) => e);
 
     expect(err).not.toBeInstanceOf(ApprovalExpired);
+  });
+
+  it.each([{ status: "approved" as const }, { status: "rejected" as const }])(
+    "CONFLICT + 処理済み token (status=$status) は ApprovalAlreadyProcessed に写す",
+    async ({ status }) => {
+      // 無いと: 二重送信が汎用エラー (再試行してください) か ApprovalExpired
+      // (実行されたか分かりません) に落ち、**409 が運んできた結果が捨てられる** (#82 /
+      // PO 裁定 2026-08-15 B 案)。送信済みの操作をユーザーがもう一度依頼しうる。
+      // token の符号化・復号は BFF の errorTokens.ts が 1 箇所で持つ (書き写さない)。
+      vi.mocked(trpc.consultation.approve.mutate).mockRejectedValue(
+        trpcError(encodeApprovalAlreadyProcessed(status), "CONFLICT"),
+      );
+
+      const err = await respondToApproval("appr-1", true).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ApprovalAlreadyProcessed);
+      expect((err as ApprovalAlreadyProcessed).status).toBe(status);
+      // 「もう無い」に混ざっていないこと (混ざると実行の有無を言えなくなる)
+      expect(err).not.toBeInstanceOf(ApprovalExpired);
+    },
+  );
+
+  it.each([
+    { name: "token の無い CONFLICT (他 procedure の競合)", message: "conflict" },
+    { name: "status を欠く token", message: "approval-already-processed" },
+    { name: "未知の status", message: "approval-already-processed:pending" },
+  ])("$name は ApprovalAlreadyProcessed にしない", async ({ message }) => {
+    // 無いと: CONFLICT を code だけで読む実装に退化しても気づけない。汎用 CONFLICT まで
+    // 「すでに承認済みです」に化けると、生きている承認カードが実行済みの顔をして閉じる
+    // (NOT_FOUND で踏んだのと同じ事故 / Codex 4 巡目 P2)。未知 status を「承認済み」に
+    // 丸めると、**実行されていない操作を「実行されました」と案内する**。
+    vi.mocked(trpc.consultation.approve.mutate).mockRejectedValue(trpcError(message, "CONFLICT"));
+
+    const err = await respondToApproval("appr-1", true).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(ApprovalAlreadyProcessed);
+  });
+
+  it("token だけ一致していてもコードが CONFLICT でなければ ApprovalAlreadyProcessed にしない", async () => {
+    // 無いと: 判定が message だけに退化しても気づけない (上流障害の文面が偶然一致した
+    // ときに「実行されました」と断定してしまう)。
+    vi.mocked(trpc.consultation.approve.mutate).mockRejectedValue(
+      trpcError(encodeApprovalAlreadyProcessed("approved"), "INTERNAL_SERVER_ERROR"),
+    );
+
+    const err = await respondToApproval("appr-1", true).catch((e: unknown) => e);
+
+    expect(err).not.toBeInstanceOf(ApprovalAlreadyProcessed);
   });
 
   it("NOT_FOUND 以外の失敗は ApprovalExpired にしない (再試行で直る失敗を消さない)", async () => {

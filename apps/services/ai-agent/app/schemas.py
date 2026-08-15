@@ -49,6 +49,34 @@ class ApproveResponse(BaseModel):
     reply: str
 
 
+class ApprovalConflictResponse(BaseModel):
+    """`/approve` の **409**: その承認 ID はもう解決済み (#82 / PO 裁定 2026-08-15 B 案)。
+
+    404 (レコードが無い) と分ける理由: 混ぜていた頃は「レコードが消えた」のか
+    「もう解決済み」なのかが応答から読めず、**確実に未実行と言える却下済みまで
+    「実行されたか不明」**に落ちていた。409 + 現在状態にすると、クライアントは
+    「すでに却下済み (= 実行されていない)」を言い切れ、承認済みは実行の有無を
+    断定しない案内に分けられる。
+
+    **`status` は「どちらの決定を受け付けたか」であって実行の完了ではない**
+    (PR #430 Codex P1)。遷移は checkpoint 再開の前に書くので、`approved` の記録後・
+    副作用の実行前に落ちれば「approved なのに未実行」のレコードが残る。
+    `approved` から「実行された」を導いてはいけない。
+
+    `detail` は FastAPI の慣行に合わせた人間可読の 1 行で、**機械判別は `status` で行う**
+    (BFF は zod でこの body を検証してから専用エラーに写す)。プロキシや別レイヤが返す
+    汎用 409 はこの形にならないので、承認と無関係な 409 を「処理済み」に化けさせない。
+    """
+
+    detail: str
+    status: Literal["approved", "rejected"]
+    # **決定を受け付けた**時刻 (ISO 8601 / UTC)。実行の完了時刻ではない (上記)。
+    # **null がありうる**: この項目より前に書かれた Cosmos の `ApprovalRecord` には
+    # 時刻が無い。「時刻が取れなかった」を「未処理」と混同させないため、status とは
+    # 独立の nullable にしてある。
+    processed_at: Optional[str] = None
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok"] = "ok"
 
@@ -83,6 +111,13 @@ class ApprovalRecord(BaseModel):
     session_id: str
     plan: Plan
     status: Literal["pending", "approved", "rejected"] = "pending"
+    # status を pending から動かした時刻 (ISO 8601 / UTC)。`/approve` の 409 応答が
+    # 「いつ受け付けたか」を運ぶために持つ (#82)。**実行の完了時刻ではない** —
+    # 遷移は checkpoint 再開の前に書かれる (PR #430 Codex P1)。**None がありうる** —
+    # この項目より前に書かれた Cosmos 文書には無い (`extra="forbid"` にしていないのと
+    # 同じ理由で、既存文書を読めなくしない)。**status の代わりに使ってはいけない**:
+    # 時刻が無いことは「未処理」を意味しない。
+    processed_at: Optional[str] = None
     # approvalRequestId (= id) → MAF checkpoint への写像 (ADR 0016 M1-3)。
     # /approve はこの checkpoint から workflow を再開する。
     checkpoint_id: Optional[str] = None

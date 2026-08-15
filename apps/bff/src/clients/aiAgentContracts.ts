@@ -92,8 +92,19 @@ export type ApproveResponse = z.infer<typeof ApproveResponseSchema>;
  * 投げる `ValueError` で、`app/main.py` が `detail=str(exc)` にそのまま載せる:
  *
  *   - `Approval not found: '<id>'`             — 未知 ID / TTL 1h 失効 / 再起動で消えた
- *   - `Approval already processed: '<status>'` — 消費済み (approved / rejected)
  *   - `Approval checkpoint not found: '<id>'`  — checkpoint が消えている
+ *   - `Approval already processed: '<status>'` — **旧 ai-agent** が返す消費済み
+ *
+ * 現行の ai-agent は消費済みを 409 + 現在状態 (`ApprovalConflictSchema`) で返す
+ * (#82 / PO 裁定 2026-08-15 B 案)。それでも `already processed` をこの 404 判別に
+ * **残してある**のは、**配備スキューの窓**があるため: BFF だけ先に新しくなると、
+ * 旧 ai-agent は消費済みを 404 で返し続ける。パターンから外すと、その窓では
+ * 二重送信が「承認レコード由来ではない 404」= 上流障害に化け、**カードが閉じられず
+ * 会話が詰む** (404 デッドロックの再発)。残しておけば、旧新どちらの組み合わせでも
+ * 二重送信はカード閉鎖に落ちる (新しい組では 409 側が結果まで運ぶ)。
+ *
+ * **409 の判別と競合しない**: 409 は HTTP status と body の形で判別しており、
+ * この detail パターンは 404 のときしか見ない。
  *
  * **これ以外の 404 は承認レコードの状態について何も言っていない** (FastAPI 既定の
  * `Not Found` / プロキシの HTML / ベース URL 違い)。区別せず全部を「もう受け付け
@@ -104,6 +115,36 @@ export type ApproveResponse = z.infer<typeof ApproveResponseSchema>;
  */
 export const APPROVAL_GONE_DETAIL =
   /^Approval (not found|already processed|checkpoint not found)\b/;
+
+/**
+ * `/approve` の **409** body (#82 / PO 裁定 2026-08-15 B 案 / ai-agent の
+ * `ApprovalConflictResponse`)。同じ承認 ID への 2 回目が来たときの現在状態。
+ *
+ * **status は「どちらの決定を受け付けたか」であって実行の完了ではない**
+ * (PR #430 Codex P1)。ai-agent は遷移を checkpoint 再開の**前**に書くので、
+ * `approved` の記録後・副作用の実行前に落ちれば「approved なのに未実行」が残る。
+ *
+ *   - `approved` … 実行してよいと受け付けた。**実行された保証はない**
+ *   - `rejected` … 実行しないと受け付けた。この経路でツールは呼ばれない = **未実行と言える**
+ *
+ * それでも 404 と分ける価値があるのは、**「もう解決済み」だと分かること自体**が
+ * 404 (レコードが消えた) からは得られないため — 却下済みなら未実行と言い切れ、
+ * 承認済みなら「実行されたかは会話を続けて確認」と正確に案内できる。
+ *
+ * `processedAt` は **受け付けた時刻** (完了時刻ではない) で、**nullable** — この項目より
+ * 前に書かれた ai-agent の `ApprovalRecord` には時刻が無い。**時刻の欠落を「未処理」と
+ * 読まないこと** (判定は status だけで行う)。
+ *
+ * schema にして zod で検証しているのは、**承認と無関係な 409 を「処理済み」に
+ * 化けさせない**ため (404 側で detail を選り分けているのと同じ規律)。プロキシや
+ * 別レイヤの 409 はこの形にならないので、パースに失敗したものは上流障害として扱う。
+ */
+export const ApprovalConflictSchema = z.object({
+  detail: z.string(),
+  status: z.enum(["approved", "rejected"]),
+  processedAt: z.string().nullable(),
+});
+export type ApprovalConflict = z.infer<typeof ApprovalConflictSchema>;
 
 // ── /extract (Problem 中心 2層モデル / ADR 0007・0012) ────────────────────────
 

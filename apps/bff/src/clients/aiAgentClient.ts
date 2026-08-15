@@ -4,8 +4,9 @@ import { logErrorEvent, logEvent, trackDependency } from "../observability/telem
 import { summarizeIssues } from "../schemaIssues";
 import { serviceHeaders } from "./serviceToken";
 import { ExtractionResultSchema, type ExtractionResult } from "../trpc/domain";
-import { APPROVAL_GONE_DETAIL } from "./aiAgentContracts";
-import type { ExtractFailureToken } from "../trpc/errorTokens";
+import { APPROVAL_GONE_DETAIL, ApprovalConflictSchema } from "./aiAgentContracts";
+import type { ApprovalConflict } from "./aiAgentContracts";
+import type { ApprovalProcessedStatus, ExtractFailureToken } from "../trpc/errorTokens";
 import type {
   ApproveRequest,
   ApproveResponse,
@@ -82,6 +83,37 @@ export class ApprovalNotFoundError extends Error {
 }
 
 /**
+ * 同じ承認 ID への **2 回目** (#82 / PO 裁定 2026-08-15 B 案 / ai-agent の 409)。
+ *
+ * `ApprovalNotFoundError` と**別の型**にしているのが本体。以前は ai-agent が
+ * 二重送信も「レコードが無い」も 404 で返していたため、**もう解決済みだということ
+ * すら分からず**、確実に未実行と言える却下済みまで「実行されたか不明」に落ちていた。
+ *
+ * **`status` は受け付けた決定であって実行の完了ではない** (PR #430 Codex P1) —
+ * `rejected` は未実行と言い切れるが、`approved` から「実行された」は導けない
+ * (ai-agent は遷移を checkpoint 再開の前に書くため)。文言はフロント側でこの差を保つ。
+ *
+ * `processedAt` は受け付けた時刻で、null がありうる (時刻を持たない古いレコード)。
+ * **判定に使わない** — 時刻の欠落は「未処理」を意味しない。
+ */
+export class ApprovalAlreadyProcessedError extends Error {
+  // パラメータプロパティ短縮記法は erasableSyntaxOnly で使えないため明示代入する。
+  readonly status: ApprovalProcessedStatus;
+  readonly processedAt: string | null;
+
+  constructor(
+    approvalRequestId: string,
+    status: ApprovalProcessedStatus,
+    processedAt: string | null,
+  ) {
+    super(`aiAgentClient: approval already processed (${status}) — ${approvalRequestId}`);
+    this.name = "ApprovalAlreadyProcessedError";
+    this.status = status;
+    this.processedAt = processedAt;
+  }
+}
+
+/**
  * エラー応答の `detail` (FastAPI の HTTPException が返す形) を読む。読めなければ null。
  *
  * 握り潰す範囲: 本文が JSON でない / `detail` が文字列でない場合の理由は捨てる。
@@ -96,6 +128,36 @@ async function readErrorDetail(res: Response): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * `/approve` の 409 body を「承認の二重送信」として読む (#82)。形が違えば null。
+ *
+ * **status を含む契約の形まで見る**のがここの持ち場。HTTP status だけで判定すると、
+ * 承認と無関係な 409 (プロキシ / 別レイヤ) まで「すでに処理済みです」に化け、
+ * 生きている承認カードが実行済みの顔をして閉じる (404 側で detail を選り分けているのと
+ * 同じ事故が 1 段隣で起きる)。
+ *
+ * 握り潰す範囲: 本文が JSON でない / 形が合わない場合の**理由**は捨てる (どれも
+ * 「承認由来の 409 ではない」= 上流障害として同じ扱いになる)。捨てたことは
+ * 呼び出し側が `approve.unmatched-409` として記録するので、無音にはならない。
+ * **本文は例外文にもログにも載せない** (#313 B-3)。
+ */
+async function readApprovalConflict(res: Response): Promise<ApprovalConflict | null> {
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    return null;
+  }
+  const wire = body as { detail?: unknown; status?: unknown; processed_at?: unknown };
+  // wire は snake_case、BFF の契約は camelCase (aiAgentContracts.ts のヘッダ参照)。
+  const parsed = ApprovalConflictSchema.safeParse({
+    detail: wire?.detail,
+    status: wire?.status,
+    processedAt: wire?.processed_at ?? null,
+  });
+  return parsed.success ? parsed.data : null;
 }
 
 export class ExtractError extends Error {
@@ -326,8 +388,38 @@ export async function approve(req: ApproveRequest): Promise<ApproveResponse> {
         }),
       });
 
+      // 409 = **同じ承認 ID の 2 回目** (#82 / PO 裁定 2026-08-15 B 案)。404 と分けて
+      // 上げることで、フロントは受け付けられた決定 (承認済み / 却下済み) を伝えられる。
+      //
+      // **すべての 409 を変換しない** — 404 側と同じ規律。承認と無関係な 409
+      // (プロキシ / 別レイヤ / 将来の別ルート) を「処理済み」に写すと、生きている
+      // 承認カードが「もう解決済み」の顔をして閉じる。判別は body の形で行う
+      // (zod で status を検証。detail 文字列一致より壊れにくく、契約テストが
+      // pydantic 側と機械照合する)。
+      if (res.status === 409) {
+        const conflict = await readApprovalConflict(res);
+        if (conflict) {
+          throw new ApprovalAlreadyProcessedError(
+            req.approvalRequestId,
+            conflict.status,
+            conflict.processedAt,
+          );
+        }
+        // 承認レコードについて何も言っていない 409 = 上流障害。**本文は載せない**
+        // (上流本文の転記は #313 B-3 で塞いだ経路) — 「形が違った」事実だけ残す。
+        logErrorEvent("approve.unmatched-409", {
+          target: "ai-agent",
+          operation: "POST /approve",
+          upstreamStatus: res.status,
+          reason: "body-unmatched",
+        });
+        throw new Error(
+          `aiAgentClient: POST /approve failed — ${res.status} ${res.statusText} (承認レコード由来ではない 409)`,
+        );
+      }
+
       // 404 のうち **ai-agent が承認レコードについて返したもの** だけを「もう無い」
-      // (TTL 失効 / ai-agent 再起動 / 消費済み) として上げる。種別を保つのは、呼び出し側
+      // (TTL 失効 / ai-agent 再起動) として上げる。種別を保つのは、呼び出し側
       // (router) が NOT_FOUND に翻訳し、フロントが「カードを閉じて続行」に落とすため。
       //
       // **すべての 404 を変換しない** (PR #416 Codex 3 巡目 P2): ルート未配備・リバース
