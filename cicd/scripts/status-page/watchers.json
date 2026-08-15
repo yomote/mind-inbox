@@ -62,6 +62,20 @@
       "note": "**id が数字なのは仕様** — GitHub が管理する dynamic workflow (path は `dynamic/github-code-scanning/codeql`) は、`actions/workflows/{id}/runs` に path 文字列を渡すと 404 になり、**数値の workflow id でしか run 履歴を引けない** (2026-08-14 実測: 数値 333008403 は 84 run を返す / path 文字列は 404 Not Found)。自前 workflow の `codeql.yml` (advanced setup) は 2026-08-12 18:42 UTC に default setup が有効化された副作用で `disabled_manually` になり、Issue #408 の PO 裁定 (2026-08-14) で退役した — この行がその置き換え。**expect_hours 192 は『PR / push が 8 日間 1 度も無いのは異常』という下限**であって、default setup の週次 schedule に依存した値ではない (2026-08-14 実測では直近 30 run がすべて PR / push 由来で、schedule 由来の run は**未確認**)。数値 id はこのリポジトリでしか通用せず、default setup を一度無効化して有効化し直すと**別の id が振られてこの行は「未検証」に落ちる** (静かに緑にはならない)。"
     },
     {
+      "id": "332644220",
+      "name": "Dependabot (依存更新 PR)",
+      "what": "既知 CVE と版上げの修正 PR を作る側 (検出側は security-sweep)。宣言は .github/dependabot.yml — 全 ecosystem monthly + security update は GitHub 側の即時トリガー",
+      "expect_hours": 800,
+      "note": "**id が数字なのは仕様** — GitHub 管理の dynamic workflow (path は `dynamic/dependabot/dependabot-updates`) は数値の workflow id でしか run 履歴を引けない (2026-08-15 実測: 数値 332644220 は 51 run を返す。CodeQL 行と同じ手筋 / Issue #408)。**expect_hours 800 は dependabot.yml の宣言 (interval: monthly ≒ 744h) + 余裕**であって実測頻度ではない — 実測 (2026-08-15) では有効化 (08-12) 以降ほぼ毎日 run があるが、それは security update と PR rebase 由来で保証が無い。この行が検出するのは **Dependabot が再び黙って disabled になる事故** (#373 で実際に両方 disabled だった) — 止まると修正 PR が来なくなるだけで赤い印はどこにも出ないため、33 日の沈黙で 🟡 にする。default setup 系と同じく、無効化→再有効化で別 id が振られてこの行は「未検証」に落ちる (静かに緑にはならない)。"
+    },
+    {
+      "id": "333008434",
+      "name": "依存グラフの更新 (Dependency Graph)",
+      "what": "lockfile (uv.lock / requirements 等) の変更 push を GitHub が取り込み、Dependabot / alerts の照合元になる依存グラフを更新する",
+      "expect": "依存 manifest の変更ごと",
+      "note": "**id が数字なのは仕様** (path は `dynamic/dependabot/update-graph` — 上の行と同じ手筋)。expect_hours を置かないのは**発火が依存変更のあった push だけ**で不定期のため (2026-08-15 実測: 有効化 08-12 以降 6 run、全て manifest 変更時) — 時間で締めると静かな週が毎回偽の 🟡 になる。この行で見えるのは**直近 run の成否だけ**で、「依存を変えたのにグラフ更新が走らなかった」型の沈黙は検出できない (その層の破れは Dependabot 行の 800h か security-sweep の照合ズレで間接的に現れる)。"
+    },
+    {
       "id": "security-sweep.yml",
       "name": "週次のセキュリティスキャン",
       "what": "npm audit / pip-audit / gitleaks を回し、依存の既知 CVE とコミットされた秘密を Issue に積む (カバー外領域は本文に明示)",
