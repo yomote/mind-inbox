@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 
 from detect import (
+    EXCLUDED_DIR_NAMES,
     LINK_SCAN_DIRS,
     UNCOVERED,
     detect_all,
@@ -149,6 +150,8 @@ def test_l1_リポジトリ直下のmdも走査するが未対象ツリーは走
         - 未対象ツリー: apps/ や .claude/ を無自覚に巻き込むと node_modules や
           worktree の md まで検査対象になり、**他人の未完成リンクを毎週報告して**
           Issue がノイズで埋まる (偽陽性は検出器の死)。広げるなら実測してから
+        - 除外ディレクトリ: 走査対象の中に居る `.venv` / `node_modules` を拾うと、
+          **同じコミットでも実行場所 (CI / ローカル) で結果が変わる**検出器になる
     """
     root = _repo(tmp_path)
     (root / "CLAUDE.md").write_text("[壊れ](docs/gone.md)", encoding="utf-8")
@@ -156,10 +159,16 @@ def test_l1_リポジトリ直下のmdも走査するが未対象ツリーは走
     (root / "apps" / "frontend" / "README.md").write_text(
         "[壊れ](nope.md)", encoding="utf-8"
     )
-    (root / "cicd" / "scripts" / "node_modules" / "dep").mkdir(parents=True)
-    (root / "cicd" / "scripts" / "node_modules" / "dep" / "README.md").write_text(
-        "[壊れ](nope.md)", encoding="utf-8"
-    )
+    # 除外名は直書きする — EXCLUDED_DIR_NAMES から生成すると、集合から名前を
+    # 落とす変異で fixture も一緒に消え、「常に自分と一致する」空テストになる
+    assert EXCLUDED_DIR_NAMES == {"node_modules", ".venv", "worktrees", ".git"}
+    for excluded in ("node_modules", ".venv", "worktrees", ".git"):
+        # 走査対象 (cicd/) の**中に**現れた依存物・worktree・仮想環境。
+        # .venv は CI に無くローカルにだけあるので、拾うと同じコミットでも
+        # 実行場所で結果が変わる (実測: ai-agent の .venv 配下に md 38 本)
+        nested = root / "cicd" / "scripts" / excluded / "dep"
+        nested.mkdir(parents=True)
+        (nested / "README.md").write_text("[壊れ](nope.md)", encoding="utf-8")
     findings = detect_broken_doc_links(root)
     assert [(f["file"], f["target"]) for f in findings] == [
         ("CLAUDE.md", "docs/gone.md")

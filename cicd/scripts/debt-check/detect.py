@@ -53,6 +53,12 @@ LINK_SCAN_DIRS = ("docs", "cicd")
 # ルート再帰は node_modules や worktree を巻き込むため、上の基準に反する。
 LINK_SCAN_ROOT_FILES = "*.md"
 
+# 走査対象の中に現れても検査しないディレクトリ名 (リポジトリが書いた md ではないもの)。
+# 混ざると偽陽性が出るうえ、**あるかどうかが実行環境で変わる** — CI では存在せず
+# ローカルにだけある `.venv` (実測: `apps/services/ai-agent/.venv` 配下に md 38 本) を
+# 拾うと、同じコミットでも実行場所で結果が変わる検出器になる。
+EXCLUDED_DIR_NAMES = {"node_modules", ".venv", "worktrees", ".git"}
+
 _FENCED_CODE = re.compile(r"```.*?```", re.DOTALL)
 # インラインリンク [text](target) / 画像 ![alt](target)。title 付き (target "title") も拾う
 _INLINE_LINK = re.compile(r"\]\(\s*<?([^)<>\s]+)>?(?:\s+\"[^\"]*\")?\s*\)")
@@ -123,12 +129,8 @@ def iter_scanned_markdown(root: Path) -> list[Path]:
             continue
         md_files.extend(target.rglob("*.md"))
     md_files.extend(root.glob(LINK_SCAN_ROOT_FILES))
-    # 依存物・worktree は走査しない (LINK_SCAN_DIRS のコメント参照)。
-    # 将来 docs/ や cicd/ の下にこれらが現れても偽陽性を出さないための保険
     return sorted(
-        f
-        for f in md_files
-        if not {"node_modules", "worktrees", ".git"} & set(f.relative_to(root).parts)
+        f for f in md_files if not EXCLUDED_DIR_NAMES & set(f.relative_to(root).parts)
     )
 
 
