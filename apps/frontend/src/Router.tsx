@@ -20,22 +20,10 @@ import { ExtractReviewScreen } from "./components/screens/ExtractReviewScreen";
 import { ProblemListScreen } from "./components/screens/ProblemListScreen";
 import { ProblemDetailScreen } from "./components/screens/ProblemDetailScreen";
 
+import { ROUTE_PATHS } from "./routes";
+import type { AppRoute } from "./routes";
+
 export type AuthStatus = "loading" | "authenticated" | "anonymous";
-
-export const ROUTE_PATHS = {
-  onboarding: "/",
-  home: "/home",
-  specPreview: "/spec",
-  session: "/consultations/current",
-  settings: "/settings",
-  paused: "/consultations/current/paused",
-  crisisSupport: "/consultations/current/crisis-support",
-  extractReview: "/consultations/current/extract",
-  problemList: "/problems",
-  problemDetail: "/problems/current",
-} as const;
-
-export type AppRoute = keyof typeof ROUTE_PATHS;
 
 type AppRouterProps = {
   authStatus: AuthStatus;

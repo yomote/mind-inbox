@@ -79,8 +79,7 @@ export function createAppTheme(mode: PaletteMode) {
       divider: isDark ? alpha("#B9C4D8", 0.18) : neutral[200],
     },
     typography: {
-      fontFamily:
-        '"Inter", "BIZ UDPGothic", "Noto Sans JP", system-ui, -apple-system, sans-serif',
+      fontFamily: '"Inter", "BIZ UDPGothic", "Noto Sans JP", system-ui, -apple-system, sans-serif',
     },
     shape: { borderRadius: 14 },
     components: {
@@ -97,9 +96,7 @@ export function createAppTheme(mode: PaletteMode) {
       MuiPaper: {
         styleOverrides: {
           root: {
-            border: isDark
-              ? `1px solid ${alpha("#C5D2EA", 0.18)}`
-              : `1px solid ${neutral[200]}`,
+            border: isDark ? `1px solid ${alpha("#C5D2EA", 0.18)}` : `1px solid ${neutral[200]}`,
             boxShadow: isDark
               ? "0 24px 50px rgba(3, 7, 18, 0.48)"
               : "0 18px 44px rgba(36, 50, 74, 0.08)",
@@ -110,9 +107,7 @@ export function createAppTheme(mode: PaletteMode) {
         styleOverrides: {
           root: {
             backdropFilter: "blur(10px)",
-            backgroundColor: isDark
-              ? alpha("#141B2D", 0.82)
-              : alpha(neutral[0], 0.86),
+            backgroundColor: isDark ? alpha("#141B2D", 0.82) : alpha(neutral[0], 0.86),
           },
         },
       },
@@ -122,13 +117,20 @@ export function createAppTheme(mode: PaletteMode) {
             borderRadius: 12,
             textTransform: "none",
             fontWeight: 700,
-          },
-          containedPrimary: {
-            boxShadow: "0 10px 24px rgba(70, 83, 255, 0.24)",
-            background: `linear-gradient(135deg, ${indigo[500]} 0%, ${violet[500]} 100%)`,
-            "&:hover": {
-              background: `linear-gradient(135deg, ${indigo[600]} 0%, ${violet[700]} 100%)`,
-            },
+            // MUI v9 で containedPrimary などの複合 slot キーが削除されたため
+            // variants (props マッチ) で同じ見た目を維持する
+            variants: [
+              {
+                props: { variant: "contained", color: "primary" },
+                style: {
+                  boxShadow: "0 10px 24px rgba(70, 83, 255, 0.24)",
+                  background: `linear-gradient(135deg, ${indigo[500]} 0%, ${violet[500]} 100%)`,
+                  "&:hover": {
+                    background: `linear-gradient(135deg, ${indigo[600]} 0%, ${violet[700]} 100%)`,
+                  },
+                },
+              },
+            ],
           },
         },
       },

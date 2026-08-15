@@ -110,7 +110,7 @@ export function SessionComposer({
         </Button>
       </Stack>
 
-      <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center">
+      <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
         <Button
           variant={voice.listening ? "contained" : "outlined"}
           color={voice.listening ? "secondary" : "primary"}

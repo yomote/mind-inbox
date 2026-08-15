@@ -97,7 +97,7 @@ export function DevSpecMdxPreview() {
 
   return (
     <Stack spacing={2}>
-      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+      <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap" }}>
         {labels.map((item) => (
           <Button
             key={item.key}

@@ -36,8 +36,10 @@ import { StubResponseBanner } from "./components/StubResponseBanner";
 import { resetStubbedResponse } from "./api/stubStatus";
 import { previewSupported } from "./api";
 import type { PaletteMode } from "@mui/material";
-import { AppRouter, ROUTE_PATHS } from "./Router";
-import type { AppRoute, AuthStatus } from "./Router";
+import { AppRouter } from "./Router";
+import type { AuthStatus } from "./Router";
+import { ROUTE_PATHS } from "./routes";
+import type { AppRoute } from "./routes";
 
 const DevSpecMdxPreview = import.meta.env.DEV
   ? React.lazy(() =>
@@ -87,7 +89,12 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const navigate = useNavigate();
   const voicevoxSpeaker = Number(import.meta.env.VITE_VOICEVOX_SPEAKER || "3");
 
-  const [authStatus, setAuthStatus] = React.useState<AuthStatus>("loading");
+  // standalone (dev / mock デモ) と認証未構成ビルドは門が無いので最初から通す。
+  // effect 内で setAuthStatus すると一瞬 loading を描いてから描き直すだけで、
+  // react-hooks/set-state-in-effect (eslint-plugin-react-hooks 7.1) にも当たる。
+  const [authStatus, setAuthStatus] = React.useState<AuthStatus>(() =>
+    standalone || !authEnabled ? "authenticated" : "loading",
+  );
   const [accountMenuAnchorEl, setAccountMenuAnchorEl] = React.useState<null | HTMLElement>(null);
 
   // 読み上げ速度は設定画面から変える (#242)。永続化と「React の外 (先行合成) からも
@@ -102,24 +109,12 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const envStatus = useEnvStatus();
 
   React.useEffect(() => {
-    let active = true;
-
-    if (standalone) {
-      setAuthStatus("authenticated");
-      return () => {
-        active = false;
-      };
-    }
-
-    // 認証が構成されていないビルド（VITE_ENTRA_* 未設定）では門が無いので通す。
+    // standalone / 認証未構成ビルド（VITE_ENTRA_* 未設定）は初期値で authenticated 済み。
     // API 側も同時に EasyAuth 未構成のため、UI だけ閉じても意味がない
     // （公開 URL に出す場合は deploy-frontend.sh が警告する）。
-    if (!authEnabled) {
-      setAuthStatus("authenticated");
-      return () => {
-        active = false;
-      };
-    }
+    if (standalone || !authEnabled) return;
+
+    let active = true;
 
     // 認可の門は Functions(EasyAuth) 側にある (#69)。UI はここで
     // 「Entra のサインイン済みアカウントがあるか」だけを見る。
@@ -351,7 +346,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
               alt=""
               sx={{ width: 28, height: 28, borderRadius: 1 }}
             />
-            <Typography variant="h6" fontWeight={800}>
+            <Typography variant="h6" sx={{ fontWeight: 800 }}>
               Mind Inbox
             </Typography>
           </ButtonBase>
@@ -401,7 +396,7 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
             <Typography color="text.secondary">認証状態を確認中...</Typography>
           ) : (
             <>
-              <Typography variant="h5" fontWeight={800}>
+              <Typography variant="h5" sx={{ fontWeight: 800 }}>
                 {HEADER_BY_ROUTE[activeHeader]}
               </Typography>
               <AppRouter

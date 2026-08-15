@@ -66,7 +66,12 @@ export function ProblemListScreen({
           ホームへ
         </Button>
 
-        <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
+        <Stack
+          direction="row"
+          spacing={1.5}
+          useFlexGap
+          sx={{ alignItems: "center", flexWrap: "wrap" }}
+        >
           <ToggleButtonGroup
             size="small"
             exclusive
@@ -130,10 +135,13 @@ export function ProblemListScreen({
               onClick={() => onOpen(p.id)}
             >
               <Stack spacing={1}>
-                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-                  <Typography fontWeight={700} sx={{ flex: 1, minWidth: 0 }}>
-                    {p.title}
-                  </Typography>
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  useFlexGap
+                  sx={{ alignItems: "center", flexWrap: "wrap" }}
+                >
+                  <Typography sx={{ fontWeight: 700, flex: 1, minWidth: 0 }}>{p.title}</Typography>
                   {p.mentionCount > 1 && (
                     <Chip
                       size="small"
@@ -151,7 +159,7 @@ export function ProblemListScreen({
                   />
                 </Stack>
 
-                <Stack direction="row" spacing={1} alignItems="center">
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                   <Chip size="small" variant="outlined" label={p.theme} />
                   <Typography variant="caption" color="text.secondary">
                     最終言及 {relativeDays(p.lastMentionedAt)}

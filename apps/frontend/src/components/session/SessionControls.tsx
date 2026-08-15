@@ -28,7 +28,7 @@ export function SessionControls({
   extractDisabled = false,
 }: SessionControlsProps) {
   return (
-    <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+    <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap" }}>
       <Button variant="text" onClick={onCrisisSupport}>
         危機時サポート
       </Button>

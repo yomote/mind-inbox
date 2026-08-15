@@ -81,7 +81,7 @@ export function ProblemDetailScreen({
 
         {/* ── タイトル（編集可）+ 状態 ───────────────────────────── */}
         {editingTitle ? (
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
             <TextField
               fullWidth
               size="small"
@@ -94,8 +94,8 @@ export function ProblemDetailScreen({
             </Button>
           </Stack>
         ) : (
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Typography variant="h6" fontWeight={800} sx={{ flex: 1 }}>
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+            <Typography variant="h6" sx={{ fontWeight: 800, flex: 1 }}>
               {problem.title}
             </Typography>
             <Chip
@@ -118,7 +118,12 @@ export function ProblemDetailScreen({
         </Typography>
 
         {/* ── テーマ（編集可）+ タグ + 言及回数 ──────────────────── */}
-        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+        <Stack
+          direction="row"
+          spacing={1}
+          useFlexGap
+          sx={{ alignItems: "center", flexWrap: "wrap" }}
+        >
           <TextField
             select
             size="small"
@@ -152,11 +157,11 @@ export function ProblemDetailScreen({
         <Divider />
 
         {/* ── Mention タイムライン（主役）─────────────────────────── */}
-        <Typography fontWeight={700}>言及の履歴（{timeline.length}件）</Typography>
+        <Typography sx={{ fontWeight: 700 }}>言及の履歴（{timeline.length}件）</Typography>
         <Stack spacing={1.5}>
           {timeline.map((m, idx) => (
             <Stack key={m.id} direction="row" spacing={1.5}>
-              <Stack alignItems="center" sx={{ pt: 0.5 }}>
+              <Stack sx={{ alignItems: "center", pt: 0.5 }}>
                 <Box
                   sx={(t) => ({
                     width: 10,
@@ -178,7 +183,7 @@ export function ProblemDetailScreen({
               </Stack>
               <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, flex: 1 }}>
                 <Stack spacing={0.5}>
-                  <Stack direction="row" spacing={1} alignItems="center">
+                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                     <Typography variant="caption" color="text.secondary">
                       {formatDate(m.createdAt)}
                     </Typography>
@@ -204,10 +209,10 @@ export function ProblemDetailScreen({
         {problem.plans.length > 0 && (
           <>
             <Divider />
-            <Typography fontWeight={700}>次の一歩</Typography>
+            <Typography sx={{ fontWeight: 700 }}>次の一歩</Typography>
             {problem.plans.map((plan, i) => (
               <Paper key={`${plan.title}-${i}`} variant="outlined" sx={{ p: 1.5, borderRadius: 2 }}>
-                <Typography fontWeight={600}>{plan.title}</Typography>
+                <Typography sx={{ fontWeight: 600 }}>{plan.title}</Typography>
                 <List dense>
                   {plan.steps.map((step) => (
                     <ListItem key={step} sx={{ px: 0 }}>
@@ -223,7 +228,7 @@ export function ProblemDetailScreen({
         <Divider />
 
         {/* ── 棚卸し / トリアージ操作 ─────────────────────────── */}
-        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+        <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap" }}>
           {onCreatePlan && (
             <Button variant="outlined" disabled={loading} onClick={() => onCreatePlan(problem.id)}>
               次の一歩を作る

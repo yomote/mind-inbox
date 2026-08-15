@@ -27,7 +27,7 @@ export function ApprovalRequestCard({ request, loading, onRespond }: ApprovalReq
       sx={{ p: 2, borderRadius: 2, borderColor: "warning.main" }}
     >
       <Stack spacing={1}>
-        <Typography variant="subtitle2" fontWeight={700}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
           この操作にはあなたの承認が必要です
         </Typography>
         <Typography sx={{ whiteSpace: "pre-wrap" }}>{request.description}</Typography>

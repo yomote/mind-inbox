@@ -35,7 +35,7 @@ import type {
   Problem,
   TriageInput,
 } from "../api";
-import type { AppRoute } from "../Router";
+import type { AppRoute } from "../routes";
 import { deriveSessionTitle } from "./sessionTitle";
 
 export type Consultation = {
