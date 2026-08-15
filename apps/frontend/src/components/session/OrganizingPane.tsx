@@ -36,7 +36,7 @@ export function OrganizingPane({ preview, status, onRefresh }: OrganizingPanePro
     <Stack spacing={1.5}>
       <Paper sx={{ px: 1.5, py: 1, borderRadius: 3 }}>
         <Stack spacing={1}>
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
             <Tabs
               value={tab}
               onChange={(_, next: OrganizingTab) => setTab(next)}

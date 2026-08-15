@@ -35,8 +35,7 @@ export function SettingsScreen({
       <Stack spacing={1.5}>
         <Typography
           variant="h6"
-          fontWeight={700}
-          sx={{ display: "flex", alignItems: "center", gap: 1 }}
+          sx={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 1 }}
         >
           <SettingsRoundedIcon fontSize="small" />
           設定
@@ -64,8 +63,7 @@ export function SettingsScreen({
         <Box data-tts-speed-scale={speedScale} sx={{ pt: 1 }}>
           <Typography
             variant="subtitle2"
-            fontWeight={700}
-            sx={{ display: "flex", alignItems: "center", gap: 1 }}
+            sx={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 1 }}
           >
             <RecordVoiceOverRoundedIcon fontSize="small" />
             読み上げ速度

@@ -31,7 +31,12 @@ function TreeNode({ node }: { node: ThinkingTreeNode }) {
       data-node-status={node.status}
       data-node-kind={node.kind}
     >
-      <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+      <Stack
+        direction="row"
+        spacing={0.75}
+        useFlexGap
+        sx={{ alignItems: "center", flexWrap: "wrap" }}
+      >
         {/* 記号は status 色のまま (チップの文字と重複する冗長な印なので、色が落ちても
             情報は失われない)。`unexplored` を `text.disabled` から `text.secondary` へ
             上げてあるのは、非テキストの UI 部品にも 3:1 が要るため (WCAG 1.4.11)。 */}

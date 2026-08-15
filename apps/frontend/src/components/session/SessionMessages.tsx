@@ -24,7 +24,7 @@ function AssistantRow({
   children: ReactNode;
 }) {
   return (
-    <Stack direction="row" spacing={1} alignItems="flex-end">
+    <Stack direction="row" spacing={1} sx={{ alignItems: "flex-end" }}>
       <MascotAvatar state={mascotState} />
       <Paper
         sx={{

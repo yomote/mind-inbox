@@ -33,7 +33,7 @@ export function ExtractReviewScreen({
           </Typography>
         ) : (
           <>
-            <Typography fontWeight={700}>
+            <Typography sx={{ fontWeight: 700 }}>
               今回の話から {count} 件の困りごとを見つけました
             </Typography>
             <Typography variant="body2" color="text.secondary">
@@ -49,9 +49,8 @@ export function ExtractReviewScreen({
                       <Stack
                         direction="row"
                         spacing={1}
-                        alignItems="center"
-                        flexWrap="wrap"
                         useFlexGap
+                        sx={{ alignItems: "center", flexWrap: "wrap" }}
                       >
                         {grouping.kind === "new" ? (
                           <Chip
@@ -82,7 +81,7 @@ export function ExtractReviewScreen({
                         {grouping.reignited && <Chip size="small" color="warning" label="再燃" />}
                       </Stack>
 
-                      <Typography fontWeight={600}>{grouping.problemTitle}</Typography>
+                      <Typography sx={{ fontWeight: 600 }}>{grouping.problemTitle}</Typography>
                       <Typography variant="body2">{mention.statement}</Typography>
                       <Typography
                         variant="body2"
@@ -92,7 +91,7 @@ export function ExtractReviewScreen({
                         「{mention.excerpt}」
                       </Typography>
 
-                      <Stack direction="row" spacing={1} alignItems="center">
+                      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                         <Chip
                           size="small"
                           variant="outlined"

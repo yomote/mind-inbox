@@ -166,18 +166,20 @@ export function useVoiceInput(
   }, []);
 
   // 録音状態の可視化: listening 中は経過秒を刻む。
+  // 0 へのリセットは effect 本体ではなく cleanup で行う (録音停止 = 依存変化の瞬間に走る)。
+  // effect 本体の同期 setState は react-hooks 7.1 の set-state-in-effect が error にする。
   React.useEffect(() => {
-    if (!listening) {
-      setElapsedSec(0);
-      return;
-    }
+    if (!listening) return;
     const timer = window.setInterval(() => {
       const startedAt = startedAtRef.current;
       if (startedAt !== null) {
         setElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
       }
     }, 500);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      setElapsedSec(0);
+    };
   }, [listening]);
 
   const stopEngines = React.useCallback(() => {

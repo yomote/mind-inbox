@@ -84,9 +84,12 @@ export function SessionScreen({
   const hasUnseenPreview = activeTab !== "preview" && preview !== null && preview !== seenPreview;
 
   // プレビュータブを開いている間の更新は、その場で見えているので既読にする。
-  React.useEffect(() => {
-    if (activeTab === "preview") setSeenPreview(preview);
-  }, [activeTab, preview]);
+  // effect ではなく render 中のガード付き調整で行う (React 公式の
+  // "adjusting state when props change" パターン / react-hooks 7.1 の
+  // set-state-in-effect が effect 内の同期 setState を error にする)。
+  if (activeTab === "preview" && seenPreview !== preview) {
+    setSeenPreview(preview);
+  }
 
   // 承認要求が届いたら対話タブへ引き戻す (§5.9 / PR #416 Codex P2)。
   //
@@ -112,7 +115,7 @@ export function SessionScreen({
   const dialoguePane = (
     <Paper sx={{ p: 3, borderRadius: 3 }}>
       <Stack spacing={2}>
-        <Typography fontWeight={700}>{session.title}</Typography>
+        <Typography sx={{ fontWeight: 700 }}>{session.title}</Typography>
 
         <SessionMessages
           messages={session.messages}

@@ -64,12 +64,18 @@ export function ThinkingMapPane({ map }: ThinkingMapPaneProps) {
             <Stack
               direction="row"
               spacing={1}
-              alignItems="center"
-              justifyContent="space-between"
-              flexWrap="wrap"
               useFlexGap
+              sx={{
+                alignItems: "center",
+                justifyContent: "space-between",
+                flexWrap: "wrap",
+              }}
             >
-              <Typography variant="body2" fontWeight={600} data-testid="thinking-map-summary">
+              <Typography
+                variant="body2"
+                data-testid="thinking-map-summary"
+                sx={{ fontWeight: 600 }}
+              >
                 話題 {summary.total} / 確定 {summary.confirmed}・仮説 {summary.tentative}・未探索{" "}
                 {summary.unexplored}
               </Typography>

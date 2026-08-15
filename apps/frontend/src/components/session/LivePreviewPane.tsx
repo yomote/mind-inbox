@@ -53,9 +53,8 @@ export function LivePreviewPane({ preview, status }: LivePreviewPaneProps) {
                   <Stack
                     direction="row"
                     spacing={0.75}
-                    alignItems="center"
-                    flexWrap="wrap"
                     useFlexGap
+                    sx={{ alignItems: "center", flexWrap: "wrap" }}
                   >
                     {grouping.kind === "new" ? (
                       <Chip
@@ -78,7 +77,7 @@ export function LivePreviewPane({ preview, status }: LivePreviewPaneProps) {
                     )}
                   </Stack>
 
-                  <Typography variant="body2" fontWeight={600}>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
                     {grouping.problemTitle}
                   </Typography>
                   <Typography variant="body2">{mention.statement}</Typography>
