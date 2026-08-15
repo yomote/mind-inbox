@@ -13,7 +13,7 @@ vi.mock("../auth/msal", () => ({
   getAccessToken: vi.fn(async () => "test-token"),
 }));
 
-describe("[L1] ttsFetch", () => {
+describe("[単体] ttsFetch", () => {
   const fetchSpy = vi.fn(async () => new Response(null, { status: 200 }));
 
   beforeEach(() => {

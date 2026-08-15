@@ -116,7 +116,20 @@ describe("[L2] handleTts — status 表", () => {
     expect(res.status).toBe(502);
   });
 
-  it("speedScale を本合成・プリフェッチの両方へそのまま渡す (#242)", async () => {
+  it("distinguishes a malformed body (400 Invalid JSON body) from a schema violation", async () => {
+    // 無いと: 「body が壊れている」と「フィールドが足りない」が同じ文言になり、切り分けが消える
+    const broken = await handleTts(post("http://x/api/tts", "{not json"), silent);
+    expect(broken.status).toBe(400);
+    expect(await broken.text()).toBe("Invalid JSON body");
+
+    const invalid = await handleTts(postJson("http://x/api/tts", { text: "" }), silent);
+    expect(invalid.status).toBe(400);
+    expect(await invalid.text()).toContain("Invalid request");
+  });
+});
+
+describe("[単体] handleTts — 読み上げ速度の受け渡し (#242)", () => {
+  it("speedScale を本合成・プリフェッチの両方へそのまま渡す", async () => {
     // 無いと: schema から speedScale を落とす / service へ渡し忘れる、のどちらでも
     // zod は optional として黙って捨て、等倍の音が普通に返る (400 にすらならない)。
     // 設定画面のスライダーだけが動いて音が変わらない状態が緑のまま通る。
@@ -154,17 +167,6 @@ describe("[L2] handleTts — status 表", () => {
 
     expect(res.status).toBe(400);
     expect(synthesizeTts).not.toHaveBeenCalled();
-  });
-
-  it("distinguishes a malformed body (400 Invalid JSON body) from a schema violation", async () => {
-    // 無いと: 「body が壊れている」と「フィールドが足りない」が同じ文言になり、切り分けが消える
-    const broken = await handleTts(post("http://x/api/tts", "{not json"), silent);
-    expect(broken.status).toBe(400);
-    expect(await broken.text()).toBe("Invalid JSON body");
-
-    const invalid = await handleTts(postJson("http://x/api/tts", { text: "" }), silent);
-    expect(invalid.status).toBe(400);
-    expect(await invalid.text()).toContain("Invalid request");
   });
 });
 

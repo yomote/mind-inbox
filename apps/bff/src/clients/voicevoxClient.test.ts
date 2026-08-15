@@ -37,7 +37,7 @@ beforeEach(() => {
   delete mockConfig.voicevoxAudience;
 });
 
-describe("[L2] voicevoxClient — speed_scale の受け渡し (#242)", () => {
+describe("[単体] voicevoxClient — speed_scale の受け渡し (#242)", () => {
   it("speedScale は wrapper の snake_case (speed_scale) で送る", async () => {
     mockConfig.voicevoxBaseUrl = "http://voicevox.example";
     const fetchSpy = stubWrapper();

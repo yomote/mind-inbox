@@ -27,7 +27,7 @@ beforeEach(() => {
   resetSpeedScaleForTest();
 });
 
-describe("[L1] normalizeSpeedScale", () => {
+describe("[単体] normalizeSpeedScale", () => {
   it("範囲外はクランプする (既定に倒さない)", () => {
     // 無いと: 上限を下げた / 保存値を手で書き換えたときに「速くしたのに等倍」になり、
     //         設定が効いていないのか値が壊れているのか区別できない
@@ -50,7 +50,7 @@ describe("[L1] normalizeSpeedScale", () => {
   });
 });
 
-describe("[L1] 読み上げ速度の永続化", () => {
+describe("[単体] 読み上げ速度の永続化", () => {
   it("設定した速度は localStorage に残り、次の読み込みで復元される", async () => {
     // 無いと: **Issue #242 の受け入れ条件そのもの** (再訪で保持される) が壊れても、
     //         その場ではスライダーが動くので気づけない

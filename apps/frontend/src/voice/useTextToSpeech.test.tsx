@@ -492,7 +492,7 @@ describe("[L1] useTextToSpeech — 逐次再生と待ち時間の可視化 (#185
   });
 });
 
-describe("[L1] useTextToSpeech — 読み上げ速度 (#242)", () => {
+describe("[単体] useTextToSpeech — 読み上げ速度 (#242)", () => {
   it("設定した速度を VOICEVOX の合成要求に載せる", async () => {
     // 無いと: 設定画面のスライダーは動くのに body から速度が落ち、BFF は optional 扱いで
     //         400 も返さないため**等倍のまま普通に鳴る** (壊れたことが誰にも見えない)。
