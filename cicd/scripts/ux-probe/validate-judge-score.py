@@ -27,7 +27,14 @@ REQUIRED_KEYS = {
     "schemaVersion", "kind", "rubricVersion", "probeId", "scenarioId",
     "scoredAt", "scores", "total", "max", "verdict", "unknowns",
 }
-PERSPECTIVES = ["U1", "U2", "U3", "U4", "U5", "U6"]
+# 観点の真実は .github/claude/ux-rubric.md。rubricVersion 0.2 で U7 (仮説の差し出し方) を
+# 追加した (#432 / 2026-08-15 PO 裁定)。**rubric と同じ PR でここを直す** — 片方だけだと
+# judge は採点できるのに蓄積で弾かれる。0.1 時代の採点レポートを再検証すると U7 欠落で
+# 落ちるが、それは意図した赤 (蓄積は追記のみで、過去行の再検証は運用に無い)
+PERSPECTIVES = ["U1", "U2", "U3", "U4", "U5", "U6", "U7"]
+# 0 なら他がどうであれ赤にする観点 (rubric の verdict 行)。U7 = 仮説の押し付け・
+# 危機領域への仮説は、合計が高くても会話として通してはいけない
+CRITICAL = ("U1", "U2", "U3", "U7")
 VALID_VERDICTS = {"green", "yellow", "red"}
 UNKNOWN = "UNKNOWN"
 
@@ -93,9 +100,9 @@ def validate(obj: dict) -> list[str]:
     if verdict not in VALID_VERDICTS:
         errors.append(f"verdict が {sorted(VALID_VERDICTS)} のいずれでもありません: {verdict!r}")
     elif expected_max > 0:
-        # rubric の閾値: >=0.75 緑 / 0.5-0.75 黄 / <0.5 または U1-U3 のいずれかが 0 で赤
+        # rubric の閾値: >=0.75 緑 / 0.5-0.75 黄 / <0.5 または CRITICAL のいずれかが 0 で赤
         ratio = expected_total / expected_max
-        critical_zero = any(scores.get(p) == 0 for p in ("U1", "U2", "U3"))
+        critical_zero = any(scores.get(p) == 0 for p in CRITICAL)
         if critical_zero:
             expected_verdict = "red"
         elif ratio >= 0.75:
@@ -107,7 +114,8 @@ def validate(obj: dict) -> list[str]:
         if verdict != expected_verdict:
             errors.append(
                 f"verdict が rubric の閾値と不整合: verdict={verdict!r} / "
-                f"期待={expected_verdict!r} (比率 {ratio:.2f}, U1-U3 に 0 が{'ある' if critical_zero else 'ない'})"
+                f"期待={expected_verdict!r} (比率 {ratio:.2f}, "
+                f"{'/'.join(CRITICAL)} に 0 が{'ある' if critical_zero else 'ない'})"
             )
 
     unknowns = obj.get("unknowns")
