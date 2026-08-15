@@ -48,6 +48,12 @@ pnpm --dir apps/frontend build       # tsc -b && vite build
 
 判断の正典は [テスト戦略](../../docs/testing/strategy.md) (§6.3)。新規テストには `[契約]` / `[単体]` / `[スモーク]` / `[E2E]` のプレフィックスを付ける。
 
+**拡張子で実行器が分かれる**: `*.spec.ts` = Playwright / `*.test.ts` = vitest。`e2e-live/` には
+実環境を叩く spec と、その定義だけを見る単体テスト (`ux-probe-scenarios.test.ts` — プローブの
+台本と待受予算) が同居している。`playwright.live.config.ts` の `testMatch` と
+`vitest.config.ts` の `include` が対で効いているので、**片方だけ直すと**実環境 job が
+vitest 用ファイルを拾って赤くなるか、単体テストが誰にも実行されないまま緑になる。
+
 ## 型は tRPC が真実
 
 BFF の zod スキーマから型が流れてくる ([ADR 0001](../../docs/adr/0001-bff-as-trpc-not-rest.md))。フロント側で API のレスポンス型を手書きし直さない — 手書きすると BFF の変更に気づけないまま `any` 相当で通る。

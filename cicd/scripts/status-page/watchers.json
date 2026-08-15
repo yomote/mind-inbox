@@ -18,9 +18,10 @@
     {
       "id": "ux-eval.yml",
       "name": "毎朝の UX 機械計測",
-      "what": "前夜のプローブ記録からレイテンシ統計・往復数・警告数を抽出してデータブランチ data/ux-observations に積む (ADR 0041。LLM 採点は PM tick — traces 欄)",
+      "what": "毎朝のプローブ記録からレイテンシ統計・往復数・警告数をシナリオごとに抽出してデータブランチ data/ux-observations に積む (ADR 0041。LLM 採点は PM tick — traces 欄)",
       "expect_hours": 26,
-      "critical": true
+      "critical": true,
+      "note": "起動は cron ではなく golden-path-monitor 完了時の workflow_run (#443 Codex P1 — 固定時刻だと monitor が長い朝に追記前のデータを読み、1 日遅れの計測が鮮度 26h では緑のまま続く)。expect_hours 26 は monitor が毎朝 22:00 UTC 起動 + 最悪 95 分で完了する前提に乗っており、monitor の schedule ごと止まった場合はこの行が遅延 (🟡) になり、プローブ蓄積の data_branch trace (traces 欄) が 26h で 🔴 になる。workflow_run の run も /actions/workflows/{id}/runs に載るので判定方法は変わらない (2026-08-15 確認)。"
     },
     {
       "id": "ux-data-migrate.yml",

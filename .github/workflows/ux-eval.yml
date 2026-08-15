@@ -6,15 +6,23 @@
 #   Routine と違い、run 履歴が必ず残るので「沈黙 = 落ちていない」が成立する (ADR 0035 D1)。
 #
 # 流れ (蓄積は ADR 0041 のデータブランチ): data/ux-observations の probes/*.jsonl から
-#   最新のプローブ記録 (golden-path-monitor が 07:00 JST に追記) を読み → 鮮度を確認
-#   (26h 以内に記録が無ければ run を赤にする — 古い記録を「今日の計測」として積まない)
-#   → 機械計測を抽出して同ブランチの evals/*.jsonl に 1 run = 1 行
-#   (kind: "ux-eval-mech") で追記する。
+#   **シナリオごとに**最新のプローブ記録 (golden-path-monitor が毎朝追記) を読み → 鮮度を
+#   確認 (26h 以内に記録が無ければ run を赤にする — 古い記録を「今日の計測」として積まない)
+#   → 機械計測を抽出して同ブランチの evals/*.jsonl に**シナリオごとに 1 行**
+#   (kind: "ux-eval-mech") で追記する。1 run = 1 行ではない (#435。流れの詳細は
+#   cicd/scripts/ux-eval/ux_eval.py の docstring が真実)。
 name: ux-eval
 
 on:
-  schedule:
-    - cron: "20 23 * * *" # 08:20 JST 毎朝 (07:00 JST の golden-path-monitor が終わってから)
+  workflow_run:
+    # golden-path-monitor (07:00 JST 起動) の**完了後**に走る (Codex P1 / PR #443)。
+    # 固定時刻 (旧 08:20 JST cron) だと、monitor が長い朝 (job timeout 95 分 → 最悪
+    # 08:35 JST 終了) に追記前のデータを読んでしまい、初回は「全部評価済み」の赤、
+    # 以後は毎朝 1 日遅れの記録を「今日の計測」として積む状態が鮮度 26h では緑のまま続く。
+    # conclusion では絞らない — monitor が赤でも記録が積まれていることはあり、
+    # 記録が無ければこの run が赤くなって通報する (それがこの workflow の役目)
+    workflows: [golden-path-monitor]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -43,12 +51,13 @@ jobs:
           git worktree add /tmp/ux-data FETCH_HEAD
           echo "probes: $(cat /tmp/ux-data/probes/*.jsonl 2>/dev/null | wc -l) 行 / evals: $(cat /tmp/ux-data/evals/*.jsonl 2>/dev/null | wc -l) 行"
 
-      - name: 機械計測を抽出 (鮮度 26h + 評価済み runId を確認)
+      - name: 機械計測を抽出 (鮮度 26h + 評価済み runId/scenarioId を確認)
         id: eval
         run: |
+          # 出力は **シナリオごとに 1 行の JSONL** (#435)。1 行だけ読むと片方の計測が静かに落ちる
           # 終了コードは必ずコマンド単体の直後に取る (PR #157 レビュー指摘と同じ理由)
           set +e
-          python3 cicd/scripts/ux-eval/ux_eval.py /tmp/ux-data > /tmp/ux-eval-payload.json
+          python3 cicd/scripts/ux-eval/ux_eval.py /tmp/ux-data > /tmp/ux-eval-payload.jsonl
           rc=$?
           set -e
           if [ "$rc" -eq 3 ]; then
@@ -59,16 +68,52 @@ jobs:
           fi
           if [ "$rc" -eq 4 ]; then
             # 前日の記録しか無い朝 — 重複を積まず、入力が止まったことを赤で表現する
-            echo "::error::最新のプローブ記録は評価済みです — 今朝の新しい記録が来ていません (golden-path-monitor の停止か追記失敗。詳細は上のログ)"
+            echo "::error::鮮度内のプローブ記録はすべて評価済みです — 今朝の新しい記録が来ていません (golden-path-monitor の停止か追記失敗。詳細は上のログ)"
             exit 1
+          fi
+          if [ "$rc" -eq 5 ]; then
+            # 前回まで積めていたシナリオの一部が今朝は計測できていない (#443)。
+            # payload は出ているので取れた分は次 step で積み、最後の step で run を赤にする —
+            # 「取れた計測を捨てない」と「減ったことを黙らせない」を両立させる
+            echo "::error::前回まで積めていたシナリオの一部が今朝は計測できていません (詳細は上のログ) — 取れた分を追記したうえで run を赤にします"
+            echo "scenario_set_shrunk=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           exit "$rc"
 
       - name: データブランチへ追記
         id: post
         run: |
-          ./cicd/scripts/ux-data/append-observation.sh /tmp/ux-eval-payload.json
-          echo "$UX_DATA_BRANCH の evals/ に追記した"
+          # 1 行 = 1 シナリオの計測。**全部を 1 回の呼び出しで渡す** (push は 1 回)。
+          # ここで 1 行目だけ渡すと、そのシナリオだけトレンドが伸び続け、
+          # もう片方は「まだ積まれていません」の表示のまま気づかれない
+          PAYLOADS=()
+          i=0
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            i=$((i + 1))
+            printf '%s\n' "$line" > "/tmp/ux-eval-payload-$i.json"
+            PAYLOADS+=("/tmp/ux-eval-payload-$i.json")
+          done < /tmp/ux-eval-payload.jsonl
+
+          if [ "${#PAYLOADS[@]}" -eq 0 ]; then
+            # exit 0 なのに payload が無いのは想定外 (ux_eval.py は 1 件以上で 0 を返す)。
+            # 黙って緑にすると「計測が積まれた」と誤認されるので赤にする
+            echo "::error::機械計測の payload が 1 件も出ていません — cicd/scripts/ux-eval/ux_eval.py の出力を確認してください"
+            exit 1
+          fi
+
+          ./cicd/scripts/ux-data/append-observation.sh "${PAYLOADS[@]}"
+          echo "$UX_DATA_BRANCH の evals/ に ${#PAYLOADS[@]} 件追記した"
+
+      # シナリオ単位の蓄積停止を緑で通さない (#443 judge B)。封筒化失敗の経路は
+      # monitor が warning + continue で緑のままなので、ここが唯一の赤になる。
+      # 追記 (post) の**後**に置く — 取れた計測は捨てず、そのうえで run を落とす
+      - name: 前回より減ったシナリオ集合を赤で表現する
+        if: steps.eval.outputs.scenario_set_shrunk == 'true'
+        run: |
+          echo "::error::一部シナリオの蓄積が止まっています (取れた分は追記済み) — golden-path-monitor の同朝 run と probes/ の最新行を確認してください"
+          exit 1
 
       # 落ちたことに気づける唯一の経路。別の見張りを置かず、落ちた当人が Issue を立てる
       # (ADR 0035 D2)。緑になれば同じ Issue を自分で閉じる。
@@ -80,4 +125,4 @@ jobs:
           # 追記まで通って初めて「計測が積まれた」— 手前で止まった success (無いはずだが)
           # を復旧と誤認しないため、post の成否で判定する
           work-ran: ${{ steps.post.outcome == 'success' }}
-          what: "**毎朝の UX 機械計測 (ux-eval) が落ちています。** プローブ記録が古い/無いか、データブランチ (data/ux-observations) への追記に失敗しています。レイテンシのトレンドが途切れます。"
+          what: "**毎朝の UX 機械計測 (ux-eval) が落ちています。** プローブ記録が古い/無い/一部シナリオだけ欠けたか、データブランチ (data/ux-observations) への追記に失敗しています。レイテンシのトレンドが途切れます。"
