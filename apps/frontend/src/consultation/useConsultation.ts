@@ -144,15 +144,22 @@ const FAILURE_MESSAGE = {
 /**
  * すでに処理済みの承認への再送 (#82 / PO 裁定 2026-08-15 B 案)。
  *
- * **期限切れ (`approvalExpired`) と文言を分ける**のがここの本体。409 は結果まで
- * 運んでくるので、「実行されたかは会話を続けて確認してください」ではなく
- * **実行の有無を言い切れる** — 承認済みなら操作は実行済み、却下済みなら実行されていない。
- * ここを曖昧な文言に戻すと、契約を 409 に分けた意味がユーザーに届かない。
+ * **期限切れ (`approvalExpired`) と文言を分ける**のがここの本体。409 は
+ * 「どちらの決定を受け付けたか」まで運んでくるので、「もう受け付けられません
+ * (期限切れか、記録が失われた)」より正確に案内できる。
+ *
+ * **断定してよい範囲が承認と却下で違う** (PR #430 Codex P1):
+ *
+ * - `rejected` … 却下された承認でツールが呼ばれる経路は無い。**未実行と言い切れる**
+ * - `approved` … ai-agent は承認の記録を**実行の前**に書く。記録の直後に落ちれば
+ *   「approved なのに未実行」が残るので、**「実行されました」と断定してはいけない**
+ *   (断定すると、実際には送られていないメールを「送った」と信じさせる — 逆向きの
+ *   事故は「送信済みのメールをもう一度送らせる」で、どちらも同じ重さ)
  */
 function approvalAlreadyProcessedMessage(status: "approved" | "rejected"): string {
   return status === "approved"
-    ? "この承認はすでに処理済みです (結果: 承認 — 操作は実行されました)。"
-    : "この承認はすでに処理済みです (結果: 却下 — 操作は実行されていません)。";
+    ? "この承認はすでに承認済みです (操作の結果は会話履歴でご確認ください)。"
+    : "この承認はすでに却下済みです (操作は実行されていません)。";
 }
 
 /** 承認 / 却下の失敗文面。断定してよい範囲が承認と却下で違う (judge major-2)。 */
@@ -476,8 +483,8 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
         setActionError(FAILURE_MESSAGE.approvalExpired);
       } else if (discarded.value.kind === "processed") {
         // すでに解決済みの承認だった (#82)。同じくカードを閉じて発話は進めるが、
-        // **結果は言い切る** — 「実行されたか分かりません」で流すと、送信済みの
-        // 操作をユーザーがもう一度依頼しうる。
+        // **受け付けられた決定は伝える** — 却下済みなら未実行と言い切れ、承認済みなら
+        // 会話履歴で結果を確かめる導線になる (期限切れの「記録が失われた」とは別物)。
         setPendingApproval(null);
         setActionError(approvalAlreadyProcessedMessage(discarded.value.status));
       } else {
@@ -560,8 +567,9 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
         return;
       }
       if (responded.kind === "processed") {
-        // 二重送信 (#82)。ここは**言い切れる** — 409 が結果を運んでくるので、
-        // 「すでに承認済み (実行済み)」「すでに却下済み (未実行)」を区別して伝える。
+        // 二重送信 (#82)。期限切れと違い「どちらの決定を受け付けたか」は言える。
+        // ただし承認済みから実行の完了は導けない (PR #430 Codex P1) — 断定の範囲は
+        // approvalAlreadyProcessedMessage が持つ。
         setActionError(approvalAlreadyProcessedMessage(responded.status));
         return;
       }

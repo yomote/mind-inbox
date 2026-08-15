@@ -245,10 +245,10 @@ async def approve(
         )
         return ApproveResponse(reply=reply)
     except ApprovalAlreadyProcessedError as exc:
-        # 二重送信 (#82 / PO 裁定 2026-08-15 B 案)。**404 に混ぜない** — 承認済みの
-        # 再送を「もう無い」と同じ応答にすると、副作用が実行されたのかどうかを
-        # クライアントが判定できず、送信済みのメールを再送させる事故になる。
-        # 409 + 現在状態なら「すでに承認済み (= 実行された)」と言い切れる。
+        # 二重送信 (#82 / PO 裁定 2026-08-15 B 案)。**404 に混ぜない** — 混ぜると
+        # 「レコードが消えた」のか「もう解決済み」なのかをクライアントが判定できず、
+        # **却下済み (= 確実に未実行) すら案内できない**。
+        # なお `status` は受け付けた決定であって実行の完了ではない (PR #430 Codex P1)。
         #
         # response_model (ApproveResponse) を通さずに JSONResponse を返しているので、
         # **この body の形は OpenAPI の宣言 (responses=) と自動では一致しない**。

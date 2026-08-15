@@ -13,6 +13,8 @@ fixture 置き換え (M1-5 / #82): SK 依存除去に伴い、履歴 fixture を
 検証意図は不変。
 """
 
+import asyncio
+
 from app.history import ChatHistory
 
 from app.schemas import ApprovalRecord, Plan
@@ -55,3 +57,72 @@ class TestInMemoryApprovalRepository:
         r1 = ApprovalRecord(session_id="s1", plan=Plan())
         r2 = ApprovalRecord(session_id="s2", plan=Plan())
         assert r1.id != r2.id
+
+
+class TestInMemoryApprovalClaim:
+    """`claim` は pending を**一度しか渡さない** (PR #430 Codex P1)。
+
+    無いと何が静かに通るか: in-memory 構成だけ「2 本目にも pending を渡す」実装に
+    なり、ローカル・テストでは二重実行が再現しないまま Cosmos 構成でだけ起きる。
+    構成で守りの強さを変えないことをここで固定する。
+
+    **注意 (このテストが証明していないこと)**: in-memory の `claim` は現状
+    await を挟まないので、単一イベントループでは lock が無くても直列に走る =
+    「lock を消す」変異ではこのテストは落ちない。lock は**臨界区間に await が
+    増えたときに守る**ためのもので、ここで固定しているのは呼び出し側から見た
+    振る舞い (勝者は 1 本 / 呼び出し側のレコードは変わらない / pending 以外は None)。
+    実際の競合を判定に使っているのは Cosmos 側の ETag テスト
+    (`test_cosmos_repositories.py`) と workflow の同時再開テスト。
+    """
+
+    def _pending(self) -> ApprovalRecord:
+        return ApprovalRecord(
+            session_id="s1",
+            plan=Plan(tool_name="send_reply", is_side_effecting=True),
+            checkpoint_id="cp-1",
+        )
+
+    async def test_単体_同時に走らせても獲得できるのは一本だけ(self, approval_repo):
+        record = self._pending()
+        await approval_repo.save(record)
+
+        results = await asyncio.gather(
+            approval_repo.claim(record.id, "approved", "2026-08-15T02:00:00+00:00"),
+            approval_repo.claim(record.id, "rejected", "2026-08-15T02:00:01+00:00"),
+        )
+
+        assert sum(r is not None for r in results) == 1
+        assert (await approval_repo.get(record.id)).status in ("approved", "rejected")
+
+    async def test_単体_claim_は呼び出し側のレコードを書き換えない(self, approval_repo):
+        """呼び出し側が持っている `record` が黙って変わらないこと。
+
+        無いと何が静かに通るか: in-memory は同じインスタンスを返すので、破壊的に
+        更新すると「保存していないのに状態が進んでいる」= Cosmos 構成と挙動が割れる。
+        構成差はテストが緑のまま本番だけ壊れる形で出る。
+        """
+        record = self._pending()
+        await approval_repo.save(record)
+
+        await approval_repo.claim(record.id, "approved", "2026-08-15T02:00:00+00:00")
+
+        assert record.status == "pending"
+        assert (await approval_repo.get(record.id)).status == "approved"
+
+    async def test_単体_処理済みや未知_id_の_claim_は_None(self, approval_repo):
+        record = self._pending()
+        await approval_repo.save(record)
+        await approval_repo.claim(record.id, "approved", "2026-08-15T02:00:00+00:00")
+
+        assert (
+            await approval_repo.claim(
+                record.id, "rejected", "2026-08-15T02:00:01+00:00"
+            )
+            is None
+        )
+        assert (
+            await approval_repo.claim(
+                "no-such-id", "approved", "2026-08-15T02:00:02+00:00"
+            )
+            is None
+        )

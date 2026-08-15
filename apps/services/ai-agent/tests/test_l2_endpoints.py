@@ -367,16 +367,16 @@ class TestApprove:
             ("approved", None),
         ],
     )
-    async def test_l2_二回目の承認は409で現在状態を返す(
+    async def test_単体_二回目の承認は409で現在状態を返す(
         self, client, monkeypatch, status, processed_at
     ):
         """#82 / PO 裁定 2026-08-15 B 案。
 
         無いと何が静かに通るか: 二重送信が 404 (= レコードが無い) に戻り、
-        BFF/フロントは「実行されたかどうか分からない」に落ちる。承認済みの
-        再送を「もう無い」と同じ応答にすると、送信済みのメールをユーザーが
-        もう一度送る判断をしうる。status / processed_at のどれが欠けても
-        フロントは「結果: 承認/却下」を言い切れない。
+        BFF/フロントは「レコードが消えた」のか「もう解決済み」なのかを区別できない。
+        **却下済み (= 確実に未実行) すら案内できなくなる**。status が欠けると
+        フロントは結果を言い分けられず、processed_at が欠けると運用が
+        「いつ受け付けた二重送信か」を追えない。
         """
 
         async def boom(*args, **kwargs):
@@ -396,7 +396,7 @@ class TestApprove:
             "processed_at": processed_at,
         }
 
-    async def test_l2_409の宣言はopenapiにも出ている(self, client):
+    async def test_単体_409の宣言はopenapiにも出ている(self, client):
         """生成 OpenAPI (docs/api/ai-agent.yaml) に 409 が載ること。
 
         無いと何が静かに通るか: 実装だけ 409 を返し、生成 docs は 200/404 しか

@@ -158,10 +158,13 @@ export class ApprovalExpired extends Error {
 /**
  * その承認 ID は**すでに処理済み** (#82 / PO 裁定 2026-08-15 B 案 / BFF の `CONFLICT`)。
  *
- * `ApprovalExpired` と分けているのが本体。`status` が `approved` なら**副作用は実行された**、
- * `rejected` なら**実行されていない**と言い切れる (ai-agent は status を resume の前に
- * 保存するので、承認済みの再送 = 実行されたあとの再送)。以前はこれが 404 に混ざっていて、
- * UI は「実行されたか分かりません」としか言えなかった (送信済みのメールを再送させうる)。
+ * `ApprovalExpired` と分けているのが本体 — あちらは「レコードがもう無い」で、
+ * こちらは「どちらの決定を受け付けたか」まで分かる。
+ *
+ * **`status` は決定であって実行の完了ではない** (PR #430 Codex P1)。ai-agent は
+ * 承認の記録を**実行の前**に書くので、`rejected` は未実行と言い切れる一方、
+ * `approved` から「実行された」は導けない。文言側で断定しないこと
+ * (`useConsultation` の `approvalAlreadyProcessedMessage`)。
  */
 export class ApprovalAlreadyProcessed extends Error {
   // パラメータプロパティ短縮記法は erasableSyntaxOnly で使えないため明示代入する。

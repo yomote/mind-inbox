@@ -96,7 +96,7 @@ export type ApproveResponse = z.infer<typeof ApproveResponseSchema>;
  *
  * **消費済み (approved / rejected) はここに来ない** (#82 / PO 裁定 2026-08-15 B 案)。
  * 二重送信は 409 + 現在状態 (`ApprovalConflictSchema`) に分離した — 404 に混ぜると
- * 「副作用が実行されたあとに ack だけ落ちた」再送から実行の有無が読めない。
+ * 「レコードが消えた」のか「もう解決済み」なのかが読めない。
  * ai-agent 側が `already processed` を再び `ValueError` に戻すと**この 404 判別に
  * 落ちてきてしまう**ので、`npm run test:contract` が 404 の detail 一覧と突き合わせて
  * 落とす (409 側は別の照合)。
@@ -114,12 +114,20 @@ export const APPROVAL_GONE_DETAIL = /^Approval (not found|checkpoint not found)\
  * `/approve` の **409** body (#82 / PO 裁定 2026-08-15 B 案 / ai-agent の
  * `ApprovalConflictResponse`)。同じ承認 ID への 2 回目が来たときの現在状態。
  *
- * **status を見て初めて「実行されたか」が言える**: `approved` = 副作用は実行された、
- * `rejected` = 実行されていない。以前はこれが 404 に混ざっていたため、UI は
- * 「実行されたか分かりません」としか言えなかった (送信済みのメールを再送させうる)。
+ * **status は「どちらの決定を受け付けたか」であって実行の完了ではない**
+ * (PR #430 Codex P1)。ai-agent は遷移を checkpoint 再開の**前**に書くので、
+ * `approved` の記録後・副作用の実行前に落ちれば「approved なのに未実行」が残る。
  *
- * `processedAt` は **nullable** — この項目より前に書かれた ai-agent の `ApprovalRecord`
- * には時刻が無い。**時刻の欠落を「未処理」と読まないこと** (判定は status だけで行う)。
+ *   - `approved` … 実行してよいと受け付けた。**実行された保証はない**
+ *   - `rejected` … 実行しないと受け付けた。この経路でツールは呼ばれない = **未実行と言える**
+ *
+ * それでも 404 と分ける価値があるのは、**「もう解決済み」だと分かること自体**が
+ * 404 (レコードが消えた) からは得られないため — 却下済みなら未実行と言い切れ、
+ * 承認済みなら「結果は会話履歴で確認」と正確に案内できる。
+ *
+ * `processedAt` は **受け付けた時刻** (完了時刻ではない) で、**nullable** — この項目より
+ * 前に書かれた ai-agent の `ApprovalRecord` には時刻が無い。**時刻の欠落を「未処理」と
+ * 読まないこと** (判定は status だけで行う)。
  *
  * schema にして zod で検証しているのは、**承認と無関係な 409 を「処理済み」に
  * 化けさせない**ため (404 側で detail を選り分けているのと同じ規律)。プロキシや

@@ -35,9 +35,12 @@ export const APPROVAL_NOT_FOUND_TOKEN = "approval-not-found";
  * `consultation.approve` の対象が **すでに処理済み** (#82 / PO 裁定 2026-08-15 B 案)。
  *
  * `NOT_FOUND` (もう無い) と分けるのが本体。ai-agent が二重送信も 404 で返していた頃は
- * 「副作用が実行されたか」がどの層でも判定できず、UI は「実行されたか分かりません」と
- * しか言えなかった (送信済みのメールを再送させうる)。BFF は 409 を `CONFLICT` +
- * この token に写し、フロントは結果 (承認済み / 却下済み) まで言い切る。
+ * 「もう解決済み」ということ自体が分からず、**確実に未実行と言える却下済みまで**
+ * 「実行されたか分かりません」に落ちていた。BFF は 409 を `CONFLICT` + この token に
+ * 写し、フロントは受け付けられた決定 (承認済み / 却下済み) を伝える。
+ *
+ * **status は決定であって実行の完了ではない** (PR #430 Codex P1) — `approved` から
+ * 「実行された」を導かないこと (文言の規律は dialogue-session.mdx §5.9)。
  *
  * **code だけで判定させない**理由は `APPROVAL_NOT_FOUND_TOKEN` と同じ — `CONFLICT` は
  * 将来ほかの procedure でも使いうる汎用コードなので、token 一致まで見て初めて
@@ -45,7 +48,10 @@ export const APPROVAL_NOT_FOUND_TOKEN = "approval-not-found";
  */
 export const APPROVAL_ALREADY_PROCESSED_TOKEN = "approval-already-processed";
 
-/** 承認の解決結果。`approved` = 副作用は実行された / `rejected` = 実行されていない。 */
+/**
+ * 承認が受け付けた**決定**。`approved` = 実行してよいと受け付けた (実行された保証は
+ * ない) / `rejected` = 実行しないと受け付けた (= 未実行と言える)。
+ */
 export const APPROVAL_PROCESSED_STATUSES = ["approved", "rejected"] as const;
 export type ApprovalProcessedStatus = (typeof APPROVAL_PROCESSED_STATUSES)[number];
 
@@ -53,7 +59,7 @@ export type ApprovalProcessedStatus = (typeof APPROVAL_PROCESSED_STATUSES)[numbe
  * 処理済み token に結果を載せる符号化 (`approval-already-processed:approved`)。
  *
  * tRPC のエラーは文字列 1 本 (`message`) しか運べないが、フロントは
- * 「承認済み = 実行された」「却下済み = 実行されていない」を言い分ける必要がある。
+ * 「承認済み」「却下済み (= 未実行と言える)」を言い分ける必要がある。
  * **符号化と復号を同じファイルに置く**のは、片側だけ書式を変えたときに黙って
  * 判定が外れる (= 汎用エラー文言に落ちる) のを防ぐため — リテラルを 1 個だけ持つ
  * 流儀と同じ理由。

@@ -22,6 +22,7 @@ fixture 置き換え (#320): 承認は自前の `is_side_effecting` 判定では
 検証意図 (承認の中断 / 再開 / 却下 / 掃除) は不変。
 """
 
+import asyncio
 import logging
 from datetime import datetime
 
@@ -205,16 +206,15 @@ class TestResumeAfterApproval:
         "first_decision,expected_status",
         [(True, "approved"), (False, "rejected")],
     )
-    async def test_l1_二回目の承認は現在状態つきの専用例外になる(
+    async def test_単体_二回目の承認は現在状態つきの専用例外になる(
         self, session_repo, approval_repo, first_decision, expected_status
     ):
         """二重送信は「レコードが無い」(ValueError → 404) と**別の型**で上がる (#82)。
 
-        無いと何が静かに通るか: 承認済み ID への再送が未知 ID と同じ 404 に戻り、
-        「副作用が実行されたあとに ack だけ落ちた」再送から**実行の有無が読めなくなる**
-        (status の保存は resume 実行の前なので、承認済みでも 404 になっていた)。
-        UI は「実行されたか分かりません」としか言えず、送信済みのメールを
-        ユーザーがもう一度送る判断をしうる。
+        無いと何が静かに通るか: 二重送信が未知 ID と同じ 404 に戻り、「レコードが
+        消えた」のか「もう解決済み」なのかがクライアントから読めなくなる。
+        **確実に未実行と言える却下済みまで**「実行されたか分かりません」に落ち、
+        ユーザーは会話を遡って自分で確かめるしかなくなる。
         """
         client = approval_script()
 
@@ -237,13 +237,16 @@ class TestResumeAfterApproval:
         # main.py の except の順序次第で静かに 404 へ戻る
         assert not isinstance(excinfo.value, ValueError)
 
-    async def test_l1_解決時刻は承認レコードに記録される(
+    async def test_単体_決定を受け付けた時刻が承認レコードに記録される(
         self, session_repo, approval_repo
     ):
         """409 body の `processed_at` の出どころを pin する (#82)。
 
         無いと何が静かに通るか: 時刻を書き忘れても例外の形は変わらないので、
         409 の `processed_at` が**常に null** になっても誰も気づけない。
+
+        なおこの時刻は **決定を受け付けた時刻**で、副作用の完了時刻ではない
+        (遷移は checkpoint 再開の前に書く / PR #430 Codex P1)。
         """
         client = approval_script()
 
@@ -261,6 +264,117 @@ class TestResumeAfterApproval:
         # ISO 8601 (UTC) として解釈できること。文字列の存在だけを見ると、
         # 表現がローカル時刻や独自形式に変わっても通ってしまう
         assert datetime.fromisoformat(record.processed_at).tzinfo is not None
+
+
+class _ConcurrentReadApprovalRepository:
+    """「2 本が同時に pending を読んだ」状態を決定的に再現する薄い委譲 (PR #430 Codex P1)。
+
+    `get` は **最初の claim が起きるまで** pending の写しを返す = どちらの
+    リクエストも `resume_after_approval` 冒頭の status チェックを通過する
+    (Cosmos で同時に読んだ / レプリカの読みが遅れた状況)。claim 以降の `get` は
+    実データを返す — 競合に負けた側が現在状態を読み直す経路。
+
+    これが無いと、**排他が claim にあるのか冒頭の status チェックにあるのかを
+    区別できない**。チェックだけの実装 (= 二重実行する実装) でもテストが緑になる。
+    """
+
+    def __init__(self, inner, pending):
+        self._inner = inner
+        self._pending = pending
+        self._claim_started = False
+
+    async def get(self, approval_id):
+        if not self._claim_started and approval_id == self._pending.id:
+            return self._pending.model_copy()
+        return await self._inner.get(approval_id)
+
+    async def save(self, record):
+        await self._inner.save(record)
+
+    async def claim(self, approval_id, status, processed_at):
+        self._claim_started = True
+        return await self._inner.claim(approval_id, status, processed_at)
+
+
+class TestConcurrentApproval:
+    """同じ承認 ID がほぼ同時に 2 本届いたターン (PR #430 Codex P1)。
+
+    無いと何が静かに通るか: 冒頭の status チェックだけで排他したつもりになると、
+    両方が pending を読んだときに**両方が checkpoint 再開へ進み、副作用が二重に
+    実行される** (メールが 2 通出る)。承認 UI (G1) が守っているはずの
+    「人間が 1 回許可した操作は 1 回だけ起きる」が崩れるが、画面はどちらも
+    普通に成功して見えるので、送られた側の証跡が出るまで気づけない。
+    """
+
+    async def test_単体_同時に届いた二本のうち副作用を実行するのは一本だけ(
+        self, session_repo, approval_repo, caplog
+    ):
+        client = approval_script()
+        res = await run_workflow(
+            "s-race", "返信して", session_repo, approval_repo, client
+        )
+        pending = await approval_repo.get(res.approval_request_id)
+        repo = _ConcurrentReadApprovalRepository(approval_repo, pending)
+
+        with caplog.at_level(logging.INFO, logger="app.tools"):
+            results = await asyncio.gather(
+                resume_after_approval(
+                    res.approval_request_id, True, session_repo, repo, client
+                ),
+                resume_after_approval(
+                    res.approval_request_id,
+                    True,
+                    session_repo,
+                    repo,
+                    approval_script(),
+                ),
+                return_exceptions=True,
+            )
+
+        # **副作用の実行が 1 回**。ここが 2 になるのがこのテストの本体
+        executed = [
+            r for r in caplog.records if "Tool[send_reply] invoked" in r.getMessage()
+        ]
+        assert len(executed) == 1
+
+        replies = [r for r in results if isinstance(r, str)]
+        conflicts = [r for r in results if isinstance(r, ApprovalAlreadyProcessedError)]
+        assert len(replies) == 1
+        assert len(conflicts) == 1
+        # 負けた側は 409 (二重送信) として説明される — 404 (もう無い) に化けない
+        assert conflicts[0].status == "approved"
+        assert not isinstance(conflicts[0], ValueError)
+
+    async def test_単体_負けた側は_checkpoint_を解放しない(
+        self, session_repo, approval_repo
+    ):
+        """獲得できなかった側が in-memory registry を掃除してしまわないこと。
+
+        無いと何が静かに通るか: 負けた側が storage を pop すると、**勝った側が
+        再開に使っている checkpoint が実行中に消える**。承認は受け付けたのに
+        ツールが走らない (しかも 409 は返っているので二重送信として片づく) 状態が
+        起きうる。
+        """
+        client = approval_script()
+        res = await run_workflow(
+            "s-race-cleanup", "返信して", session_repo, approval_repo, client
+        )
+        pending = await approval_repo.get(res.approval_request_id)
+        repo = _ConcurrentReadApprovalRepository(approval_repo, pending)
+
+        # 先に 1 本目を解決 (claim を取る)。以降の get は実データ = 処理済みを返す
+        await repo.claim(
+            res.approval_request_id, "approved", "2026-08-15T02:00:00+00:00"
+        )
+        assert get_pending_checkpoint_storage(res.approval_request_id) is not None
+
+        with pytest.raises(ApprovalAlreadyProcessedError):
+            await resume_after_approval(
+                res.approval_request_id, True, session_repo, repo, client
+            )
+
+        # 負けた側は解放していない (勝者の再開が使う)
+        assert get_pending_checkpoint_storage(res.approval_request_id) is not None
 
 
 class TestChainedApproval:

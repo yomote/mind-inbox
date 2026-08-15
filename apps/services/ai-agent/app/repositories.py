@@ -11,9 +11,14 @@ Protocol の戻り値型 (ChatHistory / ApprovalRecord) は実装で変えない
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Protocol
 
-from azure.cosmos.exceptions import CosmosResourceNotFoundError
+from azure.core import MatchConditions
+from azure.cosmos.exceptions import (
+    CosmosAccessConditionFailedError,
+    CosmosResourceNotFoundError,
+)
 
 from .config import get_settings
 from .history import ChatHistory
@@ -32,6 +37,23 @@ class SessionRepository(Protocol):
 class ApprovalRepository(Protocol):
     async def get(self, approval_id: str) -> ApprovalRecord | None: ...
     async def save(self, record: ApprovalRecord) -> None: ...
+
+    async def claim(
+        self, approval_id: str, status: str, processed_at: str
+    ) -> ApprovalRecord | None:
+        """`pending` → `status` の遷移を**原子的に**獲得する。
+
+        獲得できたら更新後のレコード、**取れなかったら None** (= 既に誰かが
+        解決した / レコードが無い)。呼び出し側は None を「二重送信」として
+        409 に写す (`workflow.resume_after_approval`)。
+
+        無いと何が静かに通るか (PR #430 Codex P1): 「read して status を見てから
+        save する」だけでは、同じ承認 ID がほぼ同時に 2 本届いたとき**両方が
+        pending を読む**。両方が checkpoint 再開へ進み、**副作用が二重に実行される**
+        (承認 UI が守っているはずの「1 回だけ実行する」が崩れる)。409 はその後に
+        返る二重送信を説明するだけで、実行そのものは止められない。
+        """
+        ...
 
 
 class InMemorySessionRepository:
@@ -55,12 +77,32 @@ class InMemoryApprovalRepository:
 
     def __init__(self) -> None:
         self._store: dict[str, object] = {}
+        # `claim` の排他。単一プロセス・単一イベントループなので lock で足りる
+        # (Cosmos 実装の ETag 条件付き更新と同じ「pending は 1 度しか取れない」を
+        # ここでも成立させる — 構成によって二重実行の可否が変わらないようにする)。
+        self._claim_lock = asyncio.Lock()
 
     async def get(self, approval_id: str) -> ApprovalRecord | None:
         return self._store.get(approval_id)  # type: ignore[return-value]
 
     async def save(self, record: ApprovalRecord) -> None:
         self._store[record.id] = record
+
+    async def claim(
+        self, approval_id: str, status: str, processed_at: str
+    ) -> ApprovalRecord | None:
+        async with self._claim_lock:
+            record: ApprovalRecord | None = self._store.get(approval_id)  # type: ignore[assignment]
+            if record is None or record.status != "pending":
+                return None
+            # **元のオブジェクトを書き換えない** (model_copy): in-memory は呼び出し側と
+            # 同じインスタンスを返しているので、破壊的に書くと「保存していないのに
+            # 呼び出し側の record が変わっている」= Cosmos 構成と挙動が割れる。
+            claimed = record.model_copy(
+                update={"status": status, "processed_at": processed_at}
+            )
+            self._store[approval_id] = claimed
+            return claimed
 
 
 class CosmosSessionRepository:
@@ -118,6 +160,44 @@ class CosmosApprovalRepository:
 
     async def save(self, record: ApprovalRecord) -> None:
         await self._container.upsert_item(body=record.model_dump(mode="json"))
+
+    async def claim(
+        self, approval_id: str, status: str, processed_at: str
+    ) -> ApprovalRecord | None:
+        """ETag 条件付き置換で `pending` からの遷移を 1 本だけ通す (PR #430 Codex P1)。
+
+        `save` (= 条件なしの `upsert_item`) では、同時に届いた 2 本が**両方 pending を
+        読んで両方 upsert に成功する**ため、二重実行を止められない。ここは読んだ
+        文書の `_etag` を条件に付け、負けた側 (412) を None で返す。
+
+        `pending` 以外を読んだ時点でも None (= もう誰かが取った)。この 2 つを
+        呼び出し側で区別する必要は無い — どちらも「この呼び出しは実行してはいけない」。
+        """
+        try:
+            doc = await self._container.read_item(
+                item=approval_id, partition_key=approval_id
+            )
+        except CosmosResourceNotFoundError:
+            return None
+        if doc.get("status") != "pending":
+            return None
+
+        claimed = ApprovalRecord.model_validate(doc).model_copy(
+            update={"status": status, "processed_at": processed_at}
+        )
+        body = claimed.model_dump(mode="json")
+        try:
+            await self._container.replace_item(
+                item=approval_id,
+                body=body,
+                etag=doc["_etag"],
+                match_condition=MatchConditions.IfNotModified,
+            )
+        except CosmosAccessConditionFailedError:
+            # 412 = 読んでから置換するまでの間に他のリクエストが遷移させた。
+            # **握り潰していない**: 呼び出し側は None を 409 (二重送信) として返す
+            return None
+        return claimed
 
 
 def create_session_repository() -> SessionRepository:

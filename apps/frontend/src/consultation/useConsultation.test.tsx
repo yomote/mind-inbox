@@ -860,23 +860,16 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
   });
 
   it.each([
-    {
-      status: "approved" as const,
-      expected: "結果: 承認 — 操作は実行されました",
-      forbidden: "実行されていません",
-    },
-    {
-      status: "rejected" as const,
-      expected: "結果: 却下 — 操作は実行されていません",
-      forbidden: "実行されました",
-    },
+    { status: "approved" as const, expected: "すでに承認済み" },
+    { status: "rejected" as const, expected: "すでに却下済み" },
   ])(
-    "すでに処理済みの承認 (status=$status) はカードを閉じ、実行の有無を言い切る",
-    async ({ status, expected, forbidden }) => {
+    "すでに処理済みの承認 (status=$status) はカードを閉じ、受け付けられた決定を伝える",
+    async ({ status, expected }) => {
       // 無いと: 二重送信が期限切れ (ApprovalExpired) と同じ文面に落ち、UI は
-      //         「操作が実行されたかは会話を続けてご確認ください」しか言えない。
-      //         契約を 409 + 現在状態に分けた意味 (#82 / PO 裁定 2026-08-15 B 案) が
-      //         ユーザーに届かず、送信済みの操作をもう一度依頼させうる。
+      //         「もう受け付けられません (期限切れか、記録が失われています)」しか
+      //         言えない。契約を 409 + 現在状態に分けた意味 (#82 / PO 裁定
+      //         2026-08-15 B 案) がユーザーに届かず、**却下済み (確実に未実行) まで
+      //         「実行されたか確認してください」**に落ちる。
       const result = await startAndAskForApproval();
       vi.mocked(respondToApproval).mockRejectedValue(new ApprovalAlreadyProcessed(status));
 
@@ -884,18 +877,44 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
 
       // 再試行しても永久に 409 なのでカードは閉じる (期限切れと同じ扱い)
       expect(result.current.pendingApproval).toBeNull();
-      expect(result.current.actionError).toContain("すでに処理済み");
       expect(result.current.actionError).toContain(expected);
-      expect(result.current.actionError).not.toContain(forbidden);
       // 曖昧な期限切れ文面に混ざっていないこと
       expect(result.current.actionError).not.toContain("もう受け付けられません");
     },
   );
 
+  it("承認済みの 409 は「実行されました」と断定しない", async () => {
+    // 無いと (PR #430 Codex P1): ai-agent は承認の記録を**実行の前**に書くので、
+    //         記録直後にプロセスが落ちると「approved なのに未実行」のレコードが残る。
+    //         その ID を再送した人に「操作は実行されました」と言うと、**実際には
+    //         送られていないメールを送ったと信じさせる**。断定してよいのは却下側だけ。
+    const result = await startAndAskForApproval();
+    vi.mocked(respondToApproval).mockRejectedValue(new ApprovalAlreadyProcessed("approved"));
+
+    await act(async () => await result.current.respondToPendingApproval(true));
+
+    expect(result.current.actionError).not.toContain("実行されました");
+    // 断定しない代わりに、確かめる導線は必ず出す (黙って閉じない)
+    expect(result.current.actionError).toContain("会話履歴");
+  });
+
+  it("却下済みの 409 は「実行されていません」と言い切る", async () => {
+    // 無いと: 却下は「実行しない」を受け付けた状態で、この経路でツールが呼ばれることは
+    //         無い。ここまで曖昧にすると、ユーザーは実行されていない操作のために
+    //         会話を遡って確認させられる (409 に分けた価値が消える)。
+    const result = await startAndAskForApproval();
+    vi.mocked(respondToApproval).mockRejectedValue(new ApprovalAlreadyProcessed("rejected"));
+
+    await act(async () => await result.current.respondToPendingApproval(false));
+
+    expect(result.current.actionError).toContain("実行されていません");
+  });
+
   it("すでに処理済みの承認を抱えたまま次の発話を送ると、結果を伝えつつ発話が送信される", async () => {
-    // 無いと: 破棄のための却下が 409 で失敗する経路が「実行されたか分かりません」に落ち、
-    //         直前に承認済みだった操作 (= 実行済み) をユーザーが再依頼しうる (#82)。
-    //         発話自体を止めないのは期限切れと同じ理由 (再試行が成功しないため)。
+    // 無いと: 破棄のための却下が 409 で失敗する経路が期限切れと同じ文面に落ち、
+    //         「もう受け付けられません (記録が失われています)」だけが出る (#82)。
+    //         直前に自分が承認した操作の行方すら案内されない。発話自体を止めないのは
+    //         期限切れと同じ理由 (この ID への再試行は永久に成功しない)。
     const result = await startAndAskForApproval();
     vi.mocked(respondToApproval).mockRejectedValue(new ApprovalAlreadyProcessed("approved"));
     vi.mocked(sendMessage).mockResolvedValue({
@@ -908,7 +927,8 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
 
     expect(result.current.pendingApproval).toBeNull();
     expect(sendMessage).toHaveBeenLastCalledWith("s1", "やっぱり別の話をしたい");
-    expect(result.current.actionError).toContain("結果: 承認 — 操作は実行されました");
+    expect(result.current.actionError).toContain("すでに承認済み");
+    expect(result.current.actionError).not.toContain("実行されました");
   });
 
   it("受け付けられない承認を抱えたまま次の発話を送ると、カードが閉じて発話が送信される", async () => {

@@ -118,12 +118,20 @@ class ApprovalAlreadyProcessedError(Exception):
 
     `ValueError` (= main.py が 404 に写す「承認レコードがもう無い」) と**別の型**に
     しているのが本体。二重送信とレコード消失を同じ 404 に混ぜていた頃は、
-    「承認が届いて副作用も実行されたが ack だけ落ちた」あとの再送も 404 になり、
-    クライアントは**実行されたかどうかを判定できなかった** (承認 status の保存は
-    resume 実行の前に起きるため)。型で分けることで main.py が 409 + 現在状態に写す。
+    「もう解決済み」ということすらクライアントに伝わらず、**確実に未実行と言える
+    却下済みまで「実行されたか不明」**に落ちていた。型で分けることで main.py が
+    409 + 現在状態に写す。
 
-    `processed_at` が None なのは「時刻を持たない古いレコード」であって、
-    **未処理ではない** — status を無視して時刻で判定してはいけない。
+    **status が意味するのは「どちらの決定を受け付けたか」であって実行の完了ではない**
+    (PR #430 Codex P1)。遷移は checkpoint 再開の**前**に書くので、`approved` の記録後・
+    副作用の実行前にプロセスが落ちれば「approved なのに実行されていない」レコードが
+    残る。したがって:
+
+    - `approved` … 実行してよいと受け付けた。**実行された保証はない**
+    - `rejected` … 実行しないと受け付けた。この経路でツールは呼ばれない = **未実行と言える**
+
+    `processed_at` は**受け付けた時刻**で、完了の証拠ではない。None は「時刻を持たない
+    古いレコード」であって未処理ではない — status を無視して時刻で判定してはいけない。
     """
 
     def __init__(self, status: str, processed_at: Optional[str]) -> None:
@@ -860,11 +868,13 @@ async def resume_after_approval(
         raise ValueError(f"Approval not found: {approval_id!r}")
     if record.status != "pending":
         # **404 (レコードが無い) と混ぜない** (#82 / PO 裁定 2026-08-15 B 案)。
-        # ここに来るのは「同じ承認 ID がもう一度送られた」= 二重送信で、下の
-        # `record.status = ...` は resume 実行の**前**に書かれるため、承認済みの
-        # 再送は「副作用がすでに実行された」ことを意味する。404 に混ぜると
-        # クライアントは実行の有無を判定できず、送信済みのメールをもう一度
-        # 送らせる事故が起きる。
+        # ここに来るのは「同じ承認 ID がもう一度送られた」= 二重送信。404 に混ぜると
+        # クライアントは「レコードが消えた」のか「もう解決済み」なのかを判定できず、
+        # 却下済み (= 確実に未実行) すら案内できない。
+        #
+        # **これは早期の見切りであって排他ではない** — 実際に 1 本だけ通す判定は
+        # 下の `claim` (原子的な遷移) が持つ。ここだけだと同時リクエストは
+        # 両方素通りする (PR #430 Codex P1)。
         raise ApprovalAlreadyProcessedError(record.status, record.processed_at)
     if not record.checkpoint_id:
         raise ValueError(f"Approval checkpoint not found: {approval_id!r}")
@@ -878,19 +888,41 @@ async def resume_after_approval(
         except Exception as exc:
             raise ValueError(f"Approval checkpoint not found: {approval_id!r}") from exc
     else:
-        # in-memory 構成: 解決に入る時点で registry から解放する (成功・失敗
-        # どちらでも再試行は status チェックで弾かれるため、保持し続ける理由がない)
-        storage = _pending_run_storages.pop(approval_id, None)
+        # in-memory 構成: ここでは**参照するだけ**で解放しない。pop を排他の代用に
+        # すると、同時に届いた 2 本目が「checkpoint が無い」(404) に化けて
+        # **二重送信が二重送信として説明されない**。解放は下の claim を獲得した
+        # 側だけが行う (排他の責務は claim に 1 本化する)。
+        storage = _pending_run_storages.get(approval_id)
         if storage is None:
             raise ValueError(f"Approval checkpoint not found: {approval_id!r}")
 
-    record.status = "approved" if approved else "rejected"
-    # 解決時刻は status と**同じ save で**書く (別 save にすると「status だけ動いて
-    # 時刻が無い」中間状態が 409 応答に出る)。resume の前に書く順序は従来どおり —
-    # 実行中のクラッシュで二重実行されるより、「実行されたかもしれない」を
-    # 409 で正直に返せる方を選ぶ。
-    record.processed_at = datetime.now(timezone.utc).isoformat()
-    await approval_repo.save(record)
+    # **ここが「1 回だけ実行する」の要** (PR #430 Codex P1)。pending からの遷移を
+    # 原子的に獲得し (Cosmos は ETag 条件付き置換 / in-memory は lock)、取れなかった
+    # 側は checkpoint を再開せずに 409 で返す。上の status チェックだけでは、
+    # 同時に届いた 2 本が**両方 pending を読んで両方が副作用を実行する**。
+    #
+    # 遷移を resume の**前**に書く順序は従来どおり: 実行中にクラッシュしたときは
+    # 「実行されたか分からない」レコードが残るが、二重実行よりそちらを選ぶ。
+    # したがって `processed_at` は **受け付けた時刻であって完了の証拠ではない**
+    # (この意味は 409 の応答と UI 文言まで一貫させてある)。
+    claimed = await approval_repo.claim(
+        approval_id,
+        "approved" if approved else "rejected",
+        datetime.now(timezone.utc).isoformat(),
+    )
+    if claimed is None:
+        current = await approval_repo.get(approval_id)
+        if current is None or current.status == "pending":
+            # 競合に負けたのに pending のまま / レコードが消えた = 承認レコードは
+            # もう当てにできない。**「処理済み」と断定せず** 404 側に倒す
+            raise ValueError(f"Approval not found: {approval_id!r}")
+        raise ApprovalAlreadyProcessedError(current.status, current.processed_at)
+    record = claimed
+
+    if not _cosmos_enabled():
+        # 獲得できた側だけが registry を解放する (in-memory には TTL が無いので、
+        # 解決した run の checkpoint を残さない / PR #243 レビュー指摘)。
+        _pending_run_storages.pop(approval_id, None)
 
     workflow = _build_chat_workflow(
         session_repo, client, stream=False, checkpoint_storage=storage

@@ -311,18 +311,14 @@ describe("[L2] consultation.approve", () => {
     expect((err as TRPCError).message).toBe(APPROVAL_NOT_FOUND_TOKEN);
   });
 
-  it.each([
-    { status: "approved" as const },
-    { status: "rejected" as const },
-  ])(
+  it.each([{ status: "approved" as const }, { status: "rejected" as const }])(
     "すでに処理済み (ApprovalAlreadyProcessedError / status=$status) は CONFLICT + 結果つき token に写す",
     async ({ status }) => {
       // 無いと: 二重送信が NOT_FOUND (もう無い) に混ざり、フロントは
-      // **副作用が実行されたかを言えなくなる** (#82 / PO 裁定 2026-08-15 B 案)。
-      // 「実行されたか分かりません」と案内された利用者は、送信済みのメールを
-      // もう一度送る判断をしうる。
+      // 「レコードが消えた」のか「もう解決済み」なのかを区別できなくなる
+      // (#82 / PO 裁定 2026-08-15 B 案)。**却下済み (= 確実に未実行) すら案内できない**。
       //
-      // **結果 (approved / rejected) が message に載っていること**もこの写しの本体 —
+      // **決定 (approved / rejected) が message に載っていること**もこの写しの本体 —
       // 載らないと UI は「処理済み」までしか言えず、判別した意味が消える。
       vi.mocked(approveAiAgent).mockRejectedValue(
         new ApprovalAlreadyProcessedError("appr-1", status, "2026-08-15T02:00:00+00:00"),
