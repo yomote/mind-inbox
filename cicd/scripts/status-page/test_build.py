@@ -446,3 +446,99 @@ def test_L1_issue_comment_は全ページを見る(tmp_path):
     # stub は --paginate が無いと失敗する (= ❓ 未検証)。取得できていれば
     # 新しい方 (2099) が拾えて 🟢 になる
     assert "🟢" in html, "--paginate を付けずに取得している (1 ページ目だけ)"
+
+
+def test_l1_LLM採点行はシナリオごとに分かれ表示窓は各7件(tmp_path, monkeypatch) -> None:
+    """無いと何が静かに通るか (#443 judge A):
+
+    採点行の表示窓が「全体で 7 件」の固定だと、2 シナリオ × 5 朝 (10 件) で窓が
+    3.5 朝に縮んで古い朝が黙って落ちるうえ、同じ日付に 🟢/🔴 が並んで
+    どちらの台本の赤か読めない。シナリオごとに窓を取れば 5 朝すべてが両方の行に残る。
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("status_page_build", BUILD)
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+
+    root = tmp_path / "uxdata"
+    (root / "evals").mkdir(parents=True)
+    judges = [
+        {
+            "kind": "ux-judge-score",
+            "scenarioId": sid,
+            "recordedAt": f"2099-01-{day:02d}T02:00:00Z",
+            "total": total,
+            "max": 14,
+            "verdict": verdict,
+        }
+        for day in range(1, 6)
+        for sid, total, verdict in (
+            ("work-overwhelm-v1", 12, "green"),
+            ("hypothesis-pushback-v1", 7, "red"),
+        )
+    ]
+    (root / "evals" / "2099-01.jsonl").write_text(
+        "".join(json.dumps(j, ensure_ascii=False) + "\n" for j in judges)
+    )
+    monkeypatch.setenv("UX_DATA_DIR", str(root))
+
+    section = build.ux_trend_section()
+    # シナリオごとに別の採点行が出る (継続線が先)
+    baseline_at = section.find("ux-judge-score / <code>work-overwhelm-v1</code>")
+    pushback_at = section.find("ux-judge-score / <code>hypothesis-pushback-v1</code>")
+    assert baseline_at != -1 and pushback_at != -1
+    assert baseline_at < pushback_at
+    # 5 朝ぶんの日付が**両方**の行に残る (全体 7 件の窓だと 01-01 が 0 回になる)
+    for day in range(1, 6):
+        assert section.count(f"01-{day:02d}") == 2, f"01-{day:02d} が両方の行に残っていない"
+
+
+def test_l1_トレンドの折れ線はシナリオを混ぜない() -> None:
+    """無いと何が静かに通るか (#435):
+
+    プローブの台本が 2 本になると、1 本の折れ線に**別々の台本の点**が交互に載る。
+    台本が違えば応答の長さも往復の重さも違うので、上下が「遅くなった」なのか
+    「別のシナリオの点」なのか誰にも区別できなくなり、#123 M0 から続く継続線
+    (`work-overwhelm-v1`) の劣化検知が読めなくなる。
+    """
+    import importlib.util
+    from datetime import datetime, timezone
+
+    spec = importlib.util.spec_from_file_location("status_page_build", BUILD)
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    now = datetime(2026, 8, 16, tzinfo=timezone.utc)
+
+    def mech(scenario_id: str | None, day: int, avg: int) -> dict:
+        obs = {
+            "kind": "ux-eval-mech",
+            "recordedAt": f"2026-08-{day:02d}T08:20:00Z",
+            "metrics": {
+                "latency": {"sendToReplyVisibleMs": {"avgMs": avg, "maxMs": avg + 100}},
+                "warnings": {"latency": 0},
+                "thresholds": {"warnReplyVisibleMs": 10000},
+            },
+        }
+        if scenario_id is not None:
+            obs["scenarioId"] = scenario_id
+        return obs
+
+    observations = [
+        mech(None, 10, 4000),  # 移行データ (scenarioId なし) = 継続線の一部
+        mech("work-overwhelm-v1", 15, 4100),
+        mech("hypothesis-pushback-v1", 15, 9000),
+    ]
+
+    baseline = build._trend_points(
+        observations, now, scenario_id=build.BASELINE_SCENARIO_ID
+    )
+    # 継続線には旧観測 (scenarioId なし) を含み、別シナリオの 9000ms は入らない
+    assert [p["avg"] for p in baseline] == [4000.0, 4100.0]
+
+    everything = build._trend_points(observations, now)
+    assert sorted(p["scenario"] for p in everything) == [
+        "hypothesis-pushback-v1",
+        "work-overwhelm-v1",
+        "work-overwhelm-v1",
+    ]

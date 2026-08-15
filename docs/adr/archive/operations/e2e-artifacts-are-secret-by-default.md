@@ -20,7 +20,7 @@
 >
 > | 何                                      | どこ                                                                                                                                                     |
 > | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-> | 層の分け方 / 鍵をどの RG に置くか       | [ADR 0056](../../0056-management-and-app-layers-with-backup-based-data-protection.md) D1 (管理系 RG `rg-mgmt-mindbox` / **Proposed**)                    |
+> | 層の分け方 / 鍵をどの RG に置くか       | [ADR 0056](../../0056-management-and-app-layers-with-backup-based-data-protection.md) D1 (管理系 RG `rg-mgmt-mindbox` / **Accepted** / 2026-08-15 発効)  |
 > | 鍵の実体 (非エクスポート / 鍵長 / 権限) | [`cicd/iac/main-mgmt.bicep`](../../../../cicd/iac/main-mgmt.bicep) の `e2eTraceKey`                                                                      |
 > | 適用手順                                | [`docs/runbooks/mgmt-layer-apply.md`](../../../runbooks/mgmt-layer-apply.md)                                                                             |
 > | 鍵の運用 (復号 / ローテーション / 失効) | [`docs/runbooks/e2e-trace-keys.md`](../../../runbooks/e2e-trace-keys.md) (鍵ファイルの置き場は [`cicd/keys/README.md`](../../../../cicd/keys/README.md)) |
@@ -99,7 +99,7 @@ Chosen option: **"Option D"**。
     - **時間が自動で閉じてくれる部分は無い。** 閉じるのは**人が revoke したとき**だけ。だから上の失効手順が「あれば良いもの」ではなく契約になる
   - **GitHub Secrets を選ばない理由**: workflow が復号できても、**public リポジトリでは Actions のログが公開**なので復号結果の出力先が無い
   - **環境変数を選ばない理由**: [ADR 0031](agent-reaches-outside-via-github-actions.md) の「サンドボックスに長期クレデンシャルを置かない」に反する。加えて Claude Code の公式ドキュメントが「**cloud environments have no dedicated secrets store, so don't add API keys or other credentials**」と明示している ([Configure cloud environments](https://code.claude.com/docs/en/cloud-environments))
-  - **置き場所は管理系 RG (`rg-mgmt-mindbox`)** — 環境 (`rg-{env}-mind-inbox`) の中に置くと `cleanup-env.sh` の RG 削除に巻き込まれる ([#302](https://github.com/yomote/mind-inbox/issues/302))。**層の定義の正典は [ADR 0056](../../0056-management-and-app-layers-with-backup-based-data-protection.md) D1** (Proposed / 2026-08-14 の PO 裁定。[ADR 0046](../../0046-environment-rebuildable-from-declaration.md) D1 の「持続層」を置き換える)
+  - **置き場所は管理系 RG (`rg-mgmt-mindbox`)** — 環境 (`rg-{env}-mind-inbox`) の中に置くと `cleanup-env.sh` の RG 削除に巻き込まれる ([#302](https://github.com/yomote/mind-inbox/issues/302))。**層の定義の正典は [ADR 0056](../../0056-management-and-app-layers-with-backup-based-data-protection.md) D1** (Accepted / 2026-08-14 の PO 裁定 → 2026-08-15 に Accept され発効。[ADR 0046](../../0046-environment-rebuildable-from-declaration.md) D1 の「持続層」を置き換え済み)
   - **管理系 RG に適用が済むまでの暫定**: それまでは秘密鍵を PO の手元に置き、**復号は PO のみ**。2026-08-12 の debrief で「Key Vault だけ先に作る」案は**採らない**と PO が判断したため、**エージェント復号が使えるようになるのは管理系 RG が立ってから**。宣言 (`main-mgmt.bicep` の `e2eTraceKey` / 非エクスポート) は [#419](https://github.com/yomote/mind-inbox/pull/419) で main に入っており、残るのは [Runbook](../../../runbooks/mgmt-layer-apply.md) の一度きりの手動適用
   - **移行**: 既に GPG 形式で残っている artifact (例: `e2e-live-trace-31571455835`) は**現行の GPG 鍵で PO が復号する**。封筒暗号への切り替えは新規分から。切り替え時は **D7 の許可拡張子 (`.gpg` → `.enc`) と、`encrypt-e2e-traces.sh` を呼ぶ「全 workflow」の upload glob・`PUBKEY` を同じ PR で替える** (取り残すと、その workflow の成果物だけが無言で上がらなくなる。詳細は D7)
 - **D6 公開鍵が無い間は trace を残さず、warning を出して続行する** — 鍵の準備前に平文で上がる事故を構造的に防ぐ (fail closed)。「鍵が無いから黙って何もしない」ではなく**必ず 1 行喋る**

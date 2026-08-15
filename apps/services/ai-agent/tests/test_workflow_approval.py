@@ -22,11 +22,14 @@ fixture 置き換え (#320): 承認は自前の `is_side_effecting` 判定では
 検証意図 (承認の中断 / 再開 / 却下 / 掃除) は不変。
 """
 
+import asyncio
 import logging
+from datetime import datetime
 
 import pytest
 
 from app.workflow import (
+    ApprovalAlreadyProcessedError,
     _pending_run_storages,
     get_pending_checkpoint_storage,
     resume_after_approval,
@@ -199,22 +202,207 @@ class TestResumeAfterApproval:
                 "no-such-id", True, session_repo, approval_repo, client
             )
 
-    async def test_l1_resume_twice_raises_already_processed(
-        self, session_repo, approval_repo
+    @pytest.mark.parametrize(
+        "first_decision,expected_status",
+        [(True, "approved"), (False, "rejected")],
+    )
+    async def test_単体_二回目の承認は現在状態つきの専用例外になる(
+        self, session_repo, approval_repo, first_decision, expected_status
     ):
+        """二重送信は「レコードが無い」(ValueError → 404) と**別の型**で上がる (#82)。
+
+        無いと何が静かに通るか: 二重送信が未知 ID と同じ 404 に戻り、「レコードが
+        消えた」のか「もう解決済み」なのかがクライアントから読めなくなる。
+        **確実に未実行と言える却下済みまで**「実行されたか分かりません」に落ち、
+        ユーザーは会話を遡って自分で確かめるしかなくなる。
+        """
         client = approval_script()
 
         res = await run_workflow(
             "s-twice", "返信して", session_repo, approval_repo, client
         )
         await resume_after_approval(
-            res.approval_request_id, True, session_repo, approval_repo, client
+            res.approval_request_id, first_decision, session_repo, approval_repo, client
         )
 
-        with pytest.raises(ValueError, match="Approval already processed"):
+        with pytest.raises(ApprovalAlreadyProcessedError) as excinfo:
             await resume_after_approval(
                 res.approval_request_id, True, session_repo, approval_repo, client
             )
+
+        # 型だけでなく **現在状態も** 運べていること (承認済み / 却下済みを言い分ける材料)
+        assert excinfo.value.status == expected_status
+        assert excinfo.value.processed_at is not None
+        # ValueError (= 404 に写る側) に混ざっていないこと。継承で通ってしまうと
+        # main.py の except の順序次第で静かに 404 へ戻る
+        assert not isinstance(excinfo.value, ValueError)
+
+    async def test_単体_決定を受け付けた時刻が承認レコードに記録される(
+        self, session_repo, approval_repo
+    ):
+        """409 body の `processed_at` の出どころを pin する (#82)。
+
+        無いと何が静かに通るか: 時刻を書き忘れても例外の形は変わらないので、
+        409 の `processed_at` が**常に null** になっても誰も気づけない。
+
+        なおこの時刻は **決定を受け付けた時刻**で、副作用の完了時刻ではない
+        (遷移は checkpoint 再開の前に書く / PR #430 Codex P1)。
+        """
+        client = approval_script()
+
+        res = await run_workflow(
+            "s-processed-at", "返信して", session_repo, approval_repo, client
+        )
+        assert (await approval_repo.get(res.approval_request_id)).processed_at is None
+
+        await resume_after_approval(
+            res.approval_request_id, True, session_repo, approval_repo, client
+        )
+
+        record = await approval_repo.get(res.approval_request_id)
+        assert record.status == "approved"
+        # ISO 8601 (UTC) として解釈できること。文字列の存在だけを見ると、
+        # 表現がローカル時刻や独自形式に変わっても通ってしまう
+        assert datetime.fromisoformat(record.processed_at).tzinfo is not None
+
+
+class _ConcurrentReadApprovalRepository:
+    """「2 本が同時に pending を読んだ」状態を決定的に再現する薄い委譲 (PR #430 Codex P1)。
+
+    **pending の窓はテストが明示的に決める**: 先頭 `stale_reads` 回の `get` は
+    pending の写しを返し (= 同時に読んだ 2 本がどちらも `resume_after_approval`
+    冒頭の status チェックを通過する)、それ以降は実データを返す (= 競合に負けた
+    側が現在状態を読み直す経路)。
+
+    窓の閉じ方を「claim が呼ばれたら」にすると、**2 本目が早期チェックで止まり
+    claim まで到達しない** (judge 実測: 敗者分岐 0 回)。それでは
+    「排他が claim にあるのか早期チェックにあるのか」を区別できず、
+    claim を外す変異も checkpoint 解放位置の変異も検出できない。
+
+    `claim_calls` / `lost_claims` は**どの経路を通ったかの実測値**。テストは
+    これを assert して「敗者が claim まで来たこと」を証拠として残す。
+    """
+
+    def __init__(self, inner, pending, stale_reads: int):
+        self._inner = inner
+        self._pending = pending
+        self._stale_remaining = stale_reads
+        self.claim_calls = 0
+        self.lost_claims = 0
+
+    async def get(self, approval_id):
+        if self._stale_remaining > 0 and approval_id == self._pending.id:
+            self._stale_remaining -= 1
+            return self._pending.model_copy()
+        return await self._inner.get(approval_id)
+
+    async def save(self, record):
+        await self._inner.save(record)
+
+    async def claim(self, approval_id, status, processed_at):
+        self.claim_calls += 1
+        claimed = await self._inner.claim(approval_id, status, processed_at)
+        if claimed is None:
+            self.lost_claims += 1
+        return claimed
+
+
+class TestConcurrentApproval:
+    """同じ承認 ID がほぼ同時に 2 本届いたターン (PR #430 Codex P1)。
+
+    無いと何が静かに通るか: 冒頭の status チェックだけで排他したつもりになると、
+    両方が pending を読んだときに**両方が checkpoint 再開へ進み、副作用が二重に
+    実行される** (メールが 2 通出る)。承認 UI (G1) が守っているはずの
+    「人間が 1 回許可した操作は 1 回だけ起きる」が崩れるが、画面はどちらも
+    普通に成功して見えるので、送られた側の証跡が出るまで気づけない。
+    """
+
+    async def test_単体_同時に届いた二本のうち副作用を実行するのは一本だけ(
+        self, session_repo, approval_repo, caplog
+    ):
+        client = approval_script()
+        res = await run_workflow(
+            "s-race", "返信して", session_repo, approval_repo, client
+        )
+        pending = await approval_repo.get(res.approval_request_id)
+        # 2 本とも冒頭の status チェックを通す = **排他は claim だけが持つ**状況
+        repo = _ConcurrentReadApprovalRepository(approval_repo, pending, stale_reads=2)
+
+        with caplog.at_level(logging.INFO, logger="app.tools"):
+            results = await asyncio.gather(
+                resume_after_approval(
+                    res.approval_request_id, True, session_repo, repo, client
+                ),
+                resume_after_approval(
+                    res.approval_request_id,
+                    True,
+                    session_repo,
+                    repo,
+                    approval_script(),
+                ),
+                return_exceptions=True,
+            )
+
+        # **副作用の実行が 1 回** — ここが 2 になるのがこのテストの本体
+        # (原子的な claim を条件なし save に戻すと実測 2 回になる)
+        executed = [
+            r for r in caplog.records if "Tool[send_reply] invoked" in r.getMessage()
+        ]
+        assert len(executed) == 1
+
+        # **2 本とも claim まで来て、1 本だけが獲得した** — 排他が「早期 status
+        # チェック」ではなく claim にあることの実測。敗者が claim に到達しない形
+        # (= 早期チェックで止まる / checkpoint 参照が先に消える) ではここが崩れ、
+        # 「解放位置を戻す」ような退行を取り逃がす
+        assert repo.claim_calls == 2
+        assert repo.lost_claims == 1
+
+        replies = [r for r in results if isinstance(r, str)]
+        conflicts = [r for r in results if isinstance(r, ApprovalAlreadyProcessedError)]
+        assert len(replies) == 1
+        assert len(conflicts) == 1
+        # 負けた側は 409 (二重送信) として説明される — 404 (もう無い) に化けない
+        assert conflicts[0].status == "approved"
+        assert not isinstance(conflicts[0], ValueError)
+
+        # 勝者が解放したので registry は空 (敗者が消したのではない — 下のテスト)
+        assert get_pending_checkpoint_storage(res.approval_request_id) is None
+
+    async def test_単体_負けた側は_checkpoint_を解放しない(
+        self, session_repo, approval_repo
+    ):
+        """獲得できなかった側が in-memory registry を掃除してしまわないこと。
+
+        無いと何が静かに通るか: 負けた側が storage を pop すると、**勝った側が
+        再開に使っている checkpoint が実行中に消える**。承認は受け付けたのに
+        ツールが走らない (しかも 409 は返っているので二重送信として片づく) 状態が
+        起きうる。
+        """
+        client = approval_script()
+        res = await run_workflow(
+            "s-race-cleanup", "返信して", session_repo, approval_repo, client
+        )
+        pending = await approval_repo.get(res.approval_request_id)
+        # 敗者ぶんの 1 回だけ pending を見せる = 早期チェックを通過して claim で負ける
+        repo = _ConcurrentReadApprovalRepository(approval_repo, pending, stale_reads=1)
+
+        # 勝者は既に claim を取っており、checkpoint を使って再開中とする
+        # (この時点で registry はまだ解放されていない)
+        assert await approval_repo.claim(
+            res.approval_request_id, "approved", "2026-08-15T02:00:00+00:00"
+        )
+        assert get_pending_checkpoint_storage(res.approval_request_id) is not None
+
+        with pytest.raises(ApprovalAlreadyProcessedError):
+            await resume_after_approval(
+                res.approval_request_id, True, session_repo, repo, client
+            )
+
+        # 敗者は claim まで到達して負けた (早期チェックで止まっていない)
+        assert repo.claim_calls == 1
+        assert repo.lost_claims == 1
+        # そのうえで解放していない (勝者の再開が使う checkpoint を消さない)
+        assert get_pending_checkpoint_storage(res.approval_request_id) is not None
 
 
 class TestChainedApproval:

@@ -30,8 +30,19 @@ export function resetTtsCache(): void {
   sentenceCache.clear();
 }
 
-function cacheKey(speakerId: number | undefined, text: string): string {
-  return `${speakerId ?? 3}:${text}`;
+/**
+ * キャッシュキーは**音が変わる入力を全部含める**。
+ *
+ * speedScale (#242) を落とすと、先行合成 (prefetch) が等倍で焼いた WAV を
+ * 1.4 倍の本合成が拾い、**設定を変えても速度が変わらない**まま音は普通に鳴る。
+ * 逆に速度だけ変えて読み直したときも古い速度の音が返る。
+ */
+function cacheKey(
+  speakerId: number | undefined,
+  speedScale: number | undefined,
+  text: string,
+): string {
+  return `${speakerId ?? 3}:${speedScale ?? 1}:${text}`;
 }
 
 function cacheGet(key: string): ArrayBuffer | null {
@@ -56,12 +67,13 @@ function cacheSet(key: string, wav: ArrayBuffer): void {
 async function synthesizeCached(
   text: string,
   speakerId: number | undefined,
+  speedScale: number | undefined,
 ): Promise<ArrayBuffer | null> {
-  const key = cacheKey(speakerId, text);
+  const key = cacheKey(speakerId, speedScale, text);
   const hit = cacheGet(key);
   if (hit) return hit;
 
-  const wav = await synthesize({ text, speakerId });
+  const wav = await synthesize({ text, speakerId, speedScale });
   if (wav === null) return null; // VOICEVOX_BASE_URL 未設定 (stub)
   cacheSet(key, wav);
   return wav;
@@ -89,6 +101,8 @@ async function mapWithLimit<T, R>(
 export type TtsSynthesisRequest = {
   text: string;
   speakerId?: number;
+  /** 読み上げ速度 (#242)。未指定は VOICEVOX の既定 (等倍)。 */
+  speedScale?: number;
 };
 
 export type TtsPrefetchResult = {
@@ -118,7 +132,7 @@ export async function prefetchTts(req: TtsSynthesisRequest): Promise<TtsPrefetch
   }
 
   const wavs = await mapWithLimit(completed, SYNTH_CONCURRENCY, (sentence) =>
-    synthesizeCached(sentence, req.speakerId),
+    synthesizeCached(sentence, req.speakerId, req.speedScale),
   );
   if (wavs.some((w) => w === null)) {
     return { status: "stub", sentences: completed.length };
@@ -158,12 +172,12 @@ export function planTts(req: TtsSynthesisRequest): TtsPlan {
 export async function synthesizeTts(req: TtsSynthesisRequest): Promise<ArrayBuffer | null> {
   const sentences = splitTtsSentences(req.text);
   if (sentences.length <= 1) {
-    return await synthesizeCached(req.text, req.speakerId);
+    return await synthesizeCached(req.text, req.speakerId, req.speedScale);
   }
 
   try {
     const wavs = await mapWithLimit(sentences, SYNTH_CONCURRENCY, (sentence) =>
-      synthesizeCached(sentence, req.speakerId),
+      synthesizeCached(sentence, req.speakerId, req.speedScale),
     );
     if (wavs.some((w) => w === null)) return null; // stub
     return concatWavs(wavs as ArrayBuffer[]);
@@ -172,6 +186,10 @@ export async function synthesizeTts(req: TtsSynthesisRequest): Promise<ArrayBuff
     // **縮退したことを黙らせない**: 成功して返るので、この行が無いと「分割合成が
     // 毎回落ちている」が正常運転と区別できなくなる。
     logErrorEvent("tts.split-fallback", { count: sentences.length, ...describeError(err) });
-    return await synthesize({ text: req.text, speakerId: req.speakerId });
+    return await synthesize({
+      text: req.text,
+      speakerId: req.speakerId,
+      speedScale: req.speedScale,
+    });
   }
 }

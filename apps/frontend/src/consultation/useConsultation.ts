@@ -11,6 +11,7 @@
 
 import * as React from "react";
 import {
+  ApprovalAlreadyProcessed,
   ApprovalExpired,
   ApprovalRequestUnusable,
   ExtractFailed,
@@ -68,6 +69,16 @@ export type Consultation = {
   pendingApproval: ApprovalRequest | null;
   /** 承認 (true) / 却下 (false) をサーバへ返す。 */
   respondToPendingApproval: (approved: boolean) => Promise<void>;
+
+  /**
+   * 直近の応答が提示した選択肢 (#432-b / §5.10)。空 = 選択肢なし。
+   *
+   * **承認と違い「待ち」ではない** — サーバ側に保留状態は無いので、押さずに次の発話を
+   * 送っても何も送り返す必要がない (却下に相当する通知は存在しない)。
+   */
+  offeredChoices: string[];
+  /** 選択肢をタップする = **その文言をそのまま次の発話として送る** (専用 API は無い)。 */
+  sendChoice: (choice: string) => Promise<void>;
 
   startConsultation: () => Promise<void>;
   sendDraftMessage: () => Promise<void>;
@@ -128,15 +139,43 @@ const FAILURE_MESSAGE = {
    * カードは閉じて会話を続けられるようにする (#82 / PR #416 judge major-1)。
    *
    * **「実行されていません」と断定してはいけない** (PR #416 judge / Codex P1)。
-   * ai-agent は失効した ID だけでなく **approved / rejected 済みの ID にも 404** を返し
-   * (`workflow.py` の `Approval already processed`)、しかも status の保存は resume 実行の
-   * **前**に起きる。つまり「承認が実行されたあとの再試行」でも 404 になるので、
-   * 404 から「実行されていない」は導けない — 断定すると、送信済みのメールを
-   * ユーザーがもう一度送る判断をしうる (approvalApprove と同じ事故)。
+   * TTL 失効 / ai-agent 再起動 / checkpoint 消失のどれかは 404 からは分からず、
+   * 「承認が実行されたあとにレコードだけ消えた」可能性も残る — 断定すると、
+   * 送信済みのメールをユーザーがもう一度送る判断をしうる (approvalApprove と同じ事故)。
+   *
+   * **処理済み (二重送信) はここに来ない** (#82 / PO 裁定 2026-08-15 B 案) —
+   * それは 409 → `approvalAlreadyProcessed` で結果まで言い切る。文言を統合すると、
+   * 言い切れるケースまで「確認してください」に落ちる。
    */
   approvalExpired:
-    "この承認はもう受け付けられません (期限が切れたか、すでに処理済みです)。操作が実行されたかは、会話を続けてご確認ください。",
+    "この承認はもう受け付けられません (期限切れか、承認の記録が失われています)。操作が実行されたかは、会話を続けてご確認ください。",
 } as const;
+
+/**
+ * すでに処理済みの承認への再送 (#82 / PO 裁定 2026-08-15 B 案)。
+ *
+ * **期限切れ (`approvalExpired`) と文言を分ける**のがここの本体。409 は
+ * 「どちらの決定を受け付けたか」まで運んでくるので、「もう受け付けられません
+ * (期限切れか、記録が失われた)」より正確に案内できる。
+ *
+ * **断定してよい範囲が承認と却下で違う** (PR #430 Codex P1):
+ *
+ * - `rejected` … 却下された承認でツールが呼ばれる経路は無い。**未実行と言い切れる**
+ * - `approved` … ai-agent は承認の記録を**実行の前**に書く。記録の直後に落ちれば
+ *   「approved なのに未実行」が残るので、**「実行されました」と断定してはいけない**
+ *   (断定すると、実際には送られていないメールを「送った」と信じさせる — 逆向きの
+ *   事故は「送信済みのメールをもう一度送らせる」で、どちらも同じ重さ)
+ *
+ * 確かめる導線は**「会話を続ける」**に倒す (#430 judge major-3)。過去ログだけを
+ * 見返す画面はこのアプリに無く (ルートも取得口も無い)、**次の発話をすれば
+ * アシスタントがサーバ側の履歴から状態を答えられる**。存在しない画面へ誘導すると、
+ * 案内どおりに操作できず「どこで確認するのか分からない」で行き止まりになる。
+ */
+function approvalAlreadyProcessedMessage(status: "approved" | "rejected"): string {
+  return status === "approved"
+    ? "この承認はすでに承認済みです (操作が実行されたかは、会話を続けてご確認ください)。"
+    : "この承認はすでに却下済みです (操作は実行されていません)。";
+}
 
 /** 承認 / 却下の失敗文面。断定してよい範囲が承認と却下で違う (judge major-2)。 */
 function approvalFailureMessage(approved: boolean): string {
@@ -146,20 +185,29 @@ function approvalFailureMessage(approved: boolean): string {
 /**
  * 承認応答の結末。**「もう受け付けられない」は「失敗」ではない** (#82 / PR #416 judge major-1)。
  *
- * 404 を返す承認への再試行は永久に成功しないので、runAction のエラー経路
+ * 404 / 409 を返す承認への再試行は永久に成功しないので、runAction のエラー経路
  * (= Snackbar + カードを残す) に流すと会話が二度と進まなくなる。ここで
- * 「送れた / もう無い」に分け、どちらもカードを閉じる側へ倒す。
+ * 「送れた / もう無い / すでに処理済み」に分け、どれもカードを閉じる側へ倒す。
+ * **「もう無い」と「処理済み」を潰さない** — 後者だけが実行の有無を言い切れる (#82)。
  */
-type ApprovalOutcome = { expired: true } | { expired: false; message: ChatMessage };
+type ApprovalOutcome =
+  | { kind: "expired" }
+  /** すでに処理済み (#82)。**結果まで運ぶ** — 実行の有無を言い切る材料になる。 */
+  | { kind: "processed"; status: "approved" | "rejected" }
+  | { kind: "responded"; message: ChatMessage };
 
 async function respondOrExpire(
   approvalRequestId: string,
   approved: boolean,
 ): Promise<ApprovalOutcome> {
   try {
-    return { expired: false, message: await respondToApproval(approvalRequestId, approved) };
+    return { kind: "responded", message: await respondToApproval(approvalRequestId, approved) };
   } catch (err) {
-    if (err instanceof ApprovalExpired) return { expired: true };
+    // 処理済みを「もう無い」に丸めない (#82 / PO 裁定 2026-08-15 B 案)。丸めると
+    // 「すでに承認済みです (実行されました)」と言えるケースが
+    // 「実行されたか分かりません」に落ちる。
+    if (err instanceof ApprovalAlreadyProcessed) return { kind: "processed", status: err.status };
+    if (err instanceof ApprovalExpired) return { kind: "expired" };
     throw err;
   }
 }
@@ -250,6 +298,12 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
   // null に戻る経路 (承認 / 却下 / 次の発話 / セッション破棄) はどれもツールを
   // 実行しない側に倒れる。実行が起きるのは respondToPendingApproval(true) だけ。
   const [pendingApproval, setPendingApproval] = React.useState<ApprovalRequest | null>(null);
+
+  // 直近の応答が提示した選択肢 (#432-b / §5.10)。**承認と対称にしない** — こちらは
+  // サーバに待ち状態が無いので、消えるときにサーバへ知らせる必要が無い (完了型 /
+  // PO 裁定 2026-08-15)。「押さずに自由記述で答える」は正常な操作で、そのたびに
+  // サーバを叩く実装にすると承認 UI の規律をコピーした無駄な往復が生まれる。
+  const [offeredChoices, setOfferedChoices] = React.useState<string[]>([]);
 
   const [preview, setPreview] = React.useState<ExtractionResult | null>(null);
   const [previewStatus, setPreviewStatus] = React.useState<"idle" | "updating" | "error">("idle");
@@ -413,89 +467,143 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     // 新規相談はこの後も画面が生きているので待たない (fire-and-forget)。
     if (abandoned) void discardApprovalOnServer(abandoned.id);
     setPendingApproval(null);
+    // 前セッションの選択肢も持ち込まない (別の会話の分岐を新しい会話で押させない)。
+    // **サーバへは何も送らない** — 承認と違い保留状態が無いので送る先が無い (#432-b)
+    setOfferedChoices([]);
     transition("session");
   }, [invalidatePreview, pendingApproval, runAction, transition]);
 
-  const sendDraftMessage = React.useCallback(async () => {
-    if (!session || !draftMessage.trim() || loadingRef.current) return;
+  /**
+   * 発話を 1 通送る (入力欄からでも選択肢のタップからでも通る唯一の経路)。
+   *
+   * **選択肢のタップを別経路にしない** (#432-b): 選択肢は「その文言を次の発話として
+   * 送る」だけなので、承認待ちの却下・タイトル自動生成・下書きの自動更新といった
+   * 発話に付随する処理は全部同じでなければならない。分けると、選択肢から送った
+   * ときだけ承認待ちが宙に浮く / 下書きが更新されない、が静かに起きる。
+   *
+   * @param fromDraft 入力欄からの送信か。選択肢のタップでは**入力欄に触らない** —
+   *                  ユーザーが書きかけの文章を消してしまうため。
+   */
+  const submitMessage = React.useCallback(
+    async (text: string, fromDraft: boolean) => {
+      if (!session || !text.trim() || loadingRef.current) return;
 
-    const userMessage = {
-      id: `u-${Date.now()}`,
-      role: "user" as const,
-      text: draftMessage.trim(),
-      createdAt: new Date().toISOString(),
-    };
+      const userMessage = {
+        id: `u-${Date.now()}`,
+        role: "user" as const,
+        text: text.trim(),
+        createdAt: new Date().toISOString(),
+      };
 
-    // 承認待ちのまま会話を続ける = **却下** (§5.9 / PR #416 Codex P2)。
-    //
-    // ローカル state を消すだけにすると、ai-agent 側の `ApprovalRecord` と checkpoint は
-    // pending のまま残る (in-memory 構成の `_pending_run_storages` には TTL が無いので、
-    // 繰り返すほど保持領域が増える)。「実行しない」はサーバにも伝える。
-    // 却下が届かなかったら**発話を送らずここで止める** — 入力もカードも残るので、
-    // やり直すか承認/却下ボタンを押し直せる (握り潰して次へ進まない / ADR 0018)。
-    let baseSession = session;
-    if (pendingApproval) {
-      const discarded = await runAction(FAILURE_MESSAGE.approvalReject, () =>
-        respondOrExpire(pendingApproval.id, false),
-      );
-      if (!discarded.ok) return;
+      // 承認待ちのまま会話を続ける = **却下** (§5.9 / PR #416 Codex P2)。
+      //
+      // ローカル state を消すだけにすると、ai-agent 側の `ApprovalRecord` と checkpoint は
+      // pending のまま残る (in-memory 構成の `_pending_run_storages` には TTL が無いので、
+      // 繰り返すほど保持領域が増える)。「実行しない」はサーバにも伝える。
+      // 却下が届かなかったら**発話を送らずここで止める** — 入力もカードも残るので、
+      // やり直すか承認/却下ボタンを押し直せる (握り潰して次へ進まない / ADR 0018)。
+      //
+      // **選択肢にはこれに相当する処理が無い** (#432-b): サーバに待ち状態が無いので、
+      // 送るべきものがそもそも無い。ここに選択肢の「却下」を足さないこと
+      let baseSession = session;
+      if (pendingApproval) {
+        const discarded = await runAction(FAILURE_MESSAGE.approvalReject, () =>
+          respondOrExpire(pendingApproval.id, false),
+        );
+        if (!discarded.ok) return;
 
-      if (discarded.value.expired) {
-        // 承認レコードがもう無い (期限切れ / ai-agent 再起動 / すでに処理済み)。
-        // **却下できないことは発話を止める理由にならない** — この ID へ却下を送り直しても
-        // 永久に 404 なので、カードを閉じてそのまま送る (ここで止めると会話が永久に詰む /
-        // judge major-1)。ただし**「実行されなかった」とは言えない** (処理済みでも 404 に
-        // なる / Codex P1) ので、文面は approvalExpired 側で断定しない。
-        setPendingApproval(null);
-        setActionError(FAILURE_MESSAGE.approvalExpired);
-      } else {
-        baseSession = {
-          ...baseSession,
-          messages: [...baseSession.messages, discarded.value.message],
-        };
-        setPendingApproval(null);
-        setSession(baseSession);
+        if (discarded.value.kind === "expired") {
+          // 承認レコードがもう無い (期限切れ / ai-agent 再起動 / checkpoint 消失)。
+          // **却下できないことは発話を止める理由にならない** — この ID へ却下を送り直しても
+          // 永久に 404 なので、カードを閉じてそのまま送る (ここで止めると会話が永久に詰む /
+          // judge major-1)。ただし**「実行されなかった」とは言えない** (Codex P1) ので、
+          // 文面は approvalExpired 側で断定しない。
+          setPendingApproval(null);
+          setActionError(FAILURE_MESSAGE.approvalExpired);
+        } else if (discarded.value.kind === "processed") {
+          // すでに解決済みの承認だった (#82)。同じくカードを閉じて発話は進めるが、
+          // **受け付けられた決定は伝える** — 却下済みなら未実行と言い切れ、承認済みなら
+          // 会話を続けて結果を確かめる導線になる (期限切れの「記録が失われた」とは別物)。
+          setPendingApproval(null);
+          setActionError(approvalAlreadyProcessedMessage(discarded.value.status));
+        } else {
+          baseSession = {
+            ...baseSession,
+            messages: [...baseSession.messages, discarded.value.message],
+          };
+          setPendingApproval(null);
+          setSession(baseSession);
+        }
       }
-    }
 
-    setDraftMessage("");
-    // 最初のユーザー発話でタイトルを内容から自動生成 (開始時は聞かない)。
-    const isFirstUserMessage = !baseSession.messages.some((m) => m.role === "user");
-    const nextTitle = isFirstUserMessage ? deriveSessionTitle(userMessage.text) : baseSession.title;
-    setSession({
-      ...baseSession,
-      title: nextTitle,
-      messages: [...baseSession.messages, userMessage],
-    });
+      if (fromDraft) setDraftMessage("");
+      // 送信中は前の選択肢を消す (答えたあとの選択肢を押せる状態で残さない)。
+      // 失敗したら戻す — 送る前の画面に完全に巻き戻すため
+      const previousChoices = offeredChoices;
+      setOfferedChoices([]);
+      // 最初のユーザー発話でタイトルを内容から自動生成 (開始時は聞かない)。
+      const isFirstUserMessage = !baseSession.messages.some((m) => m.role === "user");
+      const nextTitle = isFirstUserMessage
+        ? deriveSessionTitle(userMessage.text)
+        : baseSession.title;
+      setSession({
+        ...baseSession,
+        title: nextTitle,
+        messages: [...baseSession.messages, userMessage],
+      });
 
-    const outcome = await runAction(sendMessageFailureMessage, () =>
-      sendMessage(baseSession.id, userMessage.text),
-    );
+      const outcome = await runAction(sendMessageFailureMessage, () =>
+        sendMessage(baseSession.id, userMessage.text),
+      );
 
-    if (!outcome.ok) {
-      // 楽観更新を巻き戻して送信前の状態に戻す。返事が来ないまま自分の発話だけが
-      // 残る状態は「送れたのに無視された」と読めてしまい、かつ入力し直しを強いる。
-      // (却下は既に成立しているので、その結果は残したまま戻す)
-      setSession(baseSession);
-      setDraftMessage(userMessage.text);
-      return;
-    }
+      if (!outcome.ok) {
+        // 楽観更新を巻き戻して送信前の状態に戻す。返事が来ないまま自分の発話だけが
+        // 残る状態は「送れたのに無視された」と読めてしまい、かつ入力し直しを強いる。
+        // (却下は既に成立しているので、その結果は残したまま戻す)
+        setSession(baseSession);
+        setOfferedChoices(previousChoices);
+        // 選択肢のタップで失敗したときに入力欄へ書き戻さない — 書きかけの文章を
+        // 上書きしてしまう。押し直せる状態 (選択肢を戻す) までで十分
+        if (fromDraft) setDraftMessage(userMessage.text);
+        return;
+      }
 
-    setSession((prev) =>
-      prev ? { ...prev, messages: [...prev.messages, outcome.value.message] } : prev,
-    );
-    // 承認要求は応答と同じ往復で届く (#82)。ここで拾わないと、サーバは承認待ちのまま
-    // 画面には普通の返事だけが出て「止まっているのに止まって見えない」状態になる。
-    setPendingApproval(outcome.value.approval);
+      setSession((prev) =>
+        prev ? { ...prev, messages: [...prev.messages, outcome.value.message] } : prev,
+      );
+      // 承認要求は応答と同じ往復で届く (#82)。ここで拾わないと、サーバは承認待ちのまま
+      // 画面には普通の返事だけが出て「止まっているのに止まって見えない」状態になる。
+      setPendingApproval(outcome.value.approval);
+      // 選択肢も同じ往復で届く (#432-b)。落とすと「AI は選ばせるつもりで書いた文面
+      // なのに、画面には選ぶものが無い」応答になる
+      setOfferedChoices(outcome.value.choices);
 
-    // ユーザー発話 2 往復ごとに下書きプレビューを自動更新する (#187 / ADR 0039 D2)。
-    // 毎ターンは LLM 呼び出しが倍増するため間引く。fire-and-forget — 会話を待たせない。
-    const messagesAfterReply = [...baseSession.messages, userMessage, outcome.value.message];
-    const userTurnCount = messagesAfterReply.filter((m) => m.role === "user").length;
-    if (userTurnCount > 0 && userTurnCount % 2 === 0) {
-      void runPreview(baseSession.id, messagesAfterReply);
-    }
-  }, [draftMessage, pendingApproval, runAction, runPreview, session]);
+      // ユーザー発話 2 往復ごとに下書きプレビューを自動更新する (#187 / ADR 0039 D2)。
+      // 毎ターンは LLM 呼び出しが倍増するため間引く。fire-and-forget — 会話を待たせない。
+      const messagesAfterReply = [...baseSession.messages, userMessage, outcome.value.message];
+      const userTurnCount = messagesAfterReply.filter((m) => m.role === "user").length;
+      if (userTurnCount > 0 && userTurnCount % 2 === 0) {
+        void runPreview(baseSession.id, messagesAfterReply);
+      }
+    },
+    [offeredChoices, pendingApproval, runAction, runPreview, session],
+  );
+
+  const sendDraftMessage = React.useCallback(
+    () => submitMessage(draftMessage, true),
+    [draftMessage, submitMessage],
+  );
+
+  /**
+   * 選択肢のタップ (#432-b / §5.10)。**その文言をそのまま次の発話として送る**。
+   *
+   * 専用の API を持たないのが仕様の芯 — サーバは選択肢を出したターンで完結して
+   * いるので、選ばれたことを知らせる先が無い (完了型 / PO 裁定 2026-08-15)。
+   */
+  const sendChoice = React.useCallback(
+    (choice: string) => submitMessage(choice, false),
+    [submitMessage],
+  );
 
   /**
    * 承認 / 却下をサーバへ返す (#82 / G1 / §5.9)。
@@ -519,12 +627,19 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
 
       const responded = outcome.value;
       setPendingApproval(null);
-      if (responded.expired) {
+      if (responded.kind === "expired") {
         // 会話に残せる発話が無い (サーバは応答を返さない)。**「何も実行していない」とは
-        // 書かない** — 処理済みの ID でも 404 なので、実行済みかどうかは分からない
-        // (Codex P1)。何が起きたかは Snackbar で言葉にする — 黙ってカードが消えると
+        // 書かない** — レコードが消えた理由は 404 からは分からない (Codex P1)。
+        // 何が起きたかは Snackbar で言葉にする — 黙ってカードが消えると
         // 「押したのに無反応」になる。
         setActionError(FAILURE_MESSAGE.approvalExpired);
+        return;
+      }
+      if (responded.kind === "processed") {
+        // 二重送信 (#82)。期限切れと違い「どちらの決定を受け付けたか」は言える。
+        // ただし承認済みから実行の完了は導けない (PR #430 Codex P1) — 断定の範囲は
+        // approvalAlreadyProcessedMessage が持つ。
+        setActionError(approvalAlreadyProcessedMessage(responded.status));
         return;
       }
       // 承認・却下どちらの結果もガイドの発話として会話に残す (何が起きたかを消さない)。
@@ -675,6 +790,7 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     setProblems([]);
     setSelectedProblem(null);
     setPendingApproval(null);
+    setOfferedChoices([]);
     invalidatePreview();
     return discarded;
   }, [invalidatePreview, pendingApproval, setBusy]);
@@ -694,6 +810,8 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
     refreshPreview,
     pendingApproval,
     respondToPendingApproval,
+    offeredChoices,
+    sendChoice,
     startConsultation,
     sendDraftMessage,
     extract,

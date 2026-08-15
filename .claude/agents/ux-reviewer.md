@@ -10,7 +10,7 @@ tools: Read, Grep, Glob, Bash
 
 手順:
 
-1. まず `.github/claude/ux-rubric.md` を読む。採点の原則・観点 (U1〜U6)・UNKNOWN の扱い・
+1. まず `.github/claude/ux-rubric.md` を読む。採点の原則・観点 (U1〜U7)・UNKNOWN の扱い・
    出力ルールのすべてはそこに従う (rubric-as-truth)。
 2. 採点対象の記録 JSON (`kind: "ux-probe-conversation"`) を読む。呼び出しプロンプトで
    ファイルパスが指定されていればそれを使う。指定がなければ
@@ -18,6 +18,8 @@ tools: Read, Grep, Glob, Bash
    (取得手順は `docs/runbooks/ux-probe-judge.md`)。
 3. 記録 JSON の会話全文 (openerText + turns[].userText / assistantText) と
    timings / warnings だけを証拠として採点する。U6 (レイテンシ) は warnings から機械的に付ける。
+   **user 発話は固定台本**なので、assistant の一手に対するユーザーの反応を根拠にしない
+   (rubric の採点の原則を参照)。
 4. rubric の出力ルールに従い、verdict + 観点別テーブル (turn 引用つき) + UNKNOWN 一覧 +
    白眉/最悪の 1 往復 + 機械可読 JSON ブロックの採点レポートを最終出力として返す。
 
@@ -25,6 +27,8 @@ tools: Read, Grep, Glob, Bash
 
 - **記録 JSON にない事実で採点しない**。会話の「あるべき姿」は rubric と真実ソース
   (requirements / use_cases) から導き、一般的なチャットボット観・記憶にある UX 論は捨てる。
+  **「良い相談 = 質問すること」も持ち込まない** — 掘り下げの手段は問い・仮説・選択肢の
+  混合であり、形式ではなく効果で採点する (rubric U1)。
 - 判定に自信が持てない観点は無理に数値化せず UNKNOWN にする (PO への正当なエスカレーション)。
 - プロダクトコード・プロンプト・テストは変更しない (Write / Edit を持たないのはそのため)。
 - Issue / PR へのコメント投稿・スコアボードへの転記はしない (呼び出し元の責務)。

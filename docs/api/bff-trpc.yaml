@@ -191,6 +191,48 @@ paths:
                   updatedProblemCount:
                     type: integer
                     minimum: 0
+                  thinkingMap:
+                    type: object
+                    properties:
+                      nodes:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            kind:
+                              type: string
+                              enum:
+                                - topic
+                                - hypothesis
+                                - unknown
+                            label:
+                              type: string
+                            status:
+                              type: string
+                              enum:
+                                - confirmed
+                                - tentative
+                                - unexplored
+                            parentId:
+                              type: string
+                              nullable: true
+                              default: null
+                            problemId:
+                              type: string
+                              nullable: true
+                              default: null
+                          required:
+                            - id
+                            - kind
+                            - label
+                            - status
+                          additionalProperties: false
+                        default: &a1 []
+                    additionalProperties: false
+                    nullable: true
+                    default: null
                   stubbed:
                     type: boolean
                 required:
@@ -532,6 +574,48 @@ paths:
                   updatedProblemCount:
                     type: integer
                     minimum: 0
+                  thinkingMap:
+                    type: object
+                    properties:
+                      nodes:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            kind:
+                              type: string
+                              enum:
+                                - topic
+                                - hypothesis
+                                - unknown
+                            label:
+                              type: string
+                            status:
+                              type: string
+                              enum:
+                                - confirmed
+                                - tentative
+                                - unexplored
+                            parentId:
+                              type: string
+                              nullable: true
+                              default: null
+                            problemId:
+                              type: string
+                              nullable: true
+                              default: null
+                          required:
+                            - id
+                            - kind
+                            - label
+                            - status
+                          additionalProperties: false
+                        default: *a1
+                    additionalProperties: false
+                    nullable: true
+                    default: null
                   stubbed:
                     type: boolean
                 required:
@@ -598,6 +682,10 @@ paths:
                     type: array
                     items:
                       type: string
+                  choices:
+                    type: array
+                    items:
+                      type: string
                   stubbed:
                     type: boolean
                 required:
@@ -605,6 +693,7 @@ paths:
                   - requiresApproval
                   - approvalRequestId
                   - citations
+                  - choices
                 additionalProperties: false
       requestBody:
         required: true

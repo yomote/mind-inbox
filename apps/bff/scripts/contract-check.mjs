@@ -33,6 +33,7 @@ const { diffSchemas } = await import("../src/contract/schemaDiff.ts");
 const { ExtractionResultSchema } = await import("../src/trpc/domain.ts");
 const {
   APPROVAL_GONE_DETAIL,
+  ApprovalConflictSchema,
   ApproveRequestSchema,
   ApproveResponseSchema,
   ChatRequestSchema,
@@ -66,6 +67,10 @@ const BFF_SCHEMAS = {
   PlanResponse: PlanResponseSchema,
   ApproveRequest: ApproveRequestSchema,
   ApproveResponse: ApproveResponseSchema,
+  // `/approve` の 409 body (#82)。200 と同じ粒度で比較する — 二重送信の応答は
+  // フロントが「操作が実行されたか」を言い切る唯一の材料なので、片側だけ形を
+  // 変えると「すでに承認済みです」の案内が黙って汎用エラーに落ちる。
+  ApprovalConflictResponse: ApprovalConflictSchema,
   ExtractRequest: ExtractRequestSchema,
   ExtractionResult: ExtractionResultSchema,
 };
@@ -90,6 +95,12 @@ function fetchAiAgentSchemas() {
 // 一致なので、ai-agent 側が文言を変えると**変換が静かに効かなくなり**、失効した承認が
 // 上流障害に化けて 404 デッドロック (承認カードが閉じられず会話が進まない) が戻る。
 // pydantic schema にはエラー本文が現れないので、上の再帰比較では捕まらない。
+//
+// **BFF 側のパターンは ai-agent の現行 404 の集合より広くてよい** (#430 judge major-2):
+// `Approval already processed` は現行 ai-agent では 409 に移ったが、配備スキューの窓で
+// 旧 ai-agent が 404 で返すので判別に残してある。ここが見るのは「ai-agent が返す 404 が
+// すべて BFF に判別されるか」の一方向だけ — 逆向き (BFF にだけある古い文言) は
+// スキュー耐性なので落とさない。
 
 /** ai-agent 側で 404 の detail を作っている場所 (`main.py` が `detail=str(exc)` で載せる)。 */
 const APPROVAL_DETAIL_SOURCE = "apps/services/ai-agent/app/workflow.py";
@@ -137,6 +148,66 @@ function checkApprovalGoneDetail() {
   return 0;
 }
 
+// ── /approve の 409 (二重送信 / #82 / PO 裁定 2026-08-15 B 案) ────────────────
+//
+// 無いと何が静かに通るか: BFF は `res.status === 409` を見て初めて
+// `ApprovalAlreadyProcessedError` を立て、フロントは「すでに承認済み (= 実行された)」
+// と言い切る。ai-agent 側が二重送信を再び ValueError (= 404) に戻すと、**BFF の 409
+// 分岐は一度も通らなくなる**が、両者のテストは片側ずつ緑のまま通る (BFF は自分で
+// 409 を作ってテストしているため)。結果、UI は「実行されたか分かりません」に静かに
+// 逆戻りし、送信済みのメールを再送させる事故が戻る。
+// body の**形**は上の再帰比較 (ApprovalConflictResponse) が見るので、ここでは
+// 「二重送信がその形の 409 に写っているか」だけを見る。
+
+/** 二重送信で投げる例外クラス名 (ValueError = 404 側と別の型であることが契約の本体)。 */
+const APPROVAL_CONFLICT_EXC = "ApprovalAlreadyProcessedError";
+const APPROVAL_ENDPOINT_SOURCE = "apps/services/ai-agent/app/main.py";
+
+function checkApprovalConflict() {
+  const workflowPath = resolve(REPO_ROOT, APPROVAL_DETAIL_SOURCE);
+  const source = readFileSync(workflowPath, "utf-8");
+  const start = source.indexOf(APPROVAL_DETAIL_FUNCTION);
+  if (start < 0) {
+    console.error(
+      `  ✗ ApprovalConflict: ${APPROVAL_DETAIL_SOURCE} に ${APPROVAL_DETAIL_FUNCTION} が無い (関数名が変わった?)`,
+    );
+    return 1;
+  }
+  const rest = source.slice(start + APPROVAL_DETAIL_FUNCTION.length);
+  const end = rest.search(/\n(?:async )?def /);
+  const body = end < 0 ? rest : rest.slice(0, end);
+
+  if (!new RegExp(`raise ${APPROVAL_CONFLICT_EXC}\\(`).test(body)) {
+    console.error(
+      `  ✗ ApprovalConflict: resume_after_approval が ${APPROVAL_CONFLICT_EXC} を投げていない`,
+    );
+    console.error(
+      "      → 二重送信が 404 (レコードが無い) に混ざる = フロントは「実行されたか」を言えなくなる。",
+    );
+    return 1;
+  }
+
+  // endpoint 側: その例外が 409 + ApprovalConflictResponse に写っていること。
+  const mainSource = readFileSync(resolve(REPO_ROOT, APPROVAL_ENDPOINT_SOURCE), "utf-8");
+  const handler = mainSource.slice(mainSource.indexOf(`except ${APPROVAL_CONFLICT_EXC}`));
+  const mapped =
+    handler.length > 0 &&
+    /status_code=409/.test(handler.slice(0, 800)) &&
+    /ApprovalConflictResponse\(/.test(handler.slice(0, 800));
+  if (!mapped) {
+    console.error(
+      `  ✗ ApprovalConflict: ${APPROVAL_ENDPOINT_SOURCE} が ${APPROVAL_CONFLICT_EXC} を 409 + ApprovalConflictResponse に写していない`,
+    );
+    console.error(
+      "      → BFF の 409 分岐が一度も通らなくなる (「すでに承認済みです」の案内が汎用エラーに落ちる)。",
+    );
+    return 1;
+  }
+
+  out("  ✓ ApprovalConflict: 二重送信は 409 + ApprovalConflictResponse に写っている");
+  return 0;
+}
+
 // ── main ────────────────────────────────────────────────────────────────────
 
 /** stdout への成功系出力 (CLI ツールとしての結果表示。debug 用 console.log ではない) */
@@ -179,6 +250,7 @@ function main() {
   }
 
   totalIssues += checkApprovalGoneDetail();
+  totalIssues += checkApprovalConflict();
 
   if (totalIssues > 0) {
     console.error(

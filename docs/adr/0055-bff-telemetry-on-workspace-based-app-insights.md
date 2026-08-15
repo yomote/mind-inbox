@@ -1,6 +1,6 @@
 # 0055. BFF のサーバ側観測性を workspace-based Application Insights で持つ (保持 30 日 / 日次上限つき)
 
-- Status: Proposed
+- Status: Accepted (2026-08-15, PO 裁定)
 - Date: 2026-08-14
 - Deciders: PO (yomote), PM セッション
 - Consulted: Codex (PR #413 レビュー)

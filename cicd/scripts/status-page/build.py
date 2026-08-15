@@ -363,18 +363,38 @@ def pending() -> dict:
 TREND_DAYS = 14
 VERDICT_MARK = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
 
+# 折れ線の基準線に使うシナリオ (#123 M0 からの継続線)。
+# #435 でプローブの台本が 2 本になったため、**1 本の折れ線に複数シナリオを混ぜない** —
+# 混ぜると「遅くなった」と「別の台本の点」が区別できず、継続線が読めなくなる。
+# scenarioId を持たない観測 (Issue コメント時代の移行データ) はこの継続線の一部として扱う
+BASELINE_SCENARIO_ID = "work-overwhelm-v1"
 
-def _trend_points(observations: list[dict], now: datetime) -> list[dict]:
+
+def _trend_points(
+    observations: list[dict], now: datetime, scenario_id: str | None = None
+) -> list[dict]:
     """ux-eval-mech の観測から描画用の点列を作る (純粋関数)。
 
     欠測 (avg/max が null) は None のまま残す — 0 に丸めるとトレンドが
     実際より良く見える (ux_eval.py の measure と同じ規律)。
+
+    scenario_id を渡すとそのシナリオだけに絞る (`BASELINE_SCENARIO_ID` のときは
+    scenarioId 無しの旧観測も含める — 除くと移行前の点が黙って消える)。
     """
     cutoff = now - timedelta(days=TREND_DAYS)
     points = []
     for o in observations:
         if o.get("kind") != "ux-eval-mech":
             continue
+        obs_scenario = o.get("scenarioId")
+        if not isinstance(obs_scenario, str) or not obs_scenario:
+            obs_scenario = None
+        if scenario_id is not None:
+            wanted = obs_scenario == scenario_id or (
+                obs_scenario is None and scenario_id == BASELINE_SCENARIO_ID
+            )
+            if not wanted:
+                continue
         t = parse(o.get("recordedAt") or o.get("evaluatedAt"))
         if t is None or t < cutoff:
             continue
@@ -397,6 +417,7 @@ def _trend_points(observations: list[dict], now: datetime) -> list[dict]:
         points.append(
             {
                 "t": t,
+                "scenario": obs_scenario or BASELINE_SCENARIO_ID,
                 "avg": _num(visible.get("avgMs")),
                 "max": _num(visible.get("maxMs")),
                 "warn": sum(
@@ -550,7 +571,14 @@ def ux_trend_section() -> str:
         )
 
     now = datetime.now(timezone.utc)
-    points = _trend_points(observations, now)
+    # 折れ線は継続線 (work-overwhelm-v1) だけ。他シナリオは下に最新値を並べる —
+    # 混ぜて 1 本にすると、台本の違いによる差が「遅くなった」に見えてしまう (#435)
+    points = _trend_points(observations, now, scenario_id=BASELINE_SCENARIO_ID)
+    others = [
+        p
+        for p in _trend_points(observations, now)
+        if p["scenario"] != BASELINE_SCENARIO_ID
+    ]
     cutoff = now - timedelta(days=TREND_DAYS)
     judges = sorted(
         (
@@ -566,11 +594,12 @@ def ux_trend_section() -> str:
     if not points:
         out.append(
             f'<p class="sub">直近 {TREND_DAYS} 日間の機械計測 (ux-eval-mech) が'
-            "まだ積まれていません</p>"
+            f"まだ積まれていません (継続線 <code>{BASELINE_SCENARIO_ID}</code>)</p>"
         )
     else:
         out.append(
-            '<p class="legend"><span class="chip avg"></span>send→表示 avg'
+            f'<p class="legend">折れ線は <code>{BASELINE_SCENARIO_ID}</code> のみ'
+            '　<span class="chip avg"></span>send→表示 avg'
             '　<span class="chip max"></span>同 max'
             '　<span class="chip warnline"></span>警告閾値 — 上がるほど悪い</p>'
         )
@@ -583,16 +612,46 @@ def ux_trend_section() -> str:
             )
         )
 
+    if others:
+        # 他シナリオを描かないのではなく**別行で出す** — 落とすと、増やしたシナリオの
+        # レイテンシが誰の目にも触れないまま「計測している」ことになる
+        latest_by_scenario: dict[str, dict] = {}
+        for p in others:
+            current = latest_by_scenario.get(p["scenario"])
+            if current is None or p["t"] > current["t"]:
+                latest_by_scenario[p["scenario"]] = p
+        summary = " ・ ".join(
+            f"{html.escape(name)} {p['t'].astimezone(JST):%m-%d} "
+            f"avg {int(p['avg']) if p['avg'] is not None else '欠測'}ms / "
+            f"max {int(p['max']) if p['max'] is not None else '欠測'}ms / 警告 {p['warn']}"
+            for name, p in sorted(latest_by_scenario.items())
+        )
+        out.append(f'<p class="sub">他シナリオの最新計測: {summary}</p>')
+
     if judges:
-        marks = " ・ ".join(
-            f"{(parse(j.get('recordedAt')) or now).astimezone(JST):%m-%d} "
-            f"{j.get('total', '?')}/{j.get('max', '?')} "
-            f"{VERDICT_MARK.get(j.get('verdict'), '❓')}"
-            for j in judges[-7:]
-        )
-        out.append(
-            f'<p class="sub">LLM 採点 (ux-judge-score): {html.escape(marks, quote=False)}</p>'
-        )
+        # 採点行は**シナリオごとに分け、表示窓 (7 件) もシナリオごと**に取る (#443 judge A)。
+        # 全体で 7 件の固定窓にすると、2 シナリオの朝は窓が 3.5 朝に縮んで古い朝が黙って
+        # 落ちるうえ、同じ日付に 🟢/🔴 が並んでどちらの台本の赤か読めない。
+        # scenarioId の無い採点 (移行データ) は継続線の採点として扱う (_trend_points と同じ)
+        judges_by_scenario: dict[str, list[dict]] = {}
+        for j in judges:
+            sid = j.get("scenarioId")
+            if not isinstance(sid, str) or not sid:
+                sid = BASELINE_SCENARIO_ID
+            judges_by_scenario.setdefault(sid, []).append(j)
+        for sid in sorted(
+            judges_by_scenario, key=lambda s: (s != BASELINE_SCENARIO_ID, s)
+        ):
+            marks = " ・ ".join(
+                f"{(parse(j.get('recordedAt')) or now).astimezone(JST):%m-%d} "
+                f"{j.get('total', '?')}/{j.get('max', '?')} "
+                f"{VERDICT_MARK.get(j.get('verdict'), '❓')}"
+                for j in judges_by_scenario[sid][-7:]
+            )
+            out.append(
+                f'<p class="sub">LLM 採点 (ux-judge-score / <code>{html.escape(sid)}</code>): '
+                f"{html.escape(marks, quote=False)}</p>"
+            )
     else:
         out.append(
             '<p class="sub">LLM 採点 (ux-judge-score) は直近 '

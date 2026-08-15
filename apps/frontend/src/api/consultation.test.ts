@@ -28,10 +28,14 @@ vi.mock("./http", () => ({
 }));
 
 import { TRPCClientError } from "@trpc/client";
-import { APPROVAL_NOT_FOUND_TOKEN } from "../../../bff/src/trpc/errorTokens";
+import {
+  APPROVAL_NOT_FOUND_TOKEN,
+  encodeApprovalAlreadyProcessed,
+} from "../../../bff/src/trpc/errorTokens";
 import { trpc } from "../trpc/client";
 import { chatStreamFetch, ttsPrefetchFetch } from "./http";
 import {
+  ApprovalAlreadyProcessed,
   ApprovalExpired,
   ApprovalRequestUnusable,
   respondToApproval,
@@ -39,6 +43,7 @@ import {
   startNewConsultation,
 } from "./consultation";
 import { clearStreamingReply, getStreamingReply } from "./streamingReply";
+import { resetSpeedScaleForTest, setSpeedScale } from "../voice/speedScale";
 import { getStubbedResponse, reportStubbedResponse, resetStubbedResponse } from "./stubStatus";
 
 function sseResponse(events: object[]): Response {
@@ -61,6 +66,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   clearStreamingReply();
   resetStubbedResponse();
+  // モジュールのストアはテスト間で持ち越される (#242)。
+  resetSpeedScaleForTest();
 });
 
 describe("[L2] sendMessage — ストリーミング経路", () => {
@@ -215,6 +222,28 @@ describe("[L2] sendMessage — ストリーミング経路", () => {
   });
 });
 
+describe("[単体] 先行合成の読み上げ速度 (#242)", () => {
+  it("プリフェッチは現在の読み上げ速度で焼かせる", async () => {
+    // 無いと: 先行合成だけ等倍で焼き、本合成が設定速度を要求して BFF のキャッシュを
+    // 全ミスする。音は普通に鳴るので、体感の待ち時間が #185 以前へ戻ったことしか
+    // 症状に出ない (どのテストも E2E も緑のまま)。
+    setSpeedScale(1.35);
+    vi.mocked(chatStreamFetch).mockResolvedValue(
+      sseResponse([
+        { type: "delta", text: "一つ目の文はこれです。二つ目" },
+        { type: "delta", text: "の文はこちらです。" },
+        { type: "done", response: { reply: "一つ目の文はこれです。二つ目の文はこちらです。" } },
+      ]),
+    );
+
+    await sendMessage("s1", "m");
+
+    const speeds = vi.mocked(ttsPrefetchFetch).mock.calls.map((call) => call[2]);
+    expect(speeds.length).toBeGreaterThan(0);
+    expect(new Set(speeds)).toEqual(new Set([1.35]));
+  });
+});
+
 describe("[単体] 副作用ツールの承認要求 (#82 / G1)", () => {
   it("done の requires_approval / approval_request_id を承認要求として返す", async () => {
     // 無いと: 承認が要る応答をフロントが「ただの返事」として扱っても画面は普通に
@@ -355,6 +384,55 @@ describe("[単体] 副作用ツールの承認要求 (#82 / G1)", () => {
     expect(err).not.toBeInstanceOf(ApprovalExpired);
   });
 
+  it.each([{ status: "approved" as const }, { status: "rejected" as const }])(
+    "CONFLICT + 処理済み token (status=$status) は ApprovalAlreadyProcessed に写す",
+    async ({ status }) => {
+      // 無いと: 二重送信が汎用エラー (再試行してください) か ApprovalExpired
+      // (実行されたか分かりません) に落ち、**409 が運んできた結果が捨てられる** (#82 /
+      // PO 裁定 2026-08-15 B 案)。送信済みの操作をユーザーがもう一度依頼しうる。
+      // token の符号化・復号は BFF の errorTokens.ts が 1 箇所で持つ (書き写さない)。
+      vi.mocked(trpc.consultation.approve.mutate).mockRejectedValue(
+        trpcError(encodeApprovalAlreadyProcessed(status), "CONFLICT"),
+      );
+
+      const err = await respondToApproval("appr-1", true).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ApprovalAlreadyProcessed);
+      expect((err as ApprovalAlreadyProcessed).status).toBe(status);
+      // 「もう無い」に混ざっていないこと (混ざると実行の有無を言えなくなる)
+      expect(err).not.toBeInstanceOf(ApprovalExpired);
+    },
+  );
+
+  it.each([
+    { name: "token の無い CONFLICT (他 procedure の競合)", message: "conflict" },
+    { name: "status を欠く token", message: "approval-already-processed" },
+    { name: "未知の status", message: "approval-already-processed:pending" },
+  ])("$name は ApprovalAlreadyProcessed にしない", async ({ message }) => {
+    // 無いと: CONFLICT を code だけで読む実装に退化しても気づけない。汎用 CONFLICT まで
+    // 「すでに承認済みです」に化けると、生きている承認カードが実行済みの顔をして閉じる
+    // (NOT_FOUND で踏んだのと同じ事故 / Codex 4 巡目 P2)。未知 status を「承認済み」に
+    // 丸めると、**実行されていない操作を「実行されました」と案内する**。
+    vi.mocked(trpc.consultation.approve.mutate).mockRejectedValue(trpcError(message, "CONFLICT"));
+
+    const err = await respondToApproval("appr-1", true).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(ApprovalAlreadyProcessed);
+  });
+
+  it("token だけ一致していてもコードが CONFLICT でなければ ApprovalAlreadyProcessed にしない", async () => {
+    // 無いと: 判定が message だけに退化しても気づけない (上流障害の文面が偶然一致した
+    // ときに「実行されました」と断定してしまう)。
+    vi.mocked(trpc.consultation.approve.mutate).mockRejectedValue(
+      trpcError(encodeApprovalAlreadyProcessed("approved"), "INTERNAL_SERVER_ERROR"),
+    );
+
+    const err = await respondToApproval("appr-1", true).catch((e: unknown) => e);
+
+    expect(err).not.toBeInstanceOf(ApprovalAlreadyProcessed);
+  });
+
   it("NOT_FOUND 以外の失敗は ApprovalExpired にしない (再試行で直る失敗を消さない)", async () => {
     // 無いと: 上流障害まで「もう受け付けられない」に化けてカードが閉じ、サーバには承認待ちが
     // 残ったまま画面から消える。
@@ -364,5 +442,77 @@ describe("[単体] 副作用ツールの承認要求 (#82 / G1)", () => {
 
     expect(err).toBeInstanceOf(Error);
     expect(err).not.toBeInstanceOf(ApprovalExpired);
+  });
+});
+
+describe("[単体] AI が提示した選択肢 (#432-b)", () => {
+  it("done の choices をそのまま応答に載せる", async () => {
+    // 無いと: ai-agent が選択肢を出しているのにフロントが捨てる。応答文だけは
+    // 「近いものを選んでみてください」と出るので、**画面は普通に見えたまま**
+    // 選ぶものが 1 つも無い会話になる (どこで落ちたかも分からない)。
+    vi.mocked(chatStreamFetch).mockResolvedValue(
+      sseResponse([
+        { type: "delta", text: "近いものはありますか。" },
+        {
+          type: "done",
+          response: {
+            reply: "近いものはありますか。",
+            requires_approval: false,
+            citations: [],
+            choices: ["仕事のこと", "家族のこと"],
+          },
+        },
+      ]),
+    );
+
+    const { approval, choices } = await sendMessage("s1", "うまく言えない");
+
+    expect(choices).toEqual(["仕事のこと", "家族のこと"]);
+    // 承認要求とは独立 (承認カードを出さない)
+    expect(approval).toBeNull();
+  });
+
+  it("choices の無い done は「選択肢なし」になる (空のチップ帯を出さない)", async () => {
+    vi.mocked(chatStreamFetch).mockResolvedValue(
+      sseResponse([{ type: "done", response: { reply: "そうだったんですね。" } }]),
+    );
+
+    const { choices } = await sendMessage("s1", "疲れました");
+
+    expect(choices).toEqual([]);
+  });
+
+  it("choices が文字列以外を含む done は安全側に落とす", async () => {
+    // 無いと: 壊れた値がそのまま「次に送る発話」になる (押すと空文字や
+    // [object Object] が会話に残る)。旧 ai-agent との配備スキューでも同じ経路を通る。
+    vi.mocked(chatStreamFetch).mockResolvedValue(
+      sseResponse([
+        {
+          type: "done",
+          response: { reply: "a", choices: ["仕事のこと", 42, null] },
+        },
+      ]),
+    );
+
+    const { choices } = await sendMessage("s1", "m");
+
+    expect(choices).toEqual(["仕事のこと"]);
+  });
+
+  it("tRPC フォールバック経路でも選択肢を落とさない", async () => {
+    // 無いと: ストリーミングが使えない環境でだけ選択肢が消える。どちらの経路を
+    // 通ったかは画面から見えないので、「本番でだけ出ない」に気づけない (#82 と同じ罠)。
+    vi.mocked(chatStreamFetch).mockResolvedValue(new Response("nf", { status: 404 }));
+    vi.mocked(trpc.consultation.sendMessage.mutate).mockResolvedValue({
+      reply: "近いものはありますか。",
+      requiresApproval: false,
+      approvalRequestId: null,
+      citations: [],
+      choices: ["仕事のこと"],
+    } as never);
+
+    const { choices } = await sendMessage("s1", "m");
+
+    expect(choices).toEqual(["仕事のこと"]);
   });
 });

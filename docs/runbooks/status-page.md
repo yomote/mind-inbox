@@ -85,6 +85,7 @@
 ## 監視項目を足す / 外す
 
 `watchers.json` に 1 行足すだけ。**自動化を作ったらここに足す。足せないなら作らない。**
+唯一の例外は [`cicd/scripts/claude-hooks/`](../../cicd/scripts/claude-hooks/) (GitHub 側に run を残さないので、載せると偽の緑になる。生死は CI の配線テストが見る — 正典は root [`CLAUDE.md`](../../CLAUDE.md) の例外宣言)。
 
 ```jsonc
 // CI (GitHub Actions)

@@ -3,7 +3,10 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from azure.cosmos.exceptions import CosmosResourceNotFoundError
+from azure.cosmos.exceptions import (
+    CosmosAccessConditionFailedError,
+    CosmosResourceNotFoundError,
+)
 
 from app.repositories import InMemoryApprovalRepository, InMemorySessionRepository
 
@@ -29,6 +32,14 @@ class FakeCosmosContainer:
 
     def __init__(self) -> None:
         self.items: dict[str, dict] = {}
+        # 書き込みのたびに変わる ETag。**固定値にしない** — 固定だと
+        # 条件付き更新 (replace_item + MatchConditions) が常に成功してしまい、
+        # 「ETag 条件を外した」変異をテストが検出できなくなる (PR #430 Codex P1)
+        self._etag_seq = 0
+
+    def _next_etag(self) -> str:
+        self._etag_seq += 1
+        return f"fake-etag-{self._etag_seq}"
 
     async def read_item(self, item: str, partition_key: str) -> dict:
         if item not in self.items:
@@ -38,8 +49,33 @@ class FakeCosmosContainer:
         return dict(self.items[item])
 
     async def upsert_item(self, body: dict) -> dict:
-        stored = {**body, "_rid": "fake-rid", "_etag": "fake-etag", "_ts": 0}
+        stored = {**body, "_rid": "fake-rid", "_etag": self._next_etag(), "_ts": 0}
         self.items[body["id"]] = stored
+        return dict(stored)
+
+    async def replace_item(
+        self,
+        item: str,
+        body: dict,
+        etag: str | None = None,
+        match_condition=None,
+        **kwargs,
+    ) -> dict:
+        """条件付き置換 (ETag 一致時のみ書く) を再現する。
+
+        承認の pending → 処理済み遷移がこれに乗っている。`etag` を渡さない実装に
+        戻すと、同時リクエストが両方成功する = 二重実行が復活する。
+        """
+        if item not in self.items:
+            raise CosmosResourceNotFoundError(
+                status_code=404, message=f"{item} not found"
+            )
+        if etag is not None and self.items[item].get("_etag") != etag:
+            raise CosmosAccessConditionFailedError(
+                status_code=412, message=f"etag mismatch for {item}"
+            )
+        stored = {**body, "_rid": "fake-rid", "_etag": self._next_etag(), "_ts": 0}
+        self.items[item] = stored
         return dict(stored)
 
     async def delete_item(self, item: str, partition_key: str) -> None:

@@ -87,6 +87,7 @@ beforeEach(() => {
     requiresApproval: false,
     approvalRequestId: null,
     citations: [],
+    choices: [],
   });
   vi.mocked(extractAiAgent).mockResolvedValue({
     sessionId: "s1",
@@ -120,6 +121,7 @@ describe("[単体] 発話 1 通の長さ上限 — tRPC / SSE の両入口", () 
           requiresApproval: false,
           approvalRequestId: null,
           citations: [],
+          choices: [],
         });
         await expect(
           makeCaller().consultation.sendMessage({ sessionId: "s1", message: filler(length) }),

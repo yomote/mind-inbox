@@ -4,8 +4,9 @@ import { ConversationMessageSchema } from "../clients/aiAgentContracts";
 import type { ConversationMessage } from "../clients/aiAgentContracts";
 import { z } from "zod";
 import type { TrpcContext } from "./context";
-import { APPROVAL_NOT_FOUND_TOKEN } from "./errorTokens";
+import { APPROVAL_NOT_FOUND_TOKEN, encodeApprovalAlreadyProcessed } from "./errorTokens";
 import {
+  ApprovalAlreadyProcessedError,
   ApprovalNotFoundError,
   approve as approveAiAgent,
   createPlan as createPlanAiAgent,
@@ -175,6 +176,14 @@ const ChatReplySchema = z.object({
   requiresApproval: z.boolean(),
   approvalRequestId: z.string().nullable(),
   citations: z.array(z.string()),
+  /**
+   * AI が提示した選択肢 (#432-b / dialogue-session.mdx §5.10)。空 = 選択肢なし。
+   *
+   * **承認 (`requiresApproval`) とは別物**: 選択肢は押さなくても会話を進められる
+   * 「会話の分岐」で、サーバ側に待ち状態は残らない (完了型)。押した文言は**次の
+   * 発話として**送られるだけなので、`consultation.approve` のような専用の口は無い。
+   */
+  choices: z.array(z.string()),
   /**
    * stub フォールバック応答の機械判別フラグ (#146 / ADR 0039 D6)。
    * AI_AGENT_BASE_URL 未設定で stub に落ちたときだけ true。実応答では付かない
@@ -617,6 +626,7 @@ const consultationRouter = router({
         requiresApproval: chatRes.requiresApproval,
         approvalRequestId: chatRes.approvalRequestId,
         citations: chatRes.citations,
+        choices: chatRes.choices,
         stubbed: chatRes.stubbed,
       };
     }),
@@ -689,6 +699,8 @@ const consultationRouter = router({
             items: input.draft.items,
             newProblemCount: 0,
             updatedProblemCount: 0,
+            // 確定経路は整理マップを返さない (#433 / 下の return も同じ)。
+            thinkingMap: null,
             // draft 経路は ai-agent を呼ばないので応答由来の stub フラグを持てない。
             // **サーバ側の条件 (AI_AGENT_BASE_URL の有無) で判定する** (#283 / #146)。
             // クライアント申告を信じるとフラグを落とす偽装で「本物のふりをした stub」が
@@ -707,7 +719,10 @@ const consultationRouter = router({
       // 確定前に対象 Problem が消えていれば「既存に追加」は新規作成に化けるため、
       // 件数だけ直してもカードのバッジが「既存に追加」のままだと画面の中で食い違う。
       const items = await materializeExtraction(extracted, ctx.problemRepo);
-      return { ...extracted, items, ...countProblems(items) };
+      // **整理マップは preview だけが返す** (#433)。確定は「保存された結果」を返す面で、
+      // マップはどこにも保存されない対話中の作業机 — ここで返すとレビュー画面が
+      // 保存物として地図を受け取り、「保存されている」という誤解が UI に生まれる。
+      return { ...extracted, items, ...countProblems(items), thinkingMap: null };
     }),
 
   approve: publicProcedure
@@ -731,7 +746,25 @@ const consultationRouter = router({
           approved: input.approved,
         });
       } catch (err) {
-        // 承認レコードがもう無い (TTL 1h 失効 / ai-agent 再起動 / 消費済み) は
+        // 二重送信 (#82 / PO 裁定 2026-08-15 B 案)。**「もう無い」(NOT_FOUND) と分ける** —
+        // 混ぜていた頃はフロントが「実行されたか分かりません」としか言えず、送信済みの
+        // メールをユーザーがもう一度送る判断をしうる状態だった。結果 (approved /
+        // rejected) を token に載せることで、UI は実行の有無まで言い切れる。
+        if (err instanceof ApprovalAlreadyProcessedError) {
+          logErrorEvent("approve.already-processed", {
+            route: "consultation.approve",
+            kind: input.approved ? "approved" : "rejected",
+            // どちらで解決済みだったか。**承認対象の中身や時刻は載せない**
+            // (ALLOWED_FIELDS の外なので出口で落ちる) — 運用が知りたいのは
+            // 「二重送信がどれだけ起きているか」だけ。
+            reason: err.status,
+          });
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: encodeApprovalAlreadyProcessed(err.status),
+          });
+        }
+        // 承認レコードがもう無い (TTL 1h 失効 / ai-agent 再起動) は
         // **回復不能な失敗として区別する** (#82 / PR #416 judge major-1)。汎用エラーで
         // 返すとフロントは「再試行してください」を出し続け、承認カードが閉じられない
         // まま会話が永久に詰む (再試行は決して成功しない)。

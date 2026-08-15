@@ -30,6 +30,7 @@
 | [`github-settings.md`](github-settings.md)                     | GitHub の設定 (ブランチ保護 / secret scanning / Dependabot) を宣言から点検・適用する (**現役の仕組み**)                                                                                              |
 | [`github-terraform.md`](github-terraform.md)                   | 同じ設定の Terraform 宣言 (#390 A-1) の未取得を埋める / CI で plan を回すためのトークンを決める (**まだ plan も回せていない — 点検は上の github-settings**)                                          |
 | [`child-sessions.md`](child-sessions.md)                       | 子セッションを起こす / 追加指示を届ける / 生死を見る / 片付ける (ADR 0048)                                                                                                                           |
+| [`branch-naming-and-cleanup.md`](branch-naming-and-cleanup.md) | **PR を出す前にブランチ名を決める** / 予約名前空間 (`data/*` `claim/*`) を踏まない / 未マージ close の引き渡し / 置き去りブランチを掃除する                                                          |
 | [`github-projects-setup.md`](github-projects-setup.md)         | **退役** — board は再建しない (ADR 0044。地図は `stream:*` ラベル / 見る手段は `/status`)                                                                                                            |
 | [`claude-pr-review.md`](claude-pr-review.md)                   | **退役** — PR レビュー Routine は削除済み (#225 / ADR 0008 は Superseded)。基準は現役 ([`review-rubric.md`](../../.github/claude/review-rubric.md))、担い手は [`review-agents.md`](review-agents.md) |
 

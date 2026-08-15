@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """撤収 (cleanup-env.sh) が「消してはいけないもの」に触れないようにするための判定。
 
-ADR 0056 / Issue #302 (層の定義は ADR 0056 が Accept され次第 ADR 0046 D1 を supersede)。
+ADR 0056 / Issue #302 (層の定義は ADR 0056。ADR 0046 D1 は supersede 済み / 2026-08-15 発効)。
 **ファイル名 (`persistent_layer_guard.py`) は初版の
 「持続層」という呼び方が残ったもの**で、中身は下の 2 種類を守るガード。名前を
 変えると呼び出し側 (cleanup-env.sh) と Runbook の参照が同時に動くので据え置いてある。

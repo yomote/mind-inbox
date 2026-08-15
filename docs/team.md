@@ -131,7 +131,7 @@ user の対話窓口。**常に 1 本**で、使い捨てローテーション�
 - **手で叩く** — `ops-inspect` (外の事実を read-only で取る) / `github-settings` (宣言 → 現実の点検・適用) / `ux-data-migrate`
 - **見張り役を置かない** — 落ちた workflow **自身**が Issue を立てる (`.github/actions/report-failure`)。見張りが黙る問題が原理的に消える (黙っている = 落ちていない)
 - **担わない** — 「やってほしいことがそこにあるか」の判定 (意図を知る PM の仕事) / リリースの merge・deploy の最終ボタン (人間)
-- **痕跡** — run 履歴 + [status ページ](https://yomote.github.io/mind-inbox/status/)。**何を見張るかの唯一の真実は [`cicd/scripts/status-page/watchers.json`](../cicd/scripts/status-page/watchers.json)** — 自動化を足したらここに 1 行足す。足せないなら作らない
+- **痕跡** — run 履歴 + [status ページ](https://yomote.github.io/mind-inbox/status/)。**何を見張るかの唯一の真実は [`cicd/scripts/status-page/watchers.json`](../cicd/scripts/status-page/watchers.json)** — 自動化を足したらここに 1 行足す。足せないなら作らない (唯一の例外は [`cicd/scripts/claude-hooks/`](../cicd/scripts/claude-hooks/) — 正典は root [`CLAUDE.md`](../CLAUDE.md) の例外宣言。生死は CI の配線テストが見る)
 
 ## 規律は破られ、機構は守られる
 

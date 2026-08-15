@@ -366,3 +366,246 @@ class TestExtractRobustness:
 
         assert result.items == []
         assert result.new_problem_count == 0
+
+
+# ---- 思考整理マップ (#433 段階 1) --------------------------------------------
+
+_MAP_PAYLOAD = {
+    "mentions": [],
+    "thinkingMap": {
+        "nodes": [
+            {
+                "id": "n1",
+                "kind": "topic",
+                "label": "転職の不安",
+                "status": "confirmed",
+                "parentId": None,
+            },
+            {
+                "id": "n2",
+                "kind": "hypothesis",
+                "label": "失敗が怖い",
+                "status": "tentative",
+                "parentId": "n1",
+            },
+            {
+                "id": "n3",
+                "kind": "unknown",
+                "label": "上司との関係?",
+                "status": "unexplored",
+                "parentId": "n1",
+            },
+        ]
+    },
+}
+
+
+class TestThinkingMap:
+    async def test_l1_maps_thinking_map_nodes(self, session_repo, make_client):
+        # kind × status の 2 軸と親子が ExtractionResult まで届くことを pin する (#433 裁定 4)。
+        # 無いと: 右ペインの「AI の整理」が常に空になる / 2 軸のどちらかが落ちても
+        #         画面は「整理はできている」ように見えるので気づけない。
+        await _seed(session_repo)
+        client_mock = make_client(json.dumps(_MAP_PAYLOAD))
+
+        result = await extract("s1", [], session_repo, client_mock)
+
+        assert result.thinking_map is not None
+        nodes = result.thinking_map.nodes
+        assert [n.id for n in nodes] == ["n1", "n2", "n3"]
+        assert [n.kind for n in nodes] == ["topic", "hypothesis", "unknown"]
+        assert [n.status for n in nodes] == ["confirmed", "tentative", "unexplored"]
+        assert [n.parent_id for n in nodes] == [None, "n1", "n1"]
+
+    async def test_l1_thinking_map_rides_on_the_same_llm_call(
+        self, session_repo, make_client
+    ):
+        # 追加の LLM 呼び出し 0 (#433 裁定 2) を pin する。
+        # 無いと: マップ用にもう 1 回 LLM を呼ぶ実装 (入力トークンの二重払い) が
+        #         テスト緑のまま入り込む — 出力は同じなので結果からは区別できない。
+        await _seed(session_repo)
+        client_mock = make_client(json.dumps(_MAP_PAYLOAD))
+
+        await extract("s1", [], session_repo, client_mock)
+
+        assert client_mock.get_response.call_count == 1
+
+    async def test_l1_problem_id_is_always_null(self, session_repo, make_client):
+        # #321 まで Problem とは紐づけない (裁定 4 — 接続穴だけ空ける)。
+        # 無いと: LLM が推測した Problem id がそのまま画面に出て、
+        #         「AI が既存の悩みと紐づけた」と誤読される (実際は当てずっぽう)。
+        await _seed(session_repo)
+        payload = json.loads(json.dumps(_MAP_PAYLOAD))
+        payload["thinkingMap"]["nodes"][0]["problemId"] = "prob-existing"
+        client_mock = make_client(json.dumps(payload))
+
+        result = await extract("s1", [], session_repo, client_mock)
+
+        assert [n.problem_id for n in result.thinking_map.nodes] == [None, None, None]
+
+    async def test_l1_unknown_kind_and_status_fall_back(
+        self, session_repo, make_client
+    ):
+        # 未知の値は kind=topic / status=tentative に丸める。
+        # 無いと: LLM の書き損じ (status: "done" など) が unexplored / confirmed に化けて、
+        #         画面に出る実数 (未探索の枝の数・確定の数) が静かに動く。
+        await _seed(session_repo)
+        payload = json.loads(json.dumps(_MAP_PAYLOAD))
+        payload["thinkingMap"]["nodes"][0]["kind"] = "conclusion"
+        payload["thinkingMap"]["nodes"][0]["status"] = "done"
+        client_mock = make_client(json.dumps(payload))
+
+        result = await extract("s1", [], session_repo, client_mock)
+
+        assert result.thinking_map.nodes[0].kind == "topic"
+        assert result.thinking_map.nodes[0].status == "tentative"
+
+    async def test_l1_dangling_and_cyclic_parents_become_roots(
+        self, session_repo, make_client
+    ):
+        # 存在しない親・循環した親は根に落とす (節は捨てない)。
+        # 無いと: 循環 (a→b→a) でツリー描画が無限再帰し、存在しない親を指す節は
+        #         どこにもぶら下がれず画面から消える (数と表示が食い違う)。
+        await _seed(session_repo)
+        payload = {
+            "mentions": [],
+            "thinkingMap": {
+                "nodes": [
+                    {
+                        "id": "a",
+                        "kind": "topic",
+                        "label": "A",
+                        "status": "confirmed",
+                        "parentId": "b",
+                    },
+                    {
+                        "id": "b",
+                        "kind": "topic",
+                        "label": "B",
+                        "status": "confirmed",
+                        "parentId": "a",
+                    },
+                    {
+                        "id": "c",
+                        "kind": "topic",
+                        "label": "C",
+                        "status": "confirmed",
+                        "parentId": "zzz",
+                    },
+                    {
+                        "id": "d",
+                        "kind": "topic",
+                        "label": "D",
+                        "status": "confirmed",
+                        "parentId": "d",
+                    },
+                ]
+            },
+        }
+        client_mock = make_client(json.dumps(payload))
+
+        result = await extract("s1", [], session_repo, client_mock)
+
+        parents = {n.id: n.parent_id for n in result.thinking_map.nodes}
+        assert parents == {"a": None, "b": None, "c": None, "d": None}
+
+    async def test_l1_empty_label_nodes_are_dropped(self, session_repo, make_client):
+        # label が無い節は画面に何も伝えないので捨てる。
+        # 無いと: 空行が実数 (話題 N) に数えられ、「数えただけ」という誠実さが崩れる。
+        await _seed(session_repo)
+        payload = json.loads(json.dumps(_MAP_PAYLOAD))
+        payload["thinkingMap"]["nodes"][1]["label"] = "   "
+        client_mock = make_client(json.dumps(payload))
+
+        result = await extract("s1", [], session_repo, client_mock)
+
+        assert [n.id for n in result.thinking_map.nodes] == ["n1", "n3"]
+
+    async def test_l1_non_string_labels_are_dropped(self, session_repo, make_client):
+        # label が文字列でない節も捨てる (Codex P2 / PR #444)。
+        # 無いと: `str(None)` = "None" / `str({})` = "{}" のような**非空文字列**に化けて
+        #         空ラベル判定をすり抜け、検証できない値が「話題」として実数に加算され
+        #         画面にも 1 行出る (数えただけ、という誠実さが崩れる)。
+        await _seed(session_repo)
+        payload = json.loads(json.dumps(_MAP_PAYLOAD))
+        payload["thinkingMap"]["nodes"][0]["label"] = None
+        payload["thinkingMap"]["nodes"][1]["label"] = {"text": "オブジェクト"}
+        client_mock = make_client(json.dumps(payload))
+
+        result = await extract("s1", [], session_repo, client_mock)
+
+        assert [n.id for n in result.thinking_map.nodes] == ["n3"]
+
+    async def test_l1_non_string_id_falls_back_to_generated_id(
+        self, session_repo, make_client
+    ):
+        # id が文字列でなければ採番し直す (親の参照先が壊れた文字列になるのを防ぐ)。
+        # 無いと: `str({...})` のような id が親子の突き合わせに使われ、
+        #         親子関係が黙って壊れる (節は出るのでツリーが平らになるだけ)。
+        await _seed(session_repo)
+        payload = json.loads(json.dumps(_MAP_PAYLOAD))
+        payload["thinkingMap"]["nodes"][0]["id"] = None
+        client_mock = make_client(json.dumps(payload))
+
+        result = await extract("s1", [], session_repo, client_mock)
+
+        assert result.thinking_map.nodes[0].id == "node-0"
+
+    async def test_l1_missing_thinking_map_is_none(self, session_repo, make_client):
+        # マップを返さない LLM 応答でも抽出は成立する (旧プロンプト / 応答の欠落)。
+        # 無いと: マップが無いだけで抽出全体が落ち、右ペインの下書きまで消える。
+        await _seed(session_repo)
+        client_mock = make_client(json.dumps(_NEW_PAYLOAD))
+
+        result = await extract("s1", [], session_repo, client_mock)
+
+        assert result.thinking_map is None
+        assert len(result.items) == 1
+
+    async def test_l1_thinking_map_is_capped(self, session_repo, make_client):
+        # 節の数に上限を置く (画面とトークンの締め)。
+        # 無いと: LLM が 100 節返したときに右ペインが際限なく伸びる。
+        await _seed(session_repo)
+        payload = {
+            "mentions": [],
+            "thinkingMap": {
+                "nodes": [
+                    {
+                        "id": f"n{i}",
+                        "kind": "topic",
+                        "label": f"話題{i}",
+                        "status": "confirmed",
+                        "parentId": None,
+                    }
+                    for i in range(40)
+                ]
+            },
+        }
+        client_mock = make_client(json.dumps(payload))
+
+        result = await extract("s1", [], session_repo, client_mock)
+
+        assert len(result.thinking_map.nodes) == 24
+
+    async def test_l1_thinking_map_prompt_asks_for_the_two_axes(
+        self, session_repo, make_client
+    ):
+        # 2 軸をプロンプトで求めていることだけ確認する (文面ではなく契約語彙の存在)。
+        # 無いと: 契約 (schemas.py) にだけ kind/status があり、LLM には一言も求めていない
+        #         実装が緑で通る — マップは永久に空のまま。
+        await _seed(session_repo)
+        client_mock = make_client(json.dumps(_MAP_PAYLOAD))
+
+        await extract("s1", [], session_repo, client_mock)
+
+        prompt = str(client_mock.get_response.call_args.args[0][0].contents[0])
+        assert "thinkingMap" in prompt
+        for token in (
+            "topic",
+            "hypothesis",
+            "unknown",
+            "confirmed",
+            "tentative",
+            "unexplored",
+        ):
+            assert token in prompt

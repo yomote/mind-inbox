@@ -12,7 +12,7 @@ IaC (Bicep) / デプロイスクリプト / 運用スクリプト。運用手順
 1. **bootstrap** — `cicd/iac/main-bootstrap.bicep`: SWA / Function App / Cosmos / OpenAI / Speech / Container App environment / **Log Analytics** / **Key Vault (`enableSql=true` のときだけ)** を作る (SQL 一式も同条件。ACR は無い)
 2. **config** — `cicd/iac/main-config.bicep`: Entra ID 認証とシークレットを配線する (bootstrap の後に流す)
 
-**層の軸は「消えると困るか」ではなく「運用のためか / アプリそのものか」** ([ADR 0056](../docs/adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D1 — Proposed。Accept され次第 ADR 0046 D1 を supersede) — Cosmos / OpenAI / Speech は**アプリ系に残す**。Cosmos のデータは RG を移して守るのではなく、管理系 RG の非公開 Storage へバックアップして戻せるようにする (ADR 0056 D2 / 経路の実装は ADR 0046 D9。**public リポジトリなので git データブランチには出さない**)。
+**層の軸は「消えると困るか」ではなく「運用のためか / アプリそのものか」** ([ADR 0056](../docs/adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D1 — ADR 0046 D1 を supersede 済み / 2026-08-15 発効) — Cosmos / OpenAI / Speech は**アプリ系に残す**。Cosmos のデータは RG を移して守るのではなく、管理系 RG の非公開 Storage へバックアップして戻せるようにする (ADR 0056 D2 / 経路の実装は ADR 0046 D9。**public リポジトリなので git データブランチには出さない**)。
 
 **管理系とアプリ系は RG をまたぐ resource 参照をしない** — 管理系の output をアプリ系の parameter に渡す。**撤収 (`cleanup-env.sh`) の対象はアプリ系だけ**で、管理系 RG は削除できない (判定は `cicd/scripts/env/persistent_layer_guard.py`)。**`rg-mgmt-mindbox` の保護は設定で外せない** — `MGMT_RG` は保護対象を足すだけで、既定名を置き換えられない (置き換えられると `MGMT_RG` を逸らすだけで恒久保護が消える)。
 
@@ -49,3 +49,4 @@ cicd/scripts/smoke-test/smoke-test.sh          # デプロイ後の疎通確認
 - **判定ロジックをシェルや workflow の中に埋めない** — 純粋関数に切り出して pytest で押さえる。`if` が YAML の中にあるとテストできない。
 - **握り潰しを足すときは、それで何が見えなくなるかをコメントに書く** (`2>/dev/null` / `|| true` / 空の `catch`)。取得や検証に失敗したものを「異常なし」として出さない — 成功と区別できる形 (`未検証: 理由` / status を error / run を落とす) にする。
 - **自動化を足したら [`cicd/scripts/status-page/watchers.json`](scripts/status-page/watchers.json) に 1 行足す。** 足せない自動化は作らない。新設の必須条件は「動いたら痕跡がリポジトリに残ること」— 異常時だけ喋る設計にすると、沈黙と正常が区別できなくなる ([Runbook](../docs/runbooks/status-page.md))。
+- **例外は [`scripts/claude-hooks/`](scripts/claude-hooks/) だけ** (PO 裁定 2026-08-13 / Issue #392)。hook は Claude Code セッションの中でしか動かず GitHub 側に run を残さないので、watchers.json に載せると「動いた形跡が無い」と「動いていない」が区別できず**偽の緑**になる。生死は [`test_hook_wiring.py`](scripts/claude-hooks/test_hook_wiring.py) が見る — `npm run test:scripts` → `npm run test:fast` → CI job `test (L0 / L1+L2 / L3 / L3-real)` (required status check) なので、**配線が壊れるとマージが止まる**。hook を増やしたら `EXPECTED` に 1 行足す。

@@ -2,6 +2,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { fakeEntraLogin, LIVE_APP_URL, LIVE_BFF_URL, liveEnvMissing } from "./entra-login";
+import {
+  HOP_TIMEOUTS,
+  probeTestTimeoutMs,
+  SCENARIOS,
+  type ProbeScenario,
+} from "./ux-probe-scenarios";
 
 /**
  * [L4] UX 体験プローブ — **実環境で相談シナリオを複数往復し、記録を残す** (#123 M0 / ADR 0022)。
@@ -14,64 +20,28 @@ import { fakeEntraLogin, LIVE_APP_URL, LIVE_BFF_URL, liveEnvMissing } from "./en
  * 設計判断:
  * - シナリオは**固定・バージョン付き** (scenario.id)。毎朝同じ入力で流すことで
  *   応答品質・レイテンシの時系列比較が成立する (入力が揺れると劣化検知にならない)
+ * - **シナリオごとに独立した test / 記録 JSON** (#435)。台本 (`ux-probe-scenarios.ts`) を
+ *   1 本増やすと記録も採点も 1 行増える。1 本の test で全シナリオを回すと、途中の
+ *   シナリオが壊れたときに後続が走らず、**壊れていないシナリオの記録まで消える**
  * - レイテンシ閾値超過は **warn (JSON の warnings + workflow annotation) であり fail にしない**。
  *   #120 は「まず測る」段階で、目標値は計測データが溜まってから PO が決める。
  *   fail するのは対話が壊れているとき (応答なし / stub) のみ — それは監視の仕事
  * - 記録は 1 往復ごとに書き出す (途中で落ちても、そこまでの記録が artifact に残る)
- * - 出力先: UX_PROBE_OUTPUT_DIR (default: probe-results/) — workflow が artifact として保存
+ * - 出力先: UX_PROBE_OUTPUT_DIR (default: probe-results/) — workflow が artifact として保存。
+ *   **シナリオごとに別ファイル** (ファイル名に scenario.id を含める) なので、
+ *   後段 (workflow の要約・封筒化) は 1 ファイルだけを拾わないこと
  */
 
 test.skip(liveEnvMissing, "LIVE_* env が未設定 (実環境向けのみ実行)");
-
-// 4 往復 × (実 AI + コールドスタート) を許容する。config の既定 240s では足りない。
-// 待受予算 (下の per-hop timeout の合計): 到達+opener 120s
-// + turn1 (stream 210 + settle 60 + visible 30 + tts 120)s
-// + turn2〜4 (stream 120 + settle 60 + visible 30 + tts 60)s×3
-// + 送信操作 (fill 30 + click 30)s×4 = 1,590s < 1,700s
-// (SSE 移行で「応答が出そろうまで待つ」settle 分が増えたので予算に加算 — レビュー指摘。
-//  送信操作分は #287 で有限化した — それまでは無期限で、予算に載せようがなかった)
-test.setTimeout(1_700_000);
-
-/** シナリオ変更時は id を上げる (時系列比較の断絶点を明示するため)。 */
-const SCENARIO = {
-  id: "work-overwhelm-v1",
-  description:
-    "仕事のタスク過多で眠りが浅い相談者。深掘りに応じて『失敗より失望されるのが怖い』と core が出てくる典型パス",
-  userTurns: [
-    "最近、仕事のことで頭がいっぱいで眠りが浅いんです。タスクが多すぎて、何から手をつければいいか分からなくて",
-    "一番気になっているのは、上司に頼まれた企画書です。期待されている気がして、失敗したらどうしようと考えてしまいます",
-    "そう言われてみると、失敗そのものより、上司にがっかりされるのが怖いのかもしれません",
-    "少し整理できた気がします。まず何から手をつけるのがいいでしょうか",
-  ],
-} as const;
 
 // 初期閾値 (超過 = warn)。#120 の正式な目標値 (例: P95) は計測データが溜まってから
 // PO が決める — それまでの仮置き。env で上書き可能
 const WARN_REPLY_VISIBLE_MS = Number(process.env.UX_PROBE_WARN_REPLY_MS ?? 10_000);
 const WARN_TTS_SYNTH_MS = Number(process.env.UX_PROBE_WARN_TTS_MS ?? 8_000);
 
-/**
- * ストリーム開始後、応答が出そろう (キャレットが消える) まで待つ上限。
- * 超えた場合は途中経過を warning つきで記録する。下の待受予算に組み込み済み。
- */
-const SETTLE_TIMEOUT_MS = 60_000;
-
-/**
- * 送信操作 (入力欄への fill / 「送信」クリック) の上限。
- *
- * **上限が無いと、止まった場所と違う場所の名前で赤くなる** — #287 / #293 の実害。
- * live config は `actionTimeout` を持っていなかったため Playwright のアクションは
- * 無期限に actionable 待ちができ、`fill` が止まっても `fill` は落ちない。代わりに
- * **送信前に張ってあった** `waitForResponse` が 210 秒で落ち、
- * 「SSE `/api/chat/stream` が 1 往復目でハングする」として 2 日間追われた。
- * 実際にはリクエストは 1 本も出ていない (#293 のタイトルが指す症状は起きていない)。
- *
- * ここを有限にすると、止まったときに Playwright 自身の call log
- * (`waiting for element to be visible, enabled and editable`) が **job ログに出る**。
- * trace は ADR 0045 で暗号化されており agent は復号できないので、
- * 「入力欄のどの状態が満たされなかったか」を平文のログ側に出せるかが調査可否を分ける。
- */
-const SEND_ACTION_TIMEOUT_MS = 30_000;
+// ホップごとの待受上限と待受予算の真実は ux-probe-scenarios.ts (予算式の入力を兼ねる)。
+const SETTLE_TIMEOUT_MS = HOP_TIMEOUTS.settleMs;
+const SEND_ACTION_TIMEOUT_MS = HOP_TIMEOUTS.sendActionMs;
 
 /**
  * ガイド発話バブルの読み取り上限。**「まだ無い」は正常な状態** (1 往復目の送信前 /
@@ -263,200 +233,226 @@ async function readSettledAssistantText(
   return { text: lastSeen, settledAt: Date.now(), settled: false };
 }
 
-test("[L4] UX プローブ: 相談シナリオ 4 往復の全応答文 + 区間レイテンシを記録する", async ({
-  page,
-}) => {
-  page.on("console", (msg) => {
-    if (msg.type() === "error") console.log(`[browser:error] ${msg.text()}`);
-  });
-  page.on("pageerror", (err) => console.log(`[browser:pageerror] ${err.message}`));
+/**
+ * シナリオ 1 本を実環境で流し、記録 JSON を書き出す。
+ *
+ * シナリオごとに独立した test にしてある (先頭の設計判断を参照) ため、
+ * 1 本が赤くなっても残りのシナリオの記録は残る。
+ */
+function runScenario(scenario: ProbeScenario): void {
+  test(`[L4] UX プローブ (${scenario.id}): 相談シナリオ ${scenario.userTurns.length} 往復の全応答文 + 区間レイテンシを記録する`, async ({
+    page,
+  }) => {
+    // config 既定の 240s では 1 往復も入らない。予算式は ux-probe-scenarios.ts
+    // (ホップ上限の合計 + 余裕)。往復数を変えると自動で追随する
+    test.setTimeout(probeTestTimeoutMs(scenario.userTurns.length));
 
-  const startedAt = new Date();
-  const record: ProbeRecord = {
-    schemaVersion: 1,
-    kind: "ux-probe-conversation",
-    probeId: `ux-probe-${startedAt.toISOString().replace(/[:.]/g, "-")}`,
-    startedAt: startedAt.toISOString(),
-    environment: {
-      appUrl: LIVE_APP_URL,
-      bffUrl: LIVE_BFF_URL,
-      gitSha: process.env.GITHUB_SHA ?? null,
-      runId: process.env.GITHUB_RUN_ID ?? null,
-      runUrl:
-        process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
-          ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
-          : null,
-    },
-    scenario: {
-      id: SCENARIO.id,
-      description: SCENARIO.description,
-      plannedTurns: SCENARIO.userTurns.length,
-    },
-    thresholds: { warnReplyVisibleMs: WARN_REPLY_VISIBLE_MS, warnTtsSynthMs: WARN_TTS_SYNTH_MS },
-    openerText: null,
-    turns: [],
-    summary: {
-      completedTurns: 0,
-      avgSendToReplyVisibleMs: null,
-      maxSendToReplyVisibleMs: null,
-      warningCount: 0,
-      firstTurnIncludesColdStart: true,
-    },
-  };
-
-  const outDir = path.resolve(process.cwd(), process.env.UX_PROBE_OUTPUT_DIR ?? "probe-results");
-  const outFile = path.join(outDir, `${record.probeId}.json`);
-  const flush = () => {
-    const visible = record.turns.map((t) => t.timings.sendToReplyVisibleMs);
-    record.summary.completedTurns = record.turns.length;
-    record.summary.avgSendToReplyVisibleMs = visible.length
-      ? Math.round(visible.reduce((a, b) => a + b, 0) / visible.length)
-      : null;
-    record.summary.maxSendToReplyVisibleMs = visible.length ? Math.max(...visible) : null;
-    record.summary.warningCount = record.turns.reduce((a, t) => a + t.warnings.length, 0);
-    fs.mkdirSync(outDir, { recursive: true });
-    fs.writeFileSync(outFile, JSON.stringify(record, null, 2) + "\n");
-  };
-
-  const ttsRecords = recordTts(page);
-  await fakeEntraLogin(page);
-
-  // 未認証で開くとオンボーディングが表示される (#112 / onboarding.mdx)。
-  // 「はじめる」でサインインが始まり、偽装 Entra が即座に認証済みで返すため
-  // そのままホームに到達する
-  await page.goto("/");
-  await page.getByRole("button", { name: "はじめる" }).click({ timeout: 60_000 });
-  await expect(page.getByRole("button", { name: "新しい相談を始める" })).toBeVisible({
-    timeout: 60_000,
-  });
-  await page.getByRole("button", { name: "新しい相談を始める" }).click();
-  await expect(page).toHaveURL(/\/consultations\/current$/);
-
-  // 開始時挨拶は #241 (ADR 0039 Phase A) で撤去された — 開始直後は
-  // マスコットの待機表示のみで、会話はユーザーの 1 発話目から始まる。
-  // openerText は記録スキーマ互換のため null のまま残す (ux_eval は null 許容)。
-  // 挨拶が「復活」したら誤配置なので、assistant メッセージが無いことを確認する。
-  await expect(page.locator("text=ガイド")).toHaveCount(0, { timeout: 30_000 });
-  record.openerText = null;
-  flush();
-
-  const composer = page.getByPlaceholder("ここに入力 / 話して入力");
-
-  for (let i = 0; i < SCENARIO.userTurns.length; i++) {
-    const userText = SCENARIO.userTurns[i];
-
-    // コールドスタート (Container Apps scale-to-zero, ADR 0013) は 1 往復目にしか
-    // 現れないので、2 往復目以降は待受を絞る (test.setTimeout の待受予算と整合させる)
-    const trpcTimeoutMs = i === 0 ? 210_000 : 120_000;
-    const ttsTimeoutMs = i === 0 ? 120_000 : 60_000;
-
-    // 前ターンの応答。これと同じものを「今回の応答」と誤認しないための基準。
-    const previousReply = (await lastAssistantBubble(page)).text;
-
-    // **入力 → 待受 → 送信 の順を崩さないこと** (#287 / #293)。
-    // 以前は待受 (waitForResponse) を fill の前に張っていたため、送信の手前で
-    // 止まったときも「/api/chat/stream が返らない」という顔で赤くなり、
-    // 実際には 1 本もリクエストが出ていないのに SSE の障害として 2 日追われた。
-    // fill が先なら、送信できなかったときは **fill が fill として** 落ちる。
-    // リクエストを出すのは下の「送信」クリックなので、fill と click の間で
-    // 待受を張れば取りこぼしは起きない。
-    await composer.fill(userText, { timeout: SEND_ACTION_TIMEOUT_MS });
-
-    // #132 (ADR 0024) で応答は SSE サイドチャネルに移り、UI から
-    // `/api/trpc/consultation.sendMessage` は呼ばれなくなった。ここで待つのは
-    // ストリームの応答ヘッダ = **最初のバイトが返るまで**の時間 (体感の初動)。
-    const trpcPromise = page.waitForResponse(
-      (res) => res.url().includes("/api/chat/stream") && res.request().method() === "POST",
-      { timeout: trpcTimeoutMs },
-    );
-
-    const sentAt = Date.now();
-    await page.getByRole("button", { name: "送信" }).click({ timeout: SEND_ACTION_TIMEOUT_MS });
-
-    const trpcRes = await trpcPromise;
-    const trpcAt = Date.now();
-    expect(trpcRes.status(), `turn ${i + 1}: chat/stream status`).toBe(200);
-
-    // ストリームは逐次描画されるので、応答文は **画面から** 読む (ユーザーが見た物が真実)。
-    // 伸びが止まったら確定とみなす。JSON から取れた頃の実装とはここが変わっている。
-    const settled = await readSettledAssistantText(page, previousReply, SETTLE_TIMEOUT_MS);
-    const assistantText = settled.text;
-
-    // 対話が壊れているケースだけ fail (品質・レイテンシの評価は judge / warn の仕事)
-    expect(assistantText, `turn ${i + 1}: 実 AI の応答が空`).not.toBe("");
-    expect(assistantText, `turn ${i + 1}: stub 応答 (AI_AGENT_BASE_URL 結線切れ)`).not.toContain(
-      "[stub]",
-    );
-
-    // 応答の実テキストで描画を待つ ("ガイド" ラベルの nth 指定は応答文自体に
-    // 「ガイド」が含まれたとき index がずれるため使わない)
-    const excerpt =
-      assistantText.split("\n")[0].trim().slice(0, 40) || assistantText.trim().slice(0, 40);
-    await expect(page.getByText(excerpt).last()).toBeVisible({ timeout: 30_000 });
-    // 応答が出そろった時刻 (安定判定の待ち時間は含めない)
-    const visibleAt = settled.settledAt;
-
-    // TTS は応答描画後に非同期で走る (Layout が応答全文を text にして呼ぶ)。
-    // 欠落・失敗は warn (200 + audio/wav の保証は consultation-scenario / golden-path hop5 が担当)
-    const tts = await waitForTtsOf(ttsRecords, assistantText, ttsTimeoutMs);
-
-    const warnings: ProbeWarning[] = [];
-    if (!settled.settled) {
-      // 確定を観測できないまま記録している = 応答文が途中の可能性がある。
-      // 黙って不完全なデータを judge に渡さない (無音失敗の禁止)
-      warnings.push({
-        category: "functional",
-        message: `応答の確定 (ストリーミング完了) を観測できず、途中経過を記録している可能性がある`,
-      });
-    }
-    const sendToReplyVisibleMs = visibleAt - sentAt;
-    if (sendToReplyVisibleMs > WARN_REPLY_VISIBLE_MS) {
-      warnings.push({
-        category: "latency",
-        message: `send→reply表示 ${sendToReplyVisibleMs}ms > 閾値 ${WARN_REPLY_VISIBLE_MS}ms (#120)`,
-      });
-    }
-    const ttsSynthMs = tts?.responseAt !== undefined ? tts.responseAt - tts.requestAt : null;
-    if (ttsSynthMs !== null && ttsSynthMs > WARN_TTS_SYNTH_MS) {
-      warnings.push({
-        category: "latency",
-        message: `TTS合成 ${ttsSynthMs}ms > 閾値 ${WARN_TTS_SYNTH_MS}ms (#120)`,
-      });
-    }
-    if (tts === undefined) {
-      warnings.push({
-        category: "functional",
-        message: `TTS 応答を ${ttsTimeoutMs / 1000}s 以内に観測できず (レイテンシ計測は欠測)`,
-      });
-    } else if (tts.status !== 200) {
-      warnings.push({
-        category: "functional",
-        message: `TTS status ${tts.status} (200 以外 — 音声なしの体験になっている)`,
-      });
-    }
-
-    record.turns.push({
-      index: i + 1,
-      userText,
-      assistantText,
-      timings: {
-        sentAt: new Date(sentAt).toISOString(),
-        sendToTrpcResponseMs: trpcAt - sentAt,
-        sendToReplyVisibleMs,
-        replyVisibleToTtsRequestMs: tts ? tts.requestAt - visibleAt : null,
-        ttsRequestToResponseMs: ttsSynthMs,
-        sendToTtsResponseMs: tts?.responseAt !== undefined ? tts.responseAt - sentAt : null,
-      },
-      ttsStatus: tts?.status ?? null,
-      warnings,
+    page.on("console", (msg) => {
+      if (msg.type() === "error") console.log(`[browser:error] ${msg.text()}`);
     });
-    flush();
-    console.log(
-      `[ux-probe] turn ${i + 1}/${SCENARIO.userTurns.length}: reply ${sendToReplyVisibleMs}ms, ` +
-        `tts ${ttsSynthMs ?? "n/a"}ms, warnings ${warnings.length}`,
-    );
-  }
+    page.on("pageerror", (err) => console.log(`[browser:pageerror] ${err.message}`));
 
-  flush();
-  console.log(`[ux-probe] record written: ${outFile}`);
-});
+    const startedAt = new Date();
+    const record: ProbeRecord = {
+      schemaVersion: 1,
+      kind: "ux-probe-conversation",
+      // **シナリオ id をファイル名に含める** — 同 run の 2 本が同じ名前で
+      // 上書きし合うと、片方の記録が黙って消える
+      probeId: `ux-probe-${scenario.id}-${startedAt.toISOString().replace(/[:.]/g, "-")}`,
+      startedAt: startedAt.toISOString(),
+      environment: {
+        appUrl: LIVE_APP_URL,
+        bffUrl: LIVE_BFF_URL,
+        gitSha: process.env.GITHUB_SHA ?? null,
+        runId: process.env.GITHUB_RUN_ID ?? null,
+        runUrl:
+          process.env.GITHUB_SERVER_URL &&
+          process.env.GITHUB_REPOSITORY &&
+          process.env.GITHUB_RUN_ID
+            ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
+            : null,
+      },
+      scenario: {
+        id: scenario.id,
+        description: scenario.description,
+        plannedTurns: scenario.userTurns.length,
+      },
+      thresholds: { warnReplyVisibleMs: WARN_REPLY_VISIBLE_MS, warnTtsSynthMs: WARN_TTS_SYNTH_MS },
+      openerText: null,
+      turns: [],
+      summary: {
+        completedTurns: 0,
+        avgSendToReplyVisibleMs: null,
+        maxSendToReplyVisibleMs: null,
+        warningCount: 0,
+        firstTurnIncludesColdStart: true,
+      },
+    };
+
+    const outDir = path.resolve(process.cwd(), process.env.UX_PROBE_OUTPUT_DIR ?? "probe-results");
+    const outFile = path.join(outDir, `${record.probeId}.json`);
+    const flush = () => {
+      const visible = record.turns.map((t) => t.timings.sendToReplyVisibleMs);
+      record.summary.completedTurns = record.turns.length;
+      record.summary.avgSendToReplyVisibleMs = visible.length
+        ? Math.round(visible.reduce((a, b) => a + b, 0) / visible.length)
+        : null;
+      record.summary.maxSendToReplyVisibleMs = visible.length ? Math.max(...visible) : null;
+      record.summary.warningCount = record.turns.reduce((a, t) => a + t.warnings.length, 0);
+      fs.mkdirSync(outDir, { recursive: true });
+      fs.writeFileSync(outFile, JSON.stringify(record, null, 2) + "\n");
+    };
+
+    const ttsRecords = recordTts(page);
+    await fakeEntraLogin(page);
+
+    // 未認証で開くとオンボーディングが表示される (#112 / onboarding.mdx)。
+    // 「はじめる」でサインインが始まり、偽装 Entra が即座に認証済みで返すため
+    // そのままホームに到達する
+    await page.goto("/");
+    await page.getByRole("button", { name: "はじめる" }).click({ timeout: 60_000 });
+    await expect(page.getByRole("button", { name: "新しい相談を始める" })).toBeVisible({
+      timeout: 60_000,
+    });
+    await page.getByRole("button", { name: "新しい相談を始める" }).click();
+    await expect(page).toHaveURL(/\/consultations\/current$/);
+
+    // 開始時挨拶は #241 (ADR 0039 Phase A) で撤去された — 開始直後は
+    // マスコットの待機表示のみで、会話はユーザーの 1 発話目から始まる。
+    // openerText は記録スキーマ互換のため null のまま残す (ux_eval は null 許容)。
+    // 挨拶が「復活」したら誤配置なので、assistant メッセージが無いことを確認する。
+    await expect(page.locator("text=ガイド")).toHaveCount(0, { timeout: 30_000 });
+    record.openerText = null;
+    flush();
+
+    const composer = page.getByPlaceholder("ここに入力 / 話して入力");
+
+    for (let i = 0; i < scenario.userTurns.length; i++) {
+      const userText = scenario.userTurns[i];
+
+      // コールドスタート (Container Apps scale-to-zero, ADR 0013) は 1 往復目にしか
+      // 現れないので、2 往復目以降は待受を絞る (test.setTimeout の待受予算と整合させる)。
+      // **2 本目のシナリオでもコールドスタート枠は外さない** — 1 本目が手前で落ちた朝や
+      // 単独実行 (--grep) では寒い環境に当たりうる。外すと、その朝だけ 1 往復目が
+      // 「SSE が返らない」顔で赤くなる (実際は温まっていないだけ)
+      const trpcTimeoutMs = i === 0 ? HOP_TIMEOUTS.streamColdMs : HOP_TIMEOUTS.streamWarmMs;
+      const ttsTimeoutMs = i === 0 ? HOP_TIMEOUTS.ttsColdMs : HOP_TIMEOUTS.ttsWarmMs;
+
+      // 前ターンの応答。これと同じものを「今回の応答」と誤認しないための基準。
+      const previousReply = (await lastAssistantBubble(page)).text;
+
+      // **入力 → 待受 → 送信 の順を崩さないこと** (#287 / #293)。
+      // 以前は待受 (waitForResponse) を fill の前に張っていたため、送信の手前で
+      // 止まったときも「/api/chat/stream が返らない」という顔で赤くなり、
+      // 実際には 1 本もリクエストが出ていないのに SSE の障害として 2 日追われた。
+      // fill が先なら、送信できなかったときは **fill が fill として** 落ちる。
+      // リクエストを出すのは下の「送信」クリックなので、fill と click の間で
+      // 待受を張れば取りこぼしは起きない。
+      await composer.fill(userText, { timeout: SEND_ACTION_TIMEOUT_MS });
+
+      // #132 (ADR 0024) で応答は SSE サイドチャネルに移り、UI から
+      // `/api/trpc/consultation.sendMessage` は呼ばれなくなった。ここで待つのは
+      // ストリームの応答ヘッダ = **最初のバイトが返るまで**の時間 (体感の初動)。
+      const trpcPromise = page.waitForResponse(
+        (res) => res.url().includes("/api/chat/stream") && res.request().method() === "POST",
+        { timeout: trpcTimeoutMs },
+      );
+
+      const sentAt = Date.now();
+      await page.getByRole("button", { name: "送信" }).click({ timeout: SEND_ACTION_TIMEOUT_MS });
+
+      const trpcRes = await trpcPromise;
+      const trpcAt = Date.now();
+      expect(trpcRes.status(), `turn ${i + 1}: chat/stream status`).toBe(200);
+
+      // ストリームは逐次描画されるので、応答文は **画面から** 読む (ユーザーが見た物が真実)。
+      // 伸びが止まったら確定とみなす。JSON から取れた頃の実装とはここが変わっている。
+      const settled = await readSettledAssistantText(page, previousReply, SETTLE_TIMEOUT_MS);
+      const assistantText = settled.text;
+
+      // 対話が壊れているケースだけ fail (品質・レイテンシの評価は judge / warn の仕事)
+      expect(assistantText, `turn ${i + 1}: 実 AI の応答が空`).not.toBe("");
+      expect(assistantText, `turn ${i + 1}: stub 応答 (AI_AGENT_BASE_URL 結線切れ)`).not.toContain(
+        "[stub]",
+      );
+
+      // 応答の実テキストで描画を待つ ("ガイド" ラベルの nth 指定は応答文自体に
+      // 「ガイド」が含まれたとき index がずれるため使わない)
+      const excerpt =
+        assistantText.split("\n")[0].trim().slice(0, 40) || assistantText.trim().slice(0, 40);
+      await expect(page.getByText(excerpt).last()).toBeVisible({
+        timeout: HOP_TIMEOUTS.replyVisibleMs,
+      });
+      // 応答が出そろった時刻 (安定判定の待ち時間は含めない)
+      const visibleAt = settled.settledAt;
+
+      // TTS は応答描画後に非同期で走る (Layout が応答全文を text にして呼ぶ)。
+      // 欠落・失敗は warn (200 + audio/wav の保証は consultation-scenario / golden-path hop5 が担当)
+      const tts = await waitForTtsOf(ttsRecords, assistantText, ttsTimeoutMs);
+
+      const warnings: ProbeWarning[] = [];
+      if (!settled.settled) {
+        // 確定を観測できないまま記録している = 応答文が途中の可能性がある。
+        // 黙って不完全なデータを judge に渡さない (無音失敗の禁止)
+        warnings.push({
+          category: "functional",
+          message: `応答の確定 (ストリーミング完了) を観測できず、途中経過を記録している可能性がある`,
+        });
+      }
+      const sendToReplyVisibleMs = visibleAt - sentAt;
+      if (sendToReplyVisibleMs > WARN_REPLY_VISIBLE_MS) {
+        warnings.push({
+          category: "latency",
+          message: `send→reply表示 ${sendToReplyVisibleMs}ms > 閾値 ${WARN_REPLY_VISIBLE_MS}ms (#120)`,
+        });
+      }
+      const ttsSynthMs = tts?.responseAt !== undefined ? tts.responseAt - tts.requestAt : null;
+      if (ttsSynthMs !== null && ttsSynthMs > WARN_TTS_SYNTH_MS) {
+        warnings.push({
+          category: "latency",
+          message: `TTS合成 ${ttsSynthMs}ms > 閾値 ${WARN_TTS_SYNTH_MS}ms (#120)`,
+        });
+      }
+      if (tts === undefined) {
+        warnings.push({
+          category: "functional",
+          message: `TTS 応答を ${ttsTimeoutMs / 1000}s 以内に観測できず (レイテンシ計測は欠測)`,
+        });
+      } else if (tts.status !== 200) {
+        warnings.push({
+          category: "functional",
+          message: `TTS status ${tts.status} (200 以外 — 音声なしの体験になっている)`,
+        });
+      }
+
+      record.turns.push({
+        index: i + 1,
+        userText,
+        assistantText,
+        timings: {
+          sentAt: new Date(sentAt).toISOString(),
+          sendToTrpcResponseMs: trpcAt - sentAt,
+          sendToReplyVisibleMs,
+          replyVisibleToTtsRequestMs: tts ? tts.requestAt - visibleAt : null,
+          ttsRequestToResponseMs: ttsSynthMs,
+          sendToTtsResponseMs: tts?.responseAt !== undefined ? tts.responseAt - sentAt : null,
+        },
+        ttsStatus: tts?.status ?? null,
+        warnings,
+      });
+      flush();
+      console.log(
+        `[ux-probe:${scenario.id}] turn ${i + 1}/${scenario.userTurns.length}: ` +
+          `reply ${sendToReplyVisibleMs}ms, ` +
+          `tts ${ttsSynthMs ?? "n/a"}ms, warnings ${warnings.length}`,
+      );
+    }
+
+    flush();
+    console.log(`[ux-probe:${scenario.id}] record written: ${outFile}`);
+  });
+}
+
+// **全シナリオを回す** (#435 / PO 裁定 2026-08-15: コスト +1 プローブ/日は許容)。
+// ここで回し忘れると、台本を足しても記録が増えず、採点も静かに 1 本のままになる。
+for (const scenario of SCENARIOS) runScenario(scenario);

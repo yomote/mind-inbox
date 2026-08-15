@@ -16,6 +16,7 @@ const mockConfig = vi.hoisted(() => ({}) as { aiAgentBaseUrl?: string; aiAgentAu
 vi.mock("../config", () => ({ config: mockConfig }));
 
 import {
+  ApprovalAlreadyProcessedError,
   ApprovalNotFoundError,
   ExtractError,
   approve,
@@ -255,8 +256,18 @@ describe("[単体] /approve の 404 は「承認レコードがもう無い」�
   // ValueError そのまま)。3 本とも同じ「もう受け付けられない」に落ちる。
   it.each([
     { name: "未知 ID / TTL 失効", detail: "Approval not found: 'appr-1'" },
-    { name: "消費済み", detail: "Approval already processed: 'approved'" },
     { name: "checkpoint が消えた", detail: "Approval checkpoint not found: 'appr-1'" },
+    // **旧 ai-agent (409 化の前) が返す消費済み**。配備スキューの窓で実際に飛んでくる。
+    //
+    // 無いと何が静かに通るか: BFF だけ先に新しくなった期間、旧 ai-agent は
+    // 二重送信を 404 で返し続ける。この detail を判別から外すと「承認レコード由来
+    // ではない 404」= 上流障害に化け、**カードが閉じられないまま会話が詰む**
+    // (404 デッドロックの再発)。判別に残しておけば、旧新どちらの組み合わせでも
+    // 二重送信はカード閉鎖に落ちる (新しい組では 409 が結果まで運ぶ)。
+    {
+      name: "旧 ai-agent の消費済み (配備スキュー)",
+      detail: "Approval already processed: 'approved'",
+    },
   ])("$name の 404 は ApprovalNotFoundError で失敗する", async ({ detail }) => {
     vi.stubGlobal(
       "fetch",
@@ -334,5 +345,89 @@ describe("[単体] /approve の 404 は「承認レコードがもう無い」�
 
     const res = await approve({ approvalRequestId: "appr-1", approved: true });
     expect(res.reply).toBe("実行しました");
+  });
+});
+
+// ---- /approve の 409 (二重送信 / #82 / PO 裁定 2026-08-15 B 案) ---------------
+
+describe("[単体] /approve の 409 は「すでに処理済み」として 404 と分ける", () => {
+  // 無いと何が静かに通るか: 二重送信が「もう無い」(ApprovalNotFoundError) に混ざり、
+  // 「レコードが消えた」のか「もう解決済み」なのかがどの層でも区別できなくなる。
+  // **却下済み (= 確実に未実行) すら案内できず**、利用者は会話を遡って自分で
+  // 確かめるしかない。種別と決定が立つ場所はここ (HTTP status を見る唯一の層)。
+  beforeEach(() => {
+    mockConfig.aiAgentBaseUrl = "http://ai-agent.example";
+  });
+
+  it.each([
+    { status: "approved" as const, processedAt: "2026-08-15T02:00:00+00:00" },
+    { status: "rejected" as const, processedAt: "2026-08-15T02:00:00+00:00" },
+    // 時刻を持たない古いレコード。**時刻の欠落で「未処理」に落とさない**
+    { status: "approved" as const, processedAt: null },
+  ])(
+    "status=$status の 409 は ApprovalAlreadyProcessedError に写す (結果も運ぶ)",
+    async ({ status, processedAt }) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json(
+            {
+              detail: `Approval already processed: '${status}'`,
+              status,
+              processed_at: processedAt,
+            },
+            { status: 409 },
+          ),
+        ),
+      );
+
+      const err = await approve({ approvalRequestId: "appr-1", approved: true }).catch(
+        (e: unknown) => e,
+      );
+
+      expect(err).toBeInstanceOf(ApprovalAlreadyProcessedError);
+      expect((err as ApprovalAlreadyProcessedError).status).toBe(status);
+      expect((err as ApprovalAlreadyProcessedError).processedAt).toBe(processedAt);
+      // 404 側と混ざっていないこと (混ざると呼び出し側の分岐順で静かに元の挙動へ戻る)
+      expect(err).not.toBeInstanceOf(ApprovalNotFoundError);
+    },
+  );
+
+  // 承認レコードについて何も言っていない 409。404 側と同じ規律で、**形が合うものだけ**写す。
+  //
+  // 無いと何が静かに通るか: プロキシや別レイヤが返す汎用 409 まで「すでに承認済みです」に
+  // 化け、生きている承認カードが**実行済みの顔をして閉じる** (サーバは承認待ちのまま)。
+  it.each([
+    { name: "status が無い", body: { detail: "Conflict" } },
+    { name: "status が未知の値", body: { detail: "x", status: "pending", processed_at: null } },
+    { name: "detail が無い", body: { status: "approved", processed_at: null } },
+    { name: "body が配列", body: [] },
+  ])("$name の 409 は ApprovalAlreadyProcessedError にしない", async ({ body }) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(body, { status: 409 })),
+    );
+
+    const err = await approve({ approvalRequestId: "appr-1", approved: true }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(ApprovalAlreadyProcessedError);
+  });
+
+  it("JSON ですらない 409 本文 (プロキシの HTML) も写さず、本文を例外文に転記しない", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<html>409 Conflict</html>", { status: 409 })),
+    );
+
+    const err = await approve({ approvalRequestId: "appr-1", approved: true }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).not.toBeInstanceOf(ApprovalAlreadyProcessedError);
+    // 上流本文を例外文に転記しない (#313 B-3)
+    expect((err as Error).message).not.toContain("<html>");
   });
 });

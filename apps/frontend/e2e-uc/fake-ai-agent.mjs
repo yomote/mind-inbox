@@ -132,7 +132,21 @@ const APPROVAL_TOOL = "send_reply";
 /** 実装の `_REJECTION_REPLY` と同一文面。 */
 const REJECTION_REPLY = "操作はキャンセルされました。他にご用件はありますか？";
 
-/** approval_request_id → status。二重解決 (実装は 404) を再現するために持つ。 */
+/**
+ * 選択肢の提示 (#432-b / dialogue-session.mdx §5.10) を決定的に踏むためのトリガ。
+ *
+ * 実 ai-agent は LLM が `offer_choices` ツールを選んだときに `choices` を返す。
+ * ここも承認と同じく語彙一致で置き換える。**上限 (3 件) は実装と同じ**にしておく —
+ * ハーネスだけ緩いと「本番では出ない件数」を通したテストが緑になる。
+ */
+const CHOICES_TRIGGER = "わからない";
+const CHOICES = ["仕事のこと", "家族やパートナーのこと", "自分の体調のこと"];
+const CHOICES_REPLY = "近いものがあれば選んでみてください。自由に書いてもらっても大丈夫です。";
+
+/**
+ * approval_request_id → { status, processedAt }。
+ * 二重解決 (実装は **409 + 現在状態** / #82) を再現するために持つ。
+ */
 const approvals = new Map();
 
 /**
@@ -169,12 +183,43 @@ function needsApproval(message) {
 /** 承認待ちの ChatResponse。実装 (`workflow.py`) と同じ形・同じ文面で返す。 */
 function approvalPending() {
   const id = nextId("appr");
-  approvals.set(id, "pending");
+  approvals.set(id, { status: "pending", processedAt: null });
   return {
     reply: `「${APPROVAL_TOOL}」を実行するには承認が必要です。実行してよろしいですか？`,
     requires_approval: true,
     approval_request_id: id,
     citations: [],
+    // 承認要求のターンに選択肢は載せない (#432-b / 実装の `_record_approval_request`)。
+    // ここを混ぜると「承認カードと選択肢が同時に出る画面」を fake が正当化してしまう
+    choices: [],
+  };
+}
+
+/**
+ * 1 ターン分の ChatResponse (実装 `schemas.ChatResponse` と同じ形)。
+ *
+ * **選択肢は「会話の分岐」なのでサーバ側に状態を持たない** (完了型 / PO 裁定
+ * 2026-08-15)。承認 (`approvals` Map) と違い、押されたことを覚える場所も、
+ * 押されなかったことを解決する口も**意図的に無い** — 押した文言は次の
+ * `/chat/stream` に普通の発話として届くだけ。
+ */
+function chatResponse(message) {
+  if (needsApproval(message)) return approvalPending();
+  if (message.includes(CHOICES_TRIGGER)) {
+    return {
+      reply: CHOICES_REPLY,
+      requires_approval: false,
+      approval_request_id: null,
+      citations: [],
+      choices: CHOICES,
+    };
+  }
+  return {
+    reply: replyTo(message),
+    requires_approval: false,
+    approval_request_id: null,
+    citations: [],
+    choices: [],
   };
 }
 
@@ -254,30 +299,36 @@ const encoder = new TextEncoder();
 const routes = {
   "POST /chat": (body) => {
     record(body.session_id, body.message);
-    if (needsApproval(body.message)) {
-      return { status: 200, json: approvalPending() };
-    }
-    return {
-      status: 200,
-      json: {
-        reply: replyTo(body.message),
-        requires_approval: false,
-        approval_request_id: null,
-        citations: [],
-      },
-    };
+    return { status: 200, json: chatResponse(body.message) };
   },
 
   /**
    * 承認 / 却下で中断していたツール実行を解決する (G1)。
-   * 未知 ID・解決済み ID は実装と同じく 404 (承認待ちが二重に消費されない)。
+   *
+   * 実装 (`workflow.py` / `main.py`) と同じ分け方にする (#82 / PO 裁定 2026-08-15 B 案):
+   * **未知 ID は 404 / 解決済み ID は 409 + 現在状態**。ここを 404 に丸めると、
+   * ハーネスだけが古い契約のままになり「実配線で確かめた」と言えなくなる。
    */
   "POST /approve": (body) => {
     const id = body.approval_request_id;
-    if (approvals.get(id) !== "pending") {
+    const record = approvals.get(id);
+    if (!record) {
       return { status: 404, json: { detail: `Approval not found: '${id}'` } };
     }
-    approvals.set(id, body.approved ? "approved" : "rejected");
+    if (record.status !== "pending") {
+      return {
+        status: 409,
+        json: {
+          detail: `Approval already processed: '${record.status}'`,
+          status: record.status,
+          processed_at: record.processedAt,
+        },
+      };
+    }
+    approvals.set(id, {
+      status: body.approved ? "approved" : "rejected",
+      processedAt: new Date().toISOString(),
+    });
     return {
       status: 200,
       json: {
@@ -324,17 +375,10 @@ const server = createServer((req, res) => {
     if (req.method === "POST" && url.pathname === "/chat/stream") {
       const body = await readJson(req);
       record(body.session_id, body.message);
-      // 承認待ちもストリーミング経路で起きる (実装は同じ workflow を stream で回す)。
-      // ここを非ストリーミングだけにすると、フロントの主経路 (SSE) で承認要求が
-      // 運ばれるかを一度も踏まないまま緑になる。
-      const response = needsApproval(body.message)
-        ? approvalPending()
-        : {
-            reply: replyTo(body.message),
-            requires_approval: false,
-            approval_request_id: null,
-            citations: [],
-          };
+      // 承認待ちも選択肢もストリーミング経路で起きる (実装は同じ workflow を stream で
+      // 回す)。ここを非ストリーミングだけにすると、フロントの主経路 (SSE) で
+      // 承認要求 / 選択肢が運ばれるかを一度も踏まないまま緑になる。
+      const response = chatResponse(body.message);
       const reply = response.reply;
 
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });

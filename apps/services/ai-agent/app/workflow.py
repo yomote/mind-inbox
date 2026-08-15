@@ -35,6 +35,7 @@ v1 の自前 7 状態 FSM を MAF の graph Workflow に写し (ADR 0016 / M1-3)
 import logging
 import uuid
 from collections.abc import AsyncIterator, Sequence
+from datetime import datetime, timezone
 from typing import Never, Optional, Union
 
 from agent_framework import (
@@ -69,6 +70,7 @@ from .schemas import (
     Plan,
 )
 from .tools import (
+    TURN_LOCAL_TOOLS,
     ToolContext,
     ToolExecution,
     exposed_tools,
@@ -110,6 +112,33 @@ _APP_CHECKPOINT_TYPES = [
     "app.workflow:ChatTurn",
     "app.workflow:FinalReply",
 ]
+
+
+class ApprovalAlreadyProcessedError(Exception):
+    """同じ承認 ID が **2 回目**に送られた (#82 / PO 裁定 2026-08-15 B 案)。
+
+    `ValueError` (= main.py が 404 に写す「承認レコードがもう無い」) と**別の型**に
+    しているのが本体。二重送信とレコード消失を同じ 404 に混ぜていた頃は、
+    「もう解決済み」ということすらクライアントに伝わらず、**確実に未実行と言える
+    却下済みまで「実行されたか不明」**に落ちていた。型で分けることで main.py が
+    409 + 現在状態に写す。
+
+    **status が意味するのは「どちらの決定を受け付けたか」であって実行の完了ではない**
+    (PR #430 Codex P1)。遷移は checkpoint 再開の**前**に書くので、`approved` の記録後・
+    副作用の実行前にプロセスが落ちれば「approved なのに実行されていない」レコードが
+    残る。したがって:
+
+    - `approved` … 実行してよいと受け付けた。**実行された保証はない**
+    - `rejected` … 実行しないと受け付けた。この経路でツールは呼ばれない = **未実行と言える**
+
+    `processed_at` は**受け付けた時刻**で、完了の証拠ではない。None は「時刻を持たない
+    古いレコード」であって未処理ではない — status を無視して時刻で判定してはいけない。
+    """
+
+    def __init__(self, status: str, processed_at: Optional[str]) -> None:
+        super().__init__(f"Approval already processed: {status!r}")
+        self.status = status
+        self.processed_at = processed_at
 
 
 def _cosmos_enabled() -> bool:
@@ -253,6 +282,7 @@ def _record_tool_outcomes(
     response: MafChatResponse,
     call_names: Optional[dict[str, str]] = None,
     executions: Sequence[ToolExecution] = (),
+    drop_tools: frozenset[str] = frozenset(),
 ) -> None:
     """MAF が実行したツールの結果 / 失敗を履歴に写す。
 
@@ -274,6 +304,10 @@ def _record_tool_outcomes(
     **応答に function_result が現れないケースがある**ため必要になる (#417 P1 /
     `ToolExecution` の docstring)。応答にも現れているものは call_id で除いて
     二重に積まない。
+
+    `drop_tools` に挙げたツールの実行は**履歴に残さない**。落ちたターンの部分結果を
+    書き戻す経路 (`_flush_partial_tool_outcomes`) だけが使う — 理由と、これを外すと
+    何が静かに起きるかは `tools.TURN_LOCAL_TOOLS` の説明を参照。
     """
     # 承認再開のターンでは function_call は checkpoint 側 (pending_messages) にあり、
     # 応答には function_result しか来ない。呼び出し側が名前の手がかりを渡す。
@@ -284,6 +318,8 @@ def _record_tool_outcomes(
             continue
         recorded.add(content.call_id or "")
         name = names.get(content.call_id or "", "?")
+        if name in drop_tools:
+            continue
         result = content.result
         if content.exception is None:
             history.add_system_message(f"Tool result ({name}): {result}")
@@ -320,7 +356,7 @@ def _record_tool_outcomes(
 
     # 応答から落ちた実行分 (承認要求で打ち切られたターンで起きる / #417 P1)
     for execution in executions:
-        if execution.call_id in recorded:
+        if execution.call_id in recorded or execution.name in drop_tools:
             continue
         if execution.error_ref is not None:
             history.add_system_message(
@@ -369,6 +405,10 @@ class FinalReply(BaseModel):
     session_id: str
     reply: str
     citations: list[str] = []
+    # `offer_choices` が提示した選択肢 (#432-b)。承認要求のターンでは運ばない
+    # (`_request_approval` は choices を見ない) — 承認カードと選択肢が同時に出る
+    # 画面を作らないため。
+    choices: list[str] = []
 
 
 # ── Executors ─────────────────────────────────────────────────────────────────
@@ -419,6 +459,7 @@ class ConverseExecutor(Executor):
         stream: bool,
         updates: list,
         tool_context: ToolContext,
+        exclude_tools: frozenset[str] = frozenset(),
     ) -> MafChatResponse:
         """ツールを載せて LLM を 1 回呼ぶ。stream 時はテキスト差分を intermediate output へ。
 
@@ -426,7 +467,7 @@ class ConverseExecutor(Executor):
         そこまでの update と実行記録が残る**ようにしてある — ツールは既に実行済み
         かもしれず、その事実を握り潰すと「実行されたのに履歴に無い」が生まれる。
         """
-        tools = exposed_tools()
+        tools = exposed_tools(exclude_tools)
         client = _resolve_client(self._client)
         logger.info(
             "Workflow[CONVERSE] session=%s tools=%s%s",
@@ -454,6 +495,11 @@ class ConverseExecutor(Executor):
         無いと: ストリーミングが応答生成中に落ちたターンで、**ツールは実行済みなのに
         履歴には何も残らない**。フロントは非ストリーミングへ自動フォールバックするので、
         同じツールがもう一度呼ばれうる (副作用ツールなら二重実行)。
+
+        **`TURN_LOCAL_TOOLS` だけは逆に「残さない」** (PR #448 Codex P2)。成果が
+        応答 payload にしか無いツールをここで履歴に残すと、フォールバックしたターンで
+        モデルが「もう提示した」と読み、payload は捨てられているので**本文だけが
+        選択を促して画面にはボタンが無い**状態になる。
         """
         if not updates and not tool_context.executions:
             return
@@ -462,6 +508,7 @@ class ConverseExecutor(Executor):
             history,
             MafChatResponse.from_updates(updates),
             executions=tool_context.executions,
+            drop_tools=TURN_LOCAL_TOOLS,
         )
         await self._session_repo.save(session_id, history)
 
@@ -559,6 +606,7 @@ class ConverseExecutor(Executor):
                 session_id=session_id,
                 reply=reply,
                 citations=list(tool_context.citations),
+                choices=list(tool_context.choices),
             )
         )
 
@@ -639,6 +687,13 @@ class ConverseExecutor(Executor):
                 stream=False,
                 updates=updates,
                 tool_context=tool_context,
+                # **この経路では選択肢を呼ばせない** (PR #448 Codex P2)。
+                # `/approve` の応答型 (ApproveResponse) は reply しか運べないので、
+                # ここで提示された選択肢はクライアントに届かない。呼ばせてから
+                # 捨てると、モデルは提示したつもりで「近いものを選んでください」と
+                # 書き、画面にはボタンが 1 つも無い応答になる。運べないなら
+                # 見せない (`exposed_tools` の exclude)
+                exclude_tools=TURN_LOCAL_TOOLS,
             )
         except Exception:
             # `converse` と同じ扱いにする (judge #417)。**再開経路の方が損害が大きい** —
@@ -681,7 +736,9 @@ class FinishExecutor(Executor):
     async def finish(
         self, msg: FinalReply, ctx: WorkflowContext[Never, ChatResponse]
     ) -> None:
-        await ctx.yield_output(ChatResponse(reply=msg.reply, citations=msg.citations))
+        await ctx.yield_output(
+            ChatResponse(reply=msg.reply, citations=msg.citations, choices=msg.choices)
+        )
 
 
 def _build_chat_workflow(
@@ -749,6 +806,9 @@ async def _record_approval_request(
         # in-memory 構成のみ: 承認待ちの run だけ storage を生かしておく
         # (/approve の解決で解放)。Cosmos 構成は共有ストアなので registry 不要
         _pending_run_storages[record.id] = storage
+    # **choices は載せない** (#432-b): 承認カードは「承認するまで実行されません」と
+    # 言う画面で、そこに「会話の分岐」の選択肢を並べると、押した文言が実行の可否に
+    # 効くのか会話に効くのかが読めなくなる。承認要求のターンは承認だけを出す。
     return ChatResponse(
         reply=f"「{request.plan.tool_name}」を実行するには承認が必要です。実行してよろしいですか？",
         requires_approval=True,
@@ -839,7 +899,15 @@ async def resume_after_approval(
     if not record:
         raise ValueError(f"Approval not found: {approval_id!r}")
     if record.status != "pending":
-        raise ValueError(f"Approval already processed: {record.status!r}")
+        # **404 (レコードが無い) と混ぜない** (#82 / PO 裁定 2026-08-15 B 案)。
+        # ここに来るのは「同じ承認 ID がもう一度送られた」= 二重送信。404 に混ぜると
+        # クライアントは「レコードが消えた」のか「もう解決済み」なのかを判定できず、
+        # 却下済み (= 確実に未実行) すら案内できない。
+        #
+        # **これは早期の見切りであって排他ではない** — 実際に 1 本だけ通す判定は
+        # 下の `claim` (原子的な遷移) が持つ。ここだけだと同時リクエストは
+        # 両方素通りする (PR #430 Codex P1)。
+        raise ApprovalAlreadyProcessedError(record.status, record.processed_at)
     if not record.checkpoint_id:
         raise ValueError(f"Approval checkpoint not found: {approval_id!r}")
 
@@ -852,15 +920,61 @@ async def resume_after_approval(
         except Exception as exc:
             raise ValueError(f"Approval checkpoint not found: {approval_id!r}") from exc
     else:
-        # in-memory 構成: 解決に入る時点で registry から解放する (成功・失敗
-        # どちらでも再試行は status チェックで弾かれるため、保持し続ける理由がない)
-        storage = _pending_run_storages.pop(approval_id, None)
+        # in-memory 構成: ここでは**参照するだけ**で解放しない。pop を排他の代用に
+        # すると、同時に届いた 2 本目が「checkpoint が無い」(404) に化けて
+        # **二重送信が二重送信として説明されない**。排他の責務は下の claim に
+        # 1 本化し、解放は再開が終わってから (finally) 行う。
+        storage = _pending_run_storages.get(approval_id)
         if storage is None:
             raise ValueError(f"Approval checkpoint not found: {approval_id!r}")
 
-    record.status = "approved" if approved else "rejected"
-    await approval_repo.save(record)
+    # **ここが「1 回だけ実行する」の要** (PR #430 Codex P1)。pending からの遷移を
+    # 原子的に獲得し (Cosmos は ETag 条件付き置換 / in-memory は lock)、取れなかった
+    # 側は checkpoint を再開せずに 409 で返す。上の status チェックだけでは、
+    # 同時に届いた 2 本が**両方 pending を読んで両方が副作用を実行する**。
+    #
+    # 遷移を resume の**前**に書く順序は従来どおり: 実行中にクラッシュしたときは
+    # 「実行されたか分からない」レコードが残るが、二重実行よりそちらを選ぶ。
+    # したがって `processed_at` は **受け付けた時刻であって完了の証拠ではない**
+    # (この意味は 409 の応答と UI 文言まで一貫させてある)。
+    claimed = await approval_repo.claim(
+        approval_id,
+        "approved" if approved else "rejected",
+        datetime.now(timezone.utc).isoformat(),
+    )
+    if claimed is None:
+        current = await approval_repo.get(approval_id)
+        if current is None or current.status == "pending":
+            # 競合に負けたのに pending のまま / レコードが消えた = 承認レコードは
+            # もう当てにできない。**「処理済み」と断定せず** 404 側に倒す
+            raise ValueError(f"Approval not found: {approval_id!r}")
+        raise ApprovalAlreadyProcessedError(current.status, current.processed_at)
+    record = claimed
 
+    try:
+        return await _resume_claimed_run(
+            approval_id, approved, record, storage, session_repo, approval_repo, client
+        )
+    finally:
+        if not _cosmos_enabled():
+            # in-memory には TTL が無いので、解決した run の checkpoint を残さない
+            # (PR #243 レビュー指摘)。**解放は claim を獲得した側が、再開を終えてから**
+            # — 早く pop すると、同時に届いた 2 本目の checkpoint 参照が先に消えて
+            # 409 (二重送信) が 404 (checkpoint が無い) に化ける。成功・失敗どちらでも
+            # 解放するので、失敗した run の storage が残り続けることもない。
+            _pending_run_storages.pop(approval_id, None)
+
+
+async def _resume_claimed_run(
+    approval_id: str,
+    approved: bool,
+    record: ApprovalRecord,
+    storage: CheckpointStorage,
+    session_repo: SessionRepository,
+    approval_repo: ApprovalRepository,
+    client: Optional[BaseChatClient],
+) -> str:
+    """claim を獲得した 1 本だけが通る再開処理 (排他の判定は呼び出し側が済ませている)。"""
     workflow = _build_chat_workflow(
         session_repo, client, stream=False, checkpoint_storage=storage
     )
@@ -889,6 +1003,18 @@ async def resume_after_approval(
     outputs = result.get_outputs()
     if not outputs:
         raise RuntimeError("Chat workflow resume completed without a response")
+
+    if outputs[-1].choices:
+        # ここは**到達しないはず** (PR #448 Codex P2): 再開経路では `offer_choices` を
+        # LLM に見せていない (`on_approval_decision` の exclude_tools)。それでも
+        # 選択肢が載っていたら、除外が効いていない = 「モデルは提示したのに画面には
+        # 出ない」が起きている。**黙って落とさず**、除外が壊れたことに気づける形で
+        # 残す (件数だけ / 文言は相談内容なので出さない)
+        logger.error(
+            "Workflow[APPROVAL_IF_NEEDED] 再開ターンに選択肢が %d 件載っている — "
+            "除外 (exclude_tools) が効いていない。/approve の応答型では運べない",
+            len(outputs[-1].choices),
+        )
 
     if _cosmos_enabled():
         # 解決時 delete (#188): 解決済みの pending checkpoint は TTL を待たずに消す。

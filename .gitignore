@@ -21,6 +21,12 @@ apps/bff/package-lock.json
 
 __pycache__
 
+# hypothesis (プロパティベーステスト) のローカルキャッシュ。
+# 過去に落ちた反例のデータベースで、**commit しない** — commit すると
+# 「この反例は DB に入っているから緑」に依存でき、反例を例ベーステストとして
+# 固定化する運用 (docs/testing/property-based-testing.md §5) が骨抜きになる。
+.hypothesis/
+
 .local
 
 # Azure Functions local config (may contain secrets)

@@ -19,10 +19,12 @@ from ux_eval import (
     EXIT_ALREADY_EVALUATED,
     EXIT_NO_FRESH_RECORD,
     EXIT_OK,
+    EXIT_SCENARIO_SET_SHRUNK,
     build_payload,
-    evaluated_probe_run_ids,
+    evaluated_probe_keys,
+    expected_scenario_ids,
     is_fresh,
-    latest_record,
+    latest_records_by_scenario,
     measure,
     read_observations,
     run,
@@ -31,21 +33,26 @@ from ux_eval import (
 NOW = datetime(2026, 8, 10, 0, 0, 0, tzinfo=timezone.utc)
 
 
-def _record(turns: list[dict] | None = None) -> dict:
+def _record(
+    turns: list[dict] | None = None,
+    scenario_id: str = "work-overwhelm-v1",
+    probe_id: str = "ux-probe-2026-08-09T22-37-09-200Z",
+    run_id: str = "31339682965",
+) -> dict:
     """真実 (ux-probe.spec.ts の ProbeRecord / #162 実コメントで確認済み) に沿った最小記録。"""
     return {
         "schemaVersion": 1,
         "kind": "ux-probe-conversation",
-        "probeId": "ux-probe-2026-08-09T22-37-09-200Z",
+        "probeId": probe_id,
         "startedAt": "2026-08-09T22:37:09.200Z",
         "environment": {
             "appUrl": "https://app.example",
             "bffUrl": "https://bff.example",
             "gitSha": "0e81517",
-            "runId": "31339682965",
-            "runUrl": "https://github.com/yomote/mind-inbox/actions/runs/31339682965",
+            "runId": run_id,
+            "runUrl": f"https://github.com/yomote/mind-inbox/actions/runs/{run_id}",
         },
-        "scenario": {"id": "work-overwhelm-v1", "description": "x", "plannedTurns": 4},
+        "scenario": {"id": scenario_id, "description": "x", "plannedTurns": 4},
         "thresholds": {"warnReplyVisibleMs": 10000, "warnTtsSynthMs": 8000},
         "openerText": "こんにちは",
         "turns": turns if turns is not None else [_turn(1, 2000), _turn(2, 4000)],
@@ -150,9 +157,9 @@ def test_l1_封筒の真実とのラウンドトリップ(tmp_path, capsys) -> N
     (data / "probes").mkdir(parents=True)
     (data / "probes" / "2026-08.jsonl").write_text(line + "\n", encoding="utf-8")
 
-    found = latest_record(read_observations(data / "probes"))
-    assert found is not None
-    envelope, recorded_at = found
+    found = latest_records_by_scenario(read_observations(data / "probes"))
+    assert set(found) == {"work-overwhelm-v1"}
+    envelope, recorded_at = found["work-overwhelm-v1"]
     assert recorded_at == NOW
     assert (
         envelope["record"]["turns"][0]["assistantText"] == "コード例は `let x = 1` です"
@@ -167,9 +174,9 @@ def test_l1_最新の記録をrecordedAtで選ぶ_記録以外や壊れた行は
     data = _data_dir(
         tmp_path, probes=[new, judge, old], probe_raw_lines=["{壊れた行"]
     )
-    found = latest_record(read_observations(data / "probes"))
-    assert found is not None
-    assert found[1].isoformat() == "2026-08-09T22:00:00+00:00"
+    found = latest_records_by_scenario(read_observations(data / "probes"))
+    assert set(found) == {"work-overwhelm-v1"}
+    assert found["work-overwhelm-v1"][1].isoformat() == "2026-08-09T22:00:00+00:00"
 
 
 def test_l1_鮮度判定() -> None:
@@ -311,13 +318,182 @@ def test_l1_未評価の記録はevalsがあっても計測する(tmp_path, caps
     assert "ux-eval-mech" in capsys.readouterr().out
 
 
-def test_l1_評価済みidの抽出はkindで絞る() -> None:
-    ids = evaluated_probe_run_ids(
+def test_l1_評価済みキーの抽出はkindで絞りシナリオまで見る() -> None:
+    keys = evaluated_probe_keys(
         [
-            {"kind": "ux-eval-mech", "probeRunId": "111"},
-            {"kind": "ux-judge-score", "probeRunId": "222"},
-            {"kind": "ux-eval-mech", "probeRunId": None},
+            {"kind": "ux-eval-mech", "probeRunId": "111", "scenarioId": "work-overwhelm-v1"},
+            {"kind": "ux-eval-mech", "probeRunId": "111", "scenarioId": "hypothesis-pushback-v1"},
+            {"kind": "ux-judge-score", "probeRunId": "222", "scenarioId": "work-overwhelm-v1"},
+            {"kind": "ux-eval-mech", "probeRunId": None, "scenarioId": "work-overwhelm-v1"},
             "not-a-dict",
         ]
     )
-    assert ids == {"111"}
+    # 同じ run でもシナリオが違えば別キー — ここが runId だけだと 2 本目が
+    # 「評価済み」に化けて永久に積まれない (#435)
+    assert keys == {("111", "work-overwhelm-v1"), ("111", "hypothesis-pushback-v1")}
+
+
+def _two_scenario_probes(recorded_at: str, run_id: str = "31339682965") -> list[dict]:
+    """同じ run から 2 シナリオぶんの記録が積まれた朝 (#435 以降の通常の朝)。"""
+    return [
+        _envelope(
+            _record(scenario_id="work-overwhelm-v1", probe_id="p-work", run_id=run_id),
+            recorded_at,
+        ),
+        _envelope(
+            _record(
+                scenario_id="hypothesis-pushback-v1", probe_id="p-push", run_id=run_id
+            ),
+            recorded_at,
+        ),
+    ]
+
+
+def test_l1_シナリオごとに計測を出す(tmp_path, capsys) -> None:
+    """無いと何が静かに通るか (#435):
+
+    同じ run から 2 シナリオの記録が来る朝に、最新 1 件しか計測しないと
+    **もう片方のシナリオは一度も蓄積されない**。run は緑のままなので、
+    「否定局面シナリオを足したのに U7 のトレンドが 1 本も無い」ことに誰も気づけない。
+    """
+    data = _data_dir(tmp_path, probes=_two_scenario_probes("2026-08-09T22:37:35Z"))
+    capsys.readouterr()
+    assert run(data, now=NOW) == EXIT_OK
+
+    payloads = [json.loads(l) for l in capsys.readouterr().out.strip().splitlines()]
+    # scenarioId 昇順で安定させている (追記順が run ごとに揺れない)
+    assert [p["scenarioId"] for p in payloads] == [
+        "hypothesis-pushback-v1",
+        "work-overwhelm-v1",
+    ]
+    assert {p["probeId"] for p in payloads} == {"p-push", "p-work"}
+    assert all(p["kind"] == "ux-eval-mech" for p in payloads)
+
+
+def test_l1_片方だけ評価済みなら残りを積む(tmp_path, capsys) -> None:
+    """1 本目の追記後に落ちて再実行した朝 — 2 本目だけを積んで緑に戻れること。
+
+    重複判定が runId だけだと、ここで 2 本目が「評価済み」に化けて永久に積まれない。
+    また「評価済み」は縮小検知 (#443 / exit 5) の covered に数える — 数えないと、
+    この再実行の朝が「1 本目が欠けた」と誤検知されて偽陽性の赤になる。
+    """
+    data = _data_dir(tmp_path, probes=_two_scenario_probes("2026-08-09T22:37:35Z"))
+    capsys.readouterr()
+    assert run(data, now=NOW) == EXIT_OK
+    first = json.loads(capsys.readouterr().out.strip().splitlines()[0])
+    assert first["scenarioId"] == "hypothesis-pushback-v1"
+
+    (data / "evals").mkdir(parents=True, exist_ok=True)
+    (data / "evals" / "2026-08.jsonl").write_text(
+        json.dumps(first, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    assert run(data, now=NOW) == EXIT_OK
+    remaining = [json.loads(l) for l in capsys.readouterr().out.strip().splitlines()]
+    assert [p["scenarioId"] for p in remaining] == ["work-overwhelm-v1"]
+
+
+def test_l1_前回積めたシナリオが欠けた朝は取れた分を出しつつ赤(tmp_path, capsys) -> None:
+    """**#443 judge B での仕様変更**: 旧仕様 (#435 実装時) は「部分欠落でも exit 0 (緑)」
+    だったが、「前回まで積めていたシナリオ集合より減ったら exit 5 (赤)」へ変えた。
+
+    無いと何が静かに通るか:
+        封筒化失敗の経路は monitor が warning + continue で緑のまま。ux-eval も取れた分
+        だけで緑にすると、U7 の観測器 (hypothesis-pushback-v1) の蓄積だけが 10 日
+        止まってもどこも赤くならない (PR #443 審査補強コメントの実測)。
+        取れた計測は捨てない — payload は出力し、呼び出し側が追記してから run を落とす。
+    """
+    probes = [
+        _envelope(
+            _record(scenario_id="work-overwhelm-v1", probe_id="p-work"),
+            "2026-08-09T22:37:35Z",
+        ),
+        _envelope(
+            _record(scenario_id="hypothesis-pushback-v1", probe_id="p-push-old"),
+            "2026-08-07T22:00:00Z",  # 鮮度切れ (前々日) — 新しい記録が来ていない
+        ),
+    ]
+    # 前日までは両シナリオが積めていた (evals に直近の実績がある)
+    evals = [
+        {
+            "kind": "ux-eval-mech",
+            "probeRunId": "prev-run",
+            "scenarioId": sid,
+            "recordedAt": "2026-08-08T23:20:00Z",
+        }
+        for sid in ("work-overwhelm-v1", "hypothesis-pushback-v1")
+    ]
+    data = _data_dir(tmp_path, probes=probes, evals=evals)
+    capsys.readouterr()
+    assert run(data, now=NOW) == EXIT_SCENARIO_SET_SHRUNK
+    captured = capsys.readouterr()
+    payloads = [json.loads(l) for l in captured.out.strip().splitlines()]
+    assert [p["scenarioId"] for p in payloads] == ["work-overwhelm-v1"]
+    assert "hypothesis-pushback-v1" in captured.err
+
+
+def test_l1_evalsに実績のないシナリオの欠落は赤にしない(tmp_path, capsys) -> None:
+    """要求集合は evals の実績 (直近 168h) から作る — 台本を**足した初日** (まだ一度も
+    積めていない) や、window を過ぎたシナリオ (退役済み) の不在で偽陽性の赤を出さない。
+
+    無いと何が静かに通るか:
+        要求集合を「過去に 1 度でも積んだ全シナリオ」にすると、退役させたシナリオが
+        恒久的な赤になり、赤が日常化して本物の停止が埋もれる。
+    """
+    probes = [
+        _envelope(
+            _record(scenario_id="work-overwhelm-v1", probe_id="p-work"),
+            "2026-08-09T22:37:35Z",
+        ),
+    ]
+    evals = [
+        {
+            "kind": "ux-eval-mech",
+            "probeRunId": "ancient-run",
+            "scenarioId": "hypothesis-pushback-v1",
+            "recordedAt": "2026-07-01T00:00:00Z",  # window (168h) の外 = 要求しない
+        },
+        # scenarioId の無い記録 (#435 以前の計測) も要求集合に数えない —
+        # 数えると #435 導入直後の朝が恒常的な偽陽性の赤になる
+        {
+            "kind": "ux-eval-mech",
+            "probeRunId": "legacy-run",
+            "recordedAt": "2026-08-09T23:20:00Z",
+        },
+    ]
+    data = _data_dir(tmp_path, probes=probes, evals=evals)
+    capsys.readouterr()
+    assert run(data, now=NOW) == EXIT_OK
+
+
+def test_l1_要求集合の抽出はkindと鮮度とscenarioIdで絞る() -> None:
+    """expected_scenario_ids (純粋関数) の境界 — ここが緩むと退役シナリオや移行データ
+    まで「積め」と要求して偽陽性の赤になり、逆に絞りすぎると縮小検知が消える。"""
+    observations = [
+        {"kind": "ux-eval-mech", "scenarioId": "a", "recordedAt": "2026-08-09T00:00:00Z"},
+        # window (168h) の外
+        {"kind": "ux-eval-mech", "scenarioId": "b", "recordedAt": "2026-07-01T00:00:00Z"},
+        # 別 kind (LLM 採点) は機械計測の実績ではない
+        {"kind": "ux-judge-score", "scenarioId": "c", "recordedAt": "2026-08-09T00:00:00Z"},
+        # scenarioId 無し (移行データ) は要求できない
+        {"kind": "ux-eval-mech", "recordedAt": "2026-08-09T00:00:00Z"},
+        "not-a-dict",
+    ]
+    assert expected_scenario_ids(observations, NOW, 168.0) == {"a"}
+
+
+def test_l1_全シナリオが鮮度切れなら赤(tmp_path) -> None:
+    data = _data_dir(tmp_path, probes=_two_scenario_probes("2026-08-07T22:00:00Z"))
+    assert run(data, now=NOW) == EXIT_NO_FRESH_RECORD
+
+
+def test_l1_全シナリオが評価済みなら赤(tmp_path, capsys) -> None:
+    data = _data_dir(tmp_path, probes=_two_scenario_probes("2026-08-09T22:37:35Z"))
+    capsys.readouterr()
+    assert run(data, now=NOW) == EXIT_OK
+    previous = capsys.readouterr().out.strip().splitlines()
+    (data / "evals").mkdir(parents=True, exist_ok=True)
+    (data / "evals" / "2026-08.jsonl").write_text(
+        "".join(line + "\n" for line in previous), encoding="utf-8"
+    )
+    assert run(data, now=NOW) == EXIT_ALREADY_EVALUATED

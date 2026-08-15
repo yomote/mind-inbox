@@ -13,11 +13,11 @@ import { isTtsSynthesisBody, ttsCallKind } from "./ttsCallKind";
 
 describe("[L1] ttsCallKind", () => {
   it("本合成 / plan / prefetch を呼び分ける", () => {
-    expect(ttsCallKind(JSON.stringify({ text: "a", speaker: 3 }))).toBe("synthesis");
+    expect(ttsCallKind(JSON.stringify({ text: "a", speaker: 3, speedScale: 1 }))).toBe("synthesis");
     expect(ttsCallKind(JSON.stringify({ text: "a", speaker: 3, plan: true }))).toBe("plan");
-    expect(ttsCallKind(JSON.stringify({ text: "a", speaker: 3, prefetch: true }))).toBe(
-      "prefetch",
-    );
+    expect(
+      ttsCallKind(JSON.stringify({ text: "a", speaker: 3, speedScale: 1, prefetch: true })),
+    ).toBe("prefetch");
   });
 
   it("body が無い / 壊れていれば判定しない (誤って本合成に倒さない)", () => {
@@ -40,9 +40,9 @@ describe("[L1] 実クライアントの呼び方", () => {
     vi.stubEnv("VITE_BFF_BASE_URL", "https://bff.example.com");
     vi.doMock("../auth/msal", () => ({ authEnabled: false, getAccessToken: vi.fn() }));
     const http = await import("./http");
-    await http.ttsFetch("あ", 3);
+    await http.ttsFetch("あ", 3, 1);
     await http.ttsPlanFetch("あ", 3);
-    await http.ttsPrefetchFetch("あ", 3);
+    await http.ttsPrefetchFetch("あ", 3, 1);
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     return bodies;
