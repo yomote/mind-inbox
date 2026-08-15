@@ -16,6 +16,10 @@ export type {
   Problem,
   ProblemStatus,
   Theme,
+  ThinkingMap,
+  ThinkingNode,
+  ThinkingNodeKind,
+  ThinkingNodeStatus,
   TriageAction,
 } from "../../../bff/src/trpc/domain";
 

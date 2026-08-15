@@ -36,6 +36,8 @@ from .schemas import (
     ExtractionResult,
     GroupingOutcome,
     Mention,
+    ThinkingMap,
+    ThinkingNode,
 )
 
 logger = logging.getLogger(__name__)
@@ -71,6 +73,15 @@ _EXTRACT_PROMPT = """\
 
 テーマは次のいずれか1つを選ぶ: {theme_list}
 
+あわせて、**あなたがこの会話を今どう整理しているか**を箇条書きツリーの形で出してください
+(thinkingMap)。これは利用者の画面に「AI の整理」として出ます。
+- kind: topic (会話に出ている話題) / hypothesis (あなたの見立て・まだ本人が認めていない) /
+  unknown (まだ聞けていない・確かめたい穴)
+- status: confirmed (本人の発話で確かめられた) / tentative (あなたがそう思っているだけ) /
+  unexplored (まだ触れていない)
+- parentId: その節が何の下にぶら下がるか (根なら null)
+- label は 20 字以内。節は多くても 12 個までにしてください。
+
 回答形式:
 {{
   "mentions": [
@@ -86,11 +97,28 @@ _EXTRACT_PROMPT = """\
         "confidence": 0.0〜1.0
       }}
     }}
-  ]
+  ],
+  "thinkingMap": {{
+    "nodes": [
+      {{
+        "id": "n1",
+        "kind": "topic|hypothesis|unknown",
+        "label": "短い見出し",
+        "status": "confirmed|tentative|unexplored",
+        "parentId": "親の id または null"
+      }}
+    ]
+  }}
 }}
 
 困りごとが無ければ mentions は空配列にしてください。
 """
+
+# 整理マップの上限。画面 (箇条書きツリー) と払うトークンを抑えるための機械的な締め。
+# ここで切ると「LLM が出したのに画面に出ない節」が生まれるが、切らないと右ペインが
+# 際限なく伸びる。切ったことはログに出す (静かに捨てない)。
+_MAX_MAP_NODES = 24
+_MAX_MAP_LABEL = 40
 
 
 def _format_messages(messages: list[ConversationMessage]) -> str:
@@ -143,6 +171,101 @@ def _coerce_affect(raw: object) -> Affect:
     return Affect(
         label=str(data.get("label", "")), valence=valence, intensity=intensity
     )
+
+
+_NODE_KINDS = ("topic", "hypothesis", "unknown")
+_NODE_STATUSES = ("confirmed", "tentative", "unexplored")
+
+
+def _coerce_thinking_map(raw: object, session_id: str) -> ThinkingMap | None:
+    """LLM が返した thinkingMap を安全な ThinkingMap へ (#433)。
+
+    LLM の生成物なので、**画面が壊れうる形は全部ここで潰す**:
+      - label が空の節は捨てる (画面に空行が出るだけで、何も伝えない)
+      - 未知の kind は topic に、未知の status は tentative に丸める
+        (unexplored / confirmed へ丸めると「未探索の枝の数」「確定の数」= 画面に出る
+         実数が、LLM の書き損じで動く。断定の弱い tentative に寄せる)
+      - 親が存在しない / 自分自身 / 循環している parentId は null (根扱い) に落とす
+        — 節を捨てると画面から消えて数と合わなくなるので、**節は残して線だけ切る**
+      - problem_id は必ず null (#321 まで — LLM が推測した Problem id を画面に出さない)
+
+    節が 1 つも残らなければ None を返す (「マップ無し」と「空マップ」を画面で区別しない)。
+    """
+    data = raw if isinstance(raw, dict) else None
+    if data is None:
+        return None
+    raw_nodes = data.get("nodes")
+    if not isinstance(raw_nodes, list):
+        return None
+
+    nodes: list[ThinkingNode] = []
+    parents: dict[str, str | None] = {}
+    for index, item in enumerate(raw_nodes):
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label", "")).strip()
+        if not label:
+            continue
+        node_id = str(item.get("id") or f"node-{index}")
+        if (
+            node_id in parents
+        ):  # id の重複は後勝ちにせず先勝ちで捨てる (親の指す先が割れる)
+            continue
+        kind = item.get("kind")
+        status = item.get("status")
+        parent_raw = item.get("parentId")
+        parents[node_id] = str(parent_raw) if isinstance(parent_raw, str) else None
+        nodes.append(
+            ThinkingNode(
+                id=node_id,
+                kind=kind if kind in _NODE_KINDS else "topic",
+                label=label[:_MAX_MAP_LABEL],
+                status=status if status in _NODE_STATUSES else "tentative",
+                parent_id=parents[node_id],
+                problem_id=None,
+            )
+        )
+
+    if len(nodes) > _MAX_MAP_NODES:
+        # 上限で切ったことは残す (静かに捨てると「LLM が出したのに出ない」が説明できない)。
+        logger.info(
+            "Thinking map truncated session=%s nodes=%d limit=%d",
+            session_id,
+            len(nodes),
+            _MAX_MAP_NODES,
+        )
+        nodes = nodes[:_MAX_MAP_NODES]
+
+    known = {n.id for n in nodes}
+    for node in nodes:
+        node.parent_id = _resolve_parent(node, parents, known)
+
+    if not nodes:
+        return None
+    return ThinkingMap(nodes=nodes)
+
+
+def _resolve_parent(
+    node: ThinkingNode, parents: dict[str, str | None], known: set[str]
+) -> str | None:
+    """親が辿れる (存在する / 自分に戻らない) ときだけ親として認める。
+
+    無いと: 循環した parentId (a→b→a) でツリー描画が無限再帰する / 上限で切られた
+    親を指す節が画面から消える。
+    """
+    parent = node.parent_id
+    if parent is None or parent not in known or parent == node.id:
+        return None
+    seen = {node.id}
+    cursor: str | None = parent
+    while cursor is not None:
+        if cursor in seen:
+            return None  # 循環 → 根に落とす
+        seen.add(cursor)
+        cursor = parents.get(cursor)
+        if cursor is not None and cursor not in known:
+            break
+    return parent
 
 
 def _clamp_confidence(value: object) -> float | None:
@@ -281,4 +404,7 @@ async def extract(
         items=items,
         new_problem_count=new_count,
         updated_problem_count=len(updated_ids),
+        # 整理マップ (#433)。同じ 1 回の LLM 出力に相乗りしているので追加呼び出しは 0。
+        # マップの解釈に失敗しても抽出は落とさない (右ペインのタブが空になるだけ)。
+        thinking_map=_coerce_thinking_map(data.get("thinkingMap"), session_id),
     )

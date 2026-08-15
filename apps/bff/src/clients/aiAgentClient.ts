@@ -409,6 +409,10 @@ function stubExtractResponse(req: ExtractRequest): StubMarked<ExtractionResult> 
     ],
     newProblemCount: 1,
     updatedProblemCount: 0,
+    // stub は整理マップを作らない (#433)。ここに偽の地図を置くと、右ペインの
+    // 「AI の整理」が **stub なのに整理できているように見える** — 数字も枝も本物の
+    // 顔をする。空にしておけば「まだ整理できていません」と出る (警告バナーは別途出る)。
+    thinkingMap: null,
     // 本物のふりをさせない (#146): フロントはこのフラグで警告バナーを出す。
     stubbed: true,
   };

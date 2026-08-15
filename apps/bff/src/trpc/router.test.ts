@@ -785,6 +785,73 @@ describe("[単体] consultation.preview (#283 / ADR 0039 D1)", () => {
     ).rejects.toBeInstanceOf(TRPCError);
     expect(extractAiAgent).not.toHaveBeenCalled();
   });
+
+  it("ai-agent の整理マップをそのまま素通しする (#433)", async () => {
+    // 無いと: 右ペインの「AI の整理」タブが常に空になる。会話は普通に進み下書きも出るので、
+    //         「まだ整理できていません」と出続けるだけで壊れているとは分からない。
+    const caller = makeCaller();
+    vi.mocked(extractAiAgent).mockResolvedValue({
+      ...newExtraction("prob-2"),
+      thinkingMap: {
+        nodes: [
+          {
+            id: "n1",
+            kind: "topic",
+            label: "転職の不安",
+            status: "confirmed",
+            parentId: null,
+            problemId: null,
+          },
+        ],
+      },
+    });
+
+    const result = await caller.consultation.preview({ sessionId: "s1", messages: [] });
+
+    expect(result.thinkingMap?.nodes).toEqual([
+      {
+        id: "n1",
+        kind: "topic",
+        label: "転職の不安",
+        status: "confirmed",
+        parentId: null,
+        problemId: null,
+      },
+    ]);
+  });
+
+  it("整理マップは preview だけが返す — 確定 (extract) は返さない (#433)", async () => {
+    // 無いと: 確定応答にも地図が乗り、レビュー画面が「保存されたもの」として地図を
+    //         受け取る。地図はどこにも保存されない (ADR 0039 D1) ので、
+    //         「保存されている」という誤解が画面の側にだけ生まれる。
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem());
+    vi.mocked(extractAiAgent).mockResolvedValue({
+      ...newExtraction("prob-2"),
+      thinkingMap: {
+        nodes: [
+          {
+            id: "n1",
+            kind: "topic",
+            label: "転職の不安",
+            status: "confirmed",
+            parentId: null,
+            problemId: null,
+          },
+        ],
+      },
+    });
+
+    const reExtracted = await caller.consultation.extract({ sessionId: "s1", messages: [] });
+    expect(reExtracted.thinkingMap).toBeNull();
+
+    const committed = await caller.consultation.extract({
+      sessionId: "s1",
+      messages: [],
+      draft: { items: newExtraction("prob-3").items },
+    });
+    expect(committed.thinkingMap).toBeNull();
+  });
 });
 
 // ---- consultation.extract — draft commit (#283 / ADR 0039 D1/D3) ------------
