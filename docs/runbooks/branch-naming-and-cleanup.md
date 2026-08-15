@@ -63,7 +63,7 @@
 | ref | 何が読み書きするか | 状態 |
 | --- | --- | --- |
 | `main` / `release` / `gh-pages` | 保護 / リリース PR の宛先 / status ページ | 現役 |
-| `data/*` | 機械が append するデータブランチ。`data/ux-observations` (UX 観測) / `data/github-settings` (設定スナップショット) を 4 つの workflow と `cicd/scripts/{ux-data,ux-eval,ux-probe,status-page,github-settings}/` が読み書きする | 現役 |
+| `data/*` | 機械が append するデータブランチ。`data/ux-observations` (UX 観測) / `data/github-settings` (設定スナップショット) を 5 つの workflow (`golden-path-monitor` / `ux-eval` / `ux-data-migrate` / `status-page` / `github-settings`) と `cicd/scripts/{ux-data,ux-eval,ux-probe,status-page,github-settings}/` が読み書きする | 現役 |
 | `claim/*` | 着工ロック (`refs/heads/claim/<Issue 番号>` への CAS push) 用に**予約だけしてある** | **実装も運用も無い** — 2026-08-15 実測で origin に 0 件、`cicd/` `.github/` `.claude/` に触るコードも無い ([`docs/team.md`](../team.md))。設計は [archive の記録](../adr/archive/operations/pm-self-driving-mode.md) (現行ルールではない) |
 
 `claim/*` を予約したままにしているのは、**ロックを専用名前空間に隔離できないため**。2026-08-12 実測で **`refs/heads` の外 (`refs/claim/*` 等) には push できなかった**ので、着工ロックを実装するなら `refs/heads/claim/*` に置くしかなく、人間の作業ブランチと同じ名前空間を共有する。分離できるのは名前だけなので、名前だけ先に空けてある。
@@ -88,7 +88,7 @@
 
 - **現在ブランチ名を解釈する自動化は 1 つも無い** (2026-08-12 実測: `.github/workflows/` の 16 workflow に branch 名を検査するものはなく、`branches: [main]` のトリガ指定と merge queue の一時 branch から PR を解決する処理のみ)。壊れるものが無いところに required check を足すと「門」の意味が薄まる
 - **機構化する条件**: 「同じ Issue に対する並行本数を機械で数える」必要が出たとき (WIP 上限の自動判定を作るとき、または [#175](https://github.com/yomote/mind-inbox/issues/175) 型の並行衝突検知をブランチ側に広げるとき)。そのとき review-gate に `head_ref` の形式判定を 1 つ足す
-- **これはこのリポジトリの経験則 (「規律は破られ、機構は守られる」) に反する意図的なトレードオフ。** 受け入れる理由は、破られたときの損害が索引の欠落だけで `main` の履歴も自動化も壊れないこと。**予約名前空間 (4) だけは損害の質が違う** — `data/*` を踏むと 4 つの workflow が読むデータが壊れるので、ここは CLAUDE.md の 1 行で毎ターン当てている
+- **これはこのリポジトリの経験則 (「規律は破られ、機構は守られる」) に反する意図的なトレードオフ。** 受け入れる理由は、破られたときの損害が索引の欠落だけで `main` の履歴も自動化も壊れないこと。**予約名前空間 (4) だけは損害の質が違う** — `data/*` を踏むと 5 つの workflow が読むデータが壊れるので、ここは CLAUDE.md の 1 行で毎ターン当てている
 
 ---
 
