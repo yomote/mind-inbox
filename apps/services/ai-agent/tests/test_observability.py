@@ -15,7 +15,12 @@ import secrets
 import pytest
 
 from app import observability
-from app.observability import exception_frames, exception_kind, fingerprint
+from app.observability import (
+    exception_frames,
+    exception_kind,
+    fingerprint,
+    redact_framework_logs,
+)
 
 # 「実際に漏れると困る値」の代表。どれもこのプロダクトの経路に実在しうる形。
 SENSITIVE_VALUES = [
@@ -151,3 +156,126 @@ class TestFingerprint:
 
         assert value not in rendered
         assert rendered.startswith(f"len={len(value)} hmac=")
+
+
+def _formatted(caplog) -> str:
+    """root 側の出力 handler が実際に書く形 (= 出口に届く文字列) まで整形して見る。"""
+    return "\n".join(logging.Formatter().format(record) for record in caplog.records)
+
+
+class TestFrameworkLogRedaction:
+    """Issue #418: MAF (`agent_framework` 階層) のどのロガーから出ても例外原文が
+    出口 (root の出力 handler) に届かないこと。
+
+    #417 の暫定対策はロガー直付けの Filter で、`agent_framework` 直の record しか
+    見ていなかった。子ロガー経由 / % 引数の例外 / `exc_info=True` の 3 経路が
+    素通しだったのは修正前の実測で確認済み (PR に記載)。
+    """
+
+    @pytest.mark.parametrize("secret", SENSITIVE_VALUES)
+    def test_単体_子ロガーからの_payload_行も指紋になる(self, secret, caplog):
+        # 無いと: Filter 方式 (record が emit されたロガーにしか掛からない) に
+        # 戻す変更が緑のまま通り、上流がロガーを分けた瞬間
+        # (`agent_framework.x`) に例外原文の素通しへ戻る。
+        redact_framework_logs()
+        with caplog.at_level(logging.ERROR):
+            logging.getLogger("agent_framework.future_module").error(
+                f"Function failed. Error: {secret}"
+            )
+
+        formatted = _formatted(caplog)
+        assert secret not in formatted
+        assert "Function failed." in formatted  # 失敗の事実は残る (行ごと消さない)
+
+    @pytest.mark.parametrize("secret", SENSITIVE_VALUES)
+    def test_単体_引数に載った例外オブジェクトは型名と指紋になる(self, secret, caplog):
+        # 無いと: MAF が実際に使う `logger.error("...: %s", exc)` の形
+        # (agent_framework._mcp:2131 等) で、% 展開の瞬間に例外原文が出る。
+        redact_framework_logs()
+        with caplog.at_level(logging.ERROR):
+            logging.getLogger("agent_framework._mcp").error(
+                "MCP connection closed unexpectedly after reconnection: %s",
+                RuntimeError(secret),
+            )
+
+        formatted = _formatted(caplog)
+        assert secret not in formatted
+        assert "RuntimeError" in formatted  # 何が起きたか (型名) は残る
+        assert "MCP connection closed" in formatted  # どの行かも残る
+
+    @pytest.mark.parametrize("secret", SENSITIVE_VALUES)
+    def test_単体_exc_info_の_traceback_からも例外文が消えフレームは残る(
+        self, secret, caplog
+    ):
+        # 無いと: MAF の `logger.warning(..., exc_info=True)`
+        # (agent_framework._mcp:1670 等) で、Formatter が整形する traceback の
+        # 最終行 = `Type: 例外文` として原文が出る。
+        redact_framework_logs()
+        with caplog.at_level(logging.WARNING):
+            try:
+                _raise_deep(secret)
+            except ValueError:
+                logging.getLogger("agent_framework._mcp").warning(
+                    "Background MCP reload failed", exc_info=True
+                )
+
+        formatted = _formatted(caplog)
+        assert secret not in formatted
+        assert "Background MCP reload failed" in formatted
+        assert "ValueError" in formatted  # 型名は残る
+        assert "inner" in formatted  # どこで壊れたか (フレーム) も残る
+
+    @pytest.mark.parametrize("secret", SENSITIVE_VALUES)
+    def test_単体_redaction_自体が壊れたら原文ごと落ちて失敗が残る(
+        self, secret, caplog, monkeypatch
+    ):
+        # 無いと: redaction 内の例外で (a) 原文がそのまま通る (最悪) か
+        # (b) logging 機構へ例外が漏れて元の障害が消える。fail-closed —
+        # 本文は失うが「redaction が失敗した」ことは成功と区別できる形で残す。
+        redact_framework_logs()
+
+        def _boom(_value: object) -> str:
+            raise RuntimeError("redaction is broken")
+
+        monkeypatch.setattr(observability, "fingerprint", _boom)
+        with caplog.at_level(logging.ERROR):
+            logging.getLogger("agent_framework").error(
+                f"Function failed. Error: {secret}"
+            )
+
+        formatted = _formatted(caplog)
+        assert secret not in formatted
+        assert "redaction failed" in formatted
+        assert "RuntimeError" in formatted  # 何で失敗したか (型名) は残る
+
+    def test_単体_二重に張っても_handler_は_1_枚(self):
+        # 無いと: import のたびに handler が増え、record 書き換えが多重に走る
+        # (指紋の指紋化で「同じ壊れ方か」の判別が壊れる)。
+        redact_framework_logs()
+        redact_framework_logs()
+
+        framework_logger = logging.getLogger("agent_framework")
+        redactors = [
+            h
+            for h in framework_logger.handlers
+            if isinstance(h, observability._FrameworkRedactionHandler)
+        ]
+        assert len(redactors) == 1
+
+
+class TestOtelExitStaysClosed:
+    """Issue #418 の「塞いでいないもの」を、開いた瞬間に赤になる形で pin する。"""
+
+    def test_単体_otel_の_span_は非記録のまま(self):
+        # 無いと: Application Insights 等の exporter を配線した瞬間、MAF の
+        # capture_exception (= record_exception + repr(exception) /
+        # SENSITIVE_DATA フラグと無関係) が例外原文を span に載せて送り出す。
+        # ログ側の redaction はこの経路に掛からない。exporter を足すときは
+        # このテストを更新し、span 側の redaction (SpanProcessor) を同時に
+        # 入れること。
+        import app.workflow  # noqa: F401 — MAF を import し終えた状態で見る
+
+        from opentelemetry import trace
+
+        span = trace.get_tracer("mind-inbox-otel-pin").start_span("probe")
+        assert not span.is_recording()

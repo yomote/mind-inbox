@@ -40,7 +40,7 @@ from agent_framework import (
 from agent_framework.exceptions import UserInputRequiredException
 
 from .config import get_settings
-from .observability import fingerprint, new_ref, redact_framework_tool_logs
+from .observability import fingerprint, new_ref, redact_framework_logs
 from .rag import retrieve
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 # **import 時に張る** (#417 P2): ツールが走る経路は必ずこのモジュールを import する
 # ので、本番の入口 (main.py) を待たずにここで掛けておけば、workflow 経由でも
 # 将来の MAF 直呼びでも取りこぼしが無い。冪等なので何度 import されても 1 枚。
-redact_framework_tool_logs()
+redact_framework_logs()
 
 
 # ── 実行コンテキスト (主体の出どころ) ─────────────────────────────────────────
