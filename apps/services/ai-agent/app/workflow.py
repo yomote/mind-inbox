@@ -397,6 +397,10 @@ class FinalReply(BaseModel):
     session_id: str
     reply: str
     citations: list[str] = []
+    # `offer_choices` が提示した選択肢 (#432-b)。承認要求のターンでは運ばない
+    # (`_request_approval` は choices を見ない) — 承認カードと選択肢が同時に出る
+    # 画面を作らないため。
+    choices: list[str] = []
 
 
 # ── Executors ─────────────────────────────────────────────────────────────────
@@ -587,6 +591,7 @@ class ConverseExecutor(Executor):
                 session_id=session_id,
                 reply=reply,
                 citations=list(tool_context.citations),
+                choices=list(tool_context.choices),
             )
         )
 
@@ -709,7 +714,9 @@ class FinishExecutor(Executor):
     async def finish(
         self, msg: FinalReply, ctx: WorkflowContext[Never, ChatResponse]
     ) -> None:
-        await ctx.yield_output(ChatResponse(reply=msg.reply, citations=msg.citations))
+        await ctx.yield_output(
+            ChatResponse(reply=msg.reply, citations=msg.citations, choices=msg.choices)
+        )
 
 
 def _build_chat_workflow(
@@ -777,6 +784,9 @@ async def _record_approval_request(
         # in-memory 構成のみ: 承認待ちの run だけ storage を生かしておく
         # (/approve の解決で解放)。Cosmos 構成は共有ストアなので registry 不要
         _pending_run_storages[record.id] = storage
+    # **choices は載せない** (#432-b): 承認カードは「承認するまで実行されません」と
+    # 言う画面で、そこに「会話の分岐」の選択肢を並べると、押した文言が実行の可否に
+    # 効くのか会話に効くのかが読めなくなる。承認要求のターンは承認だけを出す。
     return ChatResponse(
         reply=f"「{request.plan.tool_name}」を実行するには承認が必要です。実行してよろしいですか？",
         requires_approval=True,
@@ -971,6 +981,17 @@ async def _resume_claimed_run(
     outputs = result.get_outputs()
     if not outputs:
         raise RuntimeError("Chat workflow resume completed without a response")
+
+    if outputs[-1].choices:
+        # `/approve` の応答型 (ApproveResponse) は reply しか運べないので、再開ターンで
+        # 提示された選択肢はクライアントに届かない (#432-b)。**黙って落とさない** —
+        # 「モデルは選択肢を出したのに画面には出ない」を、選択肢を出さなかったターンと
+        # 区別できる形でログに残す。件数だけ (文言は相談内容)
+        logger.warning(
+            "Workflow[APPROVAL_IF_NEEDED] 再開ターンの選択肢 %d 件は /approve の"
+            "応答型に載せられないため届かない",
+            len(outputs[-1].choices),
+        )
 
     if _cosmos_enabled():
         # 解決時 delete (#188): 解決済みの pending checkpoint は TTL を待たずに消す。

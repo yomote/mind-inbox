@@ -3,6 +3,7 @@ import { Badge, Box, Paper, Stack, Tab, Tabs, Typography } from "@mui/material";
 import type { ApprovalRequest, ConsultationSession, ExtractionResult } from "../../api";
 import type { TtsStatus } from "../../voice/useTextToSpeech";
 import { ApprovalRequestCard } from "./ApprovalRequestCard";
+import { ChoiceOptions } from "./ChoiceOptions";
 import { deriveMascotState } from "./mascotState";
 import type { PreviewStatus } from "./LivePreviewPane";
 import { OrganizingPane } from "./OrganizingPane";
@@ -32,6 +33,12 @@ type SessionScreenProps = {
   /** 副作用ツールの承認待ち (#82 / G1 / §5.9)。null なら承認カードを出さない。 */
   pendingApproval?: ApprovalRequest | null;
   onRespondToApproval?: (approved: boolean) => void;
+  /**
+   * AI が提示した選択肢 (#432-b / §5.10)。空配列なら何も出さない。
+   * **承認とは独立** — 押さなくても入力欄から会話を続けられる。
+   */
+  offeredChoices?: string[];
+  onSelectChoice?: (choice: string) => void;
   onDraftMessageChange: (value: string) => void;
   onSendMessage: () => void;
   onToggleTtsEnabled: () => void;
@@ -55,6 +62,8 @@ export function SessionScreen({
   onRefreshPreview,
   pendingApproval = null,
   onRespondToApproval,
+  offeredChoices = [],
+  onSelectChoice,
   onDraftMessageChange,
   onSendMessage,
   onToggleTtsEnabled,
@@ -119,6 +128,20 @@ export function SessionScreen({
             onRespond={onRespondToApproval ?? (() => {})}
           />
         )}
+
+        {/* 選択肢 (#432-b / §5.10) も会話の直下・入力欄の上。承認カードとは
+            **独立に**出る (同時に出ることは無い — ai-agent が承認要求のターンに
+            choices を積まないため)。入力欄は塞がない: 選ばずに書くのは正常な操作。
+
+            md 未満で「整理」タブを見ている間に届いても対話タブへ引き戻さない
+            (承認 §5.9 との違い)。承認はサーバが待っていて TTL で失効するから
+            引き戻す必要があるが、選択肢はサーバに待ち状態が無く、次の発話まで
+            画面に残り続けるので、見逃しても失われるものが無い。 */}
+        <ChoiceOptions
+          choices={offeredChoices}
+          loading={loading}
+          onSelect={onSelectChoice ?? (() => {})}
+        />
 
         <SessionComposer
           value={draftMessage}

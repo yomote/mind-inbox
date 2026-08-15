@@ -46,6 +46,8 @@ type ChatStreamEvent =
         requires_approval?: boolean;
         approval_request_id?: string | null;
         citations?: string[];
+        /** AI が提示した選択肢 (#432-b)。無い / 配列でない = 選択肢なし。 */
+        choices?: string[];
         /** stub 判別フラグ (#146)。BFF が合成する stub ストリームにだけ現れる。 */
         stubbed?: boolean;
       };
@@ -73,6 +75,13 @@ function asChatStreamEvent(raw: unknown): ChatStreamEvent | null {
             typeof response.approval_request_id === "string" ? response.approval_request_id : null,
           citations: Array.isArray(response.citations)
             ? response.citations.filter((c): c is string => typeof c === "string")
+            : undefined,
+          // 選択肢 (#432-b)。配列でなければ「選択肢なし」に倒す — 旧 ai-agent /
+          // 旧 BFF (フィールドを返さない版) と、壊れた値を同じ安全側に落とす。
+          // **文字列以外を混ぜたまま渡さない**: そのまま次の発話として送る値なので、
+          // 型が崩れると「押したのに空文字が送られる」になる
+          choices: Array.isArray(response.choices)
+            ? response.choices.filter((c): c is string => typeof c === "string")
             : undefined,
           stubbed: response.stubbed === true,
         },
@@ -210,6 +219,7 @@ async function sendMessageStreaming(
   const prefetchSentences = createSentencePrefetcher();
   let finalReply: string | null = null;
   let approval: ApprovalRequest | null = null;
+  let choices: string[] = [];
 
   for await (const raw of parseSseJsonStream(res.body)) {
     const event = asChatStreamEvent(raw);
@@ -225,6 +235,7 @@ async function sendMessageStreaming(
         event.response.approval_request_id,
         event.response.reply,
       );
+      choices = event.response.choices ?? [];
       // stub 応答の可視化 (#146): 実応答 (フラグ無し) なら下ろす。
       reportStubbedResponse(event.response.stubbed);
     } else {
@@ -245,6 +256,7 @@ async function sendMessageStreaming(
       createdAt: new Date().toISOString(),
     },
     approval,
+    choices,
   };
 }
 
@@ -293,6 +305,10 @@ export async function sendMessage(sessionId: string, text: string): Promise<Assi
       // フォールバック経路でも承認要求は落とさない (#82)。ここを落とすと
       // 「ストリーミングが死んでいる環境でだけ副作用ツールが承認なしに見える」になる。
       approval: toApprovalRequest(res.requiresApproval, res.approvalRequestId, res.reply),
+      // 選択肢も同じ (#432-b) — 落とすと「ストリーミングが死んでいる環境でだけ
+      // 選択肢が出ない」になり、どちらの経路を通ったかは画面から見えない。
+      // 旧 BFF (フィールドを返さない版) 相手でも配列に倒す
+      choices: res.choices ?? [],
     };
   }
 }

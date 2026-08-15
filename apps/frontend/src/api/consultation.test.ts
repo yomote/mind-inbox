@@ -444,3 +444,75 @@ describe("[単体] 副作用ツールの承認要求 (#82 / G1)", () => {
     expect(err).not.toBeInstanceOf(ApprovalExpired);
   });
 });
+
+describe("[単体] AI が提示した選択肢 (#432-b)", () => {
+  it("done の choices をそのまま応答に載せる", async () => {
+    // 無いと: ai-agent が選択肢を出しているのにフロントが捨てる。応答文だけは
+    // 「近いものを選んでみてください」と出るので、**画面は普通に見えたまま**
+    // 選ぶものが 1 つも無い会話になる (どこで落ちたかも分からない)。
+    vi.mocked(chatStreamFetch).mockResolvedValue(
+      sseResponse([
+        { type: "delta", text: "近いものはありますか。" },
+        {
+          type: "done",
+          response: {
+            reply: "近いものはありますか。",
+            requires_approval: false,
+            citations: [],
+            choices: ["仕事のこと", "家族のこと"],
+          },
+        },
+      ]),
+    );
+
+    const { approval, choices } = await sendMessage("s1", "うまく言えない");
+
+    expect(choices).toEqual(["仕事のこと", "家族のこと"]);
+    // 承認要求とは独立 (承認カードを出さない)
+    expect(approval).toBeNull();
+  });
+
+  it("choices の無い done は「選択肢なし」になる (空のチップ帯を出さない)", async () => {
+    vi.mocked(chatStreamFetch).mockResolvedValue(
+      sseResponse([{ type: "done", response: { reply: "そうだったんですね。" } }]),
+    );
+
+    const { choices } = await sendMessage("s1", "疲れました");
+
+    expect(choices).toEqual([]);
+  });
+
+  it("choices が文字列以外を含む done は安全側に落とす", async () => {
+    // 無いと: 壊れた値がそのまま「次に送る発話」になる (押すと空文字や
+    // [object Object] が会話に残る)。旧 ai-agent との配備スキューでも同じ経路を通る。
+    vi.mocked(chatStreamFetch).mockResolvedValue(
+      sseResponse([
+        {
+          type: "done",
+          response: { reply: "a", choices: ["仕事のこと", 42, null] },
+        },
+      ]),
+    );
+
+    const { choices } = await sendMessage("s1", "m");
+
+    expect(choices).toEqual(["仕事のこと"]);
+  });
+
+  it("tRPC フォールバック経路でも選択肢を落とさない", async () => {
+    // 無いと: ストリーミングが使えない環境でだけ選択肢が消える。どちらの経路を
+    // 通ったかは画面から見えないので、「本番でだけ出ない」に気づけない (#82 と同じ罠)。
+    vi.mocked(chatStreamFetch).mockResolvedValue(new Response("nf", { status: 404 }));
+    vi.mocked(trpc.consultation.sendMessage.mutate).mockResolvedValue({
+      reply: "近いものはありますか。",
+      requiresApproval: false,
+      approvalRequestId: null,
+      citations: [],
+      choices: ["仕事のこと"],
+    } as never);
+
+    const { choices } = await sendMessage("s1", "m");
+
+    expect(choices).toEqual(["仕事のこと"]);
+  });
+});

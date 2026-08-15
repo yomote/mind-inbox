@@ -45,6 +45,22 @@ const APPROVAL_TRIGGER = "返信";
 /** ai-agent の確認文と同じ形にする (実物を見たときに別物に見えないように)。 */
 const APPROVAL_DESCRIPTION = "「send_reply」を実行するには承認が必要です。実行してよろしいですか？";
 
+/**
+ * 選択肢の提示 (#432-b / dialogue-session.mdx §5.10) を mock で決定的に踏むためのトリガ語。
+ *
+ * real では ai-agent が `offer_choices` ツールを選んだときに立つ (どのターンで出すかは
+ * LLM 判断)。mock は BFF も LLM も呼ばないので、この語を含む発話で代用する。
+ * ここが無いと mock ビルドでは選択肢 UI に一度も到達できず、デモでも単体テストでも
+ * 「タップした文言が次の発話として送られる」を確かめられない (ADR 0004)。
+ */
+const CHOICES_TRIGGER = "わからない";
+
+/** 上限は ai-agent 側と同じ 3 件 (`app/tools.py` の MAX_CHOICES)。 */
+const CHOICES = ["仕事のこと", "家族やパートナーのこと", "自分の体調のこと"];
+
+const CHOICES_REPLY =
+  "うまく言葉にならないときもありますよね。近いものがあれば選んでみてください（自由に書いてもらっても大丈夫です）。";
+
 export async function sendMessage(_sessionId: string, text: string): Promise<AssistantReply> {
   await wait(300);
 
@@ -57,6 +73,23 @@ export async function sendMessage(_sessionId: string, text: string): Promise<Ass
         createdAt: nowText(),
       },
       approval: { id: `appr-${uid()}`, description: APPROVAL_DESCRIPTION },
+      // 承認要求のターンに選択肢は出さない (#432-b) — real の ai-agent も
+      // 承認要求のターンでは choices を積まない (workflow の `_record_approval_request`)。
+      // 混ぜると「押した文言が実行の可否に効くのか会話に効くのか」読めない画面になる
+      choices: [],
+    };
+  }
+
+  if (text.includes(CHOICES_TRIGGER)) {
+    return {
+      message: {
+        id: uid(),
+        role: "assistant",
+        text: CHOICES_REPLY,
+        createdAt: nowText(),
+      },
+      approval: null,
+      choices: CHOICES,
     };
   }
 
@@ -73,6 +106,7 @@ export async function sendMessage(_sessionId: string, text: string): Promise<Ass
       createdAt: nowText(),
     },
     approval: null,
+    choices: [],
   };
 }
 
