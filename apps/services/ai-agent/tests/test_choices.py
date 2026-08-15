@@ -21,6 +21,17 @@
 ここで test しないこと:
 - どういうときに選択肢を出すか (プロンプトの領域 / LLM を採点者にしない)
 - 画面の見た目 (frontend の単体テスト)
+- 「BFF まで選択肢が届くか」の受け渡し (契約テストとスモークの担当)
+
+**単体テストの入場条件** (`docs/testing/strategy.md` §2.2 / PR #448 Codex P1):
+ここに置いているのは全部「壊れても例外が出ず、静かに間違う」判定で、フィールドの
+受け渡しを見に来ているのではない。具体的には (a) LLM 往復回数 — 1 回に減ると
+逐次表示が消えるが応答は普通に返る、(b) どの分岐がどのフィールドを埋めるか —
+承認と選択肢が混ざっても画面は描画される、(c) 上限 / 重複 / 2 回目の純粋な判定、
+(d) ログの指紋化。**他の層からは観測できない**: 契約テストはスキーマしか見ず、
+スモークは ai-agent をダブルに差し替えるので実 workflow が 1 行も動かない。
+既存の `test_workflow_tools.py`「ツールを使わない通常ターンの LLM 往復は 1 回」が
+同じ subsystem・同じ形の先例。
 """
 
 import logging
@@ -208,6 +219,90 @@ class TestChoicesStreaming:
         assert isinstance(done, ChatStreamDone)
         assert done.response.choices == OPTIONS
         assert done.response.requires_approval is False
+
+    async def test_l1_途中で切れたターンの提示は履歴に残さない(
+        self, session_repo, approval_repo
+    ):
+        """PR #448 Codex P2 — 提示が「済んだこと」になったまま payload だけ消える穴。
+
+        無いと何が静かに通るか: ストリーミングが done の前に切れると payload
+        (`ChatResponse.choices`) は捨てられるのに、履歴には
+        「N 件の選択肢を提示しました」だけが残る。フロントは非ストリーミングへ
+        フォールバックして同じ発話を送り直すが、モデルは履歴を読んで「もう提示した」
+        と判断しツールを呼び直さない — **本文は「近いものを選んでください」なのに
+        画面にボタンが 1 つも無い**応答になる。例外もエラーも出ない。
+        """
+        client = ScriptedChatClient(
+            [
+                tool_call_step("offer_choices", {"options": OPTIONS}),
+                # 本文の 1 chunk 目を流した直後に接続断 (done に到達しない)
+                text_step("どれか", "近いものは", fail_after=1),
+            ]
+        )
+
+        with pytest.raises(RuntimeError):
+            [
+                e
+                async for e in run_workflow_stream(
+                    "s-broken", "うまく言えない", session_repo, approval_repo, client
+                )
+            ]
+
+        history = await session_repo.get("s-broken")
+        # `offer_choices` の語はシステムプロンプトにも出るので、**ツール結果の行**だけを見る
+        tool_lines = [m.text for m in history.messages if m.text.startswith("Tool ")]
+        assert not any("offer_choices" in line for line in tool_lines), (
+            f"落ちたターンの提示が履歴に残っている — 再試行でモデルが提示済みと誤読する: {tool_lines}"
+        )
+
+        # 送り直したターンでは提示し直せる (= 選択肢がちゃんと画面へ戻る)
+        retry = ScriptedChatClient(
+            [
+                tool_call_step("offer_choices", {"options": OPTIONS}),
+                text_step("どれか近いものはありますか。"),
+            ]
+        )
+        res = await run_workflow(
+            "s-broken", "うまく言えない", session_repo, approval_repo, retry
+        )
+        assert res.choices == OPTIONS
+
+
+class TestChoicesOnApprovalResume:
+    async def test_l1_承認の再開経路では選択肢ツールを見せない(
+        self, session_repo, approval_repo
+    ):
+        """PR #448 Codex P2 — 運べない成果を作らせない。
+
+        無いと何が静かに通るか: `/approve` の応答型 (ApproveResponse) は reply しか
+        運べないので、再開ターンでモデルが選択肢を出しても**クライアントには届かない**。
+        本文だけが「近いものを選んでください」と言い、画面にはボタンが無い応答になる。
+        呼ばせてから捨てるのではなく、そもそも見せない。
+        """
+        from app.workflow import resume_after_approval
+
+        client = ScriptedChatClient(
+            [
+                tool_call_step("send_reply", {"to": "a@example.com", "body": "はい"}),
+                text_step("送信しました。"),
+            ]
+        )
+        first = await run_workflow(
+            "s-resume", "返信しておいて", session_repo, approval_repo, client
+        )
+        assert first.requires_approval is True
+
+        await resume_after_approval(
+            first.approval_request_id, True, session_repo, approval_repo, client
+        )
+
+        # 再開ターン (最後の往復) に渡ったツール一覧に offer_choices が無い
+        assert client.tool_names_seen[-1], (
+            "ツールを 1 本も渡していない (検査になっていない)"
+        )
+        assert "offer_choices" not in client.tool_names_seen[-1]
+        # 最初のターンでは見えている (この構成で全ツールを開けているため)
+        assert "offer_choices" in client.tool_names_seen[0]
 
 
 class TestChoicesObservability:

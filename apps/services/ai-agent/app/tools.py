@@ -219,6 +219,22 @@ MAX_CHOICES = 3
 # 超えたら提示そのものを断り、モデルに短く作り直させる。
 MAX_CHOICE_LENGTH = 40
 
+# **そのターンが完了して初めて意味を持つ**ツール (#432-b / PR #448 Codex P2)。
+#
+# `offer_choices` の成果は応答 payload (`ChatResponse.choices`) にしか現れず、副作用は
+# 何も無い。**ターンが途中で落ちたときに実行を履歴へ残してはいけない**:
+#
+#   1. ストリーミングが done の前に切れる → `_flush_partial_tool_outcomes` が
+#      「N 件の選択肢を提示しました」を履歴に積む。**payload は捨てられている**
+#   2. フロントは非ストリーミング `/chat` へフォールバックして同じ発話を送り直す
+#   3. モデルは履歴を読んで「もう提示した」と判断し、ツールを呼び直さない
+#   4. 結果: 本文は「近いものを選んでください」なのに、画面にボタンが 1 つも無い
+#
+# 副作用ツール (#417 P1) が「実行したのに履歴に無い」を恐れるのとちょうど逆で、
+# こちらは**実行していないことにするのが安全側**。判定をここに集約しておかないと、
+# 将来 payload だけのツールを足した人が同じ穴を踏む。
+TURN_LOCAL_TOOLS = frozenset({"offer_choices"})
+
 
 @tool(
     name="offer_choices",
@@ -329,25 +345,34 @@ class UnknownExposedTool(ValueError):
     """LLM_EXPOSED_TOOLS に registry に無い名前が入っていた。"""
 
 
-def exposed_tools() -> tuple[FunctionTool, ...]:
+def exposed_tools(exclude: frozenset[str] = frozenset()) -> tuple[FunctionTool, ...]:
     """この構成で LLM に見せるツール (= `options["tools"]` に載るもの)。
 
     既定は空。`LLM_EXPOSED_TOOLS` の書式と既定オフの理由は config.py を参照。
     ここが registry から導出されているので、**registry に 1 本足せば LLM に渡る
     tools も増える** (tests/test_tools.py が pin する)。
+
+    `exclude` は「この呼び出しでは成果を運べないツール」を落とすためのもの
+    (PR #448 Codex P2)。**運べないなら呼ばせない**のが要点 — 呼ばせてから結果を
+    捨てると、モデルは提示したつもりで本文を書き、画面には何も出ない。今の用途は
+    `/approve` の再開経路 (応答型が reply しか運べない / workflow.py を参照)。
     """
     raw = get_settings().llm_exposed_tools.strip()
     if not raw:
         return ()
     if raw == "*":
-        return tuple(_REGISTRY.values())
-    names = [name.strip() for name in raw.split(",") if name.strip()]
-    unknown = [name for name in names if name not in _REGISTRY]
-    if unknown:
-        raise UnknownExposedTool(
-            f"LLM_EXPOSED_TOOLS に registry に無いツール名が含まれています: {unknown}"
-        )
-    return tuple(_REGISTRY[name] for name in names)
+        selected: tuple[FunctionTool, ...] = tuple(_REGISTRY.values())
+    else:
+        names = [name.strip() for name in raw.split(",") if name.strip()]
+        unknown = [name for name in names if name not in _REGISTRY]
+        if unknown:
+            raise UnknownExposedTool(
+                f"LLM_EXPOSED_TOOLS に registry に無いツール名が含まれています: {unknown}"
+            )
+        selected = tuple(_REGISTRY[name] for name in names)
+    if not exclude:
+        return selected
+    return tuple(t for t in selected if t.name not in exclude)
 
 
 # ── ツール境界 (実行の記録 + 例外の一般化) ───────────────────────────────────
