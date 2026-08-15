@@ -99,8 +99,19 @@ zip -qr "$ZIP_PATH" \
   -x "node_modules/.cache/*" \
   -x "**/*.map"
 
-# ステージングが正しくても zip の作り方次第で symlink エントリは入りうるので、
-# **送るファイルそのもの**も数える (判定は同じ純粋関数側)。
+# 送るファイルそのものも数える。**何を保証せず / いつ発火するか** (#424):
+#   保証しない — 「ツリーに symlink が無かったこと」。上の `zip -qr` は `-y` が無いので
+#     symlink を辿って実体を格納する。symlink 入りツリーを同じフラグで固めても
+#     エントリは 0 件になるため、ここの 0 件は tree 検査の裏取りにならない。
+#     symlink が無いことを保証しているのは上の tree 検査 (実測でこちらが止める)。
+#   発火する条件 — 単独では発火しない。(a) アーカイバが実体化をやめる (`-y` を足す /
+#     別実装に替える) と、(b) tree 検査が守っていない範囲に symlink が居る
+#     (tree 検査は node_modules しか歩かないので dist/ 配下、または tree 検査を
+#     消した・迂回した node_modules) の**両方**が揃ったときだけ。(a) だけなら
+#     tree 検査が node_modules の 0 本を保証済みなので恒久 0 件のまま。
+#     = 実質「tree 検査の二重化 + tree 検査が歩かない dist/ 側の網」で、平常時 0 件が正常。
+# 検査自体が空振り (zipinfo の書式変更で恒久的に 0 件) になっていないことは、
+# `zip -y` で作った実 fixture を食わせる test_verify_deploy_tree.py が押さえる。
 python3 "$SCRIPT_DIR/../verify_deploy_tree.py" zip "$ZIP_PATH"
 
 ZIP_BYTES="$(stat -c%s "$ZIP_PATH" 2>/dev/null || stat -f%z "$ZIP_PATH")"
