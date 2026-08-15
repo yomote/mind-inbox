@@ -36,13 +36,21 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 BFF_MANIFEST = REPO_ROOT / "apps" / "bff" / "package.json"
 
 # fixture の zip は本物の zip/zipinfo で作る (書式パーサを押さえるのが目的なので
-# 自前生成では意味が無い)。無い環境では skip — 「動かせなかった」を緑と混同しない
-# ように、握り潰さず skip 理由として出す。
-_missing_zip_tools = [t for t in ("zip", "zipinfo") if shutil.which(t) is None]
-requires_zip_tools = pytest.mark.skipif(
-    bool(_missing_zip_tools),
-    reason=f"zip 検査の fixture を作れない (missing: {', '.join(_missing_zip_tools)})",
-)
+# 自前生成では意味が無い)。
+
+
+def _assert_zip_tools() -> None:
+    """zip / zipinfo があることを**前提として assert する** (skip しない)。
+
+    無いとこれが静かに通る: ツール欠如の環境で skip に落とすと、パーサを一度も
+    通していない job が exit 0 で緑になり、#424 で塞いだ「検査が空振りしていても
+    気づけない」穴が環境依存で開き直る。build-bff-package.sh が `need zip` /
+    `need zipinfo` で必須宣言しているものなので、無いのは環境の欠陥として落とす。
+    """
+    for tool in ("zip", "zipinfo"):
+        assert shutil.which(tool), (
+            f"前提: {tool} がある (build-bff-package.sh が need で必須宣言している)"
+        )
 
 _STAGE_DEPS = ("@azure/functions", "@azure/cosmos", "@trpc/server", "zod")
 
@@ -238,10 +246,10 @@ def _zip(cwd: Path, name: str, *flags: str) -> Path:
     return zip_path
 
 
-@requires_zip_tools
 def test_単体_symlink_を保持した_zip_から_symlink_エントリを拾える(tmp_path: Path):
     """無いとこれが静かに通る: zipinfo の書式変更でパーサが恒久的に 0 件を返し、
     zip 検査が「常に合格」になっても誰も気づかない。"""
+    _assert_zip_tools()
     stage = _make_symlink_tree(tmp_path)
     zip_path = _zip(stage, "with-symlink.zip", "-y")  # -y = symlink を実体化しない
 
@@ -250,7 +258,6 @@ def test_単体_symlink_を保持した_zip_から_symlink_エントリを拾え
     assert judge_zip(entries)  # 判定まで繋いで止まることを見る
 
 
-@requires_zip_tools
 def test_単体_実体化する_zip_フラグでは_symlink_エントリが出ないことを明示する(
     tmp_path: Path,
 ):
@@ -258,6 +265,7 @@ def test_単体_実体化する_zip_フラグでは_symlink_エントリが出�
     zip 側の 0 件は「ツリーに symlink が無かった」証拠にならない — この非保証を
     仕様として固定する。無いとこれが静かに通る: 0 件を tree 検査の裏取りだと誤読し、
     tree 検査を弱めても気づけなくなる。"""
+    _assert_zip_tools()
     stage = _make_symlink_tree(tmp_path)
     zip_path = _zip(stage, "dereferenced.zip")
 
@@ -269,9 +277,9 @@ def test_単体_実体化する_zip_フラグでは_symlink_エントリが出�
     assert "node_modules/left-pad/package.json" in listed.splitlines()
 
 
-@requires_zip_tools
 def test_単体_symlink_の無い_zip_は_何も検出しない(tmp_path: Path):
     """無いとこれが通る: 正常な zip を止める (パーサが行を取り違えている)。"""
+    _assert_zip_tools()
     stage = _make_stage(tmp_path)
     assert scan_zip(_zip(stage, "clean.zip")) == []
 
