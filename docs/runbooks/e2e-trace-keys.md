@@ -226,4 +226,4 @@ CI 側の変更は要りません (秘密を持っていないため)。**古い
 - device-code で Azure に入る: [`claude-web-azure-access.md`](claude-web-azure-access.md) / [ADR 0006](../adr/0006-azure-access-via-device-code.md)
 - 落ちた run の artifact を取る: [`ops-inspect.md`](ops-inspect.md)
 - 判断の記録 (**ADR ではありません**): [E2E 成果物は既定で秘密扱い](../adr/archive/operations/e2e-artifacts-are-secret-by-default.md)
-- 層の定義: [ADR 0056](../adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D1 (Proposed)
+- 層の定義: [ADR 0056](../adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D1 (Accepted / 2026-08-15)

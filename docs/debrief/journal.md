@@ -18,6 +18,18 @@
 - **持ち越し**: {未消化の項目・次回に回した判断。無ければ「なし」}
 ```
 
+## 2026-08-15 — PO 裁定 (ADR 0055 / 0056 Accept ・ #342 の置き場 ・ `/approve` の冪等性)
+
+- **対象**: [ADR 0055](../adr/0055-bff-telemetry-on-workspace-based-app-insights.md) (BFF テレメトリ / [#307](https://github.com/yomote/mind-inbox/issues/307)) / [ADR 0056](../adr/0056-management-and-app-layers-with-backup-based-data-protection.md) (管理系・アプリ系の層とバックアップ / [#302](https://github.com/yomote/mind-inbox/issues/302)) / [PR #342](https://github.com/yomote/mind-inbox/pull/342) (旧 ADR 0049 案 — ブランチ戦略) / [#82](https://github.com/yomote/mind-inbox/issues/82) の M1 残件 (`/approve` 冪等性ほか)
+- **決定** (4 件):
+  - **ADR 0055 を Accepted** — BFF のサーバ側観測性は workspace-based Application Insights で持つ (保持 30 日 / 日次上限つき / 相談本文は名前と値の両面で落とす)。**「サーバに証拠が無い」を終わらせる**判断で、[#293](https://github.com/yomote/mind-inbox/issues/293) の誤診 (丸一日) を再発させないための資源新設
+  - **ADR 0056 を Accepted、あわせて読み替えの 1 行を追記** — 層の軸は「消えると困るか」ではなく「運用のためか / アプリそのものか」。**この Accept をもって [ADR 0046](../adr/0046-environment-rebuildable-from-declaration.md) D1 の supersede が発効**した (2026-08-14 の裁定では「Accept 時に確定」として保留していた)。追記した読み替えは、**0046 本文の「持続層に GPG 秘密鍵」を「管理系 RG の Key Vault にある非エクスポートの RSA 鍵オブジェクト」と読む**というもの — 層の呼び名は 0056 D1 が、鍵の方式は [2026-08-12 の裁定記録](../adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D5 の改訂 (GPG → 封筒暗号 + Key Vault 内復号) がそれぞれ置き換えており、**2 本の改訂が同じ 1 文に効いていて読み手が迷う**ため。過去 ADR の本文は書き換えず、遷移時の PO 承認済み追記として 0056 側に置いた
+  - **[PR #342](https://github.com/yomote/mind-inbox/pull/342) (ブランチ戦略) は ADR ではなく運用文書へ** — [#385](https://github.com/yomote/mind-inbox/pull/385) の分類基準 (運用・プロセスの決め事は ADR ではない) に素直に従い、PR に提示されていた選択肢の **B (運用 doc へ移す)** を採る。**`docs/adr/0049-*.md` は作らない**。ブランチ名は「ブランチを切る瞬間に気づくルール」なので置き場は skill (`dispatch`)。**D7 (CI で強制するか) の A/B/C は、置き場が skill になったことで ADR の争点ではなくなった** — 機構化するかは規約の実効性の話として別に扱う
+  - **`/approve` の冪等性は B 案** — 同一承認 ID への 2 回目は **409 Conflict + 現在状態 (approved/rejected 済み + いつ) を返す**。**二重送信とレコード消失を区別できる**ようにするのが理由で、フロントの文言もそれに追随する。あわせて RAG (`search_faq`) の配線は既定オフのまま M1 に残す / 複数承認要求は「先頭のみ + warning」の暫定を [#321](https://github.com/yomote/mind-inbox/issues/321) へ持ち越し ([#82 のコメント](https://github.com/yomote/mind-inbox/issues/82#issuecomment-5300044560) が全文)
+- **学びメモ**: (このエントリは裁定反映の子セッションからの追記。理解確認の対話は窓口 PM セッションの記録を参照)
+- **特記**: **Proposed のまま実装が先に進んでいた 2 本を、同じ日にまとめて Accept する形になった** — 0056 は実装 ([#419](https://github.com/yomote/mind-inbox/pull/419)) が、0055 は配線 ([#413](https://github.com/yomote/mind-inbox/pull/413)) が先に着地している。`/adr` skill の「Proposed の判断を前提に実装を進めてよい」は機能したが、**「Accept され次第 X する」と書いた箇所が 6 ファイルに散り、発効時に手で棚卸しする必要が出た**。次に条件つきの supersede を書くときは、**発効時に直す場所を ADR 側に列挙しておく**と棚卸しが機械的になる
+- **持ち越し**: **バックアップ / 復元の往復 1 回** (ADR 0056 D2 / 0046 D9) — 通るまで `data-restore-unproven` の一律拒否は解けない (2026-08-14 から継続)。**[PR #342](https://github.com/yomote/mind-inbox/pull/342) の作り直し** — 内容を `dispatch` skill へ入れ、0049 を採らないことの後始末 (PR の close / `retired-numbers.txt` の扱い) は別セッション。**[`docs/adr/archive/operations/e2e-artifacts-are-secret-by-default.md`](../adr/archive/operations/e2e-artifacts-are-secret-by-default.md) の 2 箇所が「ADR 0056 D1 (Proposed)」のまま** — archive は退避時点で凍結する規約 (`/adr` skill) なので本反映では触っていない。触るかどうかは PO / 窓口 PM 判断
+
 ## 2026-08-14 — PO 裁定 (層の定義 / ADR 0056)
 
 - **対象**: [ADR 0046](../adr/0046-environment-rebuildable-from-declaration.md) D1 / [#302](https://github.com/yomote/mind-inbox/issues/302) / [PR #412](https://github.com/yomote/mind-inbox/pull/412) (マージ済み)
