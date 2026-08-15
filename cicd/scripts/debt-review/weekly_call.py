@@ -8,7 +8,7 @@
 
     - 週替わりの審査範囲を決める (ROTATION — 毎週リポジトリ全体は現実的でない)
     - 台帳 Issue へ依頼コメントを投稿する (投稿は workflow 側)
-    - 前回の依頼に審査結果が付いていなければ、翌週の依頼にそれを明示する —
+    - 前回の依頼に審査結果が付いていなければ、新しい依頼は積まず再掲 (⏰) を出す —
       「呼ばれなかった週」と「呼ばれて 0 件だった週」を外形で区別する (#410 の核)
 
 審査結果の生死は status-page の trace (labeled_issue_comment) が見る。
@@ -21,7 +21,8 @@ test_weekly_call.py の契約テストが落とす。
         (黙って通すと、実在しない場所への依頼が毎週「審査済みの顔」で積まれる)。
     weekly_call.py request --run-url URL [--repo-root DIR] [--date YYYY-MM-DD]
                            [--comments FILE.jsonl]
-        依頼コメントの Markdown を stdout に出す。--comments は台帳 Issue の
+        今週の投稿文の Markdown を stdout に出す — 未解消の依頼が無ければ新しい
+        依頼 (📮)、あれば**依頼ではなく再掲 (⏰)**。--comments は台帳 Issue の
         既存コメント (1 行 1 JSON: {"body": ..., "created_at": ...})。
     weekly_call.py ledger-body
         台帳 Issue の本文 (初回作成時に workflow が使う)。
@@ -45,8 +46,16 @@ LEDGER_LABEL = "debt-review"
 # コメントの種別マーカー。**先頭一致 (startswith) で判定する** — 依頼コメントは
 # 本文中で結果マーカーを引用する (「このマーカーで始めて」と指示する) ため、
 # 部分一致にすると毎週の自動依頼が審査の心拍に化け、審査が止まっても 🟢 が続く。
+#
+# 不変条件: **未解消の依頼 (📮) は台帳に常に高々 1 件** — 未解消のまま次の週が来たら
+# 新しい依頼ではなく再掲 (⏰) を積む。依頼が 2 件並ぶことを許すと、古い依頼への
+# 結果 (🔍) が時系列上は最新依頼の後に来るため、まだ審査していない最新の範囲まで
+# 解消扱いになる (PR #465 Codex P1)。結果に依頼 ID を書かせて突き合わせる案は、
+# 審査役の転記ミスという新しい失敗モードを増やすので採らない —
+# 曖昧な状態を検出するのではなく、作れなくする (rubric の段 T1 と同じ思想)。
 REQUEST_MARKER = "📮 debt-review 審査依頼"
 RESULT_MARKER = "🔍 debt-review 審査結果"
+REMINDER_MARKER = "⏰ debt-review 依頼の再掲"
 
 # 週替わりの審査範囲 (Issue #410 §2-2)。ISO 週番号で巡回する。
 # 年替わり (第 52/53 週 → 第 1 週) は番号が連続しないため、同じ範囲が 2 週続く /
@@ -93,7 +102,6 @@ def build_request(
     position: int,
     day: date,
     run_url: str,
-    unanswered_at: str | None,
 ) -> str:
     """依頼コメントの Markdown を組み立てる。純粋関数。
 
@@ -106,13 +114,6 @@ def build_request(
         f"- **今週の範囲: `{scope}`** (週替わりローテーション {position}/{len(ROTATION)})",
         f"- run: {run_url}",
     ]
-    if unanswered_at:
-        lines += [
-            "",
-            f"⚠️ **前回の依頼 ({unanswered_at}) に審査結果が付いていません — 未実施のまま 1 週が経過しています。**"
-            "「呼ばれなかった週」を「指摘 0 件の週」と混同しないため、先に前回分を実施するか、"
-            "実施しない判断をこのコメントへの返信で残してください。",
-        ]
     lines += [
         "",
         "## やること (当番 PM tick / 窓口 PM)",
@@ -134,6 +135,31 @@ def build_request(
         "[状況ページ](https://yomote.github.io/mind-inbox/status/) の「週次 AI 負債審査の結果」行が 🔴 になります。",
     ]
     return "\n".join(lines)
+
+
+def build_reminder(day: date, run_url: str, pending_at: str) -> str:
+    """再掲コメントの Markdown を組み立てる。純粋関数。
+
+    未解消の依頼がある週は、新しい依頼 (📮) ではなくこれを積む — 依頼を積むと
+    未解消の依頼が 2 件並び、古い方への結果が新しい方まで解消してしまう
+    (不変条件はマーカー定義のコメント参照)。先頭は REQUEST_MARKER でも
+    RESULT_MARKER でもないこと (依頼の数にも審査の心拍にも数えない)。
+    """
+    return "\n".join(
+        [
+            f"{REMINDER_MARKER} ({day.isoformat()})",
+            "",
+            f"⚠️ **前回の依頼 ({pending_at}) に審査結果が付いていません。**"
+            "未解消の依頼がある間は新しい依頼を積みません (範囲のローテーションも進めません) — "
+            "「呼ばれなかった週」を「指摘 0 件の週」と混同しないためです。",
+            "",
+            f"上の `{REQUEST_MARKER}` ({pending_at}) のコメントに書かれた範囲で審査を実施し、"
+            f"結果を `{RESULT_MARKER}` で始まるコメントで残すか、実施しない判断を"
+            "そのコメントへの返信で残してください。",
+            "",
+            f"- run: {run_url}",
+        ]
+    )
 
 
 LEDGER_BODY = f"""週次 AI 負債審査 (#410) の**依頼と結果の台帳**。
@@ -212,18 +238,20 @@ def main(argv: list[str]) -> int:
         if args.date
         else datetime.now(JST).date()
     )
-    scope, position = _resolve_scope(args.repo_root, day)
 
     if args.command == "scope":
-        print(scope)
+        print(_resolve_scope(args.repo_root, day)[0])
         return 0
 
-    comments = _load_comments(args.comments)
-    print(
-        build_request(
-            scope, position, day, args.run_url, unanswered_request(comments)
-        )
-    )
+    pending = unanswered_request(_load_comments(args.comments))
+    if pending:
+        # 未解消の依頼がある週は新しい依頼を積まない (不変条件: 未解消は高々 1 件)。
+        # 範囲の実在チェックはしない — 審査すべき範囲は既に依頼済みのもの
+        print(build_reminder(day, args.run_url, pending))
+        return 0
+
+    scope, position = _resolve_scope(args.repo_root, day)
+    print(build_request(scope, position, day, args.run_url))
     return 0
 
 

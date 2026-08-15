@@ -7,8 +7,10 @@
 #     - 週替わりの審査範囲を決めて台帳 Issue に依頼コメントを投稿する
 #       (範囲決めと文面は cicd/scripts/debt-review/weekly_call.py — 判定ロジックを
 #       YAML に埋めない)
-#     - 前回の依頼に審査結果が付いていなければ、依頼にそれを明示する —
-#       「呼ばれなかった週」と「呼ばれて 0 件の週」を外形で区別する (#410 の核)
+#     - 前回の依頼に審査結果が付いていなければ、**新しい依頼は積まず再掲を投稿する**
+#       (未解消の依頼は常に高々 1 件 — 2 件並ぶと古い依頼への結果が最新依頼まで
+#       解消してしまう / PR #465 Codex P1)。「呼ばれなかった週」と「呼ばれて 0 件の
+#       週」を外形で区別する (#410 の核)
 #
 # 審査結果の生死は status-page の trace (labeled_issue_comment — 台帳の
 #   「🔍 …」で始まるコメントの最終時刻) が見る。watchers.json 参照。
@@ -77,14 +79,15 @@ jobs:
             > /tmp/ledger-comments.jsonl
           wc -l /tmp/ledger-comments.jsonl
 
-      - name: 依頼コメントを組み立てて投稿
+      - name: 今週の投稿文 (依頼または再掲) を組み立てて投稿
         id: post
         env:
           GH_TOKEN: ${{ github.token }}
           NUMBER: ${{ steps.ledger.outputs.number }}
         run: |
-          # 範囲ディレクトリが実在しなければここで落ちる (実在しない範囲への依頼を
-          # 「審査済みの顔」で積まないため — weekly_call.py 参照)
+          # 未解消の依頼があれば再掲 (⏰)、無ければ新しい依頼 (📮) が出る。
+          # 依頼の範囲ディレクトリが実在しなければここで落ちる (実在しない範囲への
+          # 依頼を「審査済みの顔」で積まないため — weekly_call.py 参照)
           python3 cicd/scripts/debt-review/weekly_call.py request \
             --repo-root . \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \

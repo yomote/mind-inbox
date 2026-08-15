@@ -51,7 +51,7 @@
     {
       "id": "debt-review-request.yml",
       "name": "週次 AI 負債審査の依頼 (debt-review)",
-      "what": "毎週月曜 07:00 JST に週替わりの審査範囲を決め、台帳 Issue (label: debt-review) に依頼コメントを投稿する (#410)。審査本体は CI では走らせない (LLM を Actions で走らせる経路は却下済み — debt-check.yml 冒頭) — 依頼を受けて当番 PM tick / 窓口 PM が debt-reviewer subagent (rubric D1〜D7) を新品コンテキストで回す。前回依頼に結果が無ければ依頼に明示する",
+      "what": "毎週月曜 07:00 JST に週替わりの審査範囲を決め、台帳 Issue (label: debt-review) に依頼コメントを投稿する (#410)。審査本体は CI では走らせない (LLM を Actions で走らせる経路は却下済み — debt-check.yml 冒頭) — 依頼を受けて当番 PM tick / 窓口 PM が debt-reviewer subagent (rubric D1〜D7) を新品コンテキストで回す。前回依頼に結果が無ければ新しい依頼は積まず再掲 (⏰) を投稿する (未解消の依頼は常に高々 1 件)",
       "expect_hours": 192
     },
     {

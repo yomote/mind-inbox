@@ -519,7 +519,7 @@ _DEBT_REVIEW_DEFS = {
 }
 
 
-def test_L1_labeled_issue_comment_は先頭一致のコメントだけを心拍に数える(tmp_path):
+def test_単体_labeled_issue_comment_は先頭一致のコメントだけを心拍に数える(tmp_path):
     """依頼コメントによる結果マーカーの引用で心拍が進まないこと。
 
     無いと何が静かに通るか (#410):
@@ -533,7 +533,7 @@ def test_L1_labeled_issue_comment_は先頭一致のコメントだけを心拍�
     assert "🟢" not in html
 
 
-def test_L1_labeled_issue_comment_の取得失敗は未検証として出す(tmp_path):
+def test_単体_labeled_issue_comment_の取得失敗は未検証として出す(tmp_path):
     """無いと何が静かに通るか:
         コメント取得の失敗を「痕跡なし」に畳むと、GitHub API の一時失敗のたびに
         🔴 (審査停止) の誤報が出る。逆に成功に畳むと止まった審査が緑に見える。
