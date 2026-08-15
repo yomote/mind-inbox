@@ -11,17 +11,22 @@
 
 ## 権限モデル（何が何をできるか）
 
-CD の identity は **2 つ**。どちらも federated credential の subject は
-`repo:yomote/mind-inbox:ref:refs/heads/main` で、**main 以外のブランチからは使えない**。
+GitHub Actions から Azure に入る identity は **2 つ**。
 
-| identity                                | 使う workflow                                                               | ロール                                                                                        | スコープ                           |
-| --------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------- |
-| `gha-oidc-mind-inbox-cd`（書き込み）    | `deploy.yml`                                                                | Contributor                                                                                   | **RG のみ**（`rg-dev-mind-inbox`） |
-| 〃                                      | 〃                                                                          | RBAC Administrator（OpenAI User / Speech User しか付けられない ABAC 条件つき）                | **RG のみ**                        |
-| `gha-oidc-mind-inbox-cd-ro`（読むだけ） | `ops-inspect.yml` / `refresh-infra-diagram.yml` / `golden-path-monitor.yml` | Reader                                                                                        | RG                                 |
-| 〃                                      | 〃                                                                          | Cost Management Reader（課金データはサブスクリプション単位でしか読めない / **読み取り専用**） | subscription                       |
+| identity                                               | federated credential の subject                    | 使う workflow                                                                                                                                  | ロール                                                                         | スコープ                           |
+| ------------------------------------------------------ | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ---------------------------------- |
+| `gha-oidc-mind-inbox-cd`（書き込み / `setup-oidc.sh`） | `...:ref:refs/heads/main`（main 以外から使えない） | `deploy.yml`、および `main` ref で動く読み取り系（`ops-inspect.yml` の `ref: main` / `refresh-infra-diagram.yml` / `golden-path-monitor.yml`） | Contributor                                                                    | **RG のみ**（`rg-dev-mind-inbox`） |
+| 〃                                                     | 〃                                                 | 〃                                                                                                                                             | RBAC Administrator（OpenAI User / Speech User しか付けられない ABAC 条件つき） | **RG のみ**                        |
+| 〃                                                     | 〃                                                 | 〃                                                                                                                                             | Cost Management Reader（**読み取り専用** / `cost-summary` 用・移行期のみ）     | subscription                       |
+| `gha-oidc-readonly-mind-inbox`（読むだけ / `ro.sh`）   | `...:ref:refs/heads/ops/inspect`                   | `ops-inspect.yml`（`ref` が `main` 以外 = 普段の調査経路）                                                                                     | Reader / Cost Management Reader / Log Analytics Reader（**書き込み系なし**）   | subscription                       |
 
 **サブスクリプションスコープの書き込み権限は誰も持たない。** これが #46 の是正点。
+
+> `setup-oidc.sh` がかつて作っていた読み取り専用 identity `gha-oidc-mind-inbox-cd-ro`
+> （変数名 `AZURE_READER_CLIENT_ID`）は、**どの workflow からも一度も使われないまま
+> `AZURE_CLIENT_ID_RO` 系に一本化して廃止した** (#397)。Azure 側にアプリ登録が残っていれば
+> 削除してよい（読み取り系ロールのみなので残っていても書き込みはできない。実在は未検証 —
+> 確認は人間の Portal / device-code 作業）。
 
 ### なぜ RG スコープで足りるのか
 
@@ -89,8 +94,8 @@ REPO=yomote/mind-inbox ./cicd/scripts/cloud-env/setup-oidc.sh
 スクリプトが以下を**冪等に**作る（既にあるものは再利用する / **何も削除しない**）:
 
 1. RG `rg-dev-mind-inbox`（CD には作らせないので、ここで作る）
-2. Entra アプリ + SP + federated credential（書き込み用 / 読み取り専用の 2 つ）
-3. 上の表のロール割り当て
+2. Entra アプリ + SP + federated credential（書き込み用。read-only 識別は別手順 `ro.sh` — 下の「read-only の識別を足す」）
+3. 上の表のロール割り当て（書き込み用の分）
 
 最後に GitHub Variables に入れる ID を出力する。
 
@@ -101,7 +106,8 @@ REPO=yomote/mind-inbox ./cicd/scripts/cloud-env/setup-oidc.sh
 - `AZURE_CLIENT_ID`（書き込み用）
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
-- `AZURE_READER_CLIENT_ID`（読み取り専用 / 下の「読み取り専用 identity へ切り替える」で使う。**登録だけしても何も変わらない**）
+
+read-only 用の `AZURE_CLIENT_ID_RO` はここでは登録しない — 下の「read-only の識別を足す」の手順（`ro.sh`）が出す ID を登録する。
 
 > OIDC なのでクライアントシークレットは保存しない（[ADR 0009](../adr/0009-on-demand-cd-via-github-actions-oidc.md)）。
 
@@ -242,33 +248,18 @@ az role assignment list --all --assignee "$CLIENT_ID" \
 > **(a) が緑になった時点で、CD は RG スコープの権限だけで動いていることが実測されている**
 > （広い権限はもう存在しないため）。これが最も強い証拠。
 
-### 6. 読み取り専用 identity へ切り替える（任意 / 別 PR）
+### 6. 読むだけの workflow と書き込み identity の分離（現状と今後）
 
-ここまでで #46 の High（サブスクリプション Contributor）は解消している。
-さらに「読むだけの 3 本が書き込み権限を持ち歩く」状態も無くしたい場合:
+かつてここに「読み取り系 3 本の `client-id:` を読み取り専用 identity（`AZURE_READER_CLIENT_ID`）へ
+置換する」手順があったが、**一度も実行されないまま、`ops-inspect` の ref 分岐
+（`AZURE_CLIENT_ID_RO` / #209）と両立しなくなったため廃止した**（#397 — 置換すると ref 分岐が壊れる）。
+read-only 識別の正典は `AZURE_CLIENT_ID_RO` 系（下の「read-only の識別を足す」）に一本化している。現状:
 
-1. Variables に `AZURE_READER_CLIENT_ID` を登録（未使用なので単独では無害）
-2. 次の 3 ファイルの `client-id:` を `${{ vars.AZURE_READER_CLIENT_ID }}` に変える PR を出す
-   （ガード条件の変数名も合わせる）:
-   - `.github/workflows/ops-inspect.yml:99`
-   - `.github/workflows/refresh-infra-diagram.yml:64`
-   - `.github/workflows/golden-path-monitor.yml:50`
-3. マージ後、3 本を手動 dispatch して緑を確認する
-4. 書き込み用 identity から課金参照を外す:
-
-   ```bash
-   GRANT_COST_READER=false REPO=yomote/mind-inbox ./cicd/scripts/cloud-env/setup-oidc.sh
-   az role assignment list --all --assignee "$CLIENT_ID" \
-     --query "[?scope=='/subscriptions/$SUB_ID'].id" -o tsv   # 残っていれば delete
-   ```
-
-   これで書き込み用 identity は **サブスクリプションスコープの割り当てをひとつも持たなくなる**。
-
-> **既知の劣化**: `ops-inspect` の `recent-errors` のうち **Container App のライブログ tail**
-> （`az containerapp logs show`）は `Reader` では実行できない（`Microsoft.App/.../authtoken/action` が要る）。
-> 同じチェックの中の **Log Analytics クエリ側は Reader で動く**し、コメントにあるとおり
-> 「過去の障害はそこでしか追えない」ので、実用上の損失は小さい。失敗しても
-> `(未検証: 理由)` として可視化される設計になっている。
+- `ops-inspect` は `ref: ops/inspect` で起動すれば read-only 識別で走る（[ops-inspect.md](ops-inspect.md)）
+- `refresh-infra-diagram` / `golden-path-monitor` と `main` ref の `ops-inspect` は今もデプロイ SP で動く。
+  read-only 識別の federated credential は `ops/inspect` ブランチ紐づけなので、`main` で走るこの 2 本には**流用できない**
+- 「読むだけの workflow が書き込み identity を持ち歩かない」形への恒久解は
+  [#405](https://github.com/yomote/mind-inbox/issues/405)（GitHub Environments — ブランチ名依存そのものを消す）が持つ
 
 ## read-only の識別を足す (#209 / ops-inspect 用)
 
@@ -367,13 +358,19 @@ Log Analytics には相談ログや例外詳細が載りうるので、「read-o
 4. **リポジトリの write 権限を持つ主体が増えたら再判断する** — 現状は PO 1 人 +
    その委任で動くエージェントセッションのみ。共同作業者が増えた時点でこの受容は前提を失う
 
+> **既知の劣化**: `ops-inspect` の `recent-errors` のうち **Container App のライブログ tail**
+> （`az containerapp logs show`）は Reader 系ロールでは実行できない（`Microsoft.App/.../authtoken/action` が要る）。
+> 同じチェックの中の **Log Analytics クエリ側は Reader で動く**し、コメントにあるとおり
+> 「過去の障害はそこでしか追えない」ので、実用上の損失は小さい。失敗しても
+> `(未検証: 理由)` として可視化される設計になっている。
+
 ### どう使われるか
 
 `ops-inspect.yml` の guard が ref を見て使い分ける。
 
-| ref | ログインに使う識別 |
-| --- | --- |
-| `main` | 従来のデプロイ SP (`AZURE_CLIENT_ID`) |
+| ref      | ログインに使う識別                      |
+| -------- | --------------------------------------- |
+| `main`   | 従来のデプロイ SP (`AZURE_CLIENT_ID`)   |
 | それ以外 | **read-only ID** (`AZURE_CLIENT_ID_RO`) |
 
 ### 動作検証

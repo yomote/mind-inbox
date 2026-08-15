@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # 一度きり: GitHub Actions が Azure へ OIDC ログインするための連携を作る。
-#   1. Entra アプリ登録(+ SP) を **2 つ** — 書き込み用 (deploy) と読み取り専用 (inspect)
+#   1. Entra アプリ登録(+ SP) — 書き込み用 (deploy)
 #   2. federated credential（GitHub の OIDC subject を信頼 = main ブランチ限定）
 #   3. 常設 dev の RG を **ここで** 作る（CD には作らせない）
 #   4. ロール付与 — 書き込み用は **RG スコープのみ**（#46）
@@ -27,12 +27,12 @@ set -euo pipefail
 #            （deploy.yml の手動 down は CD の SP では権限不足で失敗する = 意図どおり。
 #             不可逆な破壊操作を、main に書ける主体が持たないための設計）
 #
-# ── identity を 2 つに分ける理由 ─────────────────────────────────────────────
-# 同じ client id を 4 本の workflow が共有していた:
-#   deploy.yml (書き込み) / ops-inspect.yml / refresh-infra-diagram.yml /
-#   golden-path-monitor.yml (いずれも読むだけ)
-# 読むだけの 3 本が書き込み権限を持ち歩く必要は無いので、Reader だけの SP を分ける。
-# 近く足す予定のドリフト検査 (実状態 vs bicep) も Reader で足りる。
+# ── 読み取り専用 identity はここでは作らない（#397） ─────────────────────────
+# かつてこのスクリプトが読み取り専用 identity（AZURE_READER_CLIENT_ID）も作っていたが、
+# どの workflow からも一度も使われないまま、ops-inspect の ref 分岐
+# （AZURE_CLIENT_ID_RO / #209）と二重宣言になったため廃止した。read-only 識別は
+# ro.sh（federated credential を ops/inspect ブランチに紐づける）が正典。
+# 手順: docs/runbooks/azure-oidc-cd-setup.md の「read-only の識別を足す」
 #
 # ── 付与するロール ───────────────────────────────────────────────────────────
 # [書き込み用 = $APP_NAME]
@@ -48,13 +48,11 @@ set -euo pipefail
 #        そのため「ロールを付ける権限」だけを足す。ただし **付けられるロールを
 #        OpenAI User / Speech User の 2 つに condition で縛る**ので、Owner や
 #        User Access Administrator を配る経路にはならない。
-#   3. (移行期のみ) Cost Management Reader @ subscription
-#        ops-inspect の cost-summary が書き込み用 identity で動いている間だけ必要。
-#        読み取り専用 identity へ 3 本を切り替えたら GRANT_COST_READER=false で外す。
-#
-# [読み取り専用 = ${APP_NAME}-ro]
-#   1. Reader @ RG                      … 構成・リソースの参照 / Resource Graph
-#   2. Cost Management Reader @ sub     … 課金データはサブスクリプション単位でしか読めない
+#   3. Cost Management Reader @ subscription
+#        `main` ref で動く ops-inspect の cost-summary（Actions タブからの手動実行の
+#        既定経路）が書き込み用 identity で動いている間は必要。読み取り系 workflow が
+#        書き込み identity を持ち歩かない形（#405 / GitHub Environments）へ移行したら
+#        GRANT_COST_READER=false で外す。
 #
 # ⚠️ このスクリプトは **古いサブスクリプションスコープの割り当てを削除しない**。
 #    新しい権限を付けてから、CD が緑であることを実測した上で人間が外す。
@@ -64,7 +62,6 @@ set -euo pipefail
 
 REPO="${REPO:-yomote/mind-inbox}"
 APP_NAME="${APP_NAME:-gha-oidc-mind-inbox-cd}"
-READER_APP_NAME="${READER_APP_NAME:-${APP_NAME}-ro}"
 BRANCH="${BRANCH:-main}"
 # CD が触ってよい唯一の RG。deploy.yml / provision.sh の既定と一致させること
 # （ズレると CD が AuthorizationFailed になる）。
@@ -73,15 +70,12 @@ LOCATION="${LOCATION:-japaneast}"
 # ABAC condition で「付けられるロール」を縛るか。false にすると RG 内で任意のロールを
 # 付けられる（Owner 含む）ので、意図的に緩める時だけ false にする。
 CONSTRAIN_RBAC_ADMIN="${CONSTRAIN_RBAC_ADMIN:-true}"
-# 読み取り専用 identity を作るか。
-CREATE_READER_IDENTITY="${CREATE_READER_IDENTITY:-true}"
-# 書き込み用 identity に課金参照を残すか（移行期は true。切替が終わったら false）。
+# 書き込み用 identity に課金参照を残すか（main ref の cost-summary が使う間は true / #405 後に false）。
 GRANT_COST_READER="${GRANT_COST_READER:-true}"
 
 # 組み込みロール定義 ID（表示名はテナントの言語設定で揺れるので GUID で指定する）
 ROLE_CONTRIBUTOR="b24988ac-6180-42a0-ab88-20f7382dd24c"
 ROLE_RBAC_ADMIN="f58310d9-a9f6-439a-9e8d-f62e7b41a168"
-ROLE_READER="acdd72a7-3385-48ef-bd42-f606fba81ae7"
 ROLE_COST_READER="72fafb9e-0641-4937-9268-a91bfd8191a3"
 # CD が MI に付けてよいロール（cicd/modules/bootstrap-core.bicep と同じ GUID）
 ROLE_OPENAI_USER="5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"
@@ -253,7 +247,8 @@ ensure_role_assignment "$CD_SP_OBJECT_ID" "$ROLE_RBAC_ADMIN" "$RG_SCOPE" \
   "$RBAC_CONDITION"
 
 if [[ "$GRANT_COST_READER" == "true" ]]; then
-  # 移行期のみ: 読み取り専用 identity へ ops-inspect を移すまでの間、cost-summary を生かす。
+  # main ref で動く ops-inspect（Actions タブからの手動実行の既定）が cost-summary を
+  # 書き込み用 identity で動かすため。外せるのは #405（Environments 移行）の後。
   ensure_role_assignment "$CD_SP_OBJECT_ID" "$ROLE_COST_READER" "$SUB_SCOPE" \
     "Cost Management Reader @ subscription（読み取り専用 / 移行期のみ）"
 else
@@ -261,20 +256,7 @@ else
   echo "          → 書き込み用 identity はサブスクリプションスコープの権限を一切持ちません"
 fi
 
-# ── 3. 読み取り専用 identity（ops-inspect / refresh-infra-diagram / golden-path-monitor） ──
-RO_APP_ID=""
-if [[ "$CREATE_READER_IDENTITY" == "true" ]]; then
-  ensure_app_with_federated_credential "$READER_APP_NAME"
-  RO_APP_ID="$APP_ID_OUT"
-  RO_SP_OBJECT_ID="$SP_OBJECT_ID_OUT"
-
-  echo "==> 読み取り専用 identity のロール"
-  ensure_role_assignment "$RO_SP_OBJECT_ID" "$ROLE_READER" "$RG_SCOPE" "Reader @ RG(${RG})"
-  ensure_role_assignment "$RO_SP_OBJECT_ID" "$ROLE_COST_READER" "$SUB_SCOPE" \
-    "Cost Management Reader @ subscription（課金データはサブスクリプション単位）"
-else
-  echo "==> 読み取り専用 identity: skip（CREATE_READER_IDENTITY=false）"
-fi
+# ── 3. 読み取り専用 identity はここでは作らない（#397 — ro.sh / AZURE_CLIENT_ID_RO が正典） ──
 
 # ── 4. 旧: サブスクリプションスコープの書き込みロールが残っていないか ──────────
 # 削除はしない（順序を誤ると CD が止まる）。**見えるようにするだけ**。
@@ -312,14 +294,6 @@ cat <<EOF
    AZURE_TENANT_ID=${TENANT_ID}
    AZURE_SUBSCRIPTION_ID=${SUBSCRIPTION_ID}
 EOF
-if [[ -n "$RO_APP_ID" ]]; then
-  cat <<EOF
-   AZURE_READER_CLIENT_ID=${RO_APP_ID}
-       ↑ 読むだけの workflow（ops-inspect / refresh-infra-diagram / golden-path-monitor）が
-         これを使うようになるまで、登録しても何も変わりません（登録しても安全）。
-         切り替え手順: docs/runbooks/azure-oidc-cd-setup.md
-EOF
-fi
 cat <<EOF
 
 権限の要約（#46 後）:
@@ -328,13 +302,6 @@ cat <<EOF
      RBAC Administrator (条件つき)      @ ${RG_SCOPE}$( [[ "$GRANT_COST_READER" == "true" ]] && echo "
      Cost Management Reader             @ ${SUB_SCOPE} … 移行期のみ")
 EOF
-if [[ -n "$RO_APP_ID" ]]; then
-  cat <<EOF
-   [読み取り専用 ${READER_APP_NAME}]
-     Reader                             @ ${RG_SCOPE}
-     Cost Management Reader             @ ${SUB_SCOPE}
-EOF
-fi
 cat <<EOF
 
    → 書き込み用は **RG の外を書き換えられない / RG を作れない・消せない**。
