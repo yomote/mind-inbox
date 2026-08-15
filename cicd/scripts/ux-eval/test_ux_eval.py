@@ -19,8 +19,10 @@ from ux_eval import (
     EXIT_ALREADY_EVALUATED,
     EXIT_NO_FRESH_RECORD,
     EXIT_OK,
+    EXIT_SCENARIO_SET_SHRUNK,
     build_payload,
     evaluated_probe_keys,
+    expected_scenario_ids,
     is_fresh,
     latest_records_by_scenario,
     measure,
@@ -372,6 +374,8 @@ def test_l1_片方だけ評価済みなら残りを積む(tmp_path, capsys) -> N
     """1 本目の追記後に落ちて再実行した朝 — 2 本目だけを積んで緑に戻れること。
 
     重複判定が runId だけだと、ここで 2 本目が「評価済み」に化けて永久に積まれない。
+    また「評価済み」は縮小検知 (#443 / exit 5) の covered に数える — 数えないと、
+    この再実行の朝が「1 本目が欠けた」と誤検知されて偽陽性の赤になる。
     """
     data = _data_dir(tmp_path, probes=_two_scenario_probes("2026-08-09T22:37:35Z"))
     capsys.readouterr()
@@ -389,11 +393,15 @@ def test_l1_片方だけ評価済みなら残りを積む(tmp_path, capsys) -> N
     assert [p["scenarioId"] for p in remaining] == ["work-overwhelm-v1"]
 
 
-def test_l1_片方が欠けた朝は取れた方を積み_飛ばした理由を出す(tmp_path, capsys) -> None:
-    """1 シナリオだけプローブが落ちた朝。取れていた計測まで捨てない。
+def test_l1_前回積めたシナリオが欠けた朝は取れた分を出しつつ赤(tmp_path, capsys) -> None:
+    """**#443 judge B での仕様変更**: 旧仕様 (#435 実装時) は「部分欠落でも exit 0 (緑)」
+    だったが、「前回まで積めていたシナリオ集合より減ったら exit 5 (赤)」へ変えた。
 
-    ただし**黙って減らさない** — 飛ばしたシナリオ名を stderr に残す
-    (数だけ減って理由が残らないと「シナリオが 1 本だった日」と区別がつかない)。
+    無いと何が静かに通るか:
+        封筒化失敗の経路は monitor が warning + continue で緑のまま。ux-eval も取れた分
+        だけで緑にすると、U7 の観測器 (hypothesis-pushback-v1) の蓄積だけが 10 日
+        止まってもどこも赤くならない (PR #443 審査補強コメントの実測)。
+        取れた計測は捨てない — payload は出力し、呼び出し側が追記してから run を落とす。
     """
     probes = [
         _envelope(
@@ -402,16 +410,76 @@ def test_l1_片方が欠けた朝は取れた方を積み_飛ばした理由を�
         ),
         _envelope(
             _record(scenario_id="hypothesis-pushback-v1", probe_id="p-push-old"),
-            "2026-08-07T22:00:00Z",  # 鮮度切れ (前々日)
+            "2026-08-07T22:00:00Z",  # 鮮度切れ (前々日) — 新しい記録が来ていない
         ),
     ]
-    data = _data_dir(tmp_path, probes=probes)
+    # 前日までは両シナリオが積めていた (evals に直近の実績がある)
+    evals = [
+        {
+            "kind": "ux-eval-mech",
+            "probeRunId": "prev-run",
+            "scenarioId": sid,
+            "recordedAt": "2026-08-08T23:20:00Z",
+        }
+        for sid in ("work-overwhelm-v1", "hypothesis-pushback-v1")
+    ]
+    data = _data_dir(tmp_path, probes=probes, evals=evals)
     capsys.readouterr()
-    assert run(data, now=NOW) == EXIT_OK
+    assert run(data, now=NOW) == EXIT_SCENARIO_SET_SHRUNK
     captured = capsys.readouterr()
     payloads = [json.loads(l) for l in captured.out.strip().splitlines()]
     assert [p["scenarioId"] for p in payloads] == ["work-overwhelm-v1"]
     assert "hypothesis-pushback-v1" in captured.err
+
+
+def test_l1_evalsに実績のないシナリオの欠落は赤にしない(tmp_path, capsys) -> None:
+    """要求集合は evals の実績 (直近 168h) から作る — 台本を**足した初日** (まだ一度も
+    積めていない) や、window を過ぎたシナリオ (退役済み) の不在で偽陽性の赤を出さない。
+
+    無いと何が静かに通るか:
+        要求集合を「過去に 1 度でも積んだ全シナリオ」にすると、退役させたシナリオが
+        恒久的な赤になり、赤が日常化して本物の停止が埋もれる。
+    """
+    probes = [
+        _envelope(
+            _record(scenario_id="work-overwhelm-v1", probe_id="p-work"),
+            "2026-08-09T22:37:35Z",
+        ),
+    ]
+    evals = [
+        {
+            "kind": "ux-eval-mech",
+            "probeRunId": "ancient-run",
+            "scenarioId": "hypothesis-pushback-v1",
+            "recordedAt": "2026-07-01T00:00:00Z",  # window (168h) の外 = 要求しない
+        },
+        # scenarioId の無い記録 (#435 以前の計測) も要求集合に数えない —
+        # 数えると #435 導入直後の朝が恒常的な偽陽性の赤になる
+        {
+            "kind": "ux-eval-mech",
+            "probeRunId": "legacy-run",
+            "recordedAt": "2026-08-09T23:20:00Z",
+        },
+    ]
+    data = _data_dir(tmp_path, probes=probes, evals=evals)
+    capsys.readouterr()
+    assert run(data, now=NOW) == EXIT_OK
+
+
+def test_l1_要求集合の抽出はkindと鮮度とscenarioIdで絞る() -> None:
+    """expected_scenario_ids (純粋関数) の境界 — ここが緩むと退役シナリオや移行データ
+    まで「積め」と要求して偽陽性の赤になり、逆に絞りすぎると縮小検知が消える。"""
+    observations = [
+        {"kind": "ux-eval-mech", "scenarioId": "a", "recordedAt": "2026-08-09T00:00:00Z"},
+        # window (168h) の外
+        {"kind": "ux-eval-mech", "scenarioId": "b", "recordedAt": "2026-07-01T00:00:00Z"},
+        # 別 kind (LLM 採点) は機械計測の実績ではない
+        {"kind": "ux-judge-score", "scenarioId": "c", "recordedAt": "2026-08-09T00:00:00Z"},
+        # scenarioId 無し (移行データ) は要求できない
+        {"kind": "ux-eval-mech", "recordedAt": "2026-08-09T00:00:00Z"},
+        "not-a-dict",
+    ]
+    assert expected_scenario_ids(observations, NOW, 168.0) == {"a"}
 
 
 def test_l1_全シナリオが鮮度切れなら赤(tmp_path) -> None:

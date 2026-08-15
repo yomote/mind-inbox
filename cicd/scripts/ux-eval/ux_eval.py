@@ -22,11 +22,13 @@
 シナリオが複数あるときの規律:
     - 重複判定は (probeRunId, scenarioId) の組で行う。**同じ run から複数シナリオの記録が
       来る**ので、runId だけで見ると 1 本目を積んだ時点で 2 本目が「評価済み」に化ける
-    - 一部のシナリオだけ記録が欠けた朝は、**取れたものを積んで exit 0** にする。
-      欠けたシナリオはプローブ側 (golden-path-monitor) がその朝に赤くなって通報する経路が
-      あり、ここで全体を落とすと**取れていた計測まで捨てる**。ただし「何を積んで何を
-      飛ばしたか」は必ず stderr に出す (黙って減らさない)
-    - 鮮度内の記録が 1 件も無い / 全部評価済み のときだけ run を赤にする (従来どおり)
+    - 一部のシナリオだけ記録が欠けた朝も、**取れたものは必ず stdout に出す** (全体を
+      落とすと取れていた計測まで捨てる)。そのうえで、**前回まで積めていたシナリオ集合
+      (直近 window 内の evals の実績) より減っていれば exit 5 で赤にする** (#443 judge B —
+      部分欠落を緑で通すと、封筒化失敗の経路 [monitor は warning + continue で緑] で
+      1 シナリオだけ蓄積が止まっても、どこも赤くならない)。呼び出し側 (ux-eval.yml) は
+      payload を追記してから run を落とす。「何を積んで何を飛ばしたか」は stderr に出す
+    - 鮮度内の記録が 1 件も無い / 全部評価済み のときは従来どおり exit 3 / 4 の赤
 
 蓄積の形 (JSONL / 封筒) の真実は cicd/scripts/ux-data/append.py と
 cicd/scripts/ux-probe/probe-record-comment.py (envelope)。test_ux_eval.py が
@@ -39,7 +41,10 @@ envelope との往復を実 module で検証している (片方だけ直すと�
                  再評価を拒否する — 鮮度 26h は前日 07:00 の記録 (約 25h 前) を通して
                  しまうため、時刻だけでは「今朝の記録が欠けた朝」を検出できない
                  (Codex レビュー指摘 / PR #224)
-      環境変数: UX_EVAL_MAX_AGE_HOURS (既定 26) / GITHUB_RUN_ID / GITHUB_SERVER_URL /
+      環境変数: UX_EVAL_MAX_AGE_HOURS (既定 26) /
+                UX_EVAL_EXPECTED_WINDOW_HOURS (既定 168 = 7 日 — 「前回まで積めていた
+                シナリオ集合」を evals の実績から作る窓) /
+                GITHUB_RUN_ID / GITHUB_SERVER_URL /
                 GITHUB_REPOSITORY (計測 run へのリンク用・無くても動く)
 
 診断は stderr、成果物 (payload JSON) だけを stdout に出す (PR #88 で踏んだ実例と同じ規律)。
@@ -47,7 +52,9 @@ envelope との往復を実 module で検証している (片方だけ直すと�
 1 行ずつ append-observation.sh に渡すこと (1 行目だけ読むと片方の計測が静かに落ちる)。
 
 終了コード:
-    0 = 1 シナリオ以上を計測できた (payload を stdout に JSONL で出力)
+    0 = 前回までの全シナリオを計測できた (payload を stdout に JSONL で出力)
+    5 = 計測はできた (payload は stdout に出力済み) が、前回まで積めていたシナリオ集合
+        より減っている — 呼び出し側は **payload を追記したうえで** run を赤にする (#443)
     3 = 鮮度内の記録が 1 件も無い (記録ゼロ / 全部古い) — 呼び出し側は run を赤にする
     4 = 鮮度内の記録はあるが全部評価済み (今朝の新しい記録が来ていない) — 同じく赤にする
     1 = 前提不足・想定外 (ディレクトリが無い / JSON が壊れている)
@@ -64,6 +71,9 @@ from pathlib import Path
 RECORD_KIND = "ux-probe-record"
 OUTPUT_KIND = "ux-eval-mech"
 DEFAULT_MAX_AGE_HOURS = 26.0
+# 「前回まで積めていたシナリオ集合」を evals の実績から作る窓 (#443)。
+# 短すぎると 1 回の欠落で要求集合から外れて検知が消え、長すぎると意図した退役の赤が長引く
+DEFAULT_EXPECTED_WINDOW_HOURS = 168.0
 
 # scenarioId を持たない記録 (Issue コメント時代の移行データ) の置き場。
 # 捨てると過去データが黙って計測対象から外れるので、1 つのシナリオとして扱う
@@ -83,6 +93,7 @@ EXIT_OK = 0
 EXIT_UNEXPECTED = 1
 EXIT_NO_FRESH_RECORD = 3
 EXIT_ALREADY_EVALUATED = 4
+EXIT_SCENARIO_SET_SHRUNK = 5
 
 
 def log(message: str) -> None:
@@ -177,6 +188,35 @@ def evaluated_probe_keys(observations: list[dict]) -> set[tuple[str, str]]:
         sid = obs.get("scenarioId")
         keys.add((rid, sid if isinstance(sid, str) and sid else UNKNOWN_SCENARIO))
     return keys
+
+
+def expected_scenario_ids(
+    observations: list[dict], now: datetime, window_hours: float
+) -> set[str]:
+    """「前回まで積めていたシナリオ集合」を evals の実績から作る (純粋関数 / #443)。
+
+    直近 window_hours 内に機械計測 (ux-eval-mech) が積まれた scenarioId の集合。
+    今朝の計測がこの集合より減っていたら EXIT_SCENARIO_SET_SHRUNK で赤にする —
+    部分欠落を緑で通すと、封筒化失敗の経路 (monitor は warning + continue で緑) で
+    1 シナリオ (例: U7 の観測器) だけ蓄積が止まっても、どこも赤くならない。
+
+    - scenarioId の無い記録 (#435 以前の計測 / 移行データ) は数えない — どのシナリオの
+      ものか判別できないものに「積め」とは要求できず、数えると #435 導入直後の朝が
+      恒常的な偽陽性の赤になる
+    - 意図してシナリオを退役させた直後も赤くなる (見えない断絶より見える赤を選ぶ)。
+      window を過ぎると要求集合から外れて緑に戻る
+    """
+    ids: set[str] = set()
+    for obs in observations:
+        if not isinstance(obs, dict) or obs.get("kind") != OUTPUT_KIND:
+            continue
+        recorded = parse_ts(obs.get("recordedAt"))
+        if recorded is None or now - recorded > timedelta(hours=window_hours):
+            continue
+        sid = obs.get("scenarioId")
+        if isinstance(sid, str) and sid:
+            ids.add(sid)
+    return ids
 
 
 def _stats(values: list[float]) -> dict:
@@ -284,6 +324,14 @@ def run(data_dir: Path, now: datetime | None = None) -> int:
     except ValueError:
         log("UX_EVAL_MAX_AGE_HOURS が数値ではありません")
         return EXIT_UNEXPECTED
+    try:
+        expected_window_hours = float(
+            os.environ.get("UX_EVAL_EXPECTED_WINDOW_HOURS")
+            or DEFAULT_EXPECTED_WINDOW_HOURS
+        )
+    except ValueError:
+        log("UX_EVAL_EXPECTED_WINDOW_HOURS が数値ではありません")
+        return EXIT_UNEXPECTED
 
     probes = read_observations(data_dir / "probes")
     evals = read_observations(data_dir / "evals")
@@ -306,6 +354,7 @@ def run(data_dir: Path, now: datetime | None = None) -> int:
     )
 
     payloads: list[dict] = []
+    measured: list[str] = []
     stale: list[str] = []
     already: list[str] = []
 
@@ -343,6 +392,7 @@ def run(data_dir: Path, now: datetime | None = None) -> int:
         payloads.append(
             build_payload(envelope, recorded_at, metrics, now, run_id, run_url)
         )
+        measured.append(scenario_id)
 
     if not payloads:
         # 全シナリオが古い / 全シナリオが評価済み — 入力が止まっているので赤にする。
@@ -372,6 +422,23 @@ def run(data_dir: Path, now: datetime | None = None) -> int:
     for payload in payloads:
         print(json.dumps(payload, ensure_ascii=False))
     log(f"計測を {len(payloads)} 件出力しました。")
+
+    # 「前回まで積めていた集合より減ったら赤」(#443 judge B)。
+    # 「評価済み」で飛ばしたシナリオは covered に数える — 蓄積そのものは追いついている
+    # (追記後の再実行や、1 本目だけ積んで落ちた朝の再 run を偽陽性の赤にしない)。
+    # 逆に鮮度切れ (stale) は数えない — そのシナリオの新しい記録が来ていない状態そのもの
+    covered = set(measured) | set(already)
+    missing = sorted(
+        expected_scenario_ids(evals, now, expected_window_hours) - covered
+    )
+    if missing:
+        log(
+            f"エラー: 前回まで積めていたシナリオのうち {', '.join(missing)} が"
+            f"今朝は計測できていません (直近 {expected_window_hours:g} 時間の実績との比較)。"
+        )
+        log("  → 取れた計測は追記してよいが、この run は赤にすること (exit 5)。")
+        log("     プローブ側 (golden-path-monitor) と封筒化・追記の経路を確認してください。")
+        return EXIT_SCENARIO_SET_SHRUNK
     return EXIT_OK
 
 

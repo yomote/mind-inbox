@@ -629,15 +629,29 @@ def ux_trend_section() -> str:
         out.append(f'<p class="sub">他シナリオの最新計測: {summary}</p>')
 
     if judges:
-        marks = " ・ ".join(
-            f"{(parse(j.get('recordedAt')) or now).astimezone(JST):%m-%d} "
-            f"{j.get('total', '?')}/{j.get('max', '?')} "
-            f"{VERDICT_MARK.get(j.get('verdict'), '❓')}"
-            for j in judges[-7:]
-        )
-        out.append(
-            f'<p class="sub">LLM 採点 (ux-judge-score): {html.escape(marks, quote=False)}</p>'
-        )
+        # 採点行は**シナリオごとに分け、表示窓 (7 件) もシナリオごと**に取る (#443 judge A)。
+        # 全体で 7 件の固定窓にすると、2 シナリオの朝は窓が 3.5 朝に縮んで古い朝が黙って
+        # 落ちるうえ、同じ日付に 🟢/🔴 が並んでどちらの台本の赤か読めない。
+        # scenarioId の無い採点 (移行データ) は継続線の採点として扱う (_trend_points と同じ)
+        judges_by_scenario: dict[str, list[dict]] = {}
+        for j in judges:
+            sid = j.get("scenarioId")
+            if not isinstance(sid, str) or not sid:
+                sid = BASELINE_SCENARIO_ID
+            judges_by_scenario.setdefault(sid, []).append(j)
+        for sid in sorted(
+            judges_by_scenario, key=lambda s: (s != BASELINE_SCENARIO_ID, s)
+        ):
+            marks = " ・ ".join(
+                f"{(parse(j.get('recordedAt')) or now).astimezone(JST):%m-%d} "
+                f"{j.get('total', '?')}/{j.get('max', '?')} "
+                f"{VERDICT_MARK.get(j.get('verdict'), '❓')}"
+                for j in judges_by_scenario[sid][-7:]
+            )
+            out.append(
+                f'<p class="sub">LLM 採点 (ux-judge-score / <code>{html.escape(sid)}</code>): '
+                f"{html.escape(marks, quote=False)}</p>"
+            )
     else:
         out.append(
             '<p class="sub">LLM 採点 (ux-judge-score) は直近 '
