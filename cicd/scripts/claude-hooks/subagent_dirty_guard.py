@@ -33,6 +33,12 @@
     そこで停止側で worktree 起動を機械判定し (`worktree_parent`)、親 cwd の控えを
     1 件回収する (`drop_worktree_entry`)。
 
+    回収する控えは**捨てる前に親 cwd の現況と突き合わせる** (`_check`)。dispatch の
+    指示は親ツリーの絶対パスで書かれることがあり、worktree の subagent がそれに
+    従って**親の作業ツリーを直接編集して停止する**と、worktree 側の `git status` には
+    1 件も出ない (2026-08-15 実測: 親に `M app.py` を置き去りにしても出力が空だった)。
+    比較せずに破棄すると、この形の置き去り・消失を検査する材料ごと消える。
+
     worktree の基準は**空**にする。同じ実測で、**親が dirty (`M README.md` /
     `?? parent-dirty.txt`) でも worktree 起動直後の `git status --porcelain` は空**
     だった (worktree は親の未コミット差分を引き継がない)。したがって停止時に worktree に
@@ -490,33 +496,53 @@ def worktree_parent(cwd: str, agent_id: Any) -> str | None:
     return str(path.parent.parent.parent)
 
 
-def drop_worktree_entry(entries: list[dict[str, Any]], parent_cwd: str) -> list[dict[str, Any]]:
-    """worktree 起動の停止に対応する控えを、親 cwd の列から 1 件回収する。
+def drop_worktree_entry(
+    entries: list[dict[str, Any]], parent_cwd: str
+) -> tuple[dict[str, str | None] | None, list[dict[str, Any]], str]:
+    """worktree 起動の停止に対応する控えを親 cwd の列から 1 件回収し、
+    **破棄する前に、その中身を親ツリー側の検査の基準として返す**。
+    戻り値は (親側の基準, 残りの列, 根拠)。根拠は "diff" / "diff-concurrent" /
+    "none" (控えが無く、親側は検査できない)。
 
-    落とすのは **`isolation` が `worktree` と記録された控え**を優先する
+    基準を返す理由 (これが無いと何が静かに通るか):
+        dispatch の指示は親ツリーの絶対パスで書かれることがあり、worktree の
+        subagent がそれに従って**親の作業ツリーを直接編集して停止する**と、
+        worktree 側の `git status` には 1 件も出ない。控えを比較せずに捨てると、
+        親ツリーへの置き去り・消失を検査する材料ごと消える (2026-08-15 実測:
+        親に `M app.py` が残った状態で SubagentStop の出力が空だった)。
+
+    落とすのは **`isolation` が `worktree` と記録された控え**のうち最も新しい 1 件
     (`_record_snapshot` が PreToolUse の `tool_input.isolation` を写している)。
-    印のある控えは基準として誰にも使われないので、落としても他の subagent の
-    判定は変わらない。
+    基準は**その中の最古**を採る (`take_baseline` と同じ理由 — 並列起動では新しい
+    控えに先行 subagent の差分が写り込んでおり、それを基準にすると見落とす)。
+    最古を基準として残す間は `concurrent` を立てる (立てないと最後の停止が "diff" に
+    なり、他の subagent の差分が混ざりうるのに「あなたの差分」と精度を偽る)。
 
-    印が 1 件も無いときは同じ親 cwd の**最も新しい**控えを落とす。控えに印が付くのは
-    この修正以降なので、印を読めない形 (旧形式の控え / `tool_input` が渡らない起動) でも
-    **必ず 1 件回収して蓄積を止める**ための保険。その代わり親 cwd を共有する別の
-    subagent の基準を 1 件奪うので、残った控えに `concurrent` を立てて
-    「他人の差分が混ざりうる」と申告する (奪われた側は基準を失って `all` に落ちる —
-    どちらも過剰報告側で、置き去りの見落としにはならない)。
+    印が 1 件も無いときは同じ親 cwd の**最古を基準に、最も新しい**控えを落とす。
+    控えに印が付くのはこの修正以降なので、印を読めない形 (旧形式の控え /
+    `tool_input` が渡らない起動) でも**必ず 1 件回収して蓄積を止める**ための保険。
+    その代わり親 cwd を共有する別の subagent の基準を 1 件奪うので、残った控えに
+    `concurrent` を立てて「他人の差分が混ざりうる」と申告する (奪われた側は基準を
+    失って `all` に落ちる — どちらも過剰報告側で、置き去りの見落としにはならない)。
+    このとき返す基準は**別の subagent の起動時の控え**なので、根拠は必ず
+    "diff-concurrent" にする (自分の起動時の控えだと偽らない)。
     """
     matched = [i for i, entry in enumerate(entries) if entry.get("cwd") == parent_cwd]
     if not matched:
-        return entries
+        return None, entries, "none"
     marked = [i for i in matched if entries[i].get("isolation") == "worktree"]
-    drop = (marked or matched)[-1]
+    pool = marked or matched
+    oldest = pool[0]
+    baseline = entry_prints(entries[oldest])
+    concurrent = (
+        len(matched) > 1 or bool(entries[oldest].get("concurrent")) or not marked
+    )
+    drop = pool[-1]
     remaining = [entry for i, entry in enumerate(entries) if i != drop]
-    if not marked:
-        for i, entry in enumerate(remaining):
-            if entry.get("cwd") == parent_cwd:
-                remaining[i] = {**entry, "concurrent": True}
-                break
-    return remaining
+    if concurrent and drop != oldest:
+        keep = oldest if drop > oldest else oldest - 1
+        remaining[keep] = {**remaining[keep], "concurrent": True}
+    return baseline, remaining, "diff-concurrent" if concurrent else "diff"
 
 
 def _listed(paths: list[str]) -> str:
@@ -589,6 +615,62 @@ def format_reason(paths: list[str], mode: str, vanished: list[str] | None = None
     return "\n\n".join(blocks)
 
 
+def format_parent_reason(paths: list[str], vanished: list[str], basis: str) -> str:
+    """worktree 停止時の**親の作業ツリー側**の増分・消失を申告する。
+
+    これが無いと何が静かに通るか:
+        worktree の subagent が指示中の絶対パス (親ツリーのパス) に従って親の
+        作業ツリーを直接編集して停止しても、worktree 側の検査 (`format_reason` の
+        "worktree" モード) には 1 件も出ず、誰にも咎められない。
+
+    根拠の弱さは隠さない — 並列起動や印無し回収 ("diff-concurrent") では、基準が
+    最初の起動前の控えなので他の subagent の分が混ざりうる。それを断定口調で
+    「あなたの差分」と言うと精度を偽る (`format_reason` の流儀と同じ)。
+    """
+    concurrent = basis == "diff-concurrent"
+    blocks = []
+    if paths:
+        if concurrent:
+            parent_basis = (
+                "これは**最初の subagent が起動する前**の親作業ツリーとの差分です。"
+                "並行して動いている subagent があるため、他の subagent が作った分が"
+                "混ざっている可能性があります "
+                "(あなたが作っていないものは、そう述べて先に進んでください)。"
+            )
+        else:
+            parent_basis = (
+                "これはあなたの起動前の親作業ツリーとの差分なので、あなたが作った差分です。"
+            )
+        blocks.append(
+            f"あなたの worktree ではなく**親の作業ツリー**に、未コミットの変更が "
+            f"{len(paths)} 件残ったまま終わろうとしています。\n"
+            f"{_listed(paths)}\n"
+            f"{parent_basis}\n"
+            "指示に親ツリーの絶対パスが書かれていても、作業はあなたの worktree の中で"
+            "行う必要があります。親ツリーに書いた差分は commit と push まで完遂するか、"
+            "何をなぜ残したかを最終回答に書いてください。"
+        )
+    if vanished:
+        mixed = (
+            "並行して動いている subagent が消した可能性もあります "
+            "(心当たりが無ければ、そう述べて先に進んでください)。"
+            if concurrent
+            else ""
+        )
+        blocks.append(
+            f"起動前に**親の作業ツリー**にあった未コミットの変更が {len(vanished)} 件、"
+            "消えています。\n"
+            f"{_listed(vanished)}\n"
+            "**これは、あなたが起動する前から親の作業ツリーに在った差分です** — "
+            "あなたのものではありません。`git restore` / `git reset --hard` / "
+            "`git checkout --` で消したのなら、その内容はもう戻せません "
+            f"(commit や stash なら戻せます)。{mixed}\n"
+            "何をして消したのかを最終回答に書いてください "
+            "(commit に取り込んだなら、その commit を書く)。"
+        )
+    return "\n\n".join(blocks)
+
+
 def handle(event: dict[str, Any]) -> dict[str, Any] | None:
     hook_event = event.get("hook_event_name")
     cwd = event.get("cwd")
@@ -645,20 +727,53 @@ def _check(event: dict[str, Any], cwd: str, session_id: str) -> dict[str, Any] |
 
     target = snapshot_path(session_id)
     parent = worktree_parent(cwd, event.get("agent_id"))
+    parent_baseline: dict[str, str | None] | None = None
+    parent_basis = "none"
     # 取り出しと書き戻しの間に別の停止が割り込むと、同じ控えを 2 つの subagent が引く。
     with locked(target):
         entries = load_entries(target)
         if parent is None:
             baseline, remaining, mode = take_baseline(entries, cwd)
         else:
-            # worktree 起動: 基準は空 (起動時の worktree は空) で、控えは親 cwd の列から回収する。
-            baseline, remaining, mode = {}, drop_worktree_entry(entries, parent), "worktree"
+            # worktree 起動: worktree 側の基準は空 (起動時の worktree は空)。
+            # 親 cwd の控えは破棄する前に取り出し、親ツリーへの置き去りの基準にする。
+            parent_baseline, remaining, parent_basis = drop_worktree_entry(entries, parent)
+            baseline, mode = {}, "worktree"
         _consume(target, remaining)
+
     paths = select_paths_to_report(now, baseline)
     vanished = select_paths_vanished(now, baseline)
-    if not paths and not vanished:
-        return None
-    return hook_io.block(format_reason(paths, mode, vanished))
+
+    # worktree 停止では、破棄した親控えと親 cwd の現況も突き合わせる (絶対パスで
+    # 親ツリーに書かれた置き去り・消失は worktree 側の検査に 1 件も出ないため)。
+    parent_paths: list[str] = []
+    parent_vanished: list[str] = []
+    unchecked: str | None = None
+    if parent is not None:
+        if parent_baseline is None:
+            # 控えが無い理由はここでは区別できない (起動時の git 失敗 / 上限超え / 旧版
+            # からの継続)。親ツリー全体を咎めると親自身の作業で subagent を止めることに
+            # なる (subagent には直しようがない) ので、検査していない事実だけを申告する。
+            unchecked = "起動時の親 cwd の控えが無く、親の作業ツリーへの置き去りは検査していない"
+        else:
+            parent_now, parent_failure = git_dirty_paths(parent)
+            if parent_failure is not None:
+                unchecked = f"親の作業ツリーで {parent_failure} ため、親側の置き去りは検査していない"
+            else:
+                parent_paths = select_paths_to_report(parent_now, parent_baseline)
+                parent_vanished = select_paths_vanished(parent_now, parent_baseline)
+
+    blocks = []
+    if paths or vanished:
+        blocks.append(format_reason(paths, mode, vanished))
+    if parent_paths or parent_vanished:
+        blocks.append(format_parent_reason(parent_paths, parent_vanished, parent_basis))
+    if not blocks:
+        return hook_io.passthrough(unchecked)  # unchecked が None なら素通し (申告なし)
+    reason = "\n\n".join(blocks)
+    if unchecked is not None:
+        reason += f"\n\n({unchecked})"
+    return hook_io.block(reason)
 
 
 def _consume(target: Path, remaining: list[dict[str, Any]]) -> None:

@@ -17,6 +17,11 @@
       このリポジトリの subagent は既定で worktree 起動なので、使うたびに 1 件ずつ増え、
       後続の親 cwd 起動が古い控えを基準に引いて無関係な親の変更を咎め続けたあと、
       64 件で新しい控えが保存されなくなる (hook が実質死ぬ)
+    - **worktree 停止時に、親控えを比較せずに破棄する** — dispatch の指示が親ツリーの
+      絶対パスで書かれていると、subagent は worktree ではなく親の作業ツリーを直接
+      編集して停止する。worktree 側の `git status` には 1 件も出ないので、破棄する
+      親控えと親 cwd の現況を突き合わせないと、この置き去り・消失を誰も咎めない
+      (2026-08-15 実測: 親に `M app.py` が残った状態で SubagentStop の出力が空)
 """
 
 import hashlib
@@ -28,6 +33,7 @@ from subagent_dirty_guard import (
     fingerprint,
     git_dirty_paths,
     git_index_prints,
+    format_parent_reason,
     format_reason,
     handle,
     load_entries,
@@ -554,18 +560,49 @@ def test_単体_印の無い控えでも_worktree_停止で回収して混入を
         {"cwd": "/repo", "prints": {"a.ts": "sha256:a"}},
         {"cwd": "/other", "prints": {}},
     ]
-    assert drop_worktree_entry(entries, "/repo") == [
+    baseline, remaining, basis = drop_worktree_entry(entries, "/repo")
+    assert remaining == [
         {"cwd": "/repo", "prints": {}, "concurrent": True},
         {"cwd": "/other", "prints": {}},
     ]
-    # 印がある控えがあれば、そちらを落とす (基準として誰にも使われない控えなので、
-    # 落としても他の subagent の判定が変わらない)
+    # 印無し回収の基準は**別の subagent の起動時の控え**なので、"diff" と言うと精度を偽る
+    assert basis == "diff-concurrent"
+    assert baseline == {}, "基準は最古 (新しい控えには先行 subagent の差分が写り込む)"
+    # 印がある控えがあれば、そちらを落とす
     marked = [
         {"cwd": "/repo", "prints": {}},
         {"cwd": "/repo", "prints": {"a.ts": "sha256:a"}, "isolation": "worktree"},
     ]
-    assert drop_worktree_entry(marked, "/repo") == [{"cwd": "/repo", "prints": {}}]
-    assert drop_worktree_entry(entries, "/どこにも無い") == entries
+    baseline_m, remaining_m, basis_m = drop_worktree_entry(marked, "/repo")
+    assert remaining_m == [{"cwd": "/repo", "prints": {}}]
+    assert baseline_m == {"a.ts": "sha256:a"}
+    assert basis_m == "diff-concurrent", "親 cwd を共有する控えが他にもある間は混入がありうる"
+    none_baseline, unchanged, none_basis = drop_worktree_entry(entries, "/どこにも無い")
+    assert (none_baseline, unchanged, none_basis) == (None, entries, "none")
+
+
+def test_単体_worktree_停止の親側基準も最古を採って見落とさない() -> None:
+    # 並列 worktree 起動で A が親ツリーの x.py を書いた後に B が起動すると、
+    # B の控えには x.py が写り込む。停止時に**新しい控え**を基準にすると、
+    # A の親ツリーへの置き去りが「起動前からあったもの」に化けて無警告で通る。
+    entries = [
+        {"cwd": "/repo", "prints": {}, "isolation": "worktree"},
+        {"cwd": "/repo", "prints": {"x.py": "sha256:a"}, "isolation": "worktree"},
+    ]
+    baseline, remaining, basis = drop_worktree_entry(entries, "/repo")
+    assert baseline == {}, "最古を基準にしないと親ツリーへの置き去りを見落とす"
+    assert basis == "diff-concurrent"
+    assert select_paths_to_report({"x.py": "sha256:a"}, baseline) == ["x.py"]
+    # 残した最古には concurrent が立つ (最後の停止で "diff" と断定させない)
+    assert remaining == [{"cwd": "/repo", "prints": {}, "isolation": "worktree", "concurrent": True}]
+    baseline2, remaining2, basis2 = drop_worktree_entry(remaining, "/repo")
+    assert baseline2 == {}
+    assert basis2 == "diff-concurrent"
+    assert remaining2 == []
+    # 単独起動 (印 1 件だけ) なら基準は自分の起動時の控えで、"diff" と断定してよい
+    single = [{"cwd": "/repo", "prints": {"p.py": "sha256:p"}, "isolation": "worktree"}]
+    baseline_s, remaining_s, basis_s = drop_worktree_entry(single, "/repo")
+    assert (baseline_s, remaining_s, basis_s) == ({"p.py": "sha256:p"}, [], "diff")
 
 
 def test_単体_worktree_起動の控えには印が付く(monkeypatch, tmp_path: Path) -> None:
@@ -713,3 +750,255 @@ def test_単体_実際の_git_で_親の差分を_restore_すると咎める(tmp
 
     assert select_paths_to_report(after, before) == [], "残っている方では検出できない前提"
     assert select_paths_vanished(after, before) == ["parent.py"]
+
+
+def test_単体_worktree_停止で親ツリーへの置き去りも咎める(monkeypatch, tmp_path: Path) -> None:
+    """代役レビュー (#396 / 31f3b1c) major 1 の再現条件。
+
+    無いと何が静かに通るか: dispatch の指示が親ツリーの絶対パスで書かれていると、
+    worktree の subagent は親の作業ツリーを直接編集して停止する。worktree 側の
+    `git status` は空なので、破棄する親控えと親 cwd の現況を突き合わせないと
+    1 件も咎めずに素通しする (2026-08-15 実測)。
+    """
+    import subagent_dirty_guard as guard
+
+    target = tmp_path / "snap.json"
+    dirty = {"/repo": {"app.py": "MM|i|sha256:before"}}
+    monkeypatch.setattr(guard, "git_dirty_paths", lambda cwd: (dict(dirty.get(cwd, {})), None))
+    monkeypatch.setattr(guard, "snapshot_path", lambda sid: target)
+
+    handle(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "cwd": "/repo",
+            "session_id": "s",
+            "tool_input": {"isolation": "worktree"},
+        }
+    )
+    # subagent が絶対パスに従って親ツリーを直接編集した (worktree 側は clean のまま)
+    dirty["/repo"] = {"app.py": "MM|i|sha256:after", "new.py": "??|noindex|sha256:n"}
+    result = handle(
+        {
+            "hook_event_name": "SubagentStop",
+            "cwd": "/repo/.claude/worktrees/agent-abc",
+            "agent_id": "abc",
+            "session_id": "s",
+        }
+    )
+    assert result is not None, "親ツリーへの置き去りが素通しした (実測で確認された穴)"
+    assert result["decision"] == "block"
+    assert "app.py" in result["reason"], "指紋が変わった親ツリーの path を咎めていない"
+    assert "new.py" in result["reason"], "親ツリーに増えた path を咎めていない"
+    assert "親の作業ツリー" in result["reason"]
+    assert "あなたが作った差分です" in result["reason"], "単独起動なら断定してよい"
+    assert not target.exists(), "控えの回収 (蓄積の防止) は維持されること"
+
+
+def test_単体_worktree_停止で親ツリーの消失も咎める(monkeypatch, tmp_path: Path) -> None:
+    # subagent が worktree の外へ出て親の未コミット作業を restore / reset で消す形。
+    # worktree 側の検査には出ないので、破棄する親控えとの突き合わせだけが検出点。
+    import subagent_dirty_guard as guard
+
+    target = tmp_path / "snap.json"
+    dirty = {"/repo": {"parent.py": "sha256:p"}}
+    monkeypatch.setattr(guard, "git_dirty_paths", lambda cwd: (dict(dirty.get(cwd, {})), None))
+    monkeypatch.setattr(guard, "snapshot_path", lambda sid: target)
+
+    handle(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "cwd": "/repo",
+            "session_id": "s",
+            "tool_input": {"isolation": "worktree"},
+        }
+    )
+    dirty["/repo"] = {}  # 親の未コミット作業が消えた
+    result = handle(
+        {
+            "hook_event_name": "SubagentStop",
+            "cwd": "/repo/.claude/worktrees/agent-abc",
+            "agent_id": "abc",
+            "session_id": "s",
+        }
+    )
+    assert result is not None, "親ツリーの消失が素通しした"
+    assert result["decision"] == "block"
+    assert "parent.py" in result["reason"]
+    assert "親の作業ツリー" in result["reason"]
+    assert "もう戻せません" in result["reason"]
+
+
+def test_単体_worktree_と親ツリーの両方の置き去りを同時に申告する(
+    monkeypatch, tmp_path: Path
+) -> None:
+    # worktree 側の検査 (基準は空) と親ツリー側の検査 (破棄する控えが基準) は独立。
+    # 片方があるともう片方を出さない形にすると、先に直した方だけで通ってしまう。
+    import subagent_dirty_guard as guard
+
+    target = tmp_path / "snap.json"
+    dirty = {
+        "/repo": {"app.py": "sha256:before"},
+        "/repo/.claude/worktrees/agent-abc": {"wt.ts": "sha256:w"},
+    }
+    monkeypatch.setattr(guard, "git_dirty_paths", lambda cwd: (dict(dirty.get(cwd, {})), None))
+    monkeypatch.setattr(guard, "snapshot_path", lambda sid: target)
+
+    handle(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "cwd": "/repo",
+            "session_id": "s",
+            "tool_input": {"isolation": "worktree"},
+        }
+    )
+    dirty["/repo"] = {"app.py": "sha256:after"}
+    result = handle(
+        {
+            "hook_event_name": "SubagentStop",
+            "cwd": "/repo/.claude/worktrees/agent-abc",
+            "agent_id": "abc",
+            "session_id": "s",
+        }
+    )
+    assert result["decision"] == "block"
+    assert "wt.ts" in result["reason"], "worktree 側の置き去りが消えた"
+    assert "app.py" in result["reason"], "親ツリー側の置き去りが消えた"
+    assert "全部あなたが作った差分です" in result["reason"], "worktree 側の断定は維持されること"
+
+
+def test_単体_worktree_停止で控えが無ければ親側は検査していないと言う(
+    monkeypatch, tmp_path: Path
+) -> None:
+    # 控えが無いのに黙ると「検査した/しなかった」が区別できない。かといって親ツリー
+    # 全体を咎めると親自身の作業で subagent を止めることになる (subagent には直し
+    # ようがない) ので、素通しの申告だけを出す。
+    import subagent_dirty_guard as guard
+
+    monkeypatch.setattr(guard, "git_dirty_paths", lambda cwd: ({}, None))
+    monkeypatch.setattr(guard, "snapshot_path", lambda sid: tmp_path / "none.json")
+    result = handle(
+        {
+            "hook_event_name": "SubagentStop",
+            "cwd": "/repo/.claude/worktrees/agent-abc",
+            "agent_id": "abc",
+            "session_id": "s",
+        }
+    )
+    assert result is not None, "親側を検査していないのに無言で素通しした"
+    assert "未検証" in result["systemMessage"]
+    assert "親" in result["systemMessage"]
+
+
+def test_単体_worktree_停止で親の_git_が失敗したら検査していないと言う(
+    monkeypatch, tmp_path: Path
+) -> None:
+    # 「親の git status が失敗した」を「親に差分なし」と読み替えない。
+    import subagent_dirty_guard as guard
+
+    target = tmp_path / "snap.json"
+    state = {"fail_parent": False}
+
+    def fake_dirty(cwd):
+        if cwd == "/repo" and state["fail_parent"]:
+            return {}, "git status が失敗した"
+        return ({"app.py": "sha256:p"} if cwd == "/repo" else {}), None
+
+    monkeypatch.setattr(guard, "git_dirty_paths", fake_dirty)
+    monkeypatch.setattr(guard, "snapshot_path", lambda sid: target)
+    handle(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "cwd": "/repo",
+            "session_id": "s",
+            "tool_input": {"isolation": "worktree"},
+        }
+    )
+    state["fail_parent"] = True
+    result = handle(
+        {
+            "hook_event_name": "SubagentStop",
+            "cwd": "/repo/.claude/worktrees/agent-abc",
+            "agent_id": "abc",
+            "session_id": "s",
+        }
+    )
+    assert result is not None, "親側を検査できていないのに無言で素通しした"
+    assert "未検証" in result["systemMessage"]
+    assert "親" in result["systemMessage"]
+
+
+def test_単体_親ツリーの文言も根拠の強さを言い分ける() -> None:
+    diff = format_parent_reason(["a.py"], [], "diff")
+    assert "あなたが作った差分です" in diff
+    assert "親の作業ツリー" in diff
+    conc = format_parent_reason(["a.py"], [], "diff-concurrent")
+    assert "混ざっている可能性" in conc
+    assert "あなたが作った差分です" not in conc, "混入がありうるのに断定すると精度を偽る"
+    gone = format_parent_reason([], ["p.py"], "diff")
+    assert "p.py" in gone
+    assert "もう戻せません" in gone
+    assert "残ったまま終わろうとしています" not in gone, "消した側に置き去りの文言を出さない"
+
+
+def test_単体_実際の_git_worktree_で親ツリーへの置き去りを咎める(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """2026-08-15 に素通しを実測した形そのものを、実物の git worktree で押さえる。
+
+    handle 単体のテストは git_dirty_paths を stub しているので、「worktree の
+    git status に親ツリーの変更が出ない」という前提そのものは検証できない。
+    ここで実物により (a) その前提と (b) 親控えとの突き合わせで block になることを押さえる。
+    """
+    import subprocess
+
+    import subagent_dirty_guard as guard
+
+    parent = tmp_path / "repo"
+    parent.mkdir()
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=parent, check=True, timeout=30, capture_output=True)
+
+    git("init", "-q")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    (parent / "app.py").write_text("base\n", encoding="utf-8")
+    git("add", "app.py")
+    git("commit", "-qm", "base")
+    wt = parent / ".claude" / "worktrees" / "agent-abc"
+    git("worktree", "add", "--detach", "-q", str(wt))
+
+    target = tmp_path / "snap.json"
+    monkeypatch.setattr(guard, "snapshot_path", lambda sid: target)
+    handle(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "cwd": str(parent),
+            "session_id": "s",
+            "tool_input": {"isolation": "worktree"},
+        }
+    )
+    # subagent が絶対パスに従って親ツリーを直接編集する
+    (parent / "app.py").write_text("subagent left this\n", encoding="utf-8")
+
+    wt_now, failure = git_dirty_paths(str(wt))
+    assert failure is None, failure
+    assert wt_now == {}, "前提が崩れている (親ツリーの変更が worktree 側の status に出ている)"
+
+    result = handle(
+        {
+            "hook_event_name": "SubagentStop",
+            "cwd": str(wt),
+            "agent_id": "abc",
+            "session_id": "s",
+        }
+    )
+    assert result is not None, "実測で確認された素通しがそのまま残っている"
+    assert result["decision"] == "block"
+    assert "app.py" in result["reason"]
+    assert "親の作業ツリー" in result["reason"]

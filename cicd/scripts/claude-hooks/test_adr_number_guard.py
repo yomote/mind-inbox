@@ -10,6 +10,8 @@
     - **未使用だが規約に合わない番号** (欠番埋め 0011 / 飛び番 9999) が通る —
       CI の `adr-number-guard.yml` は衝突しか見ていないので、ここで通すと誰も止めない
     - ADR 以外の Write (README / template / archive 配下) まで止める
+    - **rev-parse の timeout / OSError を「repo 外」と読んで note 無しで素通しする** —
+      採番検査の死が見えなくなる (hook_io の「素通しは黙らない」規律の例外経路になる)
 """
 
 import subprocess
@@ -110,7 +112,8 @@ def test_単体_ADR_以外の_Write_では_git_すら叩かない(monkeypatch, t
     def _explode(*args, **kwargs):
         raise AssertionError("ADR 以外で git を叩いてはいけない (毎回の Write の費用になる)")
 
-    monkeypatch.setattr(guard, "_git", _explode)
+    # `_git` だけでなく subprocess ごと差し替える (repo_toplevel は _git を通らないため)
+    monkeypatch.setattr(guard.subprocess, "run", _explode)
     assert handle(_write_event(tmp_path, "apps/bff/src/a.ts")) is None
     assert handle({"tool_name": "Edit", "tool_input": {"file_path": "docs/adr/0099-x.md"}}) is None
 
@@ -193,6 +196,63 @@ def test_単体_origin_main_が無いリポジトリでは衝突なしと答え�
     assert used == set()
 
 
+def test_単体_repo_外の_Write_は無言で通す(tmp_path: Path) -> None:
+    # 実物の「git 管理下でない」ディレクトリ = exit 128 / "not a git repository"。
+    # ここで note を出すと repo 外での Write のたびに騒ぐ (過剰申告の常態化で
+    # note そのものが読まれなくなる) ので、この種別だけは無言で通す。
+    assert handle(_write_event(tmp_path, "docs/adr/0099-x.md")) is None
+
+
+def test_単体_rev_parse_の失敗は種別ごとに素通しを申告する(monkeypatch, tmp_path: Path) -> None:
+    """これが無いと何が静かに通るか:
+
+    rev-parse の失敗を全部「repo 外 = ADR ではない」と読むと、timeout / OSError /
+    repo 内の別の fatal (dubious ownership 等) でも採番検査が **note 無しで**素通しし、
+    hook_io の「素通しは黙らない」規律の唯一の例外経路になる。
+    """
+    import subprocess as sp
+    import types
+
+    import adr_number_guard as guard
+
+    event = _write_event(tmp_path, "docs/adr/0099-x.md")
+
+    def fake_run(behavior):
+        def _run(*args, **kwargs):
+            return behavior()
+
+        return _run
+
+    def _timeout():
+        raise sp.TimeoutExpired(cmd=["git"], timeout=10)
+
+    def _oserror():
+        raise FileNotFoundError("git")
+
+    def _fatal_in_repo():
+        return types.SimpleNamespace(
+            returncode=128, stdout="", stderr="fatal: detected dubious ownership in repository"
+        )
+
+    for name, behavior in (("timeout", _timeout), ("OSError", _oserror), ("fatal", _fatal_in_repo)):
+        monkeypatch.setattr(guard.subprocess, "run", fake_run(behavior))
+        result = handle(event)
+        assert result is not None, f"{name} が「repo 外」と同じ扱いで無言素通しした"
+        assert "未検証" in result["systemMessage"], result
+        assert "照合していない" in result["systemMessage"], result
+
+    # exit 128 でも "not a git repository" のときだけは無言 (repo 外の Write は ADR ではない)
+    def _not_a_repo():
+        return types.SimpleNamespace(
+            returncode=128,
+            stdout="",
+            stderr="fatal: not a git repository (or any of the parent directories): .git",
+        )
+
+    monkeypatch.setattr(guard.subprocess, "run", fake_run(_not_a_repo))
+    assert handle(event) is None
+
+
 def _write_event(root: Path, relative: str) -> dict:
     return {
         "tool_name": "Write",
@@ -203,5 +263,5 @@ def _write_event(root: Path, relative: str) -> dict:
 
 def _stub_repo(monkeypatch, guard, root: Path, used: set[int], failure: str | None = None) -> None:
     """git を使わずに「使用済み番号の集合」だけ差し替える。"""
-    monkeypatch.setattr(guard, "_git", lambda args, cwd: (str(root), None))
+    monkeypatch.setattr(guard, "repo_toplevel", lambda cwd: (root, None))
     monkeypatch.setattr(guard, "collect_used", lambda repo_root, cwd: (used, failure))

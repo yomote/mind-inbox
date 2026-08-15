@@ -94,6 +94,41 @@ def _git(args: list[str], cwd: str) -> tuple[str, str | None]:
     return proc.stdout, None
 
 
+def repo_toplevel(cwd: str) -> tuple[Path | None, str | None]:
+    """repo root を引く。戻り値は (root, 素通しの理由)。**両方 None = git 管理下でない**。
+
+    失敗の種別を分ける理由 (これが無いと何が静かに通るか):
+        rev-parse の失敗を全部「repo 外」と読むと、timeout や OSError (git が無い /
+        実行できない) でも**採番検査そのものが note 無しで素通しする**。repo 外の
+        Write は ADR ではないので黙って通してよいが、git が壊れているだけの場合は
+        「照合していない」と申告しないと、hook_io の「素通しは黙らない」規律の
+        唯一の例外経路になる。
+
+    無言で通すのは **exit 128 かつ stderr が "not a git repository"** のときだけ。
+    exit 128 には repo 内の別の fatal (dubious ownership 等) も含まれるため、
+    メッセージまで見る。git のメッセージが英語でない環境では repo 外でも note が
+    出る (過剰申告) — 無言側ではなく申告側に倒す。
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT_SEC,
+            check=False,  # check=False の分、非ゼロ終了は下で種別に応じて扱いを分ける
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, f"git rev-parse を実行できなかった ({exc!r})"
+    if proc.returncode == 0:
+        return Path(proc.stdout.strip()), None
+    stderr = (proc.stderr or "").strip()
+    if proc.returncode == 128 and "not a git repository" in stderr:
+        return None, None  # git 管理下でない場所での Write は ADR ではない
+    detail = stderr.splitlines()
+    return None, f"git rev-parse が失敗した ({detail[0] if detail else proc.returncode})"
+
+
 def collect_used(repo_root: Path, cwd: str) -> tuple[set[int], str | None]:
     """使用済み番号 = origin/main の実ファイル + 作業ツリーの実ファイル + 退役一覧。
 
@@ -169,10 +204,13 @@ def handle(event: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(cwd, str) or not cwd:
         return None
 
-    root_out, failure = _git(["rev-parse", "--show-toplevel"], cwd)
-    if failure is not None:
-        return None  # git 管理下でない場所での Write は ADR ではない
-    repo_root = Path(root_out.strip())
+    repo_root, failure = repo_toplevel(cwd)
+    if repo_root is None:
+        if failure is None:
+            return None  # git 管理下でない場所での Write は ADR ではない (無言で通してよい)
+        # timeout / OSError / repo 内の fatal は「repo 外」ではない。黙って通すと
+        # 採番検査の死が見えなくなるので、素通しを申告する。
+        return hook_io.passthrough(f"{failure} ため、ADR 採番を照合していない")
 
     try:
         relative = Path(file_path).resolve().relative_to(repo_root.resolve()).as_posix()
