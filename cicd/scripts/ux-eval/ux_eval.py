@@ -55,6 +55,10 @@ envelope との往復を実 module で検証している (片方だけ直すと�
     0 = 前回までの全シナリオを計測できた (payload を stdout に JSONL で出力)
     5 = 計測はできた (payload は stdout に出力済み) が、前回まで積めていたシナリオ集合
         より減っている — 呼び出し側は **payload を追記したうえで** run を赤にする (#443)
+    6 = 計測はできた (payload は stdout に出力済み) が、turns 0 件の空記録がある —
+        呼び出し側は **payload を追記したうえで** run を赤にする (#401)。行は積む
+        (時系列の欠落も情報) が、「計測が成功した」とは言わない。採点側
+        (inspect-probe-artifact.py の exit 4 = 採点する材料がない) と判定を揃える
     3 = 鮮度内の記録が 1 件も無い (記録ゼロ / 全部古い) — 呼び出し側は run を赤にする
     4 = 鮮度内の記録はあるが全部評価済み (今朝の新しい記録が来ていない) — 同じく赤にする
     1 = 前提不足・想定外 (ディレクトリが無い / JSON が壊れている)
@@ -94,6 +98,7 @@ EXIT_UNEXPECTED = 1
 EXIT_NO_FRESH_RECORD = 3
 EXIT_ALREADY_EVALUATED = 4
 EXIT_SCENARIO_SET_SHRUNK = 5
+EXIT_EMPTY_RECORD = 6
 
 
 def log(message: str) -> None:
@@ -357,6 +362,7 @@ def run(data_dir: Path, now: datetime | None = None) -> int:
     measured: list[str] = []
     stale: list[str] = []
     already: list[str] = []
+    empty: list[str] = []
 
     for scenario_id, (envelope, recorded_at) in sorted(found.items()):
         age_hours = (now - recorded_at).total_seconds() / 3600
@@ -393,6 +399,18 @@ def run(data_dir: Path, now: datetime | None = None) -> int:
             build_payload(envelope, recorded_at, metrics, now, run_id, run_url)
         )
         measured.append(scenario_id)
+        # 中身が空 (往復 0 件) の記録は「計測が成功した」とは言わない (#401)。
+        # 記録は 1 往復ごとに書き出す設計 (ADR 0037) なので、プローブが送信前に
+        # 自滅しても turns: [] の record が書かれ、鮮度チェックだけでは素通りする。
+        # 行は積む (時系列の欠落も情報) が、run は赤にする — 採点側
+        # (inspect-probe-artifact.py の exit 4 = 採点する材料がない) と判定を揃える。
+        # 0 < completedTurns < plannedTurns の部分記録は正常な産物なので落とさない
+        if metrics["completedTurns"] == 0:
+            empty.append(scenario_id)
+            log(
+                f"[{scenario_id}] 記録に往復が 1 件もありません (turns 0 件) — "
+                "行は積みますが、計測が成功したことにはしません。"
+            )
 
     if not payloads:
         # 全シナリオが古い / 全シナリオが評価済み — 入力が止まっているので赤にする。
@@ -431,6 +449,15 @@ def run(data_dir: Path, now: datetime | None = None) -> int:
     missing = sorted(
         expected_scenario_ids(evals, now, expected_window_hours) - covered
     )
+    if empty:
+        # 縮小 (exit 5) と同時に起きた朝も、空記録の存在は必ず stderr に残す —
+        # 終了コードは 1 つしか返せないので、ここで黙るともう片方の異常が消える
+        log(
+            f"エラー: プローブが 1 往復も完了しないまま書き出した空記録があります "
+            f"(シナリオ: {', '.join(empty)})。"
+        )
+        log("  → 行は追記してよいが、この run は赤にすること (exit 6)。")
+        log("     プローブ側 (golden-path-monitor) の同朝 run を確認してください (#401)。")
     if missing:
         log(
             f"エラー: 前回まで積めていたシナリオのうち {', '.join(missing)} が"
@@ -439,6 +466,8 @@ def run(data_dir: Path, now: datetime | None = None) -> int:
         log("  → 取れた計測は追記してよいが、この run は赤にすること (exit 5)。")
         log("     プローブ側 (golden-path-monitor) と封筒化・追記の経路を確認してください。")
         return EXIT_SCENARIO_SET_SHRUNK
+    if empty:
+        return EXIT_EMPTY_RECORD
     return EXIT_OK
 
 

@@ -3,6 +3,9 @@
 無いと何が静かに通るか:
     - 古い記録が「今日の計測」として積まれ、プローブが止まっているのに
       トレンドが伸び続ける (鮮度チェックの穴)
+    - turns 0 件の空記録が「成功した計測」として緑のまま時系列に入り、
+      プローブ全滅の朝も「計測は回っている」に見える (#401 — 鮮度チェックは
+      「記録は書かれたが中身が空」を素通りさせる)
     - 欠測 (null) が 0ms として平均に混ざり、レイテンシが実際より良く見える
     - 封筒の形 (probe-record-comment.py envelope) が変わったとき、こちらだけ
       古いまま「記録なし」と誤報する — round-trip テストが実 module で結合を検証する
@@ -17,6 +20,7 @@ from pathlib import Path
 
 from ux_eval import (
     EXIT_ALREADY_EVALUATED,
+    EXIT_EMPTY_RECORD,
     EXIT_NO_FRESH_RECORD,
     EXIT_OK,
     EXIT_SCENARIO_SET_SHRUNK,
@@ -497,3 +501,99 @@ def test_l1_全シナリオが評価済みなら赤(tmp_path, capsys) -> None:
         "".join(line + "\n" for line in previous), encoding="utf-8"
     )
     assert run(data, now=NOW) == EXIT_ALREADY_EVALUATED
+
+
+def test_l1_turns0件の空記録は行を積みつつ赤(tmp_path, capsys) -> None:
+    """#401 回帰: 2026-08-13 の実測 (probeId: ux-probe-2026-08-12T22-45-07-419Z /
+    run 31648071011) — プローブが 1 往復も完了しないまま書いた記録で ux-eval が緑になった。
+
+    無いと何が静かに通るか:
+        鮮度チェックは「記録は書かれたが中身が空」を素通りさせる。プローブ全滅の朝も
+        run が緑のままなので、ステータスページの UX トレンドは「計測は回っている」に
+        見え、沈黙と正常が区別できない (monitor 赤 → ux-eval 緑が実際に起きた)。
+    """
+    empty = _envelope(
+        _record(
+            turns=[],
+            probe_id="ux-probe-2026-08-12T22-45-07-419Z",
+            run_id="31648071011",
+        ),
+        "2026-08-09T22:37:35Z",
+    )
+    data = _data_dir(tmp_path, probes=[empty])
+    capsys.readouterr()
+    assert run(data, now=NOW) == EXIT_EMPTY_RECORD
+    captured = capsys.readouterr()
+    # 行は積む (時系列の欠落も情報) — payload は出力したうえで赤にする
+    payloads = [json.loads(l) for l in captured.out.strip().splitlines()]
+    assert [p["metrics"]["completedTurns"] for p in payloads] == [0]
+    assert payloads[0]["probeRunId"] == "31648071011"
+    assert "turns 0 件" in captured.err
+
+
+def test_l1_片方が空記録でも両方の行を積んで赤(tmp_path, capsys) -> None:
+    """2 シナリオのうち 1 本だけ空だった朝 — 取れた計測は捨てず、run は赤にする。"""
+    probes = [
+        _envelope(
+            _record(scenario_id="work-overwhelm-v1", probe_id="p-work"),
+            "2026-08-09T22:37:35Z",
+        ),
+        _envelope(
+            _record(
+                turns=[], scenario_id="hypothesis-pushback-v1", probe_id="p-push"
+            ),
+            "2026-08-09T22:37:35Z",
+        ),
+    ]
+    data = _data_dir(tmp_path, probes=probes)
+    capsys.readouterr()
+    assert run(data, now=NOW) == EXIT_EMPTY_RECORD
+    captured = capsys.readouterr()
+    payloads = [json.loads(l) for l in captured.out.strip().splitlines()]
+    assert len(payloads) == 2
+    # 空だったシナリオが名指しされること (どちらを調べればよいか分かる)
+    assert "hypothesis-pushback-v1" in captured.err
+
+
+def test_l1_途中で壊れた部分記録は赤にしない(tmp_path, capsys) -> None:
+    """0 < completedTurns < plannedTurns は落とさない (#401 の判断)。
+
+    記録は 1 往復ごとに書き出す設計 (ADR 0037) なので部分記録は正常な産物 —
+    ここまで赤にすると、途中で 1 回壊れただけの朝が全部赤になり、
+    赤が日常化して本物の全滅 (turns 0 件) が埋もれる。まず 0 件だけを落とす。
+    """
+    partial = _envelope(_record(turns=[_turn(1, 2000)]), "2026-08-09T22:37:35Z")
+    data = _data_dir(tmp_path, probes=[partial])
+    capsys.readouterr()
+    assert run(data, now=NOW) == EXIT_OK
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert payload["metrics"]["completedTurns"] == 1
+
+
+def test_l1_空記録と集合縮小が同時の朝は縮小の赤を返しつつ両方をstderrに残す(
+    tmp_path, capsys
+) -> None:
+    """終了コードは 1 つしか返せない — exit 5 を優先しても、空記録の存在が
+    stderr から消えないこと (黙るともう片方の異常が見えなくなる)。"""
+    probes = [
+        _envelope(
+            _record(turns=[], scenario_id="work-overwhelm-v1", probe_id="p-work"),
+            "2026-08-09T22:37:35Z",
+        ),
+        # hypothesis-pushback-v1 は今朝の記録そのものが無い (縮小)
+    ]
+    evals = [
+        {
+            "kind": "ux-eval-mech",
+            "probeRunId": "prev-run",
+            "scenarioId": sid,
+            "recordedAt": "2026-08-08T23:20:00Z",
+        }
+        for sid in ("work-overwhelm-v1", "hypothesis-pushback-v1")
+    ]
+    data = _data_dir(tmp_path, probes=probes, evals=evals)
+    capsys.readouterr()
+    assert run(data, now=NOW) == EXIT_SCENARIO_SET_SHRUNK
+    err = capsys.readouterr().err
+    assert "turns 0 件" in err
+    assert "hypothesis-pushback-v1" in err

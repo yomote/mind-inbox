@@ -79,6 +79,15 @@ jobs:
             echo "scenario_set_shrunk=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          if [ "$rc" -eq 6 ]; then
+            # turns 0 件の空記録 (#401)。プローブが 1 往復も完了しないまま自滅した朝 —
+            # 行は積む (時系列の欠落も情報) が、「計測が成功した」ことにはしない。
+            # golden-path-monitor 側の追記ステップは「材料なしなら ux-eval が赤くなる」を
+            # 前提に warning + continue で緑のままなので、ここが唯一の赤になる
+            echo "::error::turns 0 件の空記録があります — プローブが 1 往復も完了していません (詳細は上のログ)。行を追記したうえで run を赤にします"
+            echo "empty_record=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           exit "$rc"
 
       - name: データブランチへ追記
@@ -113,6 +122,16 @@ jobs:
         if: steps.eval.outputs.scenario_set_shrunk == 'true'
         run: |
           echo "::error::一部シナリオの蓄積が止まっています (取れた分は追記済み) — golden-path-monitor の同朝 run と probes/ の最新行を確認してください"
+          exit 1
+
+      # turns 0 件の空記録を緑で通さない (#401)。鮮度チェックは「記録が書かれたが中身が空」
+      # を素通りさせる (記録は 1 往復ごとに書き出す設計 [ADR 0037] のため、プローブが
+      # 送信前に自滅しても turns: [] の record は書かれる)。行の追記 (post) の**後**に
+      # 置く — 欠落も時系列の情報として残し、そのうえで run を落とす
+      - name: turns 0 件の空記録を赤で表現する
+        if: steps.eval.outputs.empty_record == 'true'
+        run: |
+          echo "::error::プローブが 1 往復も完了しないまま記録を書き出しています (行は追記済み) — golden-path-monitor の同朝 run を確認してください (#401)"
           exit 1
 
       # 落ちたことに気づける唯一の経路。別の見張りを置かず、落ちた当人が Issue を立てる
