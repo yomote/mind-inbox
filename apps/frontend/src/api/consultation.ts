@@ -5,7 +5,7 @@ import { chatStreamFetch, ttsPrefetchFetch, useMock } from "./http";
 import { parseSseJsonStream } from "./sse";
 import { appendStreamingReply, beginStreamingReply, clearStreamingReply } from "./streamingReply";
 import { reportStubbedResponse, resetStubbedResponse } from "./stubStatus";
-import { isApprovalNotFound } from "./trpcError";
+import { approvalAlreadyProcessedStatus, isApprovalNotFound } from "./trpcError";
 
 const voicevoxSpeaker = Number(import.meta.env.VITE_VOICEVOX_SPEAKER || "3");
 
@@ -139,15 +139,38 @@ export class ApprovalRequestUnusable extends Error {
  * 次の発話を送れる状態に戻す。
  *
  * **クラス名の "Expired" は「もう受け付けられない」の略で、「期限切れ」の断定ではない**
- * (PR #416 judge / Codex P1)。ai-agent は approved / rejected 済みの ID にも同じ 404 を
- * 返す (`Approval already processed`) ため、**この例外から「操作は実行されていない」は
- * 導けない**。ユーザーに出す文面で断定しないこと (`FAILURE_MESSAGE.approvalExpired`)。
- * 区別できるようにするには契約側の冪等化 (409 + status 返却) が要る → #82 に選択肢を記録。
+ * (PR #416 judge / Codex P1)。TTL 失効・再起動・checkpoint 消失のどれかは分からず、
+ * **この例外から「操作は実行されていない」は導けない**。ユーザーに出す文面で
+ * 断定しないこと (`FAILURE_MESSAGE.approvalExpired`)。
+ *
+ * ただし**処理済み (二重送信) はもうここに来ない** (#82 / PO 裁定 2026-08-15 B 案) —
+ * それは 409 → `ApprovalAlreadyProcessed` に分離した。両者を再び 1 つに戻すと、
+ * 「すでに承認済みです (実行されました)」と言えたケースが「実行されたか分かりません」に
+ * 逆戻りする。
  */
 export class ApprovalExpired extends Error {
   constructor() {
-    super("approval request no longer accepted (expired, released, or already processed)");
+    super("approval request no longer accepted (expired or released)");
     this.name = "ApprovalExpired";
+  }
+}
+
+/**
+ * その承認 ID は**すでに処理済み** (#82 / PO 裁定 2026-08-15 B 案 / BFF の `CONFLICT`)。
+ *
+ * `ApprovalExpired` と分けているのが本体。`status` が `approved` なら**副作用は実行された**、
+ * `rejected` なら**実行されていない**と言い切れる (ai-agent は status を resume の前に
+ * 保存するので、承認済みの再送 = 実行されたあとの再送)。以前はこれが 404 に混ざっていて、
+ * UI は「実行されたか分かりません」としか言えなかった (送信済みのメールを再送させうる)。
+ */
+export class ApprovalAlreadyProcessed extends Error {
+  // パラメータプロパティ短縮記法は erasableSyntaxOnly で使えないため明示代入する。
+  readonly status: "approved" | "rejected";
+
+  constructor(status: "approved" | "rejected") {
+    super(`approval request already processed (${status})`);
+    this.name = "ApprovalAlreadyProcessed";
+    this.status = status;
   }
 }
 
@@ -275,6 +298,8 @@ export async function sendMessage(sessionId: string, text: string): Promise<Assi
  *
  * @throws {ApprovalExpired} 承認レコードがもう無い (BFF の `NOT_FOUND` +
  *         `approval-not-found` token)。再試行では回復しないので、通信失敗と区別して投げる。
+ * @throws {ApprovalAlreadyProcessed} すでに承認 / 却下済み (BFF の `CONFLICT`)。
+ *         実行の有無まで言えるので、上と別に投げる (#82)。
  */
 export async function respondToApproval(
   approvalRequestId: string,
@@ -286,9 +311,14 @@ export async function respondToApproval(
   try {
     res = await trpc.consultation.approve.mutate({ approvalRequestId, approved });
   } catch (err) {
-    // 承認レコードがもう受け付けられない: 期限切れ (TTL 1h) / ai-agent 再起動で消えた、
-    // または**すでに approved / rejected 済み**。ai-agent はこの 3 つを区別せず 404 を返す。
-    // ここで種別を立てないと UI は「通信失敗 → 再試行」しか出せず、
+    // すでに承認 / 却下済み (二重送信) = BFF の CONFLICT (#82 / PO 裁定 2026-08-15 B 案)。
+    // **「もう無い」より先に見る** — 結果 (実行されたか) まで言える方を優先しないと、
+    // 判別できたケースが「分かりません」に落ちる。
+    const processed = approvalAlreadyProcessedStatus(err);
+    if (processed) throw new ApprovalAlreadyProcessed(processed);
+
+    // 承認レコードがもう受け付けられない: 期限切れ (TTL 1h) / ai-agent 再起動で消えた /
+    // checkpoint が消えた。ここで種別を立てないと UI は「通信失敗 → 再試行」しか出せず、
     // 何度押しても同じ 404 に当たり続ける (#82 / PR #416 judge major-1)。
     //
     // **code だけで判定しない** (Codex 4 巡目 P2): tRPC は procedure 未配備でも

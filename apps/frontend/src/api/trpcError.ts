@@ -1,7 +1,11 @@
 import { TRPCClientError } from "@trpc/client";
 // BFF と共有する機械可読 token (依存を持たない値だけの module / ADR 0001 と同じ流儀で
 // 「BFF が真実」。zod を跨ぐスキーマは共有しないが、リテラル 1 個の重複は避ける)。
-import { APPROVAL_NOT_FOUND_TOKEN } from "../../../bff/src/trpc/errorTokens";
+import {
+  APPROVAL_NOT_FOUND_TOKEN,
+  parseApprovalAlreadyProcessed,
+} from "../../../bff/src/trpc/errorTokens";
+import type { ApprovalProcessedStatus } from "../../../bff/src/trpc/errorTokens";
 
 /**
  * BFF が返した tRPC エラーコードの判定。
@@ -38,4 +42,24 @@ export function isApprovalNotFound(err: unknown): boolean {
     err.data?.code === "NOT_FOUND" &&
     err.message === APPROVAL_NOT_FOUND_TOKEN
   );
+}
+
+/**
+ * 「その承認はすでに処理済み」だけを拾い、**結果 (承認済み / 却下済み) まで返す**
+ * (#82 / PO 裁定 2026-08-15 B 案)。該当しなければ null。
+ *
+ * `isApprovalNotFound` と分ける理由: 「もう無い」からはカードを閉じる判断しかできないが、
+ * こちらは**副作用が実行されたかどうか**まで言える (`approved` = 実行された /
+ * `rejected` = 実行されていない)。両者を同じ扱いに戻すと、UI は再び
+ * 「実行されたか分かりません」しか言えなくなる。
+ *
+ * **code だけで判定しない**のも `isApprovalNotFound` と同じ理由 — `CONFLICT` は将来
+ * ほかの procedure でも使いうる汎用コードなので、BFF がこのケースにだけ載せる
+ * token との一致まで見る。token の書式 (`token:status`) の符号化・復号は BFF の
+ * `errorTokens.ts` が 1 箇所で持ち、ここは復号だけを値として import する。
+ */
+export function approvalAlreadyProcessedStatus(err: unknown): ApprovalProcessedStatus | null {
+  if (!(err instanceof TRPCClientError)) return null;
+  if (err.data?.code !== "CONFLICT") return null;
+  return parseApprovalAlreadyProcessed(err.message);
 }

@@ -92,8 +92,14 @@ export type ApproveResponse = z.infer<typeof ApproveResponseSchema>;
  * 投げる `ValueError` で、`app/main.py` が `detail=str(exc)` にそのまま載せる:
  *
  *   - `Approval not found: '<id>'`             — 未知 ID / TTL 1h 失効 / 再起動で消えた
- *   - `Approval already processed: '<status>'` — 消費済み (approved / rejected)
  *   - `Approval checkpoint not found: '<id>'`  — checkpoint が消えている
+ *
+ * **消費済み (approved / rejected) はここに来ない** (#82 / PO 裁定 2026-08-15 B 案)。
+ * 二重送信は 409 + 現在状態 (`ApprovalConflictSchema`) に分離した — 404 に混ぜると
+ * 「副作用が実行されたあとに ack だけ落ちた」再送から実行の有無が読めない。
+ * ai-agent 側が `already processed` を再び `ValueError` に戻すと**この 404 判別に
+ * 落ちてきてしまう**ので、`npm run test:contract` が 404 の detail 一覧と突き合わせて
+ * 落とす (409 側は別の照合)。
  *
  * **これ以外の 404 は承認レコードの状態について何も言っていない** (FastAPI 既定の
  * `Not Found` / プロキシの HTML / ベース URL 違い)。区別せず全部を「もう受け付け
@@ -102,8 +108,29 @@ export type ApproveResponse = z.infer<typeof ApproveResponseSchema>;
  * 文字列一致なので ai-agent 側の文言変更で静かに切れる — 切れたことに気づけるよう、
  * `npm run test:contract` が ai-agent のソース中の実文字列と突き合わせる。
  */
-export const APPROVAL_GONE_DETAIL =
-  /^Approval (not found|already processed|checkpoint not found)\b/;
+export const APPROVAL_GONE_DETAIL = /^Approval (not found|checkpoint not found)\b/;
+
+/**
+ * `/approve` の **409** body (#82 / PO 裁定 2026-08-15 B 案 / ai-agent の
+ * `ApprovalConflictResponse`)。同じ承認 ID への 2 回目が来たときの現在状態。
+ *
+ * **status を見て初めて「実行されたか」が言える**: `approved` = 副作用は実行された、
+ * `rejected` = 実行されていない。以前はこれが 404 に混ざっていたため、UI は
+ * 「実行されたか分かりません」としか言えなかった (送信済みのメールを再送させうる)。
+ *
+ * `processedAt` は **nullable** — この項目より前に書かれた ai-agent の `ApprovalRecord`
+ * には時刻が無い。**時刻の欠落を「未処理」と読まないこと** (判定は status だけで行う)。
+ *
+ * schema にして zod で検証しているのは、**承認と無関係な 409 を「処理済み」に
+ * 化けさせない**ため (404 側で detail を選り分けているのと同じ規律)。プロキシや
+ * 別レイヤの 409 はこの形にならないので、パースに失敗したものは上流障害として扱う。
+ */
+export const ApprovalConflictSchema = z.object({
+  detail: z.string(),
+  status: z.enum(["approved", "rejected"]),
+  processedAt: z.string().nullable(),
+});
+export type ApprovalConflict = z.infer<typeof ApprovalConflictSchema>;
 
 // ── /extract (Problem 中心 2層モデル / ADR 0007・0012) ────────────────────────
 

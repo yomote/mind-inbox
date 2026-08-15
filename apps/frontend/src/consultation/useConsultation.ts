@@ -11,6 +11,7 @@
 
 import * as React from "react";
 import {
+  ApprovalAlreadyProcessed,
   ApprovalExpired,
   ApprovalRequestUnusable,
   ExtractFailed,
@@ -128,15 +129,31 @@ const FAILURE_MESSAGE = {
    * カードは閉じて会話を続けられるようにする (#82 / PR #416 judge major-1)。
    *
    * **「実行されていません」と断定してはいけない** (PR #416 judge / Codex P1)。
-   * ai-agent は失効した ID だけでなく **approved / rejected 済みの ID にも 404** を返し
-   * (`workflow.py` の `Approval already processed`)、しかも status の保存は resume 実行の
-   * **前**に起きる。つまり「承認が実行されたあとの再試行」でも 404 になるので、
-   * 404 から「実行されていない」は導けない — 断定すると、送信済みのメールを
-   * ユーザーがもう一度送る判断をしうる (approvalApprove と同じ事故)。
+   * TTL 失効 / ai-agent 再起動 / checkpoint 消失のどれかは 404 からは分からず、
+   * 「承認が実行されたあとにレコードだけ消えた」可能性も残る — 断定すると、
+   * 送信済みのメールをユーザーがもう一度送る判断をしうる (approvalApprove と同じ事故)。
+   *
+   * **処理済み (二重送信) はここに来ない** (#82 / PO 裁定 2026-08-15 B 案) —
+   * それは 409 → `approvalAlreadyProcessed` で結果まで言い切る。文言を統合すると、
+   * 言い切れるケースまで「確認してください」に落ちる。
    */
   approvalExpired:
-    "この承認はもう受け付けられません (期限が切れたか、すでに処理済みです)。操作が実行されたかは、会話を続けてご確認ください。",
+    "この承認はもう受け付けられません (期限切れか、承認の記録が失われています)。操作が実行されたかは、会話を続けてご確認ください。",
 } as const;
+
+/**
+ * すでに処理済みの承認への再送 (#82 / PO 裁定 2026-08-15 B 案)。
+ *
+ * **期限切れ (`approvalExpired`) と文言を分ける**のがここの本体。409 は結果まで
+ * 運んでくるので、「実行されたかは会話を続けて確認してください」ではなく
+ * **実行の有無を言い切れる** — 承認済みなら操作は実行済み、却下済みなら実行されていない。
+ * ここを曖昧な文言に戻すと、契約を 409 に分けた意味がユーザーに届かない。
+ */
+function approvalAlreadyProcessedMessage(status: "approved" | "rejected"): string {
+  return status === "approved"
+    ? "この承認はすでに処理済みです (結果: 承認 — 操作は実行されました)。"
+    : "この承認はすでに処理済みです (結果: 却下 — 操作は実行されていません)。";
+}
 
 /** 承認 / 却下の失敗文面。断定してよい範囲が承認と却下で違う (judge major-2)。 */
 function approvalFailureMessage(approved: boolean): string {
@@ -146,20 +163,29 @@ function approvalFailureMessage(approved: boolean): string {
 /**
  * 承認応答の結末。**「もう受け付けられない」は「失敗」ではない** (#82 / PR #416 judge major-1)。
  *
- * 404 を返す承認への再試行は永久に成功しないので、runAction のエラー経路
+ * 404 / 409 を返す承認への再試行は永久に成功しないので、runAction のエラー経路
  * (= Snackbar + カードを残す) に流すと会話が二度と進まなくなる。ここで
- * 「送れた / もう無い」に分け、どちらもカードを閉じる側へ倒す。
+ * 「送れた / もう無い / すでに処理済み」に分け、どれもカードを閉じる側へ倒す。
+ * **「もう無い」と「処理済み」を潰さない** — 後者だけが実行の有無を言い切れる (#82)。
  */
-type ApprovalOutcome = { expired: true } | { expired: false; message: ChatMessage };
+type ApprovalOutcome =
+  | { kind: "expired" }
+  /** すでに処理済み (#82)。**結果まで運ぶ** — 実行の有無を言い切る材料になる。 */
+  | { kind: "processed"; status: "approved" | "rejected" }
+  | { kind: "responded"; message: ChatMessage };
 
 async function respondOrExpire(
   approvalRequestId: string,
   approved: boolean,
 ): Promise<ApprovalOutcome> {
   try {
-    return { expired: false, message: await respondToApproval(approvalRequestId, approved) };
+    return { kind: "responded", message: await respondToApproval(approvalRequestId, approved) };
   } catch (err) {
-    if (err instanceof ApprovalExpired) return { expired: true };
+    // 処理済みを「もう無い」に丸めない (#82 / PO 裁定 2026-08-15 B 案)。丸めると
+    // 「すでに承認済みです (実行されました)」と言えるケースが
+    // 「実行されたか分かりません」に落ちる。
+    if (err instanceof ApprovalAlreadyProcessed) return { kind: "processed", status: err.status };
+    if (err instanceof ApprovalExpired) return { kind: "expired" };
     throw err;
   }
 }
@@ -440,14 +466,20 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
       );
       if (!discarded.ok) return;
 
-      if (discarded.value.expired) {
-        // 承認レコードがもう無い (期限切れ / ai-agent 再起動 / すでに処理済み)。
+      if (discarded.value.kind === "expired") {
+        // 承認レコードがもう無い (期限切れ / ai-agent 再起動 / checkpoint 消失)。
         // **却下できないことは発話を止める理由にならない** — この ID へ却下を送り直しても
         // 永久に 404 なので、カードを閉じてそのまま送る (ここで止めると会話が永久に詰む /
-        // judge major-1)。ただし**「実行されなかった」とは言えない** (処理済みでも 404 に
-        // なる / Codex P1) ので、文面は approvalExpired 側で断定しない。
+        // judge major-1)。ただし**「実行されなかった」とは言えない** (Codex P1) ので、
+        // 文面は approvalExpired 側で断定しない。
         setPendingApproval(null);
         setActionError(FAILURE_MESSAGE.approvalExpired);
+      } else if (discarded.value.kind === "processed") {
+        // すでに解決済みの承認だった (#82)。同じくカードを閉じて発話は進めるが、
+        // **結果は言い切る** — 「実行されたか分かりません」で流すと、送信済みの
+        // 操作をユーザーがもう一度依頼しうる。
+        setPendingApproval(null);
+        setActionError(approvalAlreadyProcessedMessage(discarded.value.status));
       } else {
         baseSession = {
           ...baseSession,
@@ -519,12 +551,18 @@ export function useConsultation(transition: (next: AppRoute) => void): Consultat
 
       const responded = outcome.value;
       setPendingApproval(null);
-      if (responded.expired) {
+      if (responded.kind === "expired") {
         // 会話に残せる発話が無い (サーバは応答を返さない)。**「何も実行していない」とは
-        // 書かない** — 処理済みの ID でも 404 なので、実行済みかどうかは分からない
-        // (Codex P1)。何が起きたかは Snackbar で言葉にする — 黙ってカードが消えると
+        // 書かない** — レコードが消えた理由は 404 からは分からない (Codex P1)。
+        // 何が起きたかは Snackbar で言葉にする — 黙ってカードが消えると
         // 「押したのに無反応」になる。
         setActionError(FAILURE_MESSAGE.approvalExpired);
+        return;
+      }
+      if (responded.kind === "processed") {
+        // 二重送信 (#82)。ここは**言い切れる** — 409 が結果を運んでくるので、
+        // 「すでに承認済み (実行済み)」「すでに却下済み (未実行)」を区別して伝える。
+        setActionError(approvalAlreadyProcessedMessage(responded.status));
         return;
       }
       // 承認・却下どちらの結果もガイドの発話として会話に残す (何が起きたかを消さない)。

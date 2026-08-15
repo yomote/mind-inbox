@@ -26,6 +26,46 @@ components:
       - intensity
       title: Affect
       type: object
+    ApprovalConflictResponse:
+      description: '`/approve` の **409**: その承認 ID はもう解決済み (#82 / PO 裁定 2026-08-15 B 案)。
+
+
+        404 (レコードが無い) と分ける理由: 「承認が届いて副作用も実行されたが ack だけ
+
+        落ちた」あとの再送を 404 に混ぜると、**実行されたかどうかが応答から一切分からない**
+
+        (status の保存は resume 実行の前に起きるため、承認済み ID への再送も 404 になる)。
+
+        409 + 現在状態にすると、クライアントは「すでに承認済み (= 実行された)」と
+
+        「すでに却下済み (= 実行されていない)」を**言い切れる**。
+
+
+        `detail` は FastAPI の慣行に合わせた人間可読の 1 行で、**機械判別は `status` で行う**
+
+        (BFF は zod でこの body を検証してから専用エラーに写す)。プロキシや別レイヤが返す
+
+        汎用 409 はこの形にならないので、承認と無関係な 409 を「処理済み」に化けさせない。'
+      properties:
+        detail:
+          title: Detail
+          type: string
+        processed_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Processed At
+        status:
+          enum:
+          - approved
+          - rejected
+          title: Status
+          type: string
+      required:
+      - detail
+      - status
+      title: ApprovalConflictResponse
+      type: object
     ApproveRequest:
       properties:
         approval_request_id:
@@ -426,6 +466,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApproveResponse'
           description: Successful Response
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalConflictResponse'
+          description: Conflict
         '422':
           content:
             application/json:

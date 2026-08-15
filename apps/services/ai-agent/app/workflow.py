@@ -35,6 +35,7 @@ v1 の自前 7 状態 FSM を MAF の graph Workflow に写し (ADR 0016 / M1-3)
 import logging
 import uuid
 from collections.abc import AsyncIterator, Sequence
+from datetime import datetime, timezone
 from typing import Never, Optional, Union
 
 from agent_framework import (
@@ -110,6 +111,25 @@ _APP_CHECKPOINT_TYPES = [
     "app.workflow:ChatTurn",
     "app.workflow:FinalReply",
 ]
+
+
+class ApprovalAlreadyProcessedError(Exception):
+    """同じ承認 ID が **2 回目**に送られた (#82 / PO 裁定 2026-08-15 B 案)。
+
+    `ValueError` (= main.py が 404 に写す「承認レコードがもう無い」) と**別の型**に
+    しているのが本体。二重送信とレコード消失を同じ 404 に混ぜていた頃は、
+    「承認が届いて副作用も実行されたが ack だけ落ちた」あとの再送も 404 になり、
+    クライアントは**実行されたかどうかを判定できなかった** (承認 status の保存は
+    resume 実行の前に起きるため)。型で分けることで main.py が 409 + 現在状態に写す。
+
+    `processed_at` が None なのは「時刻を持たない古いレコード」であって、
+    **未処理ではない** — status を無視して時刻で判定してはいけない。
+    """
+
+    def __init__(self, status: str, processed_at: Optional[str]) -> None:
+        super().__init__(f"Approval already processed: {status!r}")
+        self.status = status
+        self.processed_at = processed_at
 
 
 def _cosmos_enabled() -> bool:
@@ -839,7 +859,13 @@ async def resume_after_approval(
     if not record:
         raise ValueError(f"Approval not found: {approval_id!r}")
     if record.status != "pending":
-        raise ValueError(f"Approval already processed: {record.status!r}")
+        # **404 (レコードが無い) と混ぜない** (#82 / PO 裁定 2026-08-15 B 案)。
+        # ここに来るのは「同じ承認 ID がもう一度送られた」= 二重送信で、下の
+        # `record.status = ...` は resume 実行の**前**に書かれるため、承認済みの
+        # 再送は「副作用がすでに実行された」ことを意味する。404 に混ぜると
+        # クライアントは実行の有無を判定できず、送信済みのメールをもう一度
+        # 送らせる事故が起きる。
+        raise ApprovalAlreadyProcessedError(record.status, record.processed_at)
     if not record.checkpoint_id:
         raise ValueError(f"Approval checkpoint not found: {approval_id!r}")
 
@@ -859,6 +885,11 @@ async def resume_after_approval(
             raise ValueError(f"Approval checkpoint not found: {approval_id!r}")
 
     record.status = "approved" if approved else "rejected"
+    # 解決時刻は status と**同じ save で**書く (別 save にすると「status だけ動いて
+    # 時刻が無い」中間状態が 409 応答に出る)。resume の前に書く順序は従来どおり —
+    # 実行中のクラッシュで二重実行されるより、「実行されたかもしれない」を
+    # 409 で正直に返せる方を選ぶ。
+    record.processed_at = datetime.now(timezone.utc).isoformat()
     await approval_repo.save(record)
 
     workflow = _build_chat_workflow(

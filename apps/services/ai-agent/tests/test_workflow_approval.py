@@ -23,10 +23,12 @@ fixture 置き換え (#320): 承認は自前の `is_side_effecting` 判定では
 """
 
 import logging
+from datetime import datetime
 
 import pytest
 
 from app.workflow import (
+    ApprovalAlreadyProcessedError,
     _pending_run_storages,
     get_pending_checkpoint_storage,
     resume_after_approval,
@@ -199,22 +201,66 @@ class TestResumeAfterApproval:
                 "no-such-id", True, session_repo, approval_repo, client
             )
 
-    async def test_l1_resume_twice_raises_already_processed(
-        self, session_repo, approval_repo
+    @pytest.mark.parametrize(
+        "first_decision,expected_status",
+        [(True, "approved"), (False, "rejected")],
+    )
+    async def test_l1_二回目の承認は現在状態つきの専用例外になる(
+        self, session_repo, approval_repo, first_decision, expected_status
     ):
+        """二重送信は「レコードが無い」(ValueError → 404) と**別の型**で上がる (#82)。
+
+        無いと何が静かに通るか: 承認済み ID への再送が未知 ID と同じ 404 に戻り、
+        「副作用が実行されたあとに ack だけ落ちた」再送から**実行の有無が読めなくなる**
+        (status の保存は resume 実行の前なので、承認済みでも 404 になっていた)。
+        UI は「実行されたか分かりません」としか言えず、送信済みのメールを
+        ユーザーがもう一度送る判断をしうる。
+        """
         client = approval_script()
 
         res = await run_workflow(
             "s-twice", "返信して", session_repo, approval_repo, client
         )
         await resume_after_approval(
-            res.approval_request_id, True, session_repo, approval_repo, client
+            res.approval_request_id, first_decision, session_repo, approval_repo, client
         )
 
-        with pytest.raises(ValueError, match="Approval already processed"):
+        with pytest.raises(ApprovalAlreadyProcessedError) as excinfo:
             await resume_after_approval(
                 res.approval_request_id, True, session_repo, approval_repo, client
             )
+
+        # 型だけでなく **現在状態も** 運べていること (承認済み / 却下済みを言い分ける材料)
+        assert excinfo.value.status == expected_status
+        assert excinfo.value.processed_at is not None
+        # ValueError (= 404 に写る側) に混ざっていないこと。継承で通ってしまうと
+        # main.py の except の順序次第で静かに 404 へ戻る
+        assert not isinstance(excinfo.value, ValueError)
+
+    async def test_l1_解決時刻は承認レコードに記録される(
+        self, session_repo, approval_repo
+    ):
+        """409 body の `processed_at` の出どころを pin する (#82)。
+
+        無いと何が静かに通るか: 時刻を書き忘れても例外の形は変わらないので、
+        409 の `processed_at` が**常に null** になっても誰も気づけない。
+        """
+        client = approval_script()
+
+        res = await run_workflow(
+            "s-processed-at", "返信して", session_repo, approval_repo, client
+        )
+        assert (await approval_repo.get(res.approval_request_id)).processed_at is None
+
+        await resume_after_approval(
+            res.approval_request_id, True, session_repo, approval_repo, client
+        )
+
+        record = await approval_repo.get(res.approval_request_id)
+        assert record.status == "approved"
+        # ISO 8601 (UTC) として解釈できること。文字列の存在だけを見ると、
+        # 表現がローカル時刻や独自形式に変わっても通ってしまう
+        assert datetime.fromisoformat(record.processed_at).tzinfo is not None
 
 
 class TestChainedApproval:

@@ -32,6 +32,7 @@ from app.history import ChatHistory
 from app import main as app_main
 from app.main import app, get_approval_repo, get_session_repo
 from app.schemas import ChatResponse
+from app.workflow import ApprovalAlreadyProcessedError
 
 
 @pytest.fixture(autouse=True)
@@ -353,3 +354,56 @@ class TestApprove:
             json={"approval_request_id": "appr-x", "approved": True},
         )
         assert res.status_code == 404
+        # 404 の detail は BFF が「承認レコードがもう無い」を判別する契約
+        # (APPROVAL_GONE_DETAIL / contract-check.mjs)。形が変わると判別が静かに外れる
+        assert res.json()["detail"].startswith("Approval not found")
+
+    @pytest.mark.parametrize(
+        "status,processed_at",
+        [
+            ("approved", "2026-08-15T02:00:00+00:00"),
+            ("rejected", "2026-08-15T02:00:00+00:00"),
+            # 時刻を持たない古いレコード (この項目より前に書かれた Cosmos 文書)
+            ("approved", None),
+        ],
+    )
+    async def test_l2_二回目の承認は409で現在状態を返す(
+        self, client, monkeypatch, status, processed_at
+    ):
+        """#82 / PO 裁定 2026-08-15 B 案。
+
+        無いと何が静かに通るか: 二重送信が 404 (= レコードが無い) に戻り、
+        BFF/フロントは「実行されたかどうか分からない」に落ちる。承認済みの
+        再送を「もう無い」と同じ応答にすると、送信済みのメールをユーザーが
+        もう一度送る判断をしうる。status / processed_at のどれが欠けても
+        フロントは「結果: 承認/却下」を言い切れない。
+        """
+
+        async def boom(*args, **kwargs):
+            raise ApprovalAlreadyProcessedError(status, processed_at)
+
+        monkeypatch.setattr(app_main, "resume_after_approval", boom)
+
+        res = await client.post(
+            "/approve",
+            json={"approval_request_id": "appr-1", "approved": True},
+        )
+
+        assert res.status_code == 409
+        assert res.json() == {
+            "detail": f"Approval already processed: '{status}'",
+            "status": status,
+            "processed_at": processed_at,
+        }
+
+    async def test_l2_409の宣言はopenapiにも出ている(self, client):
+        """生成 OpenAPI (docs/api/ai-agent.yaml) に 409 が載ること。
+
+        無いと何が静かに通るか: 実装だけ 409 を返し、生成 docs は 200/404 しか
+        宣言しない状態になる (契約書を読んだ実装者が 409 を扱わない)。
+        """
+        schema = app_main.app.openapi()
+        responses = schema["paths"]["/approve"]["post"]["responses"]
+        assert "409" in responses
+        ref = responses["409"]["content"]["application/json"]["schema"]["$ref"]
+        assert ref.endswith("ApprovalConflictResponse")
