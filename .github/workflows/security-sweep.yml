@@ -28,6 +28,9 @@ on:
 permissions:
   contents: read
   issues: write
+  # SAST の稼働実測 (code scanning analyses の読み取り) にだけ使う。read のみ —
+  # このスキャンは alert を書き換えない。
+  security-events: read
 
 env:
   # ツールのバージョンは固定する (ADR 0025 の :latest 禁止と同じ理由 —
@@ -90,6 +93,27 @@ jobs:
           tar -C /tmp -xzf /tmp/gitleaks.tgz gitleaks
           /tmp/gitleaks dir . --no-banner --exit-code 0 \
             --report-format json --report-path /tmp/sweep-reports/gitleaks.json
+
+      # SAST はこの sweep の対象外だが「未導入」でもない — CodeQL default setup が
+      # 回している (Issue #408 §2)。レポートに文言で「稼働中」と書くと止まっても
+      # 気づけないので、直近の解析を API で実測して sweep.py に渡す。
+      # 取れなかったときは**空ファイルを置かない** — 空配列 (= 解析実績ゼロ) と
+      # 取得失敗が区別できなくなるため、理由を載せた {"unavailable": …} を置き、
+      # sweep.py が「未検証: 理由」として出す。この step 自体では run を落とさない
+      # (SAST の生死は watchers.json / 状況ページの担当。ここで落とすと
+      #  依存 CVE と秘密の検出という本務まで巻き添えで止まる)。
+      - name: SAST (CodeQL default setup) の稼働実測
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh api "repos/${GITHUB_REPOSITORY}/code-scanning/analyses?tool_name=CodeQL&per_page=1" \
+                 > /tmp/sweep-reports/code-scanning.json 2> /tmp/code-scanning.err; then
+            jq -n --rawfile reason /tmp/code-scanning.err \
+              '{unavailable: ($reason | gsub("\\s+"; " ") | .[0:300])}' \
+              > /tmp/sweep-reports/code-scanning.json
+            echo "::warning::CodeQL の稼働を実測できなかった (レポートには『未検証』として出る)"
+            cat /tmp/code-scanning.err
+          fi
 
       - name: 集計 (severity 別 + カバー外の明示)
         id: sweep

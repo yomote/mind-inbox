@@ -6,6 +6,8 @@
     - severity の数え間違い / pip-audit の severity 無しを moderate 等に寄せる改変が
       通り、Issue タイトルの深刻度が実態とズレる
     - 0 件のときにカバー外領域の明示が落ち、「0 件 = 安全」という嘘が緑色の顔をして通る
+    - SAST の欄が、**稼働 / 解析実績ゼロ / 取得失敗**のどれでも同じ顔になる
+      (403 やネットワーク失敗を「稼働中」と読ませる嘘。Issue #408 の再発)
 """
 
 import json
@@ -14,13 +16,26 @@ from pathlib import Path
 from sweep import (
     ParseError,
     aggregate,
+    load_sast_status,
     load_tool_results,
+    parse_code_scanning,
     parse_gitleaks,
     parse_npm_audit,
     parse_pip_audit,
     parse_pnpm_audit,
+    sast_line,
     severity_line,
 )
+
+CODE_SCANNING_SAMPLE = [
+    {
+        "id": 91,
+        "ref": "refs/heads/main",
+        "commit_sha": "0123456789abcdef0123456789abcdef01234567",
+        "created_at": "2026-08-14T01:48:12Z",
+        "tool": {"name": "CodeQL", "version": "2.20.0"},
+    }
+]
 
 NPM_SAMPLE = {
     "auditReportVersion": 2,
@@ -180,6 +195,95 @@ def test_l1_明細の省略は黙って切らず残件数を明示する() -> No
     ]
     md = aggregate([_tool("a", many)])["markdown"]
     assert "…他 10 件" in md
+
+
+def test_l1_SASTはCodeQL未導入と書かず実測した稼働を出す() -> None:
+    """#408 の再発防止。CodeQL default setup は 2026-08-12 から回っている。"""
+    measured = parse_code_scanning(CODE_SCANNING_SAMPLE)
+    sast = {"status": "verified", **_no_flag(measured)}
+    line = sast_line(sast)
+    assert line.startswith("✅")
+    assert "2026-08-14T01:48:12Z" in line  # 「いつ回ったか」まで出す (稼働の証拠)
+    assert "refs/heads/main" in line
+    assert "0123456" in line and "0123456789abcdef" not in line  # sha は短縮
+    md = aggregate([_tool("a", [])], sast)["markdown"]
+    assert line in md
+    # 事実と食い違う宣言 (#408 で見つかった「CodeQL 未導入」) を二度と出さない
+    assert "CodeQL 未導入" not in md
+    assert "この sweep の対象外" in md  # 「回していない」こと自体は毎回明示する
+
+
+def test_l1_SASTの取得失敗は稼働と区別できる未検証になる() -> None:
+    """403 / ネットワーク失敗を「稼働中」と読ませない (取れなかったものを合格と書かない)。"""
+    try:
+        parse_code_scanning({"unavailable": "HTTP 403: Resource not accessible"})
+        raise AssertionError("取得失敗を黙って通した")
+    except ParseError as exc:
+        assert "403" in str(exc)
+
+    line = sast_line({"status": "unverified", "reason": "HTTP 403"})
+    assert not line.startswith("✅")
+    assert "未検証" in line
+    assert "HTTP 403" in line  # 理由を落とさない
+    report = aggregate([_tool("a", [])], {"status": "unverified", "reason": "HTTP 403"})
+    assert line in report["markdown"]
+
+    # API のエラー文に `|` や改行が混ざっても表 (= 理由の読める場所) を壊さない
+    messy = sast_line({"status": "unverified", "reason": "gh: 403\n{a|b}\n"})
+    assert "\n" not in messy and "{a\\|b}" in messy
+
+
+def test_l1_SAST解析実績ゼロは稼働とも未検証とも別の顔で出る() -> None:
+    """空配列 = 「有効なのに一度も回っていない」。0 件 = 安全ではない。"""
+    assert parse_code_scanning([]) == {"analyzed": False}
+    line = sast_line({"status": "never_analyzed"})
+    assert not line.startswith("✅")
+    assert "解析実績ゼロ" in line and "未検証" not in line
+    assert line in aggregate([_tool("a", [])], {"status": "never_analyzed"})["markdown"]
+
+
+def test_l1_SASTの実測を渡さなければ稼働扱いされず未検証になる() -> None:
+    """呼び出し側が実測を落としたとき、黙って「稼働中」に見えないこと。"""
+    report = aggregate([_tool("a", [])])
+    assert report["sast"]["status"] == "unverified"
+    assert "未検証" in report["markdown"]
+
+
+def test_l1_load_sast_statusはファイルの有無と中身で3通りに分かれる(
+    tmp_path: Path,
+) -> None:
+    assert load_sast_status(tmp_path)["status"] == "unverified"  # 実測 step が回らず
+
+    path = tmp_path / "code-scanning.json"
+    path.write_text(json.dumps(CODE_SCANNING_SAMPLE), encoding="utf-8")
+    assert load_sast_status(tmp_path) == {
+        "status": "verified",
+        "created_at": "2026-08-14T01:48:12Z",
+        "ref": "refs/heads/main",
+        "commit_sha": "0123456",
+        "tool": "CodeQL",
+    }
+
+    path.write_text("[]", encoding="utf-8")
+    assert load_sast_status(tmp_path)["status"] == "never_analyzed"
+
+    path.write_text('{"unavailable": "HTTP 403"}', encoding="utf-8")
+    unverified = load_sast_status(tmp_path)
+    assert unverified["status"] == "unverified"
+    assert "403" in unverified["reason"]
+
+
+def test_l1_SASTの失敗はsweep自身のツール失敗と混ざらない() -> None:
+    """SAST は別 workflow の担当 — ここで failed に混ぜると run を落とす判定が濁る。"""
+    report = aggregate([_tool("a", [])], {"status": "unverified", "reason": "HTTP 403"})
+    assert report["failed"] == []
+
+
+def _no_flag(measured: dict) -> dict:
+    """parse_code_scanning の analyzed フラグを外した残り (load_sast_status と同じ形)。"""
+    rest = dict(measured)
+    assert rest.pop("analyzed") is True
+    return rest
 
 
 def test_l1_load_tool_resultsは欠損ファイルをerrorにする(tmp_path: Path) -> None:

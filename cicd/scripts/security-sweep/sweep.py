@@ -10,15 +10,19 @@
 規律 — **静かに嘘をつかない** (debt-check と同じ):
     - ツールの出力が読めなかったら、そのツールを「0 件」ではなく「実行できず」として
       報告する。取れなかったものを「合格」と書かない
-    - カバーしていない領域 (SAST / 実環境の設定監査 / 依存の悪意ある更新 …) は
+    - カバーしていない領域 (実環境の設定監査 / 依存の悪意ある更新 …) は
       検出 0 件でも**毎回明示する**。「0 件 = 安全」と読ませない (silent caps 禁止)
+    - **カバー外の宣言そのものが古びる**のも同じ嘘 — SAST は「未導入」ではなく
+      別機構 (CodeQL default setup) が回している。決め打ちで「稼働中」と書くと
+      止まっても気づけないので、稼働は毎回**実測を解釈して**出す (下の SAST_*)
 
 使い方:
     sweep.py <reports_dir>
       reports_dir に各ツールの生 JSON (下の TOOLS のファイル名) を置いて呼ぶ。
+      SAST の稼働実測 (code-scanning.json) も同じディレクトリから読む。
       stdout に JSON 1 個:
         {"total": int, "by_severity": {...}, "failed": [tool_id, ...],
-         "issue_needed": bool, "tools": [...], "markdown": str}
+         "issue_needed": bool, "tools": [...], "sast": {...}, "markdown": str}
       markdown は Issue 本文にそのまま使える形。診断は stderr。
 
 終了コード: 0 = 集計できた (検出件数・ツール失敗は JSON で表す) / 1 = 前提不足
@@ -39,9 +43,26 @@ SEVERITIES = ("critical", "high", "moderate", "low", "info", "unknown")
 # (黙って切らない — silent caps 禁止)。
 MAX_LINES_PER_TOOL = 50
 
+# SAST の稼働実測。**この sweep は SAST を回さない**が、「未導入」でもない —
+# 2026-08-12 18:42 UTC から CodeQL default setup が回っている
+# (watchers.json の id 333008403 / Issue #408 §2)。ここで扱うのは
+# `GET /repos/{owner}/{repo}/code-scanning/analyses?tool_name=CodeQL` の生出力で、
+# workflow が取ってこのファイル名で置く。取れなければ「未検証: 理由」に落ちる —
+# **文言で「稼働中」と決め打ちしない** (止まったときに嘘が緑色の顔をして残るため)。
+SAST_REPORT_FILE = "code-scanning.json"
+SAST_NAME = "SAST (CodeQL default setup)"
+# workflow が実測 step ごと落ちた / 古い呼び出しでファイルが無い場合の既定。
+# 「稼働中」でも「停止」でもなく**未検証**に倒す。
+SAST_NOT_MEASURED = {
+    "status": "unverified",
+    "reason": f"{SAST_REPORT_FILE} が reports_dir に無い (実測 step が回っていない)",
+}
+
 # この sweep がカバーしていない領域。検出器を足したらここから消す (debt-check と同じ運用)。
 UNCOVERED = [
-    "SAST (コード自体の脆弱パターン — injection / SSRF 等)。semgrep / bandit / CodeQL 未導入",
+    "SAST (コード自体の脆弱パターン — injection / SSRF 等) は **この sweep の対象外**。"
+    f"回しているのは別機構の {SAST_NAME} で、その稼働は上の「隣接する検査」欄に実測を出す "
+    "(semgrep / bandit は入れない — ADR 0038)",
     "実環境の設定監査 (Azure の EasyAuth / ingress / RBAC の実設定)。"
     "release-gate の security-reviewer と ops-inspect の領域 (ADR 0019)",
     "依存の悪意ある更新 (タイポスクワット / postinstall / lockfile への混入)。"
@@ -142,6 +163,57 @@ def parse_gitleaks(data: object) -> list[dict]:
     ]
 
 
+def parse_code_scanning(data: object) -> dict:
+    """code scanning analyses API の出力から「最後に SAST が回った事実」を取り出す。
+
+    3 通りに分ける (ここを 2 通りに畳むと嘘が生まれる):
+        - 解析実績あり → いつ / どの ref / どのツールで回ったか
+        - **空配列** = 解析実績ゼロ。「異常なし」ではなく **SAST が回っていない**
+        - API を叩けなかった → workflow が `{"unavailable": 理由}` を置く → ParseError
+          (= 未検証。取れなかったものを「稼働中」と書かない)
+    """
+    if isinstance(data, dict) and "unavailable" in data:
+        raise ParseError(f"API から取得できず: {data['unavailable'] or '理由の記録なし'}")
+    if not isinstance(data, list):
+        raise ParseError("code scanning analyses の JSON が配列ではありません")
+    if not data:
+        return {"analyzed": False}
+    latest = data[0]
+    if not isinstance(latest, dict) or not latest.get("created_at"):
+        raise ParseError("analyses の要素に created_at がありません")
+    tool = latest.get("tool")
+    return {
+        "analyzed": True,
+        "created_at": latest["created_at"],
+        "ref": latest.get("ref", "?"),
+        "commit_sha": str(latest.get("commit_sha", "?"))[:7],
+        "tool": (tool.get("name") if isinstance(tool, dict) else None) or "?",
+    }
+
+
+def _cell(text: str) -> str:
+    """表のセルに入れる 1 行。API のエラー文をそのまま入れると `|` や改行で表が壊れ、
+    **理由が読めなくなる (= 未検証の理由を失う)** ので、ここで潰しておく。"""
+    return " ".join(str(text).split()).replace("|", "\\|")
+
+
+def sast_line(sast: dict) -> str:
+    """隣接機構 (SAST) の 1 行。稼働 / 実績ゼロ / 未検証 を見分けられる形で出す。"""
+    if sast["status"] == "verified":
+        return (
+            f"✅ 直近の解析 {sast['created_at']} "
+            f"(ref `{sast['ref']}` / `{sast['commit_sha']}` / tool {sast['tool']})"
+        )
+    if sast["status"] == "never_analyzed":
+        return "🔴 **解析実績ゼロ** — 有効になっていても実際には SAST が回っていません"
+    return (
+        f"⚠️ **未検証**: {_cell(sast['reason'])} "
+        "— 稼働している証拠も止まっている証拠も取れていません "
+        "(状況ページ <https://yomote.github.io/mind-inbox/status/> の "
+        f"「{SAST_NAME}」で確認する)"
+    )
+
+
 # (ファイル名, tool_id, 表示名, パーサ)。workflow 側の出力ファイル名と 1:1。
 TOOLS = [
     ("npm-root.json", "npm-audit-root", "npm audit (root)", parse_npm_audit),
@@ -185,13 +257,18 @@ def severity_line(by_severity: dict[str, int]) -> str:
     return " · ".join(parts) if parts else "0 件"
 
 
-def aggregate(tool_results: list[dict]) -> dict:
+def aggregate(tool_results: list[dict], sast: dict | None = None) -> dict:
     """ツール別の結果 (ok / error + findings) を 1 個のレポートに畳む。
 
     ここが「しきい値」の正典: Issue を立てるのは **検出 1 件以上** (issue_needed)。
     severity で足切りしない — 到達可能性の判定はこの機構では**できない**ので、
     足切りは「静かに嘘をつく」side に倒れる。ノイズが問題になったら
     しきい値を上げるのではなく、判定できる材料 (直接依存か等) を足す。
+
+    sast は隣接機構の実測 (省略 = 未検証)。**この sweep のツール失敗とは混ぜない** —
+    `failed` は「この sweep が検査できなかった対象」の桁で、run を落とす判定に
+    使われる。SAST は別 workflow の担当で、その生死は watchers.json / 状況ページが
+    見張る (ここで run を落とすと責任の所在がぼやける)。レポート本文には毎回出す。
     """
     by_severity = count_by_severity(tool_results)
     total = sum(by_severity.values())
@@ -203,6 +280,7 @@ def aggregate(tool_results: list[dict]) -> dict:
         "failed": failed,
         "issue_needed": total > 0,
         "tools": tool_results,
+        "sast": sast if sast is not None else dict(SAST_NOT_MEASURED),
     }
     report["markdown"] = to_markdown(report)
     return report
@@ -248,6 +326,12 @@ def to_markdown(report: dict) -> str:
     for tool in report["tools"]:
         lines.extend(_tool_section(tool))
     lines += [
+        "## 隣接する検査 (この sweep の外で回っているもの)",
+        "",
+        "| 検査 | 担当 | 実測 |",
+        "| --- | --- | --- |",
+        f"| SAST (コードの脆弱パターン) | CodeQL default setup | {sast_line(report['sast'])} |",
+        "",
         "## この sweep がカバーしていないもの",
         "",
         "**0 件 = 安全、ではありません。** 以下は機械スキャンの対象外です (ADR 0038):",
@@ -283,6 +367,23 @@ def load_tool_results(reports_dir: Path) -> list[dict]:
     return results
 
 
+def load_sast_status(reports_dir: Path) -> dict:
+    """SAST (隣接機構) の実測を読む。読めなかったら「未検証: 理由」に落とす。"""
+    path = reports_dir / SAST_REPORT_FILE
+    if not path.exists():
+        log(f"⚠️ SAST: 実測ファイルが無い — {path}")
+        return dict(SAST_NOT_MEASURED)
+    try:
+        measured = parse_code_scanning(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, json.JSONDecodeError, ParseError) as exc:
+        log(f"⚠️ SAST: 稼働を確認できず — {exc}")
+        return {"status": "unverified", "reason": str(exc)}
+    if not measured.pop("analyzed"):
+        log("🔴 SAST: 解析実績ゼロ (CodeQL の解析が 1 件も無い)")
+        return {"status": "never_analyzed"}
+    return {"status": "verified", **measured}
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         log(f"使い方: {Path(argv[0]).name} <reports_dir>")
@@ -291,10 +392,11 @@ def main(argv: list[str]) -> int:
     if not reports_dir.is_dir():
         log(f"reports_dir がありません: {reports_dir}")
         return 1
-    report = aggregate(load_tool_results(reports_dir))
+    report = aggregate(load_tool_results(reports_dir), load_sast_status(reports_dir))
     log(
         f"検出 {report['total']} 件 ({report['severity_line']}) / "
-        f"実行できず {len(report['failed'])} ツール / カバー外 {len(UNCOVERED)} 領域 (本文に明示)"
+        f"実行できず {len(report['failed'])} ツール / カバー外 {len(UNCOVERED)} 領域 (本文に明示) / "
+        f"SAST {report['sast']['status']}"
     )
     print(json.dumps(report, ensure_ascii=False))
     return 0
