@@ -5,6 +5,8 @@ const extraction: ExtractionResult = {
   sessionId: "s-preview",
   newProblemCount: 1,
   updatedProblemCount: 1,
+  // 確定後のレビュー画面には整理マップは来ない (#433 — マップは対話中だけの作業机)。
+  thinkingMap: null,
   items: [
     {
       mention: {

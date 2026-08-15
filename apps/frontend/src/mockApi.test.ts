@@ -140,6 +140,39 @@ describe("[単体] mockApi.previewExtraction — 読み取り専用の下書き 
     const result = await previewExtraction("s-preview", messages);
     expect(result.items[0].mention.excerpt).toBe(messages[0].text.slice(0, 60));
   });
+
+  // 無いと何が静かに通るか: mock の整理マップ (#433) が固定の 1 枚に退行しても画面は
+  // 描画され続け、**「地図が育つ」体験と「未探索の枝は増えることもある」**という
+  // この機能の 2 つの前提が mock ビルド (ADR 0004 = 契約の真実) から消える。
+  // とくに枝が増える往復が無くなると、単調減少を前提にした UI が入り込んでも気づけない。
+  it("会話が進むと整理マップが育ち、未探索の枝は増えることもある (#433)", async () => {
+    const unexplored = (nodes: { status: string }[]) =>
+      nodes.filter((n) => n.status === "unexplored").length;
+
+    const early = await previewExtraction("s-map", conversation(1));
+    const mid = await previewExtraction("s-map", conversation(3));
+    const late = await previewExtraction("s-map", conversation(4));
+
+    expect(early.thinkingMap?.nodes.length ?? 0).toBeGreaterThan(0);
+    expect(mid.thinkingMap!.nodes.length).toBeGreaterThan(early.thinkingMap!.nodes.length);
+    // 枝 (未探索) が増える往復が必ず存在する。
+    expect(unexplored(mid.thinkingMap!.nodes)).toBeGreaterThan(
+      unexplored(early.thinkingMap!.nodes),
+    );
+    // AI の見立て (hypothesis) が本人の発話で裏取りされて confirmed に変わる往復もある
+    // — kind × status の 2 軸 (裁定 4) が動いていることの mock 側の証拠。
+    expect(
+      late.thinkingMap!.nodes.some((n) => n.kind === "hypothesis" && n.status === "confirmed"),
+    ).toBe(true);
+  });
+
+  // 無いと何が静かに通るか: 整理マップは対話中だけの作業机 (どこにも保存されない) なのに、
+  // 確定の結果にも地図が乗ると「保存されたもの」として扱う実装が後から生えうる。
+  it("確定 (commitPreview) の結果に整理マップは載らない (#433)", async () => {
+    const drafts = (await previewExtraction("s-map-commit", conversation(2))).items;
+    const committed = await commitPreview("s-map-commit", drafts);
+    expect(committed.thinkingMap).toBeNull();
+  });
 });
 
 describe("[単体] mockApi.commitPreview — 表示中の下書きをそのまま保存する (#187 / PR #282 P1)", () => {

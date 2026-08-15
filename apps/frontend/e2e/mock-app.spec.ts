@@ -47,6 +47,8 @@ test.describe("mock ビルド (認証なし)", () => {
     // disabled)。real 未結線ビルドでは従来の「困りごとを抽出」のまま。
     await expect(page.getByRole("button", { name: "この内容で確定" })).toBeDisabled();
     await page.getByRole("button", { name: "今すぐ整理" }).click();
+    // 右ペインの既定タブは「AI の整理」(#433)。下書きカードは「下書き」タブ側にある。
+    await page.getByTestId("draft-tab").click();
     await expect(page.getByTestId("preview-card").first()).toBeVisible();
 
     await page.getByRole("button", { name: "この内容で確定" }).click();

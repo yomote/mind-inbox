@@ -33,6 +33,8 @@ test.describe("主要画面のスクリーンショット", () => {
     // mock ビルドは下書きプレビュー有効 (#187 / ADR 0039)。確定対象の下書きを
     // 「今すぐ整理」で作ってから「この内容で確定」する (表示中の下書きの保存)。
     await page.getByRole("button", { name: "今すぐ整理" }).click();
+    // 右ペインの既定タブは「AI の整理」(#433)。下書きカードは「下書き」タブ側にある。
+    await page.getByTestId("draft-tab").click();
     await expect(page.getByTestId("preview-card").first()).toBeVisible();
     await page.getByRole("button", { name: "この内容で確定" }).click();
     await expect(page.getByText(/件の困りごとを見つけました/)).toBeVisible();
