@@ -28,6 +28,7 @@ import {
   logout,
 } from "./auth/msal";
 import { useTextToSpeech } from "./voice/useTextToSpeech";
+import { setSpeedScale, useSpeedScale } from "./voice/speedScale";
 import { useConsultation } from "./consultation/useConsultation";
 import { useEnvStatus } from "./envstatus/useEnvStatus";
 import { EnvStatusBanner } from "./envstatus/EnvStatusBanner";
@@ -89,9 +90,13 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const [authStatus, setAuthStatus] = React.useState<AuthStatus>("loading");
   const [accountMenuAnchorEl, setAccountMenuAnchorEl] = React.useState<null | HTMLElement>(null);
 
+  // 読み上げ速度は設定画面から変える (#242)。永続化と「React の外 (先行合成) からも
+  // 同じ値を読む」ことは voice/speedScale.ts が持つ。
+  const speedScale = useSpeedScale();
+
   // 読み上げ (state 3 + audio ref 5 + VOICEVOX/ブラウザの分岐) は voice/ が所有する (#141)。
   // 音声入力 (STT) は SessionComposer の useVoiceInput が所有する (#121 / ADR 0023)。
-  const tts = useTextToSpeech({ standalone, speaker: voicevoxSpeaker });
+  const tts = useTextToSpeech({ standalone, speaker: voicevoxSpeaker, speedScale });
 
   // 「今この環境、触って大丈夫?」(env-status-banner.mdx)。VITE_ENV_STATUS_REPO 未設定なら常に unknown。
   const envStatus = useEnvStatus();
@@ -408,6 +413,8 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
                 }
                 themeMode={themeMode}
                 onToggleTheme={onToggleTheme}
+                speedScale={speedScale}
+                onChangeSpeedScale={setSpeedScale}
                 transition={transition}
                 setDraftMessage={consultation.setDraftMessage}
                 handleLogin={handleLogin}

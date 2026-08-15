@@ -76,6 +76,14 @@ export type TextToSpeechOptions = {
   standalone: boolean;
   /** VOICEVOX の話者 ID。 */
   speaker: number;
+  /**
+   * 読み上げ速度 (等倍 = 1.0 / #242)。設定画面のスライダーが真実 (`voice/speedScale.ts`)。
+   *
+   * **VOICEVOX とブラウザ読み上げの両方に効かせる**。片方だけに配ると、VOICEVOX が
+   * 未設定・障害でフォールバックした瞬間だけ速度が戻り、「たまに速度設定が無視される」
+   * という再現しづらい形になる (dialogue-session.mdx §5.5)。
+   */
+  speedScale: number;
 };
 
 /**
@@ -126,7 +134,11 @@ export type TextToSpeech = {
   reset: () => void;
 };
 
-export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): TextToSpeech {
+export function useTextToSpeech({
+  standalone,
+  speaker,
+  speedScale,
+}: TextToSpeechOptions): TextToSpeech {
   const [status, setStatus] = React.useState<TtsStatus>("idle");
   const speaking = status !== "idle";
   const [enabled, setEnabled] = React.useState(true);
@@ -179,7 +191,7 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
       // BFF 直叩き + Authorization は api/http.ts に集約 (#69)。相対 /api/tts のままだと
       // SWA に投げて必ず失敗し、ブラウザ読み上げへ静かにフォールバックしていた
       // (2026-08-08 実環境で発覚)。
-      const res = await ttsFetch(text, speaker);
+      const res = await ttsFetch(text, speaker, speedScale);
 
       if (res.status === 204) {
         // VOICEVOX_BASE_URL 未設定時の stub。フォールバックをトリガーする。
@@ -192,7 +204,7 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
 
       return await res.blob();
     },
-    [speaker],
+    [speaker, speedScale],
   );
 
   /**
@@ -202,31 +214,36 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
    * (dialogue-session.mdx §5.5: 無言で別の声に置き換えない)。standalone は想定内なので
    * 理由なしで呼ぶ = 警告を出さない。
    */
-  const speakWithBrowser = React.useCallback((text: string, degradedReason?: string) => {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      setStatus("idle");
-      setOutputMode("idle");
-      setError(degradedReason ?? "このブラウザは音声読み上げに対応していません。");
-      return;
-    }
+  const speakWithBrowser = React.useCallback(
+    (text: string, degradedReason?: string) => {
+      if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+        setStatus("idle");
+        setOutputMode("idle");
+        setError(degradedReason ?? "このブラウザは音声読み上げに対応していません。");
+        return;
+      }
 
-    setOutputMode("browser-fallback");
-    if (degradedReason) setError(degradedReason);
+      setOutputMode("browser-fallback");
+      if (degradedReason) setError(degradedReason);
 
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "ja-JP";
-    // 日本語ボイスがあれば優先 (無ければ既定ボイス + lang ヒント)。
-    const jaVoice = window.speechSynthesis
-      .getVoices()
-      .find((v) => v.lang?.toLowerCase().startsWith("ja"));
-    if (jaVoice) utterance.voice = jaVoice;
-    utterance.rate = 1;
-    setStatus("playing");
-    utterance.onend = () => setStatus("idle");
-    utterance.onerror = () => setStatus("idle");
-    window.speechSynthesis.speak(utterance);
-  }, []);
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = "ja-JP";
+      // 日本語ボイスがあれば優先 (無ければ既定ボイス + lang ヒント)。
+      const jaVoice = window.speechSynthesis
+        .getVoices()
+        .find((v) => v.lang?.toLowerCase().startsWith("ja"));
+      if (jaVoice) utterance.voice = jaVoice;
+      // 設定した速度はフォールバックにも効かせる (#242)。VOICEVOX の speedScale と
+      // `SpeechSynthesisUtterance.rate` はどちらも等倍 1.0 の倍率なのでそのまま渡す。
+      utterance.rate = speedScale;
+      setStatus("playing");
+      utterance.onend = () => setStatus("idle");
+      utterance.onerror = () => setStatus("idle");
+      window.speechSynthesis.speak(utterance);
+    },
+    [speedScale],
+  );
 
   // **2 系統をどちらも解錠する** (#150): ブラウザ読み上げ (speechSynthesis) と
   // ずんだもんの再生 (HTMLAudioElement) は別物で、前者だけ解錠しても後者は弾かれる。
@@ -250,7 +267,9 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
   /** 合成 1 文ぶん。フロント側キャッシュ (同じ文の読み直しで往復しない) を通す。 */
   const synthesizeCached = React.useCallback(
     async (text: string): Promise<Blob> => {
-      const cacheKey = `${speaker}:${text}`;
+      // **速度をキーに含める** (#242)。含めないと、速度を変えた直後の読み上げが
+      // 前の速度で焼いた WAV を再生し、「変えたのに変わらない」になる。
+      const cacheKey = `${speaker}:${speedScale}:${text}`;
       const cache = voiceCacheRef.current;
       const cached = cache.get(cacheKey);
       if (cached) return cached;
@@ -263,7 +282,7 @@ export function useTextToSpeech({ standalone, speaker }: TextToSpeechOptions): T
       }
       return blob;
     },
-    [speaker, synthesizeWithVoicevox],
+    [speaker, speedScale, synthesizeWithVoicevox],
   );
 
   /**
