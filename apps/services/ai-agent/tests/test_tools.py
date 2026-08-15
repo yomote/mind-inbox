@@ -136,6 +136,9 @@ class TestFunctionInvocationLimits:
 DECLARED_APPROVAL_MODE = {
     "search_faq": "never_require",
     "get_inbox_stats": "never_require",
+    # 選択肢の提示 (#432-b)。**副作用は無い** — 会話の分岐を差し出すだけで、
+    # 状態は何も変えないし、押されなくてもターンは完結する (完了型 / PO 裁定)
+    "offer_choices": "never_require",
     "send_reply": "always_require",
     "archive_message": "always_require",
 }

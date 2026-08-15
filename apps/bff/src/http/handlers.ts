@@ -147,6 +147,15 @@ const TtsRequestSchema = z.object({
   prefetch: z.boolean().optional(),
   /** #185: 合成せず読み上げ単位の文の並びだけ返す (フロントの逐次再生用)。 */
   plan: z.boolean().optional(),
+  /**
+   * #242: 読み上げ速度 (VOICEVOX の speedScale)。**optional = 省略で従来どおり等倍**。
+   *
+   * optional なのは後方互換のため — フロントと BFF は別デプロイ単位なので、
+   * 必須にすると BFF を先に出した瞬間に旧フロントの読み上げが 400 で全滅する。
+   * 範囲は voicevox-wrapper の `speed_scale` (0.5〜2.0) に合わせる。ここで弾かないと
+   * 範囲外は wrapper が 422 を返し、フロントには「合成失敗」としか見えない。
+   */
+  speedScale: z.number().min(0.5).max(2).optional(),
 });
 
 /** VOICEVOX 合成 (`POST /api/tts`)。未構成なら 204 でフロントに縮退を促す。 */
@@ -163,7 +172,7 @@ export async function handleTts(
       return new Response(`Invalid request: ${parsed.error.message}`, { status: 400 });
     }
 
-    const { text, speaker, prefetch, plan } = parsed.data;
+    const { text, speaker, prefetch, plan, speedScale } = parsed.data;
     // text は読み上げ対象 = AI の応答本文。**長さだけ**残す。
     logEvent("tts.request", {
       chars: text.length,
@@ -185,14 +194,14 @@ export async function handleTts(
       if (prefetch) {
         // text は「ストリーミングで今までに届いた途中経過」。どこが文の切れ目かの判断は
         // BFF 側 (prefetchTts) が単独で持つ — フロントに分割ロジックを置かない (ADR 0024)。
-        const result = await prefetchTts({ text, speakerId: speaker });
+        const result = await prefetchTts({ text, speakerId: speaker, speedScale });
         logEvent("tts.prefetch", { status: result.status, count: result.sentences });
         // stub (VOICEVOX 未構成) でも 204 で返す — プリフェッチは fire-and-forget なので
         // フロントは結果を使わないが、区別できるようにはしておく。
         return new Response(null, { status: result.status === "stub" ? 204 : 202 });
       }
 
-      const audio = await synthesizeTts({ text, speakerId: speaker });
+      const audio = await synthesizeTts({ text, speakerId: speaker, speedScale });
       if (!audio) return new Response(null, { status: 204 });
 
       return new Response(audio, { status: 200, headers: { "Content-Type": "audio/wav" } });

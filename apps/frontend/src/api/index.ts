@@ -1,4 +1,5 @@
 export {
+  ApprovalAlreadyProcessed,
   ApprovalExpired,
   ApprovalRequestUnusable,
   startNewConsultation,

@@ -30,13 +30,15 @@ jobs:
     # 待受予算の積み上げ (playwright.live.config.ts は workers: 1 = 直列。全部を足す):
     #   curl 版 (コールドスタート込み最大 ~11 分) + 永続化プローブ ~1 分
     #   + pnpm install / playwright install ~4 分
-    #   + e2e-live: ux-probe 1,700s (ux-probe.spec.ts の setTimeout)
-    #     + 他 3 本 × 240s (config の既定) = 計 2,420s ≒ 40.5 分
+    #   + e2e-live: ux-probe **2 シナリオ** × 1,700s (#435 / 予算式は
+    #     apps/frontend/e2e-live/ux-probe-scenarios.ts の probeTestTimeoutMs)
+    #     + 他 3 本 × 240s (config の既定) = 計 4,120s ≒ 68.7 分
     #   + 失敗証拠 / trace 暗号化 / データブランチ追記の後段 ~3 分
-    #   = 最悪 ~60 分。**45 分では途中で job ごと打ち切られ、report-failure にも
+    #   = 最悪 ~88 分。**足りないと途中で job ごと打ち切られ、report-failure にも
     #   artifact のアップロードにも到達できない** (= 落ちたのに通報が残らない / PR #399 レビュー指摘)。
-    # 余裕を 15 分積んで 75 分。プローブの予算を動かしたらこの数字も動かすこと。
-    timeout-minutes: 75
+    # 余裕を 7 分積んで 95 分。**シナリオを足したらこの数字も動かすこと**
+    # (1 シナリオ = 最悪 +28 分)。
+    timeout-minutes: 95
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -111,31 +113,37 @@ jobs:
         run: |
           python3 - <<'EOF'
           import glob, json, os
+          # **全記録を要約する** (#435: シナリオごとに 1 ファイル)。1 ファイルだけ読むと
+          # もう片方のシナリオの warn が誰の目にも触れないまま run が緑になる
           files = sorted(glob.glob("apps/frontend/probe-results/*.json"))
           if not files:
               print("::notice::UX プローブ記録なし (プローブ手前で fail した可能性 — E2E ログ参照)")
               raise SystemExit(0)
-          rec = json.load(open(files[-1]))
-          lines = [
-              "## UX プローブ (#123 M0 / ADR 0022)",
-              f"- scenario: `{rec['scenario']['id']}` / 完了 {rec['summary']['completedTurns']}/{rec['scenario']['plannedTurns']} 往復",
-              f"- send→応答表示: avg {rec['summary']['avgSendToReplyVisibleMs']}ms / max {rec['summary']['maxSendToReplyVisibleMs']}ms (1 往復目はコールドスタート込み)",
-              "",
-              "| turn | send→tRPC | send→表示 | TTS合成 | warn |",
-              "| --- | --- | --- | --- | --- |",
-          ]
-          for t in rec["turns"]:
-              tm = t["timings"]
-              tts = f"{tm['ttsRequestToResponseMs']}ms" if tm["ttsRequestToResponseMs"] is not None else "n/a"
-              lines.append(
-                  f"| {t['index']} | {tm['sendToTrpcResponseMs']}ms | {tm['sendToReplyVisibleMs']}ms "
-                  f"| {tts} | {len(t['warnings'])} |"
-              )
-              for w in t["warnings"]:
-                  print(f"::warning title=UX probe turn {t['index']} ({w['category']})::{w['message']}")
+          lines = ["## UX プローブ (#123 M0 / ADR 0022)"]
+          for path in files:
+              rec = json.load(open(path))
+              scenario = rec["scenario"]["id"]
+              lines += [
+                  "",
+                  f"### `{scenario}`",
+                  f"- 完了 {rec['summary']['completedTurns']}/{rec['scenario']['plannedTurns']} 往復",
+                  f"- send→応答表示: avg {rec['summary']['avgSendToReplyVisibleMs']}ms / max {rec['summary']['maxSendToReplyVisibleMs']}ms (1 往復目はコールドスタート込み)",
+                  "",
+                  "| turn | send→tRPC | send→表示 | TTS合成 | warn |",
+                  "| --- | --- | --- | --- | --- |",
+              ]
+              for t in rec["turns"]:
+                  tm = t["timings"]
+                  tts = f"{tm['ttsRequestToResponseMs']}ms" if tm["ttsRequestToResponseMs"] is not None else "n/a"
+                  lines.append(
+                      f"| {t['index']} | {tm['sendToTrpcResponseMs']}ms | {tm['sendToReplyVisibleMs']}ms "
+                      f"| {tts} | {len(t['warnings'])} |"
+                  )
+                  for w in t["warnings"]:
+                      print(f"::warning title=UX probe {scenario} turn {t['index']} ({w['category']})::{w['message']}")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
               f.write("\n".join(lines) + "\n")
-          print(f"summary written for {files[-1]}")
+          print(f"summary written for {len(files)} record(s): {files}")
           EOF
 
       # 記録 JSON は artifact とデータブランチの両方に残す (ADR 0029 → ADR 0041)。
@@ -164,33 +172,50 @@ jobs:
       - name: UX プローブ記録をデータブランチへ追記 (採点の入力 / ADR 0041)
         if: always() && steps.guard.outputs.run == 'true'
         run: |
-          PROBE_JSON="$(ls -1 apps/frontend/probe-results/*.json 2>/dev/null | sort | tail -1 || true)"
-          if [ -z "$PROBE_JSON" ]; then
-            echo "::notice::UX プローブ記録なし — データブランチへの追記をスキップ"
-            exit 0
-          fi
+          # **全記録を積む** (#435: シナリオごとに 1 ファイル)。`tail -1` で 1 本だけ
+          # 拾っていた頃の形のままシナリオを増やすと、片方の記録が毎朝黙って捨てられ、
+          # そのシナリオの採点行が一度も積まれないまま run は緑になる
+          # nullglob: 記録が 1 件も無いときに `*.json` という**存在しないパス**を
+          # 掴んで「封筒化に失敗」の warning を出さないため (原因を取り違える)
+          shopt -s nullglob
+          PROBE_FILES=(apps/frontend/probe-results/*.json)
+          shopt -u nullglob
 
-          # 終了コードは必ずコマンド単体の直後に取る (PR #157 レビュー指摘と同じ理由)
-          set +e
-          python3 cicd/scripts/ux-probe/probe-record-comment.py envelope "$PROBE_JSON" > /tmp/probe-envelope.json
-          rc=$?
-          set -e
+          ENVELOPES=()
+          i=0
+          for PROBE_JSON in "${PROBE_FILES[@]}"; do
+            i=$((i + 1))
+            OUT="/tmp/probe-envelope-$i.json"
+            # 終了コードは必ずコマンド単体の直後に取る (PR #157 レビュー指摘と同じ理由)
+            set +e
+            python3 cicd/scripts/ux-probe/probe-record-comment.py envelope "$PROBE_JSON" > "$OUT"
+            rc=$?
+            set -e
+            if [ "$rc" -ne 0 ]; then
+              echo "::warning::プローブ記録を封筒化できませんでした (exit $rc): $PROBE_JSON — artifact から調査してください"
+              continue
+            fi
+            ENVELOPES+=("$OUT")
+          done
 
-          if [ "$rc" -ne 0 ]; then
-            echo "::warning::プローブ記録を封筒化できませんでした (exit $rc) — artifact から調査してください"
+          if [ "${#ENVELOPES[@]}" -eq 0 ]; then
+            echo "::notice::追記できる UX プローブ記録なし — データブランチへの追記をスキップ"
             exit 0
           fi
 
           # 追記の失敗も warning に丸める。`run:` は既定で `bash -eo pipefail` なので、
           # ここを裸で呼ぶと一時的な push 失敗で run 全体が failure になり、
           # ゴールデンパスの死活監視としては偽陽性になる。
+          # (全 payload を 1 回の呼び出しで渡す = push も 1 回 — 競合リトライを増やさない)
           set +e
-          ./cicd/scripts/ux-data/append-observation.sh /tmp/probe-envelope.json
+          ./cicd/scripts/ux-data/append-observation.sh "${ENVELOPES[@]}"
           rc=$?
           set -e
 
           if [ "$rc" -ne 0 ]; then
-            echo "::warning::記録の追記に失敗しました (exit $rc) — artifact から調査してください"
+            echo "::warning::記録の追記に失敗しました (exit $rc / ${#ENVELOPES[@]} 件) — artifact から調査してください"
+          else
+            echo "データブランチへ ${#ENVELOPES[@]} 件の記録を追記した"
           fi
 
       # 落ちたときの一次情報。緑のときは不要。

@@ -31,6 +31,7 @@ vi.mock("../clients/aiAgentClient", async (importOriginal) => ({
 }));
 
 import {
+  ApprovalAlreadyProcessedError,
   ApprovalNotFoundError,
   ExtractError,
   approve as approveAiAgent,
@@ -49,7 +50,7 @@ import {
 import { InMemoryProblemRepository } from "../repositories/problemRepository";
 import { runWithLogger } from "../observability/telemetry";
 import type { TrpcContext } from "./context";
-import { APPROVAL_NOT_FOUND_TOKEN } from "./errorTokens";
+import { APPROVAL_NOT_FOUND_TOKEN, parseApprovalAlreadyProcessed } from "./errorTokens";
 import { appRouter } from "./router";
 
 // ---- helpers ---------------------------------------------------------------
@@ -145,6 +146,7 @@ describe("[L2] consultation.start", () => {
       requiresApproval: false,
       approvalRequestId: null,
       citations: [],
+      choices: [],
     });
 
     const result = await makeCaller().consultation.start({
@@ -190,6 +192,7 @@ describe("[L2] consultation.start", () => {
       requiresApproval: false,
       approvalRequestId: null,
       citations: [],
+      choices: [],
       stubbed: true,
     });
 
@@ -208,6 +211,7 @@ describe("[L2] consultation.sendMessage", () => {
       requiresApproval: true,
       approvalRequestId: "appr-1",
       citations: ["doc-a", "doc-b"],
+      choices: [],
     });
 
     const result = await makeCaller().consultation.sendMessage({
@@ -220,7 +224,30 @@ describe("[L2] consultation.sendMessage", () => {
       requiresApproval: true,
       approvalRequestId: "appr-1",
       citations: ["doc-a", "doc-b"],
+      choices: [],
     });
+  });
+
+  it("選択肢 (#432-b) を承認フラグと混ぜずにそのまま通す", async () => {
+    // 無いと: 選択肢を requiresApproval に畳む / 落とす実装が通る。畳むと
+    // 「押さなくても進める会話の分岐」に承認カード (「承認するまで実行されません」)
+    // が出て、押さないと会話が止まるとユーザーに誤解させる
+    vi.mocked(sendChatMessage).mockResolvedValue({
+      reply: "どれか近いものはありますか。",
+      requiresApproval: false,
+      approvalRequestId: null,
+      citations: [],
+      choices: ["仕事のこと", "家族のこと"],
+    });
+
+    const result = await makeCaller().consultation.sendMessage({
+      sessionId: "s1",
+      message: "うまく言えない",
+    });
+
+    expect(result.choices).toEqual(["仕事のこと", "家族のこと"]);
+    expect(result.requiresApproval).toBe(false);
+    expect(result.approvalRequestId).toBeNull();
   });
 
   it("marks the reply as stubbed on the stub path and leaves the flag absent on the real path", async () => {
@@ -231,6 +258,7 @@ describe("[L2] consultation.sendMessage", () => {
       requiresApproval: false,
       approvalRequestId: null,
       citations: [],
+      choices: [],
       stubbed: true,
     });
     const stubReply = await makeCaller().consultation.sendMessage({
@@ -244,6 +272,7 @@ describe("[L2] consultation.sendMessage", () => {
       requiresApproval: false,
       approvalRequestId: null,
       citations: [],
+      choices: [],
     });
     const realReply = await makeCaller().consultation.sendMessage({
       sessionId: "s1",
@@ -310,6 +339,34 @@ describe("[L2] consultation.approve", () => {
     expect((err as TRPCError).message).toBe(APPROVAL_NOT_FOUND_TOKEN);
   });
 
+  it.each([{ status: "approved" as const }, { status: "rejected" as const }])(
+    "すでに処理済み (ApprovalAlreadyProcessedError / status=$status) は CONFLICT + 結果つき token に写す",
+    async ({ status }) => {
+      // 無いと: 二重送信が NOT_FOUND (もう無い) に混ざり、フロントは
+      // 「レコードが消えた」のか「もう解決済み」なのかを区別できなくなる
+      // (#82 / PO 裁定 2026-08-15 B 案)。**却下済み (= 確実に未実行) すら案内できない**。
+      //
+      // **決定 (approved / rejected) が message に載っていること**もこの写しの本体 —
+      // 載らないと UI は「処理済み」までしか言えず、判別した意味が消える。
+      vi.mocked(approveAiAgent).mockRejectedValue(
+        new ApprovalAlreadyProcessedError("appr-1", status, "2026-08-15T02:00:00+00:00"),
+      );
+
+      const err = await makeCaller()
+        .consultation.approve({ approvalRequestId: "appr-1", approved: true })
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+
+      expect(err).toBeInstanceOf(TRPCError);
+      expect((err as TRPCError).code).toBe("CONFLICT");
+      // NOT_FOUND (カードを閉じるが実行の有無は不明) に混ざっていないこと
+      expect((err as TRPCError).code).not.toBe("NOT_FOUND");
+      expect(parseApprovalAlreadyProcessed((err as TRPCError).message)).toBe(status);
+    },
+  );
+
   it("上流障害はそのまま失敗させる (NOT_FOUND に丸めない)", async () => {
     // 無いと: 再試行で直る障害まで「期限切れ」に化け、フロントが承認カードを閉じて
     // しまう。サーバには承認待ちが残ったまま、画面からは消える。
@@ -338,6 +395,7 @@ describe("[L2] flow: start → sendMessage → extract → problem.createPlan �
       requiresApproval: false,
       approvalRequestId: null,
       citations: [],
+      choices: [],
     });
     vi.mocked(extractAiAgent).mockResolvedValue(newExtraction("prob-1"));
     vi.mocked(createPlanAiAgent).mockResolvedValue({
@@ -784,6 +842,73 @@ describe("[単体] consultation.preview (#283 / ADR 0039 D1)", () => {
       makeCaller().consultation.preview({ sessionId: "", messages: [] }),
     ).rejects.toBeInstanceOf(TRPCError);
     expect(extractAiAgent).not.toHaveBeenCalled();
+  });
+
+  it("ai-agent の整理マップをそのまま素通しする (#433)", async () => {
+    // 無いと: 右ペインの「AI の整理」タブが常に空になる。会話は普通に進み下書きも出るので、
+    //         「まだ整理できていません」と出続けるだけで壊れているとは分からない。
+    const caller = makeCaller();
+    vi.mocked(extractAiAgent).mockResolvedValue({
+      ...newExtraction("prob-2"),
+      thinkingMap: {
+        nodes: [
+          {
+            id: "n1",
+            kind: "topic",
+            label: "転職の不安",
+            status: "confirmed",
+            parentId: null,
+            problemId: null,
+          },
+        ],
+      },
+    });
+
+    const result = await caller.consultation.preview({ sessionId: "s1", messages: [] });
+
+    expect(result.thinkingMap?.nodes).toEqual([
+      {
+        id: "n1",
+        kind: "topic",
+        label: "転職の不安",
+        status: "confirmed",
+        parentId: null,
+        problemId: null,
+      },
+    ]);
+  });
+
+  it("整理マップは preview だけが返す — 確定 (extract) は返さない (#433)", async () => {
+    // 無いと: 確定応答にも地図が乗り、レビュー画面が「保存されたもの」として地図を
+    //         受け取る。地図はどこにも保存されない (ADR 0039 D1) ので、
+    //         「保存されている」という誤解が画面の側にだけ生まれる。
+    const { caller, problemRepo } = makeCallerWithRepos();
+    await problemRepo.upsert(makeProblem());
+    vi.mocked(extractAiAgent).mockResolvedValue({
+      ...newExtraction("prob-2"),
+      thinkingMap: {
+        nodes: [
+          {
+            id: "n1",
+            kind: "topic",
+            label: "転職の不安",
+            status: "confirmed",
+            parentId: null,
+            problemId: null,
+          },
+        ],
+      },
+    });
+
+    const reExtracted = await caller.consultation.extract({ sessionId: "s1", messages: [] });
+    expect(reExtracted.thinkingMap).toBeNull();
+
+    const committed = await caller.consultation.extract({
+      sessionId: "s1",
+      messages: [],
+      draft: { items: newExtraction("prob-3").items },
+    });
+    expect(committed.thinkingMap).toBeNull();
   });
 });
 
@@ -1551,6 +1676,7 @@ describe("[単体] consultation の procedure ログ — sessionId を生のま�
       requiresApproval: false,
       approvalRequestId: null,
       citations: [],
+      choices: [],
     });
     vi.mocked(extractAiAgent).mockResolvedValue(newExtraction());
     const lines: string[] = [];

@@ -60,8 +60,15 @@ type AppRouterProps = {
   /** 副作用ツールの承認待ち (#82 / G1 / dialogue-session.mdx §5.9)。 */
   pendingApproval: ApprovalRequest | null;
   handleRespondToApproval: (approved: boolean) => void;
+  /** AI が提示した選択肢 (#432-b / dialogue-session.mdx §5.10)。空 = 選択肢なし。 */
+  offeredChoices: string[];
+  /** 選択肢をタップする = その文言を次の発話として送る。 */
+  handleSelectChoice: (choice: string) => void;
   themeMode: PaletteMode;
   onToggleTheme: () => void;
+  /** 読み上げ速度 (等倍 = 1.0 / #242)。設定画面で変える。 */
+  speedScale: number;
+  onChangeSpeedScale: (value: number) => void;
   transition: (next: AppRoute) => void;
   setDraftMessage: (value: string) => void;
   handleLogin: () => void;
@@ -128,8 +135,12 @@ export function AppRouter({
   handleRefreshPreview,
   pendingApproval,
   handleRespondToApproval,
+  offeredChoices,
+  handleSelectChoice,
   themeMode,
   onToggleTheme,
+  speedScale,
+  onChangeSpeedScale,
   transition,
   setDraftMessage,
   handleLogin,
@@ -212,6 +223,8 @@ export function AppRouter({
                 onRefreshPreview={handleRefreshPreview}
                 pendingApproval={pendingApproval}
                 onRespondToApproval={handleRespondToApproval}
+                offeredChoices={offeredChoices}
+                onSelectChoice={handleSelectChoice}
                 onDraftMessageChange={setDraftMessage}
                 onSendMessage={handleSendMessage}
                 onToggleTtsEnabled={toggleTtsEnabled}
@@ -248,7 +261,12 @@ export function AppRouter({
         path={ROUTE_PATHS.settings}
         element={
           <ProtectedRoute authStatus={authStatus}>
-            <SettingsScreen themeMode={themeMode} onToggleTheme={onToggleTheme} />
+            <SettingsScreen
+              themeMode={themeMode}
+              onToggleTheme={onToggleTheme}
+              speedScale={speedScale}
+              onChangeSpeedScale={onChangeSpeedScale}
+            />
           </ProtectedRoute>
         }
       />

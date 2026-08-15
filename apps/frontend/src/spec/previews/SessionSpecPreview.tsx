@@ -79,6 +79,43 @@ const previewExtraction = {
   ],
   newProblemCount: 1,
   updatedProblemCount: 1,
+  // 「AI の整理」タブ (#433 / §5.8) の fixture。kind × status の組み合わせを一通り見せる。
+  thinkingMap: {
+    nodes: [
+      {
+        id: "tm-1",
+        kind: "topic" as const,
+        label: "転職するかどうか",
+        status: "confirmed" as const,
+        parentId: null,
+        problemId: null,
+      },
+      {
+        id: "tm-2",
+        kind: "hypothesis" as const,
+        label: "失敗が怖いのが本体?",
+        status: "tentative" as const,
+        parentId: "tm-1",
+        problemId: null,
+      },
+      {
+        id: "tm-3",
+        kind: "unknown" as const,
+        label: "面談だけ受ける選択肢",
+        status: "unexplored" as const,
+        parentId: "tm-1",
+        problemId: null,
+      },
+      {
+        id: "tm-4",
+        kind: "topic" as const,
+        label: "タスクが多すぎる",
+        status: "confirmed" as const,
+        parentId: null,
+        problemId: null,
+      },
+    ],
+  },
 };
 
 export function SessionSpecPreview() {
@@ -103,6 +140,11 @@ export function SessionSpecPreview() {
         description: "「send_reply」を実行するには承認が必要です。実行してよろしいですか？",
       }}
       onRespondToApproval={() => {}}
+      // 選択肢 (#432-b / §5.10) も「AI が提示したターン」でしか出ないので、同じ理由で
+      // 常設する。**実際の会話では承認カードと同時には出ない** (ai-agent が承認要求の
+      // ターンに choices を積まない) — ここは見本市なので並べているだけ
+      offeredChoices={["仕事のこと", "家族やパートナーのこと", "自分の体調のこと"]}
+      onSelectChoice={() => {}}
       onDraftMessageChange={setDraftMessage}
       onSendMessage={() => {}}
       onToggleTtsEnabled={() => {}}

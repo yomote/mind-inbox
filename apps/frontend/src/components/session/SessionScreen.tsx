@@ -3,9 +3,10 @@ import { Badge, Box, Paper, Stack, Tab, Tabs, Typography } from "@mui/material";
 import type { ApprovalRequest, ConsultationSession, ExtractionResult } from "../../api";
 import type { TtsStatus } from "../../voice/useTextToSpeech";
 import { ApprovalRequestCard } from "./ApprovalRequestCard";
+import { ChoiceOptions } from "./ChoiceOptions";
 import { deriveMascotState } from "./mascotState";
-import { LivePreviewPane } from "./LivePreviewPane";
 import type { PreviewStatus } from "./LivePreviewPane";
+import { OrganizingPane } from "./OrganizingPane";
 import { SessionComposer } from "./SessionComposer";
 import { SessionControls } from "./SessionControls";
 import { SessionMessages } from "./SessionMessages";
@@ -32,6 +33,12 @@ type SessionScreenProps = {
   /** 副作用ツールの承認待ち (#82 / G1 / §5.9)。null なら承認カードを出さない。 */
   pendingApproval?: ApprovalRequest | null;
   onRespondToApproval?: (approved: boolean) => void;
+  /**
+   * AI が提示した選択肢 (#432-b / §5.10)。空配列なら何も出さない。
+   * **承認とは独立** — 押さなくても入力欄から会話を続けられる。
+   */
+  offeredChoices?: string[];
+  onSelectChoice?: (choice: string) => void;
   onDraftMessageChange: (value: string) => void;
   onSendMessage: () => void;
   onToggleTtsEnabled: () => void;
@@ -55,6 +62,8 @@ export function SessionScreen({
   onRefreshPreview,
   pendingApproval = null,
   onRespondToApproval,
+  offeredChoices = [],
+  onSelectChoice,
   onDraftMessageChange,
   onSendMessage,
   onToggleTtsEnabled,
@@ -66,7 +75,6 @@ export function SessionScreen({
   // モバイル (md 未満) は 2 ペインが成立しないのでタブ切替 (ADR 0039 D4)。
   // md 以上では両ペインを常時表示し、タブ UI 自体を出さない。
   const [activeTab, setActiveTab] = React.useState<"dialogue" | "preview">("dialogue");
-  const previewCount = preview?.items.length ?? 0;
   // 対話タブを見ている間に下書きが**更新されたら**バッジで知らせる (D4 / §5.8)。
   //
   // 「見た」の基準は**更新そのもの** (= preview オブジェクトの世代) であって件数ではない。
@@ -121,6 +129,20 @@ export function SessionScreen({
           />
         )}
 
+        {/* 選択肢 (#432-b / §5.10) も会話の直下・入力欄の上。承認カードとは
+            **独立に**出る (同時に出ることは無い — ai-agent が承認要求のターンに
+            choices を積まないため)。入力欄は塞がない: 選ばずに書くのは正常な操作。
+
+            md 未満で「整理」タブを見ている間に届いても対話タブへ引き戻さない
+            (承認 §5.9 との違い)。承認はサーバが待っていて TTL で失効するから
+            引き戻す必要があるが、選択肢はサーバに待ち状態が無く、次の発話まで
+            画面に残り続けるので、見逃しても失われるものが無い。 */}
+        <ChoiceOptions
+          choices={offeredChoices}
+          loading={loading}
+          onSelect={onSelectChoice ?? (() => {})}
+        />
+
         <SessionComposer
           value={draftMessage}
           onChange={onDraftMessageChange}
@@ -157,6 +179,9 @@ export function SessionScreen({
         value={activeTab}
         onChange={handleTabChange}
         variant="fullWidth"
+        // 右ペイン内にもタブ (AI の整理 / 下書き) があるので、**どちらのペインを見ているか**を
+        // 読む側が取り違えないよう、外側のタブ群に印を付ける (#433)。
+        data-testid="session-tabs"
         sx={{ display: { xs: "flex", md: "none" } }}
       >
         <Tab value="dialogue" label="対話" />
@@ -165,9 +190,12 @@ export function SessionScreen({
           data-testid="preview-tab"
           // 未読状態の機械検証点 (§5.8)。E2E / 単体が「更新の通知が出ているか」を読める。
           data-preview-unseen={hasUnseenPreview ? "true" : "false"}
+          // 件数は右ペイン内の「下書き N」タブが持つ (#433)。既定で開くのは
+          // 「AI の整理」なので、外側のタブに下書き件数を出すと**開いて出てくるものと
+          // 数が食い違う**。ここは「整理の面がある」ことと未読だけを伝える。
           label={
             <Badge color="secondary" variant="dot" invisible={!hasUnseenPreview}>
-              整理中 {previewCount}
+              整理
             </Badge>
           }
         />
@@ -185,7 +213,8 @@ export function SessionScreen({
           {dialoguePane}
         </Box>
         <Box sx={{ display: { xs: activeTab === "preview" ? "block" : "none", md: "block" } }}>
-          <LivePreviewPane
+          {/* 右ペインは「AI の整理」(既定) / 「下書き」の 2 タブ (#433 / 裁定 1)。 */}
+          <OrganizingPane
             preview={preview}
             status={previewStatus}
             onRefresh={onRefreshPreview ?? (() => {})}

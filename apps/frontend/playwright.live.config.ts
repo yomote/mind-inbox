@@ -21,6 +21,11 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e-live",
+  // **`*.spec.ts` だけを実行する** (既定は `*.spec.ts` に加えて `*.test.ts` も拾う)。
+  // e2e-live には vitest 用の単体テスト (`ux-probe-scenarios.test.ts` — 台本と待受予算の
+  // 不変条件) が同居しており、既定のままだと Playwright がそれを拾って
+  // 「テストが 1 件も無いファイル」として実環境 job を赤くする。
+  testMatch: "**/*.spec.ts",
   outputDir: "./test-results-live",
   fullyParallel: false,
   workers: 1,

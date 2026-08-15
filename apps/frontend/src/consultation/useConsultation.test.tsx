@@ -35,11 +35,13 @@ vi.mock("../api", async (importOriginal) => ({
     items: [],
     newProblemCount: 0,
     updatedProblemCount: 0,
+    thinkingMap: null,
   })),
   commitPreview: vi.fn(),
 }));
 
 import {
+  ApprovalAlreadyProcessed,
   ApprovalExpired,
   ApprovalRequestUnusable,
   ExtractFailed,
@@ -116,6 +118,7 @@ describe("[L1] useConsultation — 相談の開始と発話", () => {
         createdAt: "2026-01-01",
       },
       approval: null,
+      choices: [],
     });
     const { result } = setup();
     await act(async () => {
@@ -314,6 +317,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
       createdAt: "2026-01-01",
     },
     approval: null,
+    choices: [],
   });
 
   async function sendTimes(result: ReturnType<typeof setup>["result"], texts: string[]) {
@@ -338,6 +342,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
       items: [],
       newProblemCount: 0,
       updatedProblemCount: 0,
+      thinkingMap: null,
     };
     vi.mocked(previewExtraction).mockResolvedValue(draft);
     const { result } = setup();
@@ -369,6 +374,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
       items: [draftItem],
       newProblemCount: 0,
       updatedProblemCount: 1,
+      thinkingMap: null,
     };
     vi.mocked(previewExtraction).mockImplementation(async (_sessionId, messages) => {
       calls.push(messages.length);
@@ -398,6 +404,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
         items: [],
         newProblemCount: 0,
         updatedProblemCount: 0,
+        thinkingMap: null,
       } as never);
     });
 
@@ -430,7 +437,13 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
     expect(result.current.session?.messages.length).toBeGreaterThan(5);
   });
 
-  const emptyDraft = { sessionId: "s1", items: [], newProblemCount: 0, updatedProblemCount: 0 };
+  const emptyDraft = {
+    sessionId: "s1",
+    items: [],
+    newProblemCount: 0,
+    updatedProblemCount: 0,
+    thinkingMap: null,
+  };
 
   it("手動「今すぐ整理」は往復数と無関係に更新する", async () => {
     vi.mocked(startNewConsultation).mockResolvedValue(session());
@@ -461,6 +474,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
       items: [draftItem],
       newProblemCount: 0,
       updatedProblemCount: 1,
+      thinkingMap: null,
     };
     vi.mocked(previewExtraction).mockResolvedValue(draft);
     const committed = { ...draft, sessionId: "s1" };
@@ -494,6 +508,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
       items: [draftItem],
       newProblemCount: 0,
       updatedProblemCount: 1,
+      thinkingMap: null,
     };
     vi.mocked(previewExtraction).mockResolvedValue(shown);
     vi.mocked(commitPreview).mockImplementation(async (_id, drafts) => ({
@@ -501,6 +516,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
       items: drafts,
       newProblemCount: 0,
       updatedProblemCount: 1,
+      thinkingMap: null,
     }));
     const { result } = setup();
     await act(async () => {
@@ -517,6 +533,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
       items: [draftItem, { mention: { id: "m-late" }, grouping: { kind: "new", problemId: "p2" } }],
       newProblemCount: 1,
       updatedProblemCount: 1,
+      thinkingMap: null,
     } as never;
     vi.mocked(previewExtraction).mockImplementation(
       () => new Promise((resolve) => (resolveLate = resolve)),
@@ -567,6 +584,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
       items: [draftItem],
       newProblemCount: 0,
       updatedProblemCount: 1,
+      thinkingMap: null,
     };
     vi.mocked(previewExtraction).mockResolvedValue(draft);
     vi.mocked(commitPreview).mockRejectedValue(new Error("commit down"));
@@ -599,6 +617,7 @@ describe("[単体] useConsultation — 下書きプレビュー (#187 / ADR 0039
       items: [draftItem],
       newProblemCount: 0,
       updatedProblemCount: 1,
+      thinkingMap: null,
     };
     vi.mocked(previewExtraction).mockImplementation(
       () => new Promise((resolve) => (resolveStale = resolve)),
@@ -699,6 +718,7 @@ describe("[L1] useConsultation — 抽出の失敗をユーザーに見せる (#
       items: [],
       newProblemCount: 0,
       updatedProblemCount: 0,
+      thinkingMap: null,
     });
     const transition = vi.fn();
     const { result } = renderHook(() => useConsultation(transition));
@@ -757,6 +777,7 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
       createdAt: "2026-01-01",
     },
     approval: { id: "appr-1", description: "「send_reply」を実行するには承認が必要です。" },
+    choices: [],
   };
 
   async function startAndAskForApproval() {
@@ -837,14 +858,14 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
   });
 
   it("受け付けられない承認 (ApprovalExpired) はカードを閉じ、実行の有無は断定せずに伝える", async () => {
-    // 無いと (1): 失効した承認 (ai-agent の TTL 1h / 再起動) を押しても「通信状況を確認して
-    //         再試行」が出続け、再試行は決して成功しないのでカードが閉じられない。
-    //         承認も却下もできず、次の発話も送れない行き止まりになる (judge major-1)。
+    // 無いと (1): 失効した承認 (ai-agent の TTL 1h / 再起動 / checkpoint 消失) を押しても
+    //         「通信状況を確認して再試行」が出続け、再試行は決して成功しないので
+    //         カードが閉じられない。承認も却下もできず、次の発話も送れない
+    //         行き止まりになる (judge major-1)。
     // 無いと (2): 「期限切れです。操作は実行されていません」と断定する文面が通る。
-    //         ai-agent は approved 済みの ID にも同じ 404 を返し (`Approval already
-    //         processed`)、status の保存は resume 実行の**前**なので、承認が実行された
-    //         あとの再試行でも 404 になる。断定すると、送信済みのメールをユーザーが
-    //         もう一度送る判断をしうる (judge / Codex P1)。
+    //         レコードが消えた理由は 404 からは分からず、「承認が実行されたあとに
+    //         レコードだけ消えた」可能性が残る。断定すると、送信済みのメールを
+    //         ユーザーがもう一度送る判断をしうる (judge / Codex P1)。
     const result = await startAndAskForApproval();
     vi.mocked(respondToApproval).mockRejectedValue(new ApprovalExpired());
 
@@ -852,9 +873,86 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
 
     expect(result.current.pendingApproval).toBeNull();
     expect(result.current.actionError).toContain("もう受け付けられません");
-    // 期限切れと処理済みを混同しない / 未実行を断定しない
-    expect(result.current.actionError).toContain("すでに処理済み");
+    // **処理済み (409) の文面と混同しない** — こちらは実行の有無を言えない側 (#82)
+    expect(result.current.actionError).not.toContain("すでに処理済み");
     expect(result.current.actionError).not.toContain("実行されていません");
+    expect(result.current.actionError).toContain("会話を続けて");
+  });
+
+  it.each([
+    { status: "approved" as const, expected: "すでに承認済み" },
+    { status: "rejected" as const, expected: "すでに却下済み" },
+  ])(
+    "すでに処理済みの承認 (status=$status) はカードを閉じ、受け付けられた決定を伝える",
+    async ({ status, expected }) => {
+      // 無いと: 二重送信が期限切れ (ApprovalExpired) と同じ文面に落ち、UI は
+      //         「もう受け付けられません (期限切れか、記録が失われています)」しか
+      //         言えない。契約を 409 + 現在状態に分けた意味 (#82 / PO 裁定
+      //         2026-08-15 B 案) がユーザーに届かず、**却下済み (確実に未実行) まで
+      //         「実行されたか確認してください」**に落ちる。
+      const result = await startAndAskForApproval();
+      vi.mocked(respondToApproval).mockRejectedValue(new ApprovalAlreadyProcessed(status));
+
+      await act(async () => await result.current.respondToPendingApproval(true));
+
+      // 再試行しても永久に 409 なのでカードは閉じる (期限切れと同じ扱い)
+      expect(result.current.pendingApproval).toBeNull();
+      expect(result.current.actionError).toContain(expected);
+      // 曖昧な期限切れ文面に混ざっていないこと
+      expect(result.current.actionError).not.toContain("もう受け付けられません");
+    },
+  );
+
+  it("承認済みの 409 は「実行されました」と断定しない", async () => {
+    // 無いと (PR #430 Codex P1): ai-agent は承認の記録を**実行の前**に書くので、
+    //         記録直後にプロセスが落ちると「approved なのに未実行」のレコードが残る。
+    //         その ID を再送した人に「操作は実行されました」と言うと、**実際には
+    //         送られていないメールを送ったと信じさせる**。断定してよいのは却下側だけ。
+    const result = await startAndAskForApproval();
+    vi.mocked(respondToApproval).mockRejectedValue(new ApprovalAlreadyProcessed("approved"));
+
+    await act(async () => await result.current.respondToPendingApproval(true));
+
+    expect(result.current.actionError).not.toContain("実行されました");
+    // 断定しない代わりに、確かめる導線は必ず出す (黙って閉じない)。導線は
+    // **「会話を続ける」** — 過去ログだけを見る画面はこのアプリに無いので、
+    // そこへ誘導する文面は「操作できない案内」になる (judge major-3)
+    expect(result.current.actionError).toContain("会話を続けて");
+    expect(result.current.actionError).not.toContain("履歴");
+  });
+
+  it("却下済みの 409 は「実行されていません」と言い切る", async () => {
+    // 無いと: 却下は「実行しない」を受け付けた状態で、この経路でツールが呼ばれることは
+    //         無い。ここまで曖昧にすると、ユーザーは実行されていない操作のために
+    //         会話を遡って確認させられる (409 に分けた価値が消える)。
+    const result = await startAndAskForApproval();
+    vi.mocked(respondToApproval).mockRejectedValue(new ApprovalAlreadyProcessed("rejected"));
+
+    await act(async () => await result.current.respondToPendingApproval(false));
+
+    expect(result.current.actionError).toContain("実行されていません");
+  });
+
+  it("すでに処理済みの承認を抱えたまま次の発話を送ると、結果を伝えつつ発話が送信される", async () => {
+    // 無いと: 破棄のための却下が 409 で失敗する経路が期限切れと同じ文面に落ち、
+    //         「もう受け付けられません (記録が失われています)」だけが出る (#82)。
+    //         直前に自分が承認した操作の行方すら案内されない。発話自体を止めないのは
+    //         期限切れと同じ理由 (この ID への再試行は永久に成功しない)。
+    const result = await startAndAskForApproval();
+    vi.mocked(respondToApproval).mockRejectedValue(new ApprovalAlreadyProcessed("approved"));
+    vi.mocked(sendMessage).mockResolvedValue({
+      message: { id: "a-3", role: "assistant", text: "受け止めました", createdAt: "2026-01-01" },
+      approval: null,
+      choices: [],
+    });
+
+    act(() => result.current.setDraftMessage("やっぱり別の話をしたい"));
+    await act(async () => await result.current.sendDraftMessage());
+
+    expect(result.current.pendingApproval).toBeNull();
+    expect(sendMessage).toHaveBeenLastCalledWith("s1", "やっぱり別の話をしたい");
+    expect(result.current.actionError).toContain("すでに承認済み");
+    expect(result.current.actionError).not.toContain("実行されました");
   });
 
   it("受け付けられない承認を抱えたまま次の発話を送ると、カードが閉じて発話が送信される", async () => {
@@ -870,6 +968,7 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
     vi.mocked(sendMessage).mockResolvedValue({
       message: { id: "a-3", role: "assistant", text: "受け止めました", createdAt: "2026-01-01" },
       approval: null,
+      choices: [],
     });
     act(() => result.current.setDraftMessage("やっぱり別の話をしたい"));
     await act(async () => await result.current.sendDraftMessage());
@@ -958,6 +1057,7 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
     vi.mocked(sendMessage).mockResolvedValue({
       message: { id: "a-3", role: "assistant", text: "受け止めました", createdAt: "2026-01-01" },
       approval: null,
+      choices: [],
     });
     act(() => result.current.setDraftMessage("やっぱりやめておく"));
     await act(async () => await result.current.sendDraftMessage());
@@ -1004,5 +1104,102 @@ describe("[単体] useConsultation — 副作用ツールの承認 (#82 / G1 / d
 
     expect(result.current.actionError).toContain("承認できない応答");
     expect(result.current.pendingApproval).toBeNull();
+  });
+});
+
+describe("[L1] useConsultation — AI が提示した選択肢 (#432-b / §5.10)", () => {
+  const reply = (text: string, choices: string[] = []) => ({
+    message: {
+      id: `a-${text}`,
+      role: "assistant" as const,
+      text,
+      createdAt: "2026-01-01",
+    },
+    approval: null,
+    choices,
+  });
+
+  async function startWithChoices(choices = ["仕事のこと", "家族のこと"]) {
+    vi.mocked(startNewConsultation).mockResolvedValue(session());
+    vi.mocked(sendMessage).mockResolvedValue(reply("近いものはありますか。", choices));
+    const { result } = setup();
+    await act(async () => await result.current.startConsultation());
+    act(() => result.current.setDraftMessage("うまく言えない"));
+    await act(async () => await result.current.sendDraftMessage());
+    return result;
+  }
+
+  it("応答に載ってきた選択肢を画面の状態として持つ", async () => {
+    // 無いと: api 層が拾った選択肢を hook が捨てる。応答文は「選んでみてください」と
+    // 出るのに選ぶものが無い会話になり、どこで落ちたかは画面から見えない
+    const result = await startWithChoices();
+
+    expect(result.current.offeredChoices).toEqual(["仕事のこと", "家族のこと"]);
+  });
+
+  it("選択肢をタップするとその文言がそのまま次の発話として送られる", async () => {
+    // 無いと: 選択肢に専用 API を持たせる実装 (承認と同じ形) に戻る。サーバ側には
+    // 待ち状態が無いので受け口が無く、「押しても会話が進まない」になる (完了型 / 裁定 2)
+    const result = await startWithChoices();
+    vi.mocked(sendMessage).mockResolvedValue(reply("もう少し聞かせてください。"));
+
+    await act(async () => await result.current.sendChoice("家族のこと"));
+
+    expect(sendMessage).toHaveBeenLastCalledWith("s1", "家族のこと");
+    // ユーザーの発話として会話に残る (AI が勝手に決めたことにしない)
+    const texts = result.current.session?.messages.map((m) => m.text) ?? [];
+    expect(texts).toContain("家族のこと");
+    // 押した後の選択肢は残さない (答え済みの分岐をもう一度押せる状態にしない)
+    expect(result.current.offeredChoices).toEqual([]);
+  });
+
+  it("選択肢のタップは入力欄の書きかけを消さない", async () => {
+    // 無いと: 選択肢を押した瞬間に、それまで打っていた文章が消える
+    const result = await startWithChoices();
+    vi.mocked(sendMessage).mockResolvedValue(reply("はい。"));
+    act(() => result.current.setDraftMessage("書きかけの文章"));
+
+    await act(async () => await result.current.sendChoice("仕事のこと"));
+
+    expect(result.current.draftMessage).toBe("書きかけの文章");
+  });
+
+  it("選択肢を無視して自由記述を送っても、サーバへ却下相当のリクエストを送らない", async () => {
+    // **この test が 432-b の裁定 2 (完了型) そのもの**。無いと: 承認 UI (§5.9) の
+    // 規律をコピーした実装が入り込み、「選ばずに書く」という正常な操作のたびに
+    // サーバを叩く (存在しない待ち状態を解除しようとする) ようになる
+    const result = await startWithChoices();
+    vi.mocked(sendMessage).mockResolvedValue(reply("なるほど。"));
+
+    act(() => result.current.setDraftMessage("自分で書きます"));
+    await act(async () => await result.current.sendDraftMessage());
+
+    expect(respondToApproval).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenLastCalledWith("s1", "自分で書きます");
+    expect(result.current.offeredChoices).toEqual([]);
+  });
+
+  it("送信に失敗したら選択肢を戻す (押し直せる状態に巻き戻す)", async () => {
+    // 無いと: 通信に失敗したターンで選択肢だけが消え、押し直す手段がなくなる
+    // (楽観更新の巻き戻しが会話だけで、選択肢に及んでいない状態)
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await startWithChoices();
+    vi.mocked(sendMessage).mockRejectedValue(new Error("network"));
+
+    await act(async () => await result.current.sendChoice("仕事のこと"));
+
+    expect(result.current.actionError).not.toBeNull();
+    expect(result.current.offeredChoices).toEqual(["仕事のこと", "家族のこと"]);
+  });
+
+  it("新しい相談を始めたら前セッションの選択肢を持ち込まない", async () => {
+    const result = await startWithChoices();
+    vi.mocked(startNewConsultation).mockResolvedValue(session({ id: "s2" }));
+
+    await act(async () => await result.current.startConsultation());
+
+    expect(result.current.offeredChoices).toEqual([]);
+    // 承認と違い、捨てるときにサーバへ知らせる必要は無い (待ち状態が無い)
+    expect(respondToApproval).not.toHaveBeenCalled();
   });
 });

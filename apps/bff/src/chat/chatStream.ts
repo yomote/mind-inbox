@@ -42,6 +42,10 @@ function toDoneEvent(res: StubMarked<ChatResponse>): unknown {
       requires_approval: res.requiresApproval,
       approval_request_id: res.approvalRequestId,
       citations: res.citations,
+      // 選択肢 (#432-b)。**承認フラグとは別のフィールドのまま運ぶ** — ここで
+      // requires_approval に畳むと、フロントは「押さないと進めない承認」と
+      // 「押さなくてよい会話の分岐」を区別できなくなる
+      choices: res.choices,
       // stub 判別フラグ (#146)。BFF が合成するストリーム (stub / フォールバック) にだけ
       // 現れうる注釈で、実 ai-agent は返さない — よって pydantic の wire 契約とその鏡
       // (aiAgentContracts.ts) には含めない。tRPC 側の真実は router.ts の ChatReplySchema。
@@ -85,6 +89,7 @@ function stubStream(req: ChatRequest): ReadableStream<Uint8Array> {
             requiresApproval: false,
             approvalRequestId: null,
             citations: [],
+            choices: [],
             stubbed: true,
           }),
         ),

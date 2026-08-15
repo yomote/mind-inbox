@@ -5,6 +5,8 @@ import { serviceHeaders } from "./serviceToken";
 export type SynthesizeRequest = {
   text: string;
   speakerId?: number;
+  /** 読み上げ速度 (#242)。未指定なら wrapper 側で VOICEVOX の既定 (等倍) のまま。 */
+  speedScale?: number;
 };
 
 /** VOICEVOX が結線されているか。合成せずに stub 判定だけしたい呼び出し元が使う。 */
@@ -39,6 +41,11 @@ export async function synthesize(req: SynthesizeRequest): Promise<ArrayBuffer | 
         body: JSON.stringify({
           text: req.text,
           speaker: req.speakerId ?? 3,
+          // **wrapper のフィールド名は snake_case** (pydantic `SynthesizeRequest`)。
+          // `speedScale` で送ると pydantic が黙って無視し、等倍のまま鳴る (#242)。
+          // 未指定は送らない — null を送ると wrapper 側で速度指定なしと同義だが、
+          // 「送っていない」と「速度を null にした」が区別できなくなる。
+          ...(req.speedScale === undefined ? {} : { speed_scale: req.speedScale }),
         }),
       });
 

@@ -16,6 +16,10 @@ export type {
   Problem,
   ProblemStatus,
   Theme,
+  ThinkingMap,
+  ThinkingNode,
+  ThinkingNodeKind,
+  ThinkingNodeStatus,
   TriageAction,
 } from "../../../bff/src/trpc/domain";
 
@@ -50,15 +54,25 @@ export type ApprovalRequest = {
 };
 
 /**
- * AI 応答 1 往復分。承認要求はメッセージと同じ応答に載って来るので一緒に返す。
+ * AI 応答 1 往復分。承認要求・選択肢はメッセージと同じ応答に載って来るので一緒に返す。
  *
  * メッセージだけを返す形にしないのは、承認要求を落としても「返事は出ている」ため
- * 画面上は正常に見えてしまうから (= G1 が静かに無効化される)。
+ * 画面上は正常に見えてしまうから (= G1 が静かに無効化される)。選択肢も同じで、
+ * 落ちても「AI が問いかけている」画面としては成立してしまう。
  */
 export type AssistantReply = {
   message: ChatMessage;
   /** 承認が要らない応答では null。 */
   approval: ApprovalRequest | null;
+  /**
+   * AI が提示した選択肢 (#432-b / dialogue-session.mdx §5.10)。**空配列 = 選択肢なし**。
+   *
+   * 契約の真実は BFF の `ChatReplySchema.choices`。**承認要求とは独立**で、
+   * 押さなくても自由記述で会話を進められる (サーバ側に待ち状態は残らない = 完了型)。
+   * タップされた文言は**そのまま次の発話として**送られるので、選択肢そのものに
+   * ID や専用の API は無い。
+   */
+  choices: string[];
 };
 
 export type ActionPlan = {

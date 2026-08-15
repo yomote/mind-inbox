@@ -4,16 +4,16 @@
  * 承認要求の到着時のタブ復帰 (§5.9)。
  *
  * 無いと何が静かに通るか:
- * - 未読通知: モバイルで「整理中」タブを一度開いた後、**件数が変わらない更新**
+ * - 未読通知: モバイルで「整理」タブを一度開いた後、**件数が変わらない更新**
  *   (カードの中身だけが変わる / 1 件が別の困りごとに差し替わる) が通知されない。
  *   バッジが出ないだけで描画は壊れないため、テストが無ければ静かに通る (PR #282 P2-b)。
- * - タブ復帰: 「整理中」タブ表示中に承認要求が届いても対話ペインは display:none のままで、
+ * - タブ復帰: 「整理」タブ表示中に承認要求が届いても対話ペインは display:none のままで、
  *   カードは DOM にあるのに**画面には出ない**。サーバは承認待ちで止まっているのに
  *   ユーザーには何も伝わらない (PR #416 Codex P2)。DOM 上はカードが存在するので、
  *   タブの選択状態を見ないと静かに通る。
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ApprovalRequest, ExtractionResult } from "../../api";
 import { SessionScreen } from "./SessionScreen";
@@ -55,6 +55,7 @@ const draft = (statement: string): ExtractionResult =>
     ],
     newProblemCount: 1,
     updatedProblemCount: 0,
+    thinkingMap: null,
   }) as ExtractionResult;
 
 type ScreenOverrides = {
@@ -95,7 +96,9 @@ function renderScreen(overrides: ScreenOverrides) {
     openPreviewTab: () => fireEvent.click(screen.getByTestId("preview-tab")),
     openDialogueTab: () => fireEvent.click(screen.getByRole("tab", { name: "対話" })),
     // タブの選択状態が「どちらのペインが見えているか」の真実 (もう一方は display:none)。
-    selectedTab: () => screen.getByRole("tab", { selected: true }).textContent,
+    // 右ペインの中にもタブ (AI の整理 / 下書き / #433) があるので、外側のタブ群に絞る。
+    selectedTab: () =>
+      within(screen.getByTestId("session-tabs")).getByRole("tab", { selected: true }).textContent,
   };
 }
 
@@ -141,7 +144,7 @@ const approval = (id: string): ApprovalRequest => ({
 });
 
 describe("[単体] SessionScreen — 承認要求が届いたら対話タブへ戻す", () => {
-  it("「整理中」タブ表示中に承認要求が届くと対話タブへ戻る", () => {
+  it("「整理」タブ表示中に承認要求が届くと対話タブへ戻る", () => {
     // 無いと: カードは DOM に出るが display:none の裏なので画面には現れない。
     // サーバは承認待ちで止まったまま、ユーザーは押すべきボタンの存在を知れない。
     const { rerenderScreen, openPreviewTab, selectedTab } = renderScreen({
@@ -149,7 +152,7 @@ describe("[単体] SessionScreen — 承認要求が届いたら対話タブへ�
     });
 
     openPreviewTab();
-    expect(selectedTab()).toContain("整理中");
+    expect(selectedTab()).toContain("整理");
 
     rerenderScreen({ preview: draft("最初の下書き"), pendingApproval: approval("appr-1") });
 
@@ -157,7 +160,7 @@ describe("[単体] SessionScreen — 承認要求が届いたら対話タブへ�
     expect(screen.getByTestId("approval-request")).toBeTruthy();
   });
 
-  it("承認待ちのまま「整理中」タブへ移ることはできる (pending 中の固定にしない)", () => {
+  it("承認待ちのまま「整理」タブへ移ることはできる (pending 中の固定にしない)", () => {
     // 無いと: 「到着時だけ戻す」が「pending の間ずっと対話タブに固定」に化けても
     // 上のテストは通る。承認を保留したまま下書きを見に行けなくなる退行を止める。
     const { openPreviewTab, rerenderScreen, selectedTab } = renderScreen({
@@ -166,12 +169,12 @@ describe("[単体] SessionScreen — 承認要求が届いたら対話タブへ�
     });
 
     openPreviewTab();
-    expect(selectedTab()).toContain("整理中");
+    expect(selectedTab()).toContain("整理");
 
     // 同じ承認が出たままの再描画 (下書きの更新など) では引き戻さない。
     rerenderScreen({ preview: draft("更新された下書き"), pendingApproval: approval("appr-1") });
 
-    expect(selectedTab()).toContain("整理中");
+    expect(selectedTab()).toContain("整理");
   });
 
   it("承認が解決したあとに次の要求が届いたら、また対話タブへ戻る", () => {
@@ -182,7 +185,7 @@ describe("[単体] SessionScreen — 承認要求が届いたら対話タブへ�
       pendingApproval: approval("appr-1"),
     });
 
-    // 1 件目を解決 → 整理中タブへ移動 → 2 件目が届く。
+    // 1 件目を解決 → 整理タブへ移動 → 2 件目が届く。
     rerenderScreen({ preview: draft("最初の下書き"), pendingApproval: null });
     openPreviewTab();
     rerenderScreen({ preview: draft("最初の下書き"), pendingApproval: approval("appr-2") });

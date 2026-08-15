@@ -12,7 +12,7 @@ IaC (Bicep) / デプロイスクリプト / 運用スクリプト。運用手順
 1. **bootstrap** — `cicd/iac/main-bootstrap.bicep`: SWA / Function App / Cosmos / OpenAI / Speech / Container App environment / **Log Analytics** / **Key Vault (`enableSql=true` のときだけ)** を作る (SQL 一式も同条件。ACR は無い)
 2. **config** — `cicd/iac/main-config.bicep`: Entra ID 認証とシークレットを配線する (bootstrap の後に流す)
 
-**層の軸は「消えると困るか」ではなく「運用のためか / アプリそのものか」** ([ADR 0056](../docs/adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D1 — Proposed。Accept され次第 ADR 0046 D1 を supersede) — Cosmos / OpenAI / Speech は**アプリ系に残す**。Cosmos のデータは RG を移して守るのではなく、管理系 RG の非公開 Storage へバックアップして戻せるようにする (ADR 0056 D2 / 経路の実装は ADR 0046 D9。**public リポジトリなので git データブランチには出さない**)。
+**層の軸は「消えると困るか」ではなく「運用のためか / アプリそのものか」** ([ADR 0056](../docs/adr/0056-management-and-app-layers-with-backup-based-data-protection.md) D1 — ADR 0046 D1 を supersede 済み / 2026-08-15 発効) — Cosmos / OpenAI / Speech は**アプリ系に残す**。Cosmos のデータは RG を移して守るのではなく、管理系 RG の非公開 Storage へバックアップして戻せるようにする (ADR 0056 D2 / 経路の実装は ADR 0046 D9。**public リポジトリなので git データブランチには出さない**)。
 
 **管理系とアプリ系は RG をまたぐ resource 参照をしない** — 管理系の output をアプリ系の parameter に渡す。**撤収 (`cleanup-env.sh`) の対象はアプリ系だけ**で、管理系 RG は削除できない (判定は `cicd/scripts/env/persistent_layer_guard.py`)。**`rg-mgmt-mindbox` の保護は設定で外せない** — `MGMT_RG` は保護対象を足すだけで、既定名を置き換えられない (置き換えられると `MGMT_RG` を逸らすだけで恒久保護が消える)。
 

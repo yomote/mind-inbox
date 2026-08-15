@@ -161,6 +161,41 @@ export const ExtractedItemSchema = z.object({
 });
 export type ExtractedItem = z.infer<typeof ExtractedItemSchema>;
 
+// ---- 思考整理マップ（Issue #433 段階 1 / 2026-08-15 PO 裁定）----------------
+// 「AI が今この会話をどう整理しているか」。preview の戻りに相乗りする（追加 LLM 呼び出し 0）。
+//
+// **% / 進捗率のフィールドをここに足さないこと**（裁定 3）。整理度合いは「ノードを数えた
+// 実数」だけで表す — 分母（悩みが出きった状態）を誰も測っていないので、率を出すと
+// 測っていない数字が画面に出る。契約に無ければ画面にも作れない（domain.test.ts が pin）。
+
+/** それが何か（話題 / AI の見立て / まだ聞けていない穴） */
+export const ThinkingNodeKindSchema = z.enum(["topic", "hypothesis", "unknown"]);
+export type ThinkingNodeKind = z.infer<typeof ThinkingNodeKindSchema>;
+
+/** どれだけ確かか（本人が認めた / AI がそう思っているだけ / まだ触れていない） */
+export const ThinkingNodeStatusSchema = z.enum(["confirmed", "tentative", "unexplored"]);
+export type ThinkingNodeStatus = z.infer<typeof ThinkingNodeStatusSchema>;
+
+export const ThinkingNodeSchema = z.object({
+  id: z.string(),
+  kind: ThinkingNodeKindSchema,
+  label: z.string(),
+  status: ThinkingNodeStatusSchema,
+  /** 箇条書きツリーの親（null = 根）。グラフの辺は段階 2 で足す */
+  parentId: z.string().nullable().default(null),
+  /**
+   * #321 との接続穴。**段階 1 では常に null**（ai-agent が落とす）。
+   * LLM が推測した Problem id を出すと「AI が既存の悩みと紐づけた」と誤読される。
+   */
+  problemId: z.string().nullable().default(null),
+});
+export type ThinkingNode = z.infer<typeof ThinkingNodeSchema>;
+
+export const ThinkingMapSchema = z.object({
+  nodes: z.array(ThinkingNodeSchema).default([]),
+});
+export type ThinkingMap = z.infer<typeof ThinkingMapSchema>;
+
 export const ExtractionResultSchema = z.object({
   sessionId: z.string(),
   items: z.array(ExtractedItemSchema),
@@ -168,6 +203,8 @@ export const ExtractionResultSchema = z.object({
   newProblemCount: z.number().int().nonnegative(),
   /** 既存に追加した（更新した）Problem 数 */
   updatedProblemCount: z.number().int().nonnegative(),
+  /** 整理マップ（#433）。null = LLM が返さなかった / 使える節が無かった */
+  thinkingMap: ThinkingMapSchema.nullable().default(null),
 });
 export type ExtractionResult = z.infer<typeof ExtractionResultSchema>;
 

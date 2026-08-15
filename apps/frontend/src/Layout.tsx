@@ -28,6 +28,7 @@ import {
   logout,
 } from "./auth/msal";
 import { useTextToSpeech } from "./voice/useTextToSpeech";
+import { setSpeedScale, useSpeedScale } from "./voice/speedScale";
 import { useConsultation } from "./consultation/useConsultation";
 import { useEnvStatus } from "./envstatus/useEnvStatus";
 import { EnvStatusBanner } from "./envstatus/EnvStatusBanner";
@@ -89,9 +90,13 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
   const [authStatus, setAuthStatus] = React.useState<AuthStatus>("loading");
   const [accountMenuAnchorEl, setAccountMenuAnchorEl] = React.useState<null | HTMLElement>(null);
 
+  // 読み上げ速度は設定画面から変える (#242)。永続化と「React の外 (先行合成) からも
+  // 同じ値を読む」ことは voice/speedScale.ts が持つ。
+  const speedScale = useSpeedScale();
+
   // 読み上げ (state 3 + audio ref 5 + VOICEVOX/ブラウザの分岐) は voice/ が所有する (#141)。
   // 音声入力 (STT) は SessionComposer の useVoiceInput が所有する (#121 / ADR 0023)。
-  const tts = useTextToSpeech({ standalone, speaker: voicevoxSpeaker });
+  const tts = useTextToSpeech({ standalone, speaker: voicevoxSpeaker, speedScale });
 
   // 「今この環境、触って大丈夫?」(env-status-banner.mdx)。VITE_ENV_STATUS_REPO 未設定なら常に unknown。
   const envStatus = useEnvStatus();
@@ -160,7 +165,12 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     clearTransient: clearTtsTransient,
     toggleEnabled: toggleTtsEnabled,
   } = tts;
-  const { reset: resetConsultation, startConsultation, sendDraftMessage } = consultation;
+  const {
+    reset: resetConsultation,
+    startConsultation,
+    sendDraftMessage,
+    sendChoice,
+  } = consultation;
 
   // iOS は最初のユーザージェスチャ内で一度発話しておかないと、以降の自動読み上げが無音になる。
   // 相談フロー (consultation) と読み上げ (tts) は互いを知らないので、「どのタップが音声の
@@ -184,6 +194,17 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
     unlock();
     return sendDraftMessage();
   }, [sendDraftMessage, unlock]);
+
+  // 選択肢のタップも「発話を送るユーザージェスチャ」(#432-b)。**unlock を通す経路を
+  // 分けない** — 選択肢だけで会話を進めたセッションで iOS の読み上げが無音になる
+  // (最初のジェスチャで解錠していないため / #141 と同じ罠)。
+  const sendChoiceWithAudio = React.useCallback(
+    (choice: string) => {
+      unlock();
+      return sendChoice(choice);
+    },
+    [sendChoice, unlock],
+  );
 
   const toggleTtsEnabledWithAudio = React.useCallback(() => {
     unlock();
@@ -406,8 +427,12 @@ export function Layout({ themeMode, onToggleTheme }: LayoutProps) {
                 handleRespondToApproval={(approved) =>
                   void consultation.respondToPendingApproval(approved)
                 }
+                offeredChoices={consultation.offeredChoices}
+                handleSelectChoice={(choice) => void sendChoiceWithAudio(choice)}
                 themeMode={themeMode}
                 onToggleTheme={onToggleTheme}
+                speedScale={speedScale}
+                onChangeSpeedScale={setSpeedScale}
                 transition={transition}
                 setDraftMessage={consultation.setDraftMessage}
                 handleLogin={handleLogin}

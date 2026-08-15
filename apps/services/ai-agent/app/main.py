@@ -14,7 +14,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from .agents import get_chat_client
 from .config import get_settings
@@ -33,6 +33,7 @@ from .repositories import (
     create_session_repository,
 )
 from .schemas import (
+    ApprovalConflictResponse,
     ApproveRequest,
     ApproveResponse,
     ChatRequest,
@@ -44,7 +45,12 @@ from .schemas import (
     PlanRequest,
     PlanResponse,
 )
-from .workflow import resume_after_approval, run_workflow, run_workflow_stream
+from .workflow import (
+    ApprovalAlreadyProcessedError,
+    resume_after_approval,
+    run_workflow,
+    run_workflow_stream,
+)
 
 settings = get_settings()
 logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
@@ -220,12 +226,16 @@ async def plan_endpoint(req: PlanRequest) -> PlanResponse:
         raise _fail("POST /plan", exc) from exc
 
 
-@app.post("/approve", response_model=ApproveResponse)
+@app.post(
+    "/approve",
+    response_model=ApproveResponse,
+    responses={409: {"model": ApprovalConflictResponse}},
+)
 async def approve(
     req: ApproveRequest,
     session_repo: SessionRepository = Depends(get_session_repo),
     approval_repo: ApprovalRepository = Depends(get_approval_repo),
-) -> ApproveResponse:
+):
     try:
         reply = await resume_after_approval(
             req.approval_request_id,
@@ -234,8 +244,31 @@ async def approve(
             approval_repo,
         )
         return ApproveResponse(reply=reply)
+    except ApprovalAlreadyProcessedError as exc:
+        # 二重送信 (#82 / PO 裁定 2026-08-15 B 案)。**404 に混ぜない** — 混ぜると
+        # 「レコードが消えた」のか「もう解決済み」なのかをクライアントが判定できず、
+        # **却下済み (= 確実に未実行) すら案内できない**。
+        # なお `status` は受け付けた決定であって実行の完了ではない (PR #430 Codex P1)。
+        #
+        # response_model (ApproveResponse) を通さずに JSONResponse を返しているので、
+        # **この body の形は OpenAPI の宣言 (responses=) と自動では一致しない**。
+        # 一致は `ApprovalConflictResponse` を組み立てて dump することで担保する
+        # (フィールド名を変えれば型エラー、schema を変えれば contract-check が落ちる)。
+        return JSONResponse(
+            status_code=409,
+            content=ApprovalConflictResponse(
+                detail=str(exc),
+                # pending がここに来ることはない (呼び出し元が pending 以外でだけ
+                # 投げる) が、来たら pydantic の Literal が実行時に弾く = 500 になる。
+                # 「未処理を処理済みとして返す」より落ちる方を選ぶ
+                status=exc.status,
+                processed_at=exc.processed_at,
+            ).model_dump(),
+        )
     except ValueError as exc:
-        # このサービス自身が投げる「未知 / 処理済みの承認 ID」— 上流の情報を含まない
+        # このサービス自身が投げる「承認レコードがもう無い」(未知 ID / TTL 失効 /
+        # checkpoint 消失)。上流の情報を含まない。**処理済みはここに来ない** —
+        # 来ていた頃の問題は上の except に書いた
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         raise _fail("POST /approve", exc) from exc

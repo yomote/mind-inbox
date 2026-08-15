@@ -84,6 +84,7 @@ describe("[L2] openChatStream", () => {
       requiresApproval: true,
       approvalRequestId: "appr-1",
       citations: ["doc-a"],
+      choices: [],
     });
 
     const events = parseEvents(
@@ -99,9 +100,38 @@ describe("[L2] openChatStream", () => {
           requires_approval: true,
           approval_request_id: "appr-1",
           citations: ["doc-a"],
+          choices: [],
         },
       },
     ]);
+  });
+
+  it("選択肢 (#432-b) はフォールバック経路の done にも載る", async () => {
+    // 無いと: ストリーミングが死んでいる環境でだけ選択肢が消える。SSE 経路と
+    // フォールバック経路で見えるものが変わると、「本番でだけ選択肢が出ない」が
+    // 自動テスト緑のまま起きる (承認要求で同じ事故を踏んでいる / #82)
+    mockConfig.aiAgentBaseUrl = "http://ai-agent.example";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("not found", { status: 404 })),
+    );
+    vi.mocked(sendChatMessage).mockResolvedValue({
+      reply: "どれか近いものはありますか。",
+      requiresApproval: false,
+      approvalRequestId: null,
+      citations: [],
+      choices: ["仕事のこと", "家族のこと"],
+    });
+
+    const events = parseEvents(
+      await readAll(await openChatStream({ sessionId: "s1", message: "m" })),
+    );
+
+    const done = events.at(-1) as { type: string; response: Record<string, unknown> };
+    expect(done.type).toBe("done");
+    expect(done.response.choices).toEqual(["仕事のこと", "家族のこと"]);
+    // 承認フラグには相乗りしない (別フィールドのまま運ぶ)
+    expect(done.response.requires_approval).toBe(false);
   });
 
   it("upstream fetch 例外: 同じく非ストリーミングへフォールバックする", async () => {
@@ -117,6 +147,7 @@ describe("[L2] openChatStream", () => {
       requiresApproval: false,
       approvalRequestId: null,
       citations: [],
+      choices: [],
     });
 
     const events = parseEvents(

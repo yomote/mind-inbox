@@ -5,7 +5,8 @@ import { chatStreamFetch, ttsPrefetchFetch, useMock } from "./http";
 import { parseSseJsonStream } from "./sse";
 import { appendStreamingReply, beginStreamingReply, clearStreamingReply } from "./streamingReply";
 import { reportStubbedResponse, resetStubbedResponse } from "./stubStatus";
-import { isApprovalNotFound } from "./trpcError";
+import { approvalAlreadyProcessedStatus, isApprovalNotFound } from "./trpcError";
+import { getSpeedScale } from "../voice/speedScale";
 
 const voicevoxSpeaker = Number(import.meta.env.VITE_VOICEVOX_SPEAKER || "3");
 
@@ -45,6 +46,8 @@ type ChatStreamEvent =
         requires_approval?: boolean;
         approval_request_id?: string | null;
         citations?: string[];
+        /** AI が提示した選択肢 (#432-b)。無い / 配列でない = 選択肢なし。 */
+        choices?: string[];
         /** stub 判別フラグ (#146)。BFF が合成する stub ストリームにだけ現れる。 */
         stubbed?: boolean;
       };
@@ -72,6 +75,13 @@ function asChatStreamEvent(raw: unknown): ChatStreamEvent | null {
             typeof response.approval_request_id === "string" ? response.approval_request_id : null,
           citations: Array.isArray(response.citations)
             ? response.citations.filter((c): c is string => typeof c === "string")
+            : undefined,
+          // 選択肢 (#432-b)。配列でなければ「選択肢なし」に倒す — 旧 ai-agent /
+          // 旧 BFF (フィールドを返さない版) と、壊れた値を同じ安全側に落とす。
+          // **文字列以外を混ぜたまま渡さない**: そのまま次の発話として送る値なので、
+          // 型が崩れると「押したのに空文字が送られる」になる
+          choices: Array.isArray(response.choices)
+            ? response.choices.filter((c): c is string => typeof c === "string")
             : undefined,
           stubbed: response.stubbed === true,
         },
@@ -108,7 +118,10 @@ function createSentencePrefetcher() {
     if (now - lastSentAt < PREFETCH_INTERVAL_MS) return;
     lastSentAt = now;
 
-    void ttsPrefetchFetch(accumulated, voicevoxSpeaker).catch(() => {
+    // 速度は**送信のたびに読む** (#242)。ストリーミング中に設定画面で変えられても
+    // 本合成と同じ値で焼くため。ズレると BFF のキャッシュが全ミスして先行合成が
+    // 無言で無効化される (音は鳴るので気づけない)。
+    void ttsPrefetchFetch(accumulated, voicevoxSpeaker, getSpeedScale()).catch(() => {
       // プリフェッチはベストエフォート — 失敗しても最終合成が普通に走る
     });
   };
@@ -139,15 +152,41 @@ export class ApprovalRequestUnusable extends Error {
  * 次の発話を送れる状態に戻す。
  *
  * **クラス名の "Expired" は「もう受け付けられない」の略で、「期限切れ」の断定ではない**
- * (PR #416 judge / Codex P1)。ai-agent は approved / rejected 済みの ID にも同じ 404 を
- * 返す (`Approval already processed`) ため、**この例外から「操作は実行されていない」は
- * 導けない**。ユーザーに出す文面で断定しないこと (`FAILURE_MESSAGE.approvalExpired`)。
- * 区別できるようにするには契約側の冪等化 (409 + status 返却) が要る → #82 に選択肢を記録。
+ * (PR #416 judge / Codex P1)。TTL 失効・再起動・checkpoint 消失のどれかは分からず、
+ * **この例外から「操作は実行されていない」は導けない**。ユーザーに出す文面で
+ * 断定しないこと (`FAILURE_MESSAGE.approvalExpired`)。
+ *
+ * ただし**処理済み (二重送信) はもうここに来ない** (#82 / PO 裁定 2026-08-15 B 案) —
+ * それは 409 → `ApprovalAlreadyProcessed` に分離した。両者を再び 1 つに戻すと、
+ * 「すでに承認済みです (実行されました)」と言えたケースが「実行されたか分かりません」に
+ * 逆戻りする。
  */
 export class ApprovalExpired extends Error {
   constructor() {
-    super("approval request no longer accepted (expired, released, or already processed)");
+    super("approval request no longer accepted (expired or released)");
     this.name = "ApprovalExpired";
+  }
+}
+
+/**
+ * その承認 ID は**すでに処理済み** (#82 / PO 裁定 2026-08-15 B 案 / BFF の `CONFLICT`)。
+ *
+ * `ApprovalExpired` と分けているのが本体 — あちらは「レコードがもう無い」で、
+ * こちらは「どちらの決定を受け付けたか」まで分かる。
+ *
+ * **`status` は決定であって実行の完了ではない** (PR #430 Codex P1)。ai-agent は
+ * 承認の記録を**実行の前**に書くので、`rejected` は未実行と言い切れる一方、
+ * `approved` から「実行された」は導けない。文言側で断定しないこと
+ * (`useConsultation` の `approvalAlreadyProcessedMessage`)。
+ */
+export class ApprovalAlreadyProcessed extends Error {
+  // パラメータプロパティ短縮記法は erasableSyntaxOnly で使えないため明示代入する。
+  readonly status: "approved" | "rejected";
+
+  constructor(status: "approved" | "rejected") {
+    super(`approval request already processed (${status})`);
+    this.name = "ApprovalAlreadyProcessed";
+    this.status = status;
   }
 }
 
@@ -180,6 +219,7 @@ async function sendMessageStreaming(
   const prefetchSentences = createSentencePrefetcher();
   let finalReply: string | null = null;
   let approval: ApprovalRequest | null = null;
+  let choices: string[] = [];
 
   for await (const raw of parseSseJsonStream(res.body)) {
     const event = asChatStreamEvent(raw);
@@ -195,6 +235,7 @@ async function sendMessageStreaming(
         event.response.approval_request_id,
         event.response.reply,
       );
+      choices = event.response.choices ?? [];
       // stub 応答の可視化 (#146): 実応答 (フラグ無し) なら下ろす。
       reportStubbedResponse(event.response.stubbed);
     } else {
@@ -215,6 +256,7 @@ async function sendMessageStreaming(
       createdAt: new Date().toISOString(),
     },
     approval,
+    choices,
   };
 }
 
@@ -263,6 +305,10 @@ export async function sendMessage(sessionId: string, text: string): Promise<Assi
       // フォールバック経路でも承認要求は落とさない (#82)。ここを落とすと
       // 「ストリーミングが死んでいる環境でだけ副作用ツールが承認なしに見える」になる。
       approval: toApprovalRequest(res.requiresApproval, res.approvalRequestId, res.reply),
+      // 選択肢も同じ (#432-b) — 落とすと「ストリーミングが死んでいる環境でだけ
+      // 選択肢が出ない」になり、どちらの経路を通ったかは画面から見えない。
+      // 旧 BFF (フィールドを返さない版) 相手でも配列に倒す
+      choices: res.choices ?? [],
     };
   }
 }
@@ -275,6 +321,8 @@ export async function sendMessage(sessionId: string, text: string): Promise<Assi
  *
  * @throws {ApprovalExpired} 承認レコードがもう無い (BFF の `NOT_FOUND` +
  *         `approval-not-found` token)。再試行では回復しないので、通信失敗と区別して投げる。
+ * @throws {ApprovalAlreadyProcessed} すでに承認 / 却下済み (BFF の `CONFLICT`)。
+ *         実行の有無まで言えるので、上と別に投げる (#82)。
  */
 export async function respondToApproval(
   approvalRequestId: string,
@@ -286,9 +334,14 @@ export async function respondToApproval(
   try {
     res = await trpc.consultation.approve.mutate({ approvalRequestId, approved });
   } catch (err) {
-    // 承認レコードがもう受け付けられない: 期限切れ (TTL 1h) / ai-agent 再起動で消えた、
-    // または**すでに approved / rejected 済み**。ai-agent はこの 3 つを区別せず 404 を返す。
-    // ここで種別を立てないと UI は「通信失敗 → 再試行」しか出せず、
+    // すでに承認 / 却下済み (二重送信) = BFF の CONFLICT (#82 / PO 裁定 2026-08-15 B 案)。
+    // **「もう無い」より先に見る** — 結果 (実行されたか) まで言える方を優先しないと、
+    // 判別できたケースが「分かりません」に落ちる。
+    const processed = approvalAlreadyProcessedStatus(err);
+    if (processed) throw new ApprovalAlreadyProcessed(processed);
+
+    // 承認レコードがもう受け付けられない: 期限切れ (TTL 1h) / ai-agent 再起動で消えた /
+    // checkpoint が消えた。ここで種別を立てないと UI は「通信失敗 → 再試行」しか出せず、
     // 何度押しても同じ 404 に当たり続ける (#82 / PR #416 judge major-1)。
     //
     // **code だけで判定しない** (Codex 4 巡目 P2): tRPC は procedure 未配備でも

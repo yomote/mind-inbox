@@ -203,7 +203,7 @@ az rest --method get --url "https://management.azure.com/subscriptions/$(az acco
 
 ## Related
 
-- ADR: [0056 管理系 / アプリ系とバックアップによるデータ保護](../adr/0056-management-and-app-layers-with-backup-based-data-protection.md) (**層の定義の正典**。Proposed — Status を動かすのは PO) / [0046 環境は宣言から再構築できる](../adr/0046-environment-rebuildable-from-declaration.md) D6/D9 (D1 は 0056 が Accept され次第 supersede) / [E2E artifact は既定で秘密 (2026-08-12 の裁定記録)](../adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D5 (**ADR ではありません** — #385 で運用文書へ退避。鍵の運用手順の正典は [`e2e-trace-keys.md`](e2e-trace-keys.md)) / [0003 2 フェーズ Bicep](../adr/0003-two-phase-bicep.md)
+- ADR: [0056 管理系 / アプリ系とバックアップによるデータ保護](../adr/0056-management-and-app-layers-with-backup-based-data-protection.md) (**層の定義の正典**。Accepted / 2026-08-15 PO 裁定) / [0046 環境は宣言から再構築できる](../adr/0046-environment-rebuildable-from-declaration.md) D6/D9 (D1 は 0056 が supersede 済み / 2026-08-15 発効) / [E2E artifact は既定で秘密 (2026-08-12 の裁定記録)](../adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D5 (**ADR ではありません** — #385 で運用文書へ退避。鍵の運用手順の正典は [`e2e-trace-keys.md`](e2e-trace-keys.md)) / [0003 2 フェーズ Bicep](../adr/0003-two-phase-bicep.md)
 - 関連 Runbook: [`claude-web-azure-access.md`](claude-web-azure-access.md) / [`cosmos-persistence.md`](cosmos-persistence.md)
 - 宣言とパラメータの説明: [`cicd/iac/README.md`](../../cicd/iac/README.md#1-5-管理系レイヤrg-mgmt-mindbox--一度きり)
 - 撤収ガード: `cicd/scripts/env/` ([README](../../cicd/scripts/env/README.md))

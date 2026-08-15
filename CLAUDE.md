@@ -12,12 +12,12 @@
 
 それ以外には、払うタイミングの違う置き場がある:
 
-| 置き場 | 何を置くか | 払うとき |
-| --- | --- | --- |
-| 領域別 `CLAUDE.md` | その領域を触るときだけ要る不変条件 | そのディレクトリのファイルを触ったとき |
-| skill | トリガーのある手順 | その作業を始めたとき |
-| subagent (`.claude/agents/`) | 自分では気づけない審査 | 呼んだとき (新品の文脈) |
-| SessionStart hook | **このセッションが何者か** | セッション開始時 |
+| 置き場                       | 何を置くか                         | 払うとき                               |
+| ---------------------------- | ---------------------------------- | -------------------------------------- |
+| 領域別 `CLAUDE.md`           | その領域を触るときだけ要る不変条件 | そのディレクトリのファイルを触ったとき |
+| skill                        | トリガーのある手順                 | その作業を始めたとき                   |
+| subagent (`.claude/agents/`) | 自分では気づけない審査             | 呼んだとき (新品の文脈)                |
+| SessionStart hook            | **このセッションが何者か**         | セッション開始時                       |
 
 **役割をここに書いてはいけない。** このファイルは窓口 PM も子セッションも subagent も Codex も同じものを読むので、「あなたは窓口 PM です」と書くと子が自分を PM だと思う。役割の判定は [`.claude/hooks/session-start.sh`](.claude/hooks/session-start.sh) が渡す。体制の全体像は [`docs/team.md`](docs/team.md)。
 
@@ -32,21 +32,22 @@
 - **「無いと何が静かに通るか?」を 1 文で書けないテストは書かない** — 仕様を指せないテストも書かない。「仕様がない」と言う
 - **実行状態 (計画・進捗) の真実は GitHub Issues** — docs は「なぜ/何を」、Issues は「いつ/誰が/今どこ」。**open Issue にはちょうど 1 個の `stream:*` ラベル**を付ける (`product` / `improve-loop` / `concept` / `factory` / `infra`。迷ったら `product`)
 - **自動化の生死は <https://yomote.github.io/mind-inbox/status/>** で見る (GitHub の実データから毎回生成。手書きの台帳は作らない)。**自動化を足したら [`watchers.json`](cicd/scripts/status-page/watchers.json) に 1 行足す。足せないなら作らない** — 唯一の例外が [`cicd/scripts/claude-hooks/`](cicd/scripts/claude-hooks/) (GitHub 側に run を残さないので載せると偽の緑になる)。生死は CI の配線テストが見る。**例外を増やすときは同じ強さの検出点を用意してから**
+- **`main` `release` `gh-pages` `data/*` `claim/*` に作業ブランチを切らない** — `data/*` は 5 つの workflow が読み書きしており、踏むと**壊れてから気づく**。**PR の head は `<type>/<Issue 番号>-<slug>`** (`claude/` `codex/` は Issue 番号必須。作業中の自動生成名は問わず、PR を出す直前に `git push origin HEAD:claude/<N>-<slug>` で切り直す)。**CI では強制していないので破っても赤くならない** — 正典は [`docs/runbooks/branch-naming-and-cleanup.md`](docs/runbooks/branch-naming-and-cleanup.md)
 
 ## 索引
 
 ### 作業に入る前に呼ぶ skill
 
-| skill | いつ |
-| --- | --- |
-| `/dev` | ローカルで起動する / ブラウザで確かめる / テスト・lint を回す |
-| `/adr` | ADR を書く / 採番する / Status を動かす |
-| `/dispatch` | 作業を分ける / 子セッション・subagent を起こす (**窓口 PM は 1 行でも自分で書かない**) |
-| `/merge` | PR を出したあと / マージしてよいかを判断する |
-| `/design-gate` | 新機能・Phase 着手・ADR 級判断・**自作の機構を新規に立ち上げる**実装を始める前 (既存機構への追記は対象外 — ただし**新機能・ADR 級判断を含む追記は起動が優先**) |
-| `/debrief` `/briefing` | マージや Proposed ADR が溜まった / リリース級の節目 |
-| `/release-gate` | リリース PR (`main → release`) の Go/No-Go |
-| `/status` `/explain` `/po-feedback` | 戦況図 / 「あれなんだっけ」 / 指示の出し方の講評 |
+| skill                               | いつ                                                                                                                                                           |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/dev`                              | ローカルで起動する / ブラウザで確かめる / テスト・lint を回す                                                                                                  |
+| `/adr`                              | ADR を書く / 採番する / Status を動かす                                                                                                                        |
+| `/dispatch`                         | 作業を分ける / 子セッション・subagent を起こす (**窓口 PM は 1 行でも自分で書かない**)                                                                         |
+| `/merge`                            | PR を出したあと / マージしてよいかを判断する                                                                                                                   |
+| `/design-gate`                      | 新機能・Phase 着手・ADR 級判断・**自作の機構を新規に立ち上げる**実装を始める前 (既存機構への追記は対象外 — ただし**新機能・ADR 級判断を含む追記は起動が優先**) |
+| `/debrief` `/briefing`              | マージや Proposed ADR が溜まった / リリース級の節目                                                                                                            |
+| `/release-gate`                     | リリース PR (`main → release`) の Go/No-Go                                                                                                                     |
+| `/status` `/explain` `/po-feedback` | 戦況図 / 「あれなんだっけ」 / 指示の出し方の講評                                                                                                               |
 
 ### 領域を触るときに読まれる CLAUDE.md
 

@@ -137,6 +137,30 @@ describe("[L2] synthesizeTts", () => {
   });
 });
 
+describe("[単体] TTS の読み上げ速度 (#242)", () => {
+  it("読み上げ速度は voicevoxClient まで届く", async () => {
+    // 無いと: speedScale を service で落としても WAV は普通に返るため、
+    //         「設定を変えても速度が変わらない」だけが症状になる (テストは緑)。
+    vi.mocked(synthesize).mockResolvedValue(makeWav(1));
+
+    await synthesizeTts({ text: "短い一文です。", speakerId: 3, speedScale: 1.4 });
+
+    expect(vi.mocked(synthesize).mock.calls[0][0].speedScale).toBe(1.4);
+  });
+
+  it("速度が違えばキャッシュは別扱い (先行合成の音を別速度で使い回さない)", async () => {
+    // 無いと: prefetch が等倍で焼いた WAV を 1.4 倍の本合成が拾い、**設定を変えても
+    //         前の速度のまま**鳴る。キャッシュヒットなので合成ログにも出ない。
+    vi.mocked(synthesize).mockResolvedValue(makeWav(1));
+
+    await prefetchTts({ text: TWO_SENTENCES, speakerId: 3, speedScale: 1.0 });
+    await prefetchTts({ text: TWO_SENTENCES, speakerId: 3, speedScale: 1.4 });
+
+    expect(synthesize).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(synthesize).mock.calls.map(([req]) => req.speedScale)).toEqual([1.0, 1.4]);
+  });
+});
+
 describe("[L2] planTts (#185)", () => {
   it("合成せずに読み上げ単位の文だけを返す", async () => {
     // 無いと: フロントが「1 文目が焼けた時点で鳴らし始める」ための材料を失い、

@@ -35,7 +35,29 @@ UNCOVERED = [
     "Markdown の参照形式リンク ([text][ref]) と外部 URL の死活 — インライン相対リンクのみ検査している",
     "リポジトリ外へ抜ける相対リンク (例: `../../../issues/4` — GitHub web 上でだけ解決する形) — "
     "ローカルに実体が無く機械では真偽を判定できないため検査対象外",
+    "リンク検査の走査対象外にある Markdown — `apps/**` / `.claude/**` / `.github/**` の md は"
+    "未検査 (検査するのは `docs/**` / `cicd/**` / リポジトリ直下の *.md のみ)",
 ]
+
+# リンク検査の走査対象。ここに無いディレクトリの md は**検査されない** —
+# 「0 件」を「リポジトリ全体が健全」と読ませないため、この範囲は UNCOVERED にも書く。
+#
+# 足す基準は「外部由来 / 生成物の md が紛れ込まない場所か」。混ざると偽陽性が出て
+# Issue がノイズで埋まり、本物の壊れリンクが読まれなくなる (偽陽性は検出器の死):
+#   - `apps/**` は依存物 (`node_modules`) の md を抱えうる
+#   - `.claude/**` は worktree (`.claude/worktrees/<agent>/…`) を抱えうる —
+#     他セッションの作業中ブランチを走査して他人の未完成リンクを報告してしまう
+# 対象を広げるときは、広げた状態で実測して偽陽性 0 を確認してから足す (Issue #421)。
+LINK_SCAN_DIRS = ("docs", "cicd")
+# リポジトリ直下の *.md (README.md / CLAUDE.md / AGENTS.md)。再帰しない —
+# ルート再帰は node_modules や worktree を巻き込むため、上の基準に反する。
+LINK_SCAN_ROOT_FILES = "*.md"
+
+# 走査対象の中に現れても検査しないディレクトリ名 (リポジトリが書いた md ではないもの)。
+# 混ざると偽陽性が出るうえ、**あるかどうかが実行環境で変わる** — CI では存在せず
+# ローカルにだけある `.venv` (実測: `apps/services/ai-agent/.venv` 配下に md 38 本) を
+# 拾うと、同じコミットでも実行場所で結果が変わる検出器になる。
+EXCLUDED_DIR_NAMES = {"node_modules", ".venv", "worktrees", ".git"}
 
 _FENCED_CODE = re.compile(r"```.*?```", re.DOTALL)
 # インラインリンク [text](target) / 画像 ![alt](target)。title 付き (target "title") も拾う
@@ -96,11 +118,40 @@ def broken_links_in(md_file: Path, text: str, root: Path) -> list[dict]:
     return findings
 
 
+def iter_scanned_markdown(root: Path) -> list[Path]:
+    """リンク検査の対象となる Markdown を列挙する (走査範囲は LINK_SCAN_DIRS が定義)。"""
+    md_files: list[Path] = []
+    for scan_dir in LINK_SCAN_DIRS:
+        target = root / scan_dir
+        if not target.is_dir():
+            # 走査対象が無いのを黙って飛ばすと「0 件 = 健全」に化ける。
+            # ここでは列挙を続け、実行経路 (main) が前提不足として run を落とす
+            continue
+        md_files.extend(target.rglob("*.md"))
+    md_files.extend(root.glob(LINK_SCAN_ROOT_FILES))
+    return sorted(
+        f for f in md_files if not EXCLUDED_DIR_NAMES & set(f.relative_to(root).parts)
+    )
+
+
+def missing_scan_dirs(root: Path) -> list[str]:
+    """LINK_SCAN_DIRS のうち実在しないもの。
+
+    走査対象が (改名・移動で) 消えると、検査していないのに 0 件になり
+    「異常なし」として緑になる。main() がこれを**前提不足 (exit 1)** として扱い、
+    run を落とすことで沈黙と健全を区別する — レポート内の finding にすると
+    「検出処理は走った」ことになってしまう。
+    """
+    return [d for d in LINK_SCAN_DIRS if not (root / d).is_dir()]
+
+
 def detect_broken_doc_links(root: Path) -> list[dict]:
-    """docs/**/*.md のインライン相対リンク切れ。"""
-    docs = root / "docs"
+    """走査対象 (LINK_SCAN_DIRS + リポジトリ直下) の md のインライン相対リンク切れ。
+
+    走査対象の実在は main() が事前に検査する (missing_scan_dirs)。
+    """
     findings = []
-    for md_file in sorted(docs.rglob("*.md")):
+    for md_file in iter_scanned_markdown(root):
         if md_file.name == "template.md":
             # 雛形の NNNN-xxx.md は意図した placeholder。毎週誤報すると
             # Issue がノイズで埋まり、本物の壊れリンクが読まれなくなる
@@ -153,7 +204,7 @@ def detect_all(root: Path) -> dict:
     detectors = [
         {
             "id": "broken-doc-links",
-            "name": "docs 内の壊れた相対リンク",
+            "name": "壊れた相対リンク (docs/ + cicd/ + リポジトリ直下の *.md)",
             "findings": detect_broken_doc_links(root),
         },
         {
@@ -211,8 +262,14 @@ def main(argv: list[str]) -> int:
         log(f"使い方: {Path(argv[0]).name} <repo_root>")
         return 1
     root = Path(argv[1]).resolve()
-    if not (root / "docs").is_dir():
-        log(f"repo root に見えません (docs/ がありません): {root}")
+    missing = missing_scan_dirs(root)
+    if missing:
+        # 走査対象が欠けたまま検出を走らせると「検査していないのに 0 件」の
+        # レポートが出る。前提不足として run を落とし、沈黙を緑にしない
+        log(
+            "repo root に見えません / リンク検査の走査対象がありません "
+            f"({' / '.join(missing)}): {root}"
+        )
         return 1
     report = detect_all(root)
     log(

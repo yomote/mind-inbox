@@ -1,6 +1,6 @@
 # 0056. 層は「管理系 / アプリ系」で分け、データは RG 移動ではなくバックアップ + 復元実証で守る
 
-- Status: Proposed (2026-08-14 起案)
+- Status: Accepted (2026-08-15, PO 裁定)
 - Date: 2026-08-14
 - Deciders: omoteforlab
 - Consulted: —
@@ -8,14 +8,15 @@
 
 Technical Story: [#302](https://github.com/yomote/mind-inbox/issues/302)（ライフサイクル分断）
 
-関連: [ADR 0046](0046-environment-rebuildable-from-declaration.md)（**本 ADR が Accept され次第 D1 を supersede する**。D2〜D10 は現行 — D9 本文の「持続層」は管理系 RG と読み替える）/ [ADR 0003](0003-two-phase-bicep.md)（2-phase Bicep）/ [ADR 0013](0013-standing-low-cost-dev-env-with-auto-deploy.md)（常設 dev / 予算）/ [ADR 0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md)（Cosmos 単一ストア）/ [ADR 0041](archive/operations/ux-observations-on-git-data-branch.md)（git データブランチ — **本 ADR はこの手法をユーザーデータには使わないと決める**）/ [ADR 0045](archive/operations/e2e-artifacts-are-secret-by-default.md)（「管理系 RG」の初出）/ [ADR 0018](archive/operations/runtime-verification-in-the-loop.md)（復元したことのないバックアップはバックアップではない）
+関連: [ADR 0046](0046-environment-rebuildable-from-declaration.md)（**本 ADR が D1 を supersede する** — 2026-08-15 の Accept で発効。D2〜D10 は現行 — D9 本文の「持続層」は管理系 RG と読み替える）/ [ADR 0003](0003-two-phase-bicep.md)（2-phase Bicep）/ [ADR 0013](0013-standing-low-cost-dev-env-with-auto-deploy.md)（常設 dev / 予算）/ [ADR 0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md)（Cosmos 単一ストア）/ [ADR 0041](archive/operations/ux-observations-on-git-data-branch.md)（git データブランチ — **本 ADR はこの手法をユーザーデータには使わないと決める**）/ [ADR 0045](archive/operations/e2e-artifacts-are-secret-by-default.md)（「管理系 RG」の初出）/ [ADR 0018](archive/operations/runtime-verification-in-the-loop.md)（復元したことのないバックアップはバックアップではない）
 
 > **Status について。** 本 ADR は **2026-08-14 の PO 口頭裁定**（窓口 PM セッション経由。
-> 「[#302](https://github.com/yomote/mind-inbox/issues/302) の 2026-08-12 の設計対話を正とする」という指示）に基づく**エージェント起案**です。
-> 裁定そのものは PO が下していますが、**ADR の Status を `Accepted` へ動かすのは PO の操作**なので
-> （[`docs/adr/README.md`](README.md) / `/adr` skill Step 4）、ここでは `Proposed` で入れています。
-> **Proposed の判断を前提に実装を進めてよい**（[#419](https://github.com/yomote/mind-inbox/pull/419) が対応する実装）一方、
-> [ADR 0046](0046-environment-rebuildable-from-declaration.md) D1 の supersede が確定するのは Accept 時です。
+> 「[#302](https://github.com/yomote/mind-inbox/issues/302) の 2026-08-12 の設計対話を正とする」という指示）に基づく**エージェント起案**で、
+> `Proposed` で入っていました（**Status を動かすのは PO の操作** — [`docs/adr/README.md`](README.md) / `/adr` skill Step 4）。
+> **2026-08-15 の PO 裁定で `Accepted` へ遷移**し、これをもって
+> [ADR 0046](0046-environment-rebuildable-from-declaration.md) **D1 の supersede が発効**しました
+> （対応する実装は [#419](https://github.com/yomote/mind-inbox/pull/419)）。
+> 遷移時に PO 承認のうえ、D1 へ**読み替えの 1 行**（0046 本文の「持続層に GPG 秘密鍵」）を追記しています。
 
 ## Context and Problem Statement
 
@@ -74,6 +75,8 @@ Chosen option: **"Option A"**、because 層の軸を「運用のためか / ア�
 
 **アプリ系から管理系への参照はパラメータ渡し**（RG をまたぐ resource 参照はしない）。この点は [ADR 0046](0046-environment-rebuildable-from-declaration.md) D1 から変えない。
 
+**読み替え（2026-08-15 の Accept 時に PO 承認のうえ追記）**: [ADR 0046](0046-environment-rebuildable-from-declaration.md) 本文の「持続層に**バックアップと GPG 秘密鍵**が置かれる」（「受け入れる穴 — 持続層の『再構築』は検証されない」節）は、現行では「**管理系 RG (`rg-mgmt-mindbox`) のバックアップ Storage と、同 RG の Key Vault に置かれた非エクスポートの RSA 鍵オブジェクト**」と読み替える（**バックアップはバックアップのまま**で、D2 のとおり管理系 RG の非公開 Storage として存続する。置き換わるのは**層の呼び名**と**鍵の方式**の 2 点だけ）。層の呼び名（持続層 → 管理系 RG）は本 D1 が置き換え、鍵の方式（GPG 秘密鍵 → 非エクスポート鍵オブジェクト + 封筒暗号 / 復号は Key Vault の中）は [E2E artifact は既定で秘密](archive/operations/e2e-artifacts-are-secret-by-default.md) D5 の 2026-08-12 改訂が置き換えたもので、**0046 の本文は書き換えずここで読み替えを宣言する**（過去 ADR の本文は改変しない / `/adr` skill）。鍵の実体は [`cicd/iac/main-mgmt.bicep`](../../cicd/iac/main-mgmt.bicep) の `e2eTraceKey`、運用手順は [`docs/runbooks/e2e-trace-keys.md`](../runbooks/e2e-trace-keys.md) が正典。
+
 ### D2 — データは「守る」のではなく「戻せる」ようにする
 
 消えて困る Cosmos のデータを撤収から**守る**のではなく、**管理系 RG の Storage へバックアップして復元可能にする**。
@@ -94,11 +97,11 @@ Chosen option: **"Option A"**、because 層の軸を「運用のためか / ア�
 
 **拒否理由を 2 種類に分け、判定コードを別にする**のが判断の核:
 
-| 判定コード                     | 何を止めるか                                    | 性質                                  |
-| ------------------------------ | ----------------------------------------------- | ------------------------------------- |
-| `target-is-management-rg`      | 管理系 RG そのものの削除                        | **恒久**。どのフラグでも通さない      |
-| `management-resources-present` | 層タグ / 名指しの管理系リソースが居る RG の撤収 | **恒久**（明示 override は可）        |
-| `data-restore-unproven`        | Cosmos が居る RG の撤収                         | **暫定**（D2 の復元実証まで）         |
+| 判定コード                     | 何を止めるか                                    | 性質                             |
+| ------------------------------ | ----------------------------------------------- | -------------------------------- |
+| `target-is-management-rg`      | 管理系 RG そのものの削除                        | **恒久**。どのフラグでも通さない |
+| `management-resources-present` | 層タグ / 名指しの管理系リソースが居る RG の撤収 | **恒久**（明示 override は可）   |
+| `data-restore-unproven`        | Cosmos が居る RG の撤収                         | **暫定**（D2 の復元実証まで）    |
 
 同じコードにすると、**復元実証が済んだときに「どちらを緩めるつもりだったか」がコードからもログからも読めなくなる**。
 
@@ -171,4 +174,4 @@ Key Vault / Storage / Log Analytics は**両層に同じ型が居る**（アプ�
 - Issue: [#302](https://github.com/yomote/mind-inbox/issues/302) — PO の原設計は [2026-08-12 のコメント](https://github.com/yomote/mind-inbox/issues/302#issuecomment-5263080034)
 - PR: [#412](https://github.com/yomote/mind-inbox/pull/412)（[ADR 0046](0046-environment-rebuildable-from-declaration.md) D1 初版に従った実装）/ [#419](https://github.com/yomote/mind-inbox/pull/419)（本 ADR の実装）
 - Runbook: [`docs/runbooks/mgmt-layer-apply.md`](../runbooks/mgmt-layer-apply.md)
-- 関連 ADR: [0046](0046-environment-rebuildable-from-declaration.md)（Accept され次第 D1 を supersede / D2〜D10 は現行 — D9 本文の「持続層」は管理系 RG と読み替える）/ [0003](0003-two-phase-bicep.md) / [0013](0013-standing-low-cost-dev-env-with-auto-deploy.md) / [0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md) / [0041](archive/operations/ux-observations-on-git-data-branch.md) / [0045](archive/operations/e2e-artifacts-are-secret-by-default.md) / [0018](archive/operations/runtime-verification-in-the-loop.md)
+- 関連 ADR: [0046](0046-environment-rebuildable-from-declaration.md)（D1 を supersede — 2026-08-15 の Accept で発効 / D2〜D10 は現行 — D9 本文の「持続層」は管理系 RG と読み替える）/ [0003](0003-two-phase-bicep.md) / [0013](0013-standing-low-cost-dev-env-with-auto-deploy.md) / [0030](0030-persistence-on-cosmos-db-single-store-behind-bff.md) / [0041](archive/operations/ux-observations-on-git-data-branch.md) / [0045](archive/operations/e2e-artifacts-are-secret-by-default.md) / [0018](archive/operations/runtime-verification-in-the-loop.md)

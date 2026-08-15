@@ -25,6 +25,7 @@ AI_AGENT_DIR = REPO_ROOT / "apps" / "services" / "ai-agent"
 sys.path.insert(0, str(AI_AGENT_DIR))
 
 from app.schemas import (  # noqa: E402  isort:skip
+    ApprovalConflictResponse,
     ApproveRequest,
     ApproveResponse,
     ChatRequest,
@@ -68,6 +69,10 @@ SCHEMAS = {
     "PlanResponse": PlanResponse,
     "ApproveRequest": ApproveRequest,
     "ApproveResponse": ApproveResponse,
+    # /approve の 409 body (#82)。**200 と同じ粒度で比較する** — 二重送信の応答は
+    # フロントが「実行されたか」を言い切る唯一の材料なので、片側だけ形を変えると
+    # 「すでに処理済みです」の案内が黙って汎用エラーに落ちる。
+    "ApprovalConflictResponse": ApprovalConflictResponse,
     "ExtractRequest": ExtractRequest,
     "ExtractionResult": ExtractionResult,
 }

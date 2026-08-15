@@ -27,7 +27,27 @@ REQUIRED_KEYS = {
     "schemaVersion", "kind", "rubricVersion", "probeId", "scenarioId",
     "scoredAt", "scores", "total", "max", "verdict", "unknowns",
 }
-PERSPECTIVES = ["U1", "U2", "U3", "U4", "U5", "U6"]
+# 観点の真実は .github/claude/ux-rubric.md。**rubric と同じ PR でここを直す** —
+# 片方だけだと judge は採点できるのに蓄積で弾かれる。
+#
+# **rubricVersion ごとに観点集合を持つ** (Codex P1 / PR #436)。1 つに固定すると、
+# `rubricVersion: "0.1"` と書かれたまま U1〜U7・14 点のレポートが素通りし、
+# **0.1 と 0.2 の断絶点を示すメタデータが静かに壊れる** — 蓄積は時系列データで、
+# version が信用できなくなると版をまたいだ比較の禁止 (max 12 → 14) が守れない。
+# 未知の version は受理しない (新版を足すときはここに 1 行足す)。
+#   perspectives = その版の観点 / critical = 0 なら他がどうであれ赤にする観点
+RUBRIC_VERSIONS = {
+    "0.1": {
+        "perspectives": ["U1", "U2", "U3", "U4", "U5", "U6"],
+        "critical": ("U1", "U2", "U3"),
+    },
+    # 0.2: U7 (仮説の差し出し方) を追加 — 仮説の押し付け・危機領域への仮説は、
+    # 合計が高くても会話として通してはいけないので critical に入れる (#432 PO 裁定 Q2)
+    "0.2": {
+        "perspectives": ["U1", "U2", "U3", "U4", "U5", "U6", "U7"],
+        "critical": ("U1", "U2", "U3", "U7"),
+    },
+}
 VALID_VERDICTS = {"green", "yellow", "red"}
 UNKNOWN = "UNKNOWN"
 
@@ -57,17 +77,40 @@ def validate(obj: dict) -> list[str]:
     if obj.get("schemaVersion") != 1:
         errors.append(f"schemaVersion が 1 ではありません: {obj.get('schemaVersion')!r}")
 
+    # 採点形式は rubricVersion で決まる。ここを見ずに 1 つの形式へ固定すると、
+    # version が実際の形式とズレたレポートが素通りして断絶点の記録が壊れる
+    rubric_version = obj.get("rubricVersion")
+    spec = RUBRIC_VERSIONS.get(rubric_version) if isinstance(rubric_version, str) else None
+    if spec is None:
+        errors.append(
+            f"rubricVersion が未知です: {rubric_version!r} / "
+            f"既知={sorted(RUBRIC_VERSIONS)} — .github/claude/ux-rubric.md を改定したなら "
+            "RUBRIC_VERSIONS にその版の観点集合を足してください"
+        )
+        return errors
+    perspectives = spec["perspectives"]
+    critical = spec["critical"]
+
     scores = obj.get("scores")
     if not isinstance(scores, dict):
         errors.append("scores が object ではありません")
         return errors
 
-    missing_p = [p for p in PERSPECTIVES if p not in scores]
+    missing_p = [p for p in perspectives if p not in scores]
     if missing_p:
-        errors.append(f"観点が欠けています: {missing_p}")
+        errors.append(f"観点が欠けています (rubricVersion {rubric_version}): {missing_p}")
+
+    # この版に無い観点が混ざっていたら弾く — 「0.1 と名乗って 0.2 の形式で採点する」を
+    # total/max の偶然の一致に頼らず落とす
+    extra_p = [p for p in scores if p not in perspectives]
+    if extra_p:
+        errors.append(
+            f"rubricVersion {rubric_version} に無い観点が入っています: {sorted(extra_p)} / "
+            f"この版の観点={perspectives}"
+        )
 
     numeric: list[int] = []
-    for p in PERSPECTIVES:
+    for p in perspectives:
         if p not in scores:
             continue
         v = scores[p]
@@ -93,9 +136,9 @@ def validate(obj: dict) -> list[str]:
     if verdict not in VALID_VERDICTS:
         errors.append(f"verdict が {sorted(VALID_VERDICTS)} のいずれでもありません: {verdict!r}")
     elif expected_max > 0:
-        # rubric の閾値: >=0.75 緑 / 0.5-0.75 黄 / <0.5 または U1-U3 のいずれかが 0 で赤
+        # rubric の閾値: >=0.75 緑 / 0.5-0.75 黄 / <0.5 または critical のいずれかが 0 で赤
         ratio = expected_total / expected_max
-        critical_zero = any(scores.get(p) == 0 for p in ("U1", "U2", "U3"))
+        critical_zero = any(scores.get(p) == 0 for p in critical)
         if critical_zero:
             expected_verdict = "red"
         elif ratio >= 0.75:
@@ -107,14 +150,15 @@ def validate(obj: dict) -> list[str]:
         if verdict != expected_verdict:
             errors.append(
                 f"verdict が rubric の閾値と不整合: verdict={verdict!r} / "
-                f"期待={expected_verdict!r} (比率 {ratio:.2f}, U1-U3 に 0 が{'ある' if critical_zero else 'ない'})"
+                f"期待={expected_verdict!r} (比率 {ratio:.2f}, "
+                f"{'/'.join(critical)} に 0 が{'ある' if critical_zero else 'ない'})"
             )
 
     unknowns = obj.get("unknowns")
     if not isinstance(unknowns, list):
         errors.append("unknowns が配列ではありません")
     else:
-        declared = {p for p in PERSPECTIVES if scores.get(p) == UNKNOWN}
+        declared = {p for p in perspectives if scores.get(p) == UNKNOWN}
         # rubric: UNKNOWN にした理由を必ず添える
         if len(declared) != len(unknowns):
             errors.append(
