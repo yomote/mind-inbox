@@ -6,16 +6,20 @@
     - severity の数え間違い / pip-audit の severity 無しを moderate 等に寄せる改変が
       通り、Issue タイトルの深刻度が実態とズレる
     - 0 件のときにカバー外領域の明示が落ち、「0 件 = 安全」という嘘が緑色の顔をして通る
-    - SAST の欄が、**稼働 / 解析実績ゼロ / 取得失敗**のどれでも同じ顔になる
+    - SAST の欄が、**稼働 / 停滞 / 解析実績ゼロ / 取得失敗**のどれでも同じ顔になる
       (403 やネットワーク失敗を「稼働中」と読ませる嘘。Issue #408 の再発)
+    - 解析が 1 件でもあれば ✅ になり、**無効化されても過去の解析で「稼働中」に見える**
+    - verified 以外が annotation に出ず、緑 run の step summary に埋もれる
 """
 
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from sweep import (
     ParseError,
     aggregate,
+    judge_freshness,
     load_sast_status,
     load_tool_results,
     parse_code_scanning,
@@ -23,7 +27,9 @@ from sweep import (
     parse_npm_audit,
     parse_pip_audit,
     parse_pnpm_audit,
+    sast_annotation,
     sast_line,
+    sast_stale_hours,
     severity_line,
 )
 
@@ -208,8 +214,12 @@ def test_l1_SASTはCodeQL未導入と書かず実測した稼働を出す() -> N
     assert "0123456" in line and "0123456789abcdef" not in line  # sha は短縮
     md = aggregate([_tool("a", [])], sast)["markdown"]
     assert line in md
-    # 事実と食い違う宣言 (#408 で見つかった「CodeQL 未導入」) を二度と出さない
-    assert "CodeQL 未導入" not in md
+    # 事実と食い違う宣言 (#408 の「CodeQL 未導入」) を二度と出さない。文字列そのものを
+    # 禁じるだけだと「SAST 未導入」への書き戻しが通るので、**SAST に触れている行すべて**を見る
+    # (「trivy 未導入」のような他ツールの記述は残ってよい)。
+    sast_lines = [ln for ln in md.splitlines() if "SAST" in ln or "CodeQL" in ln]
+    assert sast_lines
+    assert all("未導入" not in ln for ln in sast_lines)
     assert "この sweep の対象外" in md  # 「回していない」こと自体は毎回明示する
 
 
@@ -249,20 +259,22 @@ def test_l1_SASTの実測を渡さなければ稼働扱いされず未検証に�
     assert "未検証" in report["markdown"]
 
 
-def test_l1_load_sast_statusはファイルの有無と中身で3通りに分かれる(
+def test_l1_load_sast_statusはファイルの有無と中身で4通りに分かれる(
     tmp_path: Path,
 ) -> None:
     assert load_sast_status(tmp_path)["status"] == "unverified"  # 実測 step が回らず
 
     path = tmp_path / "code-scanning.json"
     path.write_text(json.dumps(CODE_SCANNING_SAMPLE), encoding="utf-8")
-    assert load_sast_status(tmp_path) == {
-        "status": "verified",
-        "created_at": "2026-08-14T01:48:12Z",
-        "ref": "refs/heads/main",
-        "commit_sha": "0123456",
-        "tool": "CodeQL",
-    }
+    fresh = load_sast_status(tmp_path, now=_at("2026-08-14T05:48:12Z"))
+    assert fresh["status"] == "verified"
+    assert fresh["created_at"] == "2026-08-14T01:48:12Z"
+    assert fresh["commit_sha"] == "0123456"
+    assert fresh["age_hours"] == 4.0
+
+    # 同じファイルでも、しきい値を超えて時間が経てば ✅ ではなくなる
+    stale = load_sast_status(tmp_path, now=_at("2027-08-14T01:48:12Z"))
+    assert stale["status"] == "stale"
 
     path.write_text("[]", encoding="utf-8")
     assert load_sast_status(tmp_path)["status"] == "never_analyzed"
@@ -271,6 +283,68 @@ def test_l1_load_sast_statusはファイルの有無と中身で3通りに分か
     unverified = load_sast_status(tmp_path)
     assert unverified["status"] == "unverified"
     assert "403" in unverified["reason"]
+
+
+def test_l1_192時間より古い解析は稼働扱いしない() -> None:
+    """**解析が 1 件ある = 回っている、ではない** (Codex P2 / #440)。
+
+    無いと何が静かに通るか: default setup を無効化しても過去の解析は API に残るので、
+    195 日前の解析でも ✅ 稼働中として出て、SAST が止まったことに誰も気づけない。
+    """
+    threshold = sast_stale_hours()
+    assert threshold == 192  # watchers.json (id 333008403) の expect_hours と同値
+    measured = _no_flag(parse_code_scanning(CODE_SCANNING_SAMPLE))
+    base = _at("2026-08-14T01:48:12Z")  # = created_at
+
+    just_inside = judge_freshness(
+        measured, base + timedelta(hours=threshold - 1), threshold
+    )
+    just_outside = judge_freshness(
+        measured, base + timedelta(hours=threshold + 1), threshold
+    )
+    assert just_inside["status"] == "verified"
+    assert just_outside["status"] == "stale"  # 境界の外は ✅ にしない
+
+    line = sast_line(just_outside)
+    assert not line.startswith("✅")
+    assert "停滞" in line
+    assert "2026-08-14T01:48:12Z" in line  # 最終解析の日時を落とさない
+    assert "192" in line  # しきい値も出す (なぜ停滞と言えるのか)
+    assert line in aggregate([_tool("a", [])], just_outside)["markdown"]
+
+
+def test_l1_鮮度を判定できない解析は稼働でも停滞でもなく未検証() -> None:
+    """created_at が読めなければ「古くない」とは言えない。✅ にも 🔴 にも倒さない。"""
+    broken = judge_freshness({"created_at": "いつか"}, _at("2026-08-14T01:48:12Z"), 192)
+    assert broken["status"] == "unverified"
+    assert "鮮度を判定できず" in broken["reason"]
+
+
+def test_l1_verified以外はannotationに出る() -> None:
+    """step summary だけだと 🔴 が緑 run に埋もれる (⚠️ 未検証より重い状態が弱い経路になる)。"""
+    verified = {"status": "verified", **_no_flag(parse_code_scanning(CODE_SCANNING_SAMPLE))}
+    assert sast_annotation(verified) == ""  # 正常時にノイズを出さない
+
+    for sast in (
+        {"status": "never_analyzed"},
+        {"status": "unverified", "reason": "HTTP 403"},
+        judge_freshness(
+            _no_flag(parse_code_scanning(CODE_SCANNING_SAMPLE)),
+            _at("2027-08-14T01:48:12Z"),
+            192,
+        ),
+    ):
+        annotation = sast_annotation(sast)
+        assert annotation.startswith("::warning::"), sast["status"]
+        assert "\n" not in annotation  # 改行すると annotation が途中で切れる
+
+    # workflow はこの文字列を出すだけ (判定を YAML に持たせない)
+    report = aggregate([_tool("a", [])], {"status": "never_analyzed"})
+    assert report["sast"]["annotation"].startswith("::warning::")
+
+
+def _at(timestamp: str) -> datetime:
+    return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
 
 
 def test_l1_SASTの失敗はsweep自身のツール失敗と混ざらない() -> None:

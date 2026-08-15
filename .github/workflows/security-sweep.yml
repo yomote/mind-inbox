@@ -101,17 +101,20 @@ jobs:
       # 取得失敗が区別できなくなるため、理由を載せた {"unavailable": …} を置き、
       # sweep.py が「未検証: 理由」として出す。この step 自体では run を落とさない
       # (SAST の生死は watchers.json / 状況ページの担当。ここで落とすと
-      #  依存 CVE と秘密の検出という本務まで巻き添えで止まる)。
+      #  依存 CVE と秘密の検出という本務まで巻き添えで止まる) — 代わりに
+      #  verified 以外は次の step が annotation を出す。
+      #
+      # sort/direction は**既定に頼らず明示する** — sweep.py は先頭要素を最新として
+      # 鮮度を測るので、並び順が変われば「古い解析を最新と読む」形で静かに壊れる。
       - name: SAST (CodeQL default setup) の稼働実測
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ! gh api "repos/${GITHUB_REPOSITORY}/code-scanning/analyses?tool_name=CodeQL&per_page=1" \
+          if ! gh api "repos/${GITHUB_REPOSITORY}/code-scanning/analyses?tool_name=CodeQL&per_page=1&sort=created&direction=desc" \
                  > /tmp/sweep-reports/code-scanning.json 2> /tmp/code-scanning.err; then
             jq -n --rawfile reason /tmp/code-scanning.err \
               '{unavailable: ($reason | gsub("\\s+"; " ") | .[0:300])}' \
               > /tmp/sweep-reports/code-scanning.json
-            echo "::warning::CodeQL の稼働を実測できなかった (レポートには『未検証』として出る)"
             cat /tmp/code-scanning.err
           fi
 
@@ -126,6 +129,10 @@ jobs:
           # カバー外領域をログにも出す (Issue が立たない 0 件の週でも「狭さ」が見えるように)
           cat /tmp/sweep-report.md
           cat /tmp/sweep-report.md >> "$GITHUB_STEP_SUMMARY"
+          # SAST が verified でなければ annotation を出す (step summary だけだと、
+          # 🔴 解析実績ゼロ が緑 run の中に埋もれて誰も見ない)。**どの状態を警告に
+          # するかの判定は sweep.py 側 (テスト済み)** — ここは出すだけで if を持たない。
+          jq -r '.sast.annotation // "" | select(length > 0)' /tmp/sweep-report.json
 
       - name: 検出があれば Issue を起票 / 追記
         if: steps.sweep.outputs.total != '0'
