@@ -24,9 +24,11 @@ from subagent_dirty_guard import (
     drop_worktree_entry,
     fingerprint,
     git_dirty_paths,
+    git_index_prints,
     format_reason,
     handle,
     load_entries,
+    parse_ls_files_stage,
     parse_porcelain,
     select_paths_to_report,
     snapshot_path,
@@ -242,6 +244,102 @@ def test_単体_実際の_git_で_ステージしただけでも指紋が変わ�
     assert after["foo.txt"] != before["foo.txt"], (
         "内容が同じでもステージ状態が変われば指紋は変わるべき"
     )
+
+
+def test_単体_ls_files_はコンフリクトの全ステージを畳む() -> None:
+    """これが無いと何が静かに通るか:
+
+    コンフリクト中の path は stage 1/2/3 の 3 行で来る。最後の 1 行で上書きすると、
+    stage 1 や 2 だけが解決された変化 (= subagent が競合解決に手を付けた) が
+    指紋に出ず、置き去りのまま通る。
+    """
+    text = (
+        "100644 aaa 1\tfoo.txt\0"
+        "100644 bbb 2\tfoo.txt\0"
+        "100644 ccc 3\tfoo.txt\0"
+        "100644 ddd 0\tbar.txt\0"
+    )
+    prints = parse_ls_files_stage(text)
+    assert prints["bar.txt"] == "100644:ddd:0"
+    assert prints["foo.txt"] == "100644:aaa:1,100644:bbb:2,100644:ccc:3", (
+        "コンフリクトの一部だけが解決されても指紋が変わらない"
+    )
+
+
+def test_単体_index_が読めないときは空ではなく失敗理由を返す(tmp_path: Path) -> None:
+    """これが無いと何が静かに通るか:
+
+    `git ls-files` が失敗したのに空の dict を返すと、全 path の index 指紋が
+    "noindex" で揃う。**取れなかったものが「index に変化なし」として判定に混ざり**、
+    部分ステージの見落としが黙って復活する。失敗は失敗として上へ返す。
+    """
+    prints, failure = git_index_prints(str(tmp_path))  # git repo ではない
+    assert prints == {}
+    assert failure is not None, "index が取れていないのに失敗理由が None"
+    assert "ls-files" in failure, failure
+
+
+def test_単体_実際の_git_で_MM_のまま一部だけステージしても指紋が変わる(
+    tmp_path: Path,
+) -> None:
+    """親の `MM` なファイルを subagent が `git add -p` で部分ステージした場合を咎めるか。
+
+    これが無いと何が静かに通るか:
+        親がステージ済みと未ステージの両方の差分を持つ `MM` 状態で、subagent が
+        未ステージ hunk の**一部だけ**を追加ステージし別の hunk を残すと、
+        **XY は `MM` のまま・作業ツリーの内容も 1 バイトも変わらない**。
+        `XY|内容` だけの指紋では起動前後が一致し、**index だけが書き換わって
+        次のコミットに混入しうる状態が無警告で通る**。
+
+    `parse_ls_files_stage` 単体では**呼び出し側が index を見るかどうかを固定できない**
+    ため (`-z` のときと同じ理由)、実物の git で押さえる。
+    """
+    import subprocess
+
+    def git(*args: str, stdin: str | None = None) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, timeout=30,
+                       capture_output=True, text=True, input=stdin)
+
+    git("init", "-q")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    # hunk が 2 つに割れるよう離れた行を変更する (近いと 1 hunk に併合される)
+    (tmp_path / "foo.txt").write_text(
+        "".join(f"l{i}\n" for i in range(1, 41)), encoding="utf-8"
+    )
+    git("add", "foo.txt")
+    git("commit", "-qm", "base")
+
+    def edit(index0: int, text: str) -> None:
+        path = tmp_path / "foo.txt"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        lines[index0] = text
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    edit(0, "PARENT-STAGED")
+    git("add", "foo.txt")           # ステージ済みの差分
+    edit(9, "HUNK-A")
+    edit(29, "HUNK-B")              # 未ステージの差分 2 つ → "MM"
+
+    before, failure = git_dirty_paths(str(tmp_path))
+    assert failure is None, failure
+    assert before["foo.txt"].startswith("MM|"), before["foo.txt"]
+    content_before = (tmp_path / "foo.txt").read_bytes()
+
+    # subagent が HUNK-A だけを追加ステージする (y = 採用 / n = 見送り)
+    git("add", "-p", "foo.txt", stdin="y\nn\n")
+
+    after, failure = git_dirty_paths(str(tmp_path))
+    assert failure is None, failure
+    assert after["foo.txt"].startswith("MM|"), "前提が崩れている (XY が MM のままでない)"
+    assert (tmp_path / "foo.txt").read_bytes() == content_before, (
+        "前提が崩れている (作業ツリーの内容が変わってしまった)"
+    )
+
+    assert after["foo.txt"] != before["foo.txt"], (
+        "XY も内容も同じでも index が変われば指紋は変わるべき"
+    )
+    assert select_paths_to_report(after, before) == ["foo.txt"]
     assert select_paths_to_report(after, before) == ["foo.txt"]
 
 

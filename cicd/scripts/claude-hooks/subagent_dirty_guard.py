@@ -39,7 +39,7 @@
     残っている dirty は**全部その subagent のもの**で、`all` (混ざっているかもしれない) より
     強い判定ができる。
 
-控えを path だけでなく指紋 (`XY 状態|内容ハッシュ`) で持つ理由:
+控えを path だけでなく指紋 (`XY 状態|index|内容ハッシュ`) で持つ理由:
     親が既に触っているファイルを subagent がさらに編集した場合、path 集合は
     起動前後で同じなので差集合が空になり、**置き去りを無警告で見逃す**。
     指紋が変わった path も咎めることでこの穴を塞ぐ (`fingerprint` を参照)。
@@ -48,6 +48,11 @@
     ファイルを subagent が `git add` しただけで停止したとき (` M foo` → `M  foo`)
     作業ツリーの内容が変わらないので指紋が一致し、**親の差分が勝手にステージされて
     次のコミットに混入しうる状態が無警告で通る** (`parse_porcelain` を参照)。
+
+    さらに **index の blob も畳む**。`MM` (ステージ済みと未ステージが両方ある) の
+    ファイルで subagent が `git add -p` により**未ステージ hunk の一部だけ**を追加
+    ステージすると、**XY は `MM` のまま・作業ツリーの内容も同一**なので、`XY|内容`
+    だけでは一致してしまう (`parse_ls_files_stage` を参照)。
 
 指紋と排他で**残る**穴 (取れていないものを「異常なし」と書かないための明示):
     - 5MiB 超のファイルは内容ハッシュではなく `size:mtime_ns` — サイズと mtime が
@@ -59,6 +64,10 @@
       更新した場合) は全 path の指紋が食い違い、**過剰報告**になる。見落とし側には
       倒れないので、そのまま置く (揃えるには控えに書式版を持たせることになるが、
       版が読めない控えの扱いをまた決めることになり穴が増える)
+    - `git ls-files` が失敗すると index 指紋が取れないので、その回は控えごと
+      取れなかったことにして "all" モードに落ちる (過剰報告)。**index が読めない
+      ことを「index に変化なし」と読み替えない** — 読み替えると部分ステージの
+      見落としが黙って復活する
 
 控えが取れている場合と取れていない場合を**必ず区別して出す**。控えが無いときに
 作業ツリー全体を subagent のせいにすると、親自身の未コミット差分で subagent を
@@ -203,11 +212,66 @@ def parse_porcelain(text: str) -> dict[str, str]:
     return states
 
 
+def parse_ls_files_stage(text: str) -> dict[str, str]:
+    """`git ls-files --stage -z` の出力から `{path: index に載っている blob の指紋}` を作る。
+
+    **index の内容も指紋に要る理由** (これが無いと何が静かに通るか):
+        親が同じファイルにステージ済みと未ステージの両方の差分を持つ `MM` 状態で、
+        subagent が `git add -p` で**未ステージ hunk の一部だけ**を追加ステージし、
+        別の hunk を未ステージのまま残すと、**XY は `MM` のまま・作業ツリーの内容も
+        同一**になる。`XY|内容` だけの指紋では起動前後が一致するため、**index の
+        内容だけが書き換わって次のコミットに混入しうる状態が無警告で通る**。
+        2026-08-15 に実測 (index blob `a8ff27c` → `f28d051` / XY・内容ともに不変)。
+
+    形式: `<mode> <object> <stage>\\t<path>\\0` の並び。**コンフリクト中の path は
+    stage 1/2/3 の 3 行で来る**ので、出現順に連結して 1 つの指紋に畳む
+    (どれか 1 つが解決されても指紋が変わるように)。
+    """
+    prints: dict[str, str] = {}
+    for entry in text.split("\0"):
+        if not entry:
+            continue
+        meta, _, path = entry.partition("\t")
+        if not path:
+            continue
+        parts = meta.split()
+        if len(parts) < 3:
+            continue
+        mode, oid, stage = parts[0], parts[1], parts[2]
+        token = f"{mode}:{oid}:{stage}"
+        prints[path] = f"{prints[path]},{token}" if path in prints else token
+    return prints
+
+
+def git_index_prints(cwd: str) -> tuple[dict[str, str], str | None]:
+    """({path: index の blob 指紋}, 失敗理由)。失敗理由が非 None なら**取れていない**。
+
+    dirty な path だけに絞らず index 全体を読む — pathspec に渡す形にすると
+    dirty が多いときに argv 長で落ちうる。index の読み出しは `git status` が
+    既に払っているコストと同程度で、hook の体感には出ない。
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "ls-files", "--stage", "-z"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT_SEC,
+            check=False,  # check=False にした分、非ゼロ終了は下で明示的に理由へ変換する
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {}, f"git ls-files を実行できなかった ({exc!r})"
+    if proc.returncode != 0:
+        detail = (proc.stderr or "").strip().splitlines()
+        return {}, f"git ls-files が失敗した ({detail[0] if detail else proc.returncode})"
+    return parse_ls_files_stage(proc.stdout), None
+
+
 def fingerprint(root: str, rel: str) -> str:
     """dirty な 1 件の**内容側**の指紋。**内容が変われば必ず変わる**ことだけを満たせばよい。
 
-    控えに載る指紋はこれ単体ではなく `XY|内容` (`git_dirty_paths` が畳む)。
-    内容が同じでもステージ状態が変われば指紋は変わる。
+    控えに載る指紋はこれ単体ではなく `XY|index|内容` (`git_dirty_paths` が畳む)。
+    内容が同じでもステージ状態や index の中身が変われば指紋は変わる。
 
     これが無いと何が静かに通るか:
         親が既に触っているファイルを subagent がさらに編集して未コミットのまま
@@ -259,10 +323,21 @@ def git_dirty_paths(cwd: str) -> tuple[dict[str, str], str | None]:
     if proc.returncode != 0:
         detail = (proc.stderr or "").strip().splitlines()
         return {}, f"git status が失敗した ({detail[0] if detail else proc.returncode})"
-    # 指紋 = `XY|内容`。XY を畳まないと `git add` しただけの変化 (` M foo` → `M  foo`)
-    # が内容同一で素通りする (parse_porcelain の docstring 参照)。
+    # 指紋 = `XY|index|内容`。3 つとも要る:
+    #   XY    — `git add` しただけの変化 (` M foo` → `M  foo`) は内容が動かない
+    #   index — `MM` のまま hunk の一部だけを追加ステージした変化は XY も内容も動かない
+    #   内容  — 作業ツリーだけの編集は XY も index も動かない
+    # (それぞれ parse_porcelain / parse_ls_files_stage / fingerprint の docstring を参照)
+    index_prints, index_failure = git_index_prints(cwd)
+    if index_failure is not None:
+        # index が読めないまま `XY|内容` だけで判定すると、上記の見落としが復活する。
+        # 「取れなかったもの」を判定に混ぜず、控えごと取れなかったことにして呼び出し元へ返す
+        # (呼び出し元は控え無し = "all" モードに落ち、文言でそれを申告する)。
+        return {}, index_failure
     return {
-        rel: f"{status}|{fingerprint(cwd, rel)}" for rel, status in parse_porcelain(proc.stdout).items()
+        # 未追跡 (`??`) は index に載らないので "noindex"。追跡され始めれば指紋が変わる。
+        rel: f"{status}|{index_prints.get(rel, 'noindex')}|{fingerprint(cwd, rel)}"
+        for rel, status in parse_porcelain(proc.stdout).items()
     }, None
 
 
