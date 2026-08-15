@@ -41,7 +41,6 @@ paths:
               required:
                 - approvalRequestId
                 - approved
-              additionalProperties: false
   /api/trpc/consultation.extract:
     post:
       operationId: consultation.extract
@@ -71,8 +70,8 @@ paths:
                             sessionId:
                               type: string
                             dumpId:
-                              type: string
                               nullable: true
+                              type: string
                             createdAt:
                               type: string
                             statement:
@@ -115,13 +114,13 @@ paths:
                               items:
                                 type: string
                             problemId:
-                              type: string
                               nullable: true
+                              type: string
                             groupingConfidence:
+                              nullable: true
                               type: number
                               minimum: 0
                               maximum: 1
-                              nullable: true
                           required:
                             - id
                             - sessionId
@@ -162,15 +161,16 @@ paths:
                               type: boolean
                             mentionCount:
                               type: integer
-                              exclusiveMinimum: true
                               minimum: 0
+                              exclusiveMinimum: true
+                              maximum: 9007199254740991
                             reignited:
                               type: boolean
                             groupingConfidence:
+                              nullable: true
                               type: number
                               minimum: 0
                               maximum: 1
-                              nullable: true
                           required:
                             - kind
                             - problemId
@@ -188,13 +188,18 @@ paths:
                   newProblemCount:
                     type: integer
                     minimum: 0
+                    maximum: 9007199254740991
                   updatedProblemCount:
                     type: integer
                     minimum: 0
+                    maximum: 9007199254740991
                   thinkingMap:
+                    default: null
+                    nullable: true
                     type: object
                     properties:
                       nodes:
+                        default: []
                         type: array
                         items:
                           type: object
@@ -216,23 +221,24 @@ paths:
                                 - tentative
                                 - unexplored
                             parentId:
-                              type: string
-                              nullable: true
                               default: null
+                              nullable: true
+                              type: string
                             problemId:
-                              type: string
-                              nullable: true
                               default: null
+                              nullable: true
+                              type: string
                           required:
                             - id
                             - kind
                             - label
                             - status
+                            - parentId
+                            - problemId
                           additionalProperties: false
-                        default: &a1 []
+                    required:
+                      - nodes
                     additionalProperties: false
-                    nullable: true
-                    default: null
                   stubbed:
                     type: boolean
                 required:
@@ -240,6 +246,7 @@ paths:
                   - items
                   - newProblemCount
                   - updatedProblemCount
+                  - thinkingMap
                 additionalProperties: false
       requestBody:
         required: true
@@ -253,6 +260,8 @@ paths:
                   minLength: 1
                   maxLength: 200
                 messages:
+                  default: []
+                  maxItems: 200
                   type: array
                   items:
                     type: object
@@ -268,13 +277,11 @@ paths:
                     required:
                       - role
                       - text
-                    additionalProperties: false
-                  maxItems: 200
-                  default: []
                 draft:
                   type: object
                   properties:
                     items:
+                      maxItems: 200
                       type: array
                       items:
                         type: object
@@ -291,10 +298,10 @@ paths:
                                 minLength: 1
                                 maxLength: 200
                               dumpId:
+                                nullable: true
                                 type: string
                                 minLength: 1
                                 maxLength: 200
-                                nullable: true
                               createdAt:
                                 type: string
                                 maxLength: 64
@@ -324,7 +331,6 @@ paths:
                                   - label
                                   - valence
                                   - intensity
-                                additionalProperties: false
                               proposedTheme:
                                 type: string
                                 enum:
@@ -337,21 +343,21 @@ paths:
                                   - 日常・生活
                                   - 未分類
                               proposedTags:
+                                maxItems: 20
                                 type: array
                                 items:
                                   type: string
                                   maxLength: 100
-                                maxItems: 20
                               problemId:
+                                nullable: true
                                 type: string
                                 minLength: 1
                                 maxLength: 200
-                                nullable: true
                               groupingConfidence:
+                                nullable: true
                                 type: number
                                 minimum: 0
                                 maximum: 1
-                                nullable: true
                             required:
                               - id
                               - sessionId
@@ -364,7 +370,6 @@ paths:
                               - proposedTags
                               - problemId
                               - groupingConfidence
-                            additionalProperties: false
                           grouping:
                             type: object
                             properties:
@@ -395,15 +400,16 @@ paths:
                                 type: boolean
                               mentionCount:
                                 type: integer
-                                exclusiveMinimum: true
                                 minimum: 0
+                                exclusiveMinimum: true
+                                maximum: 9007199254740991
                               reignited:
                                 type: boolean
                               groupingConfidence:
+                                nullable: true
                                 type: number
                                 minimum: 0
                                 maximum: 1
-                                nullable: true
                             required:
                               - kind
                               - problemId
@@ -413,18 +419,13 @@ paths:
                               - mentionCount
                               - reignited
                               - groupingConfidence
-                            additionalProperties: false
                         required:
                           - mention
                           - grouping
-                        additionalProperties: false
-                      maxItems: 200
                   required:
                     - items
-                  additionalProperties: false
               required:
                 - sessionId
-              additionalProperties: false
   /api/trpc/consultation.preview:
     post:
       operationId: consultation.preview
@@ -454,8 +455,8 @@ paths:
                             sessionId:
                               type: string
                             dumpId:
-                              type: string
                               nullable: true
+                              type: string
                             createdAt:
                               type: string
                             statement:
@@ -498,13 +499,13 @@ paths:
                               items:
                                 type: string
                             problemId:
-                              type: string
                               nullable: true
+                              type: string
                             groupingConfidence:
+                              nullable: true
                               type: number
                               minimum: 0
                               maximum: 1
-                              nullable: true
                           required:
                             - id
                             - sessionId
@@ -545,15 +546,16 @@ paths:
                               type: boolean
                             mentionCount:
                               type: integer
-                              exclusiveMinimum: true
                               minimum: 0
+                              exclusiveMinimum: true
+                              maximum: 9007199254740991
                             reignited:
                               type: boolean
                             groupingConfidence:
+                              nullable: true
                               type: number
                               minimum: 0
                               maximum: 1
-                              nullable: true
                           required:
                             - kind
                             - problemId
@@ -571,13 +573,18 @@ paths:
                   newProblemCount:
                     type: integer
                     minimum: 0
+                    maximum: 9007199254740991
                   updatedProblemCount:
                     type: integer
                     minimum: 0
+                    maximum: 9007199254740991
                   thinkingMap:
+                    default: null
+                    nullable: true
                     type: object
                     properties:
                       nodes:
+                        default: []
                         type: array
                         items:
                           type: object
@@ -599,23 +606,24 @@ paths:
                                 - tentative
                                 - unexplored
                             parentId:
-                              type: string
-                              nullable: true
                               default: null
+                              nullable: true
+                              type: string
                             problemId:
-                              type: string
-                              nullable: true
                               default: null
+                              nullable: true
+                              type: string
                           required:
                             - id
                             - kind
                             - label
                             - status
+                            - parentId
+                            - problemId
                           additionalProperties: false
-                        default: *a1
+                    required:
+                      - nodes
                     additionalProperties: false
-                    nullable: true
-                    default: null
                   stubbed:
                     type: boolean
                 required:
@@ -623,6 +631,7 @@ paths:
                   - items
                   - newProblemCount
                   - updatedProblemCount
+                  - thinkingMap
                 additionalProperties: false
       requestBody:
         required: true
@@ -636,6 +645,7 @@ paths:
                   minLength: 1
                   maxLength: 200
                 messages:
+                  maxItems: 200
                   type: array
                   items:
                     type: object
@@ -651,12 +661,9 @@ paths:
                     required:
                       - role
                       - text
-                    additionalProperties: false
-                  maxItems: 200
               required:
                 - sessionId
                 - messages
-              additionalProperties: false
   /api/trpc/consultation.sendMessage:
     post:
       operationId: consultation.sendMessage
@@ -676,8 +683,8 @@ paths:
                   requiresApproval:
                     type: boolean
                   approvalRequestId:
-                    type: string
                     nullable: true
+                    type: string
                   citations:
                     type: array
                     items:
@@ -713,7 +720,6 @@ paths:
               required:
                 - sessionId
                 - message
-              additionalProperties: false
   /api/trpc/consultation.start:
     post:
       operationId: consultation.start
@@ -779,7 +785,6 @@ paths:
                   maxLength: 8000
               required:
                 - concern
-              additionalProperties: false
   /api/trpc/health.ping:
     get:
       operationId: health.ping
@@ -843,6 +848,7 @@ paths:
                       - resolved
                       - shelved
                   mentions:
+                    minItems: 1
                     type: array
                     items:
                       type: object
@@ -852,8 +858,8 @@ paths:
                         sessionId:
                           type: string
                         dumpId:
-                          type: string
                           nullable: true
+                          type: string
                         createdAt:
                           type: string
                         statement:
@@ -896,13 +902,13 @@ paths:
                           items:
                             type: string
                         problemId:
-                          type: string
                           nullable: true
+                          type: string
                         groupingConfidence:
+                          nullable: true
                           type: number
                           minimum: 0
                           maximum: 1
-                          nullable: true
                         reopenedProblem:
                           type: boolean
                       required:
@@ -918,10 +924,10 @@ paths:
                         - problemId
                         - groupingConfidence
                       additionalProperties: false
-                    minItems: 1
                   mentionCount:
                     type: integer
                     minimum: 0
+                    maximum: 9007199254740991
                   plans:
                     type: array
                     items:
@@ -942,11 +948,11 @@ paths:
                   lastMentionedAt:
                     type: string
                   resolvedAt:
-                    type: string
                     nullable: true
+                    type: string
                   shelvedAt:
-                    type: string
                     nullable: true
+                    type: string
                 required:
                   - id
                   - title
@@ -975,7 +981,6 @@ paths:
                   maxLength: 200
               required:
                 - problemId
-              additionalProperties: false
   /api/trpc/problem.get:
     get:
       operationId: problem.get
@@ -1018,6 +1023,7 @@ paths:
                       - resolved
                       - shelved
                   mentions:
+                    minItems: 1
                     type: array
                     items:
                       type: object
@@ -1027,8 +1033,8 @@ paths:
                         sessionId:
                           type: string
                         dumpId:
-                          type: string
                           nullable: true
+                          type: string
                         createdAt:
                           type: string
                         statement:
@@ -1071,13 +1077,13 @@ paths:
                           items:
                             type: string
                         problemId:
-                          type: string
                           nullable: true
+                          type: string
                         groupingConfidence:
+                          nullable: true
                           type: number
                           minimum: 0
                           maximum: 1
-                          nullable: true
                         reopenedProblem:
                           type: boolean
                       required:
@@ -1093,10 +1099,10 @@ paths:
                         - problemId
                         - groupingConfidence
                       additionalProperties: false
-                    minItems: 1
                   mentionCount:
                     type: integer
                     minimum: 0
+                    maximum: 9007199254740991
                   plans:
                     type: array
                     items:
@@ -1117,11 +1123,11 @@ paths:
                   lastMentionedAt:
                     type: string
                   resolvedAt:
-                    type: string
                     nullable: true
+                    type: string
                   shelvedAt:
-                    type: string
                     nullable: true
+                    type: string
                 required:
                   - id
                   - title
@@ -1151,7 +1157,6 @@ paths:
                 maxLength: 200
             required:
               - id
-            additionalProperties: false
   /api/trpc/problem.list:
     get:
       operationId: problem.list
@@ -1196,6 +1201,7 @@ paths:
                         - resolved
                         - shelved
                     mentions:
+                      minItems: 1
                       type: array
                       items:
                         type: object
@@ -1205,8 +1211,8 @@ paths:
                           sessionId:
                             type: string
                           dumpId:
-                            type: string
                             nullable: true
+                            type: string
                           createdAt:
                             type: string
                           statement:
@@ -1249,13 +1255,13 @@ paths:
                             items:
                               type: string
                           problemId:
-                            type: string
                             nullable: true
+                            type: string
                           groupingConfidence:
+                            nullable: true
                             type: number
                             minimum: 0
                             maximum: 1
-                            nullable: true
                           reopenedProblem:
                             type: boolean
                         required:
@@ -1271,10 +1277,10 @@ paths:
                           - problemId
                           - groupingConfidence
                         additionalProperties: false
-                      minItems: 1
                     mentionCount:
                       type: integer
                       minimum: 0
+                      maximum: 9007199254740991
                     plans:
                       type: array
                       items:
@@ -1295,11 +1301,11 @@ paths:
                     lastMentionedAt:
                       type: string
                     resolvedAt:
-                      type: string
                       nullable: true
+                      type: string
                     shelvedAt:
-                      type: string
                       nullable: true
+                      type: string
                   required:
                     - id
                     - title
@@ -1321,28 +1327,25 @@ paths:
           required: true
           description: tRPC input (URL-encoded JSON)
           schema:
-            anyOf:
-              - not: {}
-              - type: object
-                properties:
-                  theme:
-                    type: string
-                    enum:
-                      - 仕事・キャリア
-                      - お金
-                      - 心と体
-                      - 家族・パートナー
-                      - 人間関係
-                      - 自己理解・生き方
-                      - 日常・生活
-                      - 未分類
-                  status:
-                    type: string
-                    enum:
-                      - open
-                      - resolved
-                      - shelved
-                additionalProperties: false
+            type: object
+            properties:
+              theme:
+                type: string
+                enum:
+                  - 仕事・キャリア
+                  - お金
+                  - 心と体
+                  - 家族・パートナー
+                  - 人間関係
+                  - 自己理解・生き方
+                  - 日常・生活
+                  - 未分類
+              status:
+                type: string
+                enum:
+                  - open
+                  - resolved
+                  - shelved
   /api/trpc/problem.triage:
     post:
       operationId: problem.triage
@@ -1390,6 +1393,7 @@ paths:
                             - resolved
                             - shelved
                         mentions:
+                          minItems: 1
                           type: array
                           items:
                             type: object
@@ -1399,8 +1403,8 @@ paths:
                               sessionId:
                                 type: string
                               dumpId:
-                                type: string
                                 nullable: true
+                                type: string
                               createdAt:
                                 type: string
                               statement:
@@ -1443,13 +1447,13 @@ paths:
                                 items:
                                   type: string
                               problemId:
-                                type: string
                                 nullable: true
+                                type: string
                               groupingConfidence:
+                                nullable: true
                                 type: number
                                 minimum: 0
                                 maximum: 1
-                                nullable: true
                               reopenedProblem:
                                 type: boolean
                             required:
@@ -1465,10 +1469,10 @@ paths:
                               - problemId
                               - groupingConfidence
                             additionalProperties: false
-                          minItems: 1
                         mentionCount:
                           type: integer
                           minimum: 0
+                          maximum: 9007199254740991
                         plans:
                           type: array
                           items:
@@ -1489,11 +1493,11 @@ paths:
                         lastMentionedAt:
                           type: string
                         resolvedAt:
-                          type: string
                           nullable: true
+                          type: string
                         shelvedAt:
-                          type: string
                           nullable: true
+                          type: string
                       required:
                         - id
                         - title
@@ -1517,7 +1521,7 @@ paths:
         content:
           application/json:
             schema:
-              anyOf:
+              oneOf:
                 - type: object
                   properties:
                     action:
@@ -1531,7 +1535,6 @@ paths:
                   required:
                     - action
                     - problemId
-                  additionalProperties: false
                 - type: object
                   properties:
                     action:
@@ -1545,7 +1548,6 @@ paths:
                   required:
                     - action
                     - problemId
-                  additionalProperties: false
                 - type: object
                   properties:
                     action:
@@ -1559,7 +1561,6 @@ paths:
                   required:
                     - action
                     - problemId
-                  additionalProperties: false
                 - type: object
                   properties:
                     action:
@@ -1573,7 +1574,6 @@ paths:
                   required:
                     - action
                     - problemId
-                  additionalProperties: false
                 - type: object
                   properties:
                     action:
@@ -1599,7 +1599,6 @@ paths:
                     - action
                     - problemId
                     - theme
-                  additionalProperties: false
                 - type: object
                   properties:
                     action:
@@ -1618,7 +1617,6 @@ paths:
                     - action
                     - problemId
                     - title
-                  additionalProperties: false
                 - type: object
                   properties:
                     action:
@@ -1642,7 +1640,6 @@ paths:
                     - mentionId
                     - fromProblemId
                     - toProblemId
-                  additionalProperties: false
                 - type: object
                   properties:
                     action:
@@ -1661,7 +1658,6 @@ paths:
                     - action
                     - sourceProblemId
                     - targetProblemId
-                  additionalProperties: false
   /api/trpc/speech.issueToken:
     get:
       operationId: speech.issueToken
@@ -1674,7 +1670,7 @@ paths:
           content:
             application/json:
               schema:
-                anyOf:
+                oneOf:
                   - type: object
                     properties:
                       available:
@@ -1682,13 +1678,15 @@ paths:
                         enum:
                           - false
                       authToken:
-                        enum:
-                          - "null"
+                        type: string
                         nullable: true
+                        enum:
+                          - null
                       region:
-                        enum:
-                          - "null"
+                        type: string
                         nullable: true
+                        enum:
+                          - null
                     required:
                       - available
                       - authToken

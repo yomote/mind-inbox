@@ -62,7 +62,7 @@ AI Agent への薄いプロキシではなく、**アーティファクト生成
 
 - tRPC ルータの zod スキーマが API の正典。**`docs/api/` の OpenAPI は手書きしない** — `pnpm run docs:openapi` (root からは `npm run docs:openapi:bff`) で再生成する。
 - 契約チェックは root の `npm run test:contract` (`scripts/contract-check.mjs`)。フロントと共有する型を変えたらここが落ちる。
-- BFF は zod v3、frontend は zod v4 が入っている。バージョン差を跨ぐスキーマを共有ファイルに置かない。
+- zod は BFF も frontend も v4 (#449 で BFF を追随)。OpenAPI / 契約チェックの JSON Schema 生成は zod-to-json-schema ではなく本体の `z.toJSONSchema` を使う。
 
 ## 触るときの注意
 

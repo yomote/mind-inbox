@@ -20,20 +20,19 @@
     "@azure/cosmos": "^4.10.0",
     "@azure/functions": "^4.16.2",
     "@trpc/server": "^11.18.0",
-    "zod": "^3.23.8"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.2.0",
     "concurrently": "^10.0.4",
     "eslint": "^10.8.1",
     "fast-check": "^4.9.0",
     "rimraf": "^6.0.0",
-    "typescript": "^5.4.5",
+    "typescript": "^6.0.3",
     "typescript-eslint": "^8.66.0",
-    "vitest": "^3.2.6",
-    "yaml": "^2.9.0",
-    "zod-to-json-schema": "^3.25.2"
+    "vitest": "^4.1.10",
+    "yaml": "^2.9.0"
   },
   "engines": {
     "node": ">=22"

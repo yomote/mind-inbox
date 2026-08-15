@@ -1,9 +1,14 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "commonjs",
-    "moduleResolution": "node",
+    /* TS 7 で moduleResolution "node" (node10) が削除されたため node16 に移行 (#449)。
+       package.json に "type": "module" が無いので emit は従来どおり CommonJS のまま。 */
+    "module": "node16",
+    "moduleResolution": "node16",
     "lib": ["ES2022"],
+    /* TS 7 (tsgo) は pnpm 配下の node_modules/@types を自動では拾わないことがあるため
+       明示する (#449)。外すと Buffer / process / fetch が全滅する形で気づける。 */
+    "types": ["node"],
     "outDir": "dist",
     "rootDir": ".",
     "strict": true,

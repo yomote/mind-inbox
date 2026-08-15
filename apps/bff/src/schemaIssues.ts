@@ -24,10 +24,15 @@ export function summarizeIssues(error: ZodError, maxIssues = 5): string {
   return rest > 0 ? `${issues.join(", ")} (+${rest} more)` : issues.join(", ");
 }
 
-function formatPath(path: (string | number)[]): string {
+/** zod v4 の `issue.path` は `PropertyKey[]` (symbol を含みうる)。symbol は description を出す。 */
+function formatPath(path: PropertyKey[]): string {
   return path
     .map((segment, i) =>
-      typeof segment === "number" ? `[${segment}]` : i === 0 ? segment : `.${segment}`,
+      typeof segment === "number"
+        ? `[${segment}]`
+        : i === 0
+          ? String(segment)
+          : `.${String(segment)}`,
     )
     .join("");
 }

@@ -17,7 +17,7 @@ voicevox サービスの OpenAPI 生成は**未整備** ([#9](https://github.com
 ### `bff-trpc.yaml` の生成方式
 
 `apps/bff/scripts/generate-openapi.mjs` が tRPC router を introspection し、各 procedure の
-`.input()` / `.output()` zod schema を `zod-to-json-schema` で OpenAPI 化する。
+`.input()` / `.output()` zod schema を zod v4 本体の `z.toJSONSchema` で OpenAPI 化する (#449)。
 `trpc-to-openapi` は使わない — BFF は単一 tRPC エントリポイントで REST を公開しないため
 ([ADR 0001](../adr/0001-bff-as-trpc-not-rest.md))、各 procedure を `1 procedure = 1 operation`
 として `/api/trpc/{path}` に素直にマップする。レスポンス仕様を保つため router の各 procedure には

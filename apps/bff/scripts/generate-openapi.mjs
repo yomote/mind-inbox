@@ -23,7 +23,7 @@ import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stringify } from "yaml";
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { z } from "zod";
 
 import { appRouter } from "../dist/src/trpc/router.js";
 
@@ -36,18 +36,29 @@ const TRPC_BASE = "/api/trpc";
 /** @type {{ version: string }} */
 const pkg = require("../package.json");
 
-/** zod schema → OpenAPI 3.0 互換 JSON Schema (自己完結・$ref なし) */
-function toSchema(zodSchema) {
-  return zodToJsonSchema(zodSchema, {
-    target: "openApi3",
-    $refStrategy: "none",
+/**
+ * zod schema → OpenAPI 3.0 互換 JSON Schema (自己完結・$ref なし)。
+ * zod v4 移行 (#449) で zod-to-json-schema から本体の `z.toJSONSchema` に置き換えた。
+ * `reused: "inline"` は旧 `$refStrategy: "none"` 相当 (再利用スキーマも $ref を作らず展開)。
+ *
+ * `io` は方向で使い分ける: リクエスト (`.input()`) は "input" — `.default()` 付き
+ * フィールドはクライアントが省略できるので required に入れない。レスポンス
+ * (`.output()`) は "output" — BFF は parse 時に default を埋めてから返すので必ず在る。
+ * 全部 "output" (zod の既定) にすると、省略可のリクエストフィールドが required と
+ * 書かれる嘘の仕様書になる。
+ */
+function toSchema(zodSchema, io) {
+  return z.toJSONSchema(zodSchema, {
+    target: "openapi-3.0",
+    reused: "inline",
+    io,
   });
 }
 
 function buildOperation(path, def) {
   const [tag] = path.split(".");
-  const inputSchema = def.inputs?.length ? toSchema(def.inputs[0]) : null;
-  const outputSchema = def.output ? toSchema(def.output) : null;
+  const inputSchema = def.inputs?.length ? toSchema(def.inputs[0], "input") : null;
+  const outputSchema = def.output ? toSchema(def.output, "output") : null;
 
   /** @type {Record<string, unknown>} */
   const operation = {
