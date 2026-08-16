@@ -181,6 +181,20 @@ def workflow_state(w: dict) -> dict:
             WARN,
             f"予定より遅れています (期待 {w['expect_hours']} 時間以内)",
         )
+    elif w.get("no_heartbeat"):
+        # 発火保証の無い watcher (update-graph のような「依存変更 push のときだけ
+        # 動く」dynamic workflow) は、成功 run を 🟢 と書かない (PR #468 Codex P1)。
+        # expect_hours が置けない = 沈黙 (無効化・不発火) と正常を時間で区別できない
+        # ため、一度 success を取ると**無期限に緑のまま**になる。「生きているか
+        # 確かめる方法が無い」は ❓ の定義そのもの (ページ脚注) なので、そちらに倒す。
+        # 失敗 run は上の BAD 判定が先に拾うので、赤の検出力は落ちない。
+        # detail を "(未検証" で始めないこと — build() がその接頭辞を「取得失敗」と
+        # 数え、ページ全体の headline を「生成そのものが失敗」に化けさせる。
+        state = UNKNOWN
+        detail = (
+            "直近 run は success — ただし発火保証が無く、"
+            "沈黙 (無効化・不発火) と正常を区別できないため 🟢 とは書かない (note 参照)"
+        )
     return {
         **row,
         "state": state,
