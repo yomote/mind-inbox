@@ -114,7 +114,15 @@ EOF
     exit 0
   fi
 
-  git -C "$WT" -c user.name="$COMMIT_NAME" -c user.email="$COMMIT_EMAIL" \
+  # hooks を無効化して commit する (#466 と同型 — PR #475 の代役レビューで検出)。
+  # worktree は呼び出し元 repo の config を共有するので、core.hooksPath が絶対パスの
+  # checkout では親の pre-commit (husky → lint-staged) がこの commit でも発火する。
+  # データブランチ側に lint-staged の設定は無いため必ず落ち、push まで到達せず
+  # GitHub 設定ドリフトの唯一の記録が古いまま静かに止まる。
+  # 見えなくなるもの: このブランチへの commit では pre-commit の検査が一切走らない。
+  # data/github-settings は snapshot の JSON だけで main のコードを含まないので問題ない。
+  git -C "$WT" -c core.hooksPath=/dev/null \
+    -c user.name="$COMMIT_NAME" -c user.email="$COMMIT_EMAIL" \
     commit --quiet -m "github-settings: $REPO_SLUG の観測を更新"
 
   if git -C "$WT" push --quiet "$REMOTE" "HEAD:refs/heads/$BRANCH"; then
