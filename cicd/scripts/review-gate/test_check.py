@@ -124,7 +124,7 @@ def test_l1_adr変更のないprはmainのsnapshotを読まない() -> None:
         raise AssertionError("ADR 変更なしの PR で main snapshot を読んだ")
 
     files = [{"filename": "apps/bff/x.ts", "status": "modified"}]
-    assert check.adr_gate_conflicts(files, load_snapshot=boom) == []
+    assert check.adr_gate_conflicts("o/r", files, fetch_snapshot=boom) == []
 
 
 def test_l1_adr追加は今のmainのsnapshotと照合される() -> None:
@@ -134,21 +134,82 @@ def test_l1_adr追加は今のmainのsnapshotと照合される() -> None:
         return (["docs/adr/0048-child.md"], set())
 
     files = [{"filename": "docs/adr/0048-readonly.md", "status": "added"}]
-    messages = check.adr_gate_conflicts(files, load_snapshot=snapshot)
+    messages = check.adr_gate_conflicts("o/r", files, fetch_snapshot=snapshot)
     assert messages == ["ADR 0048 が今の main と衝突 (docs/adr/0048-child.md)"]
 
 
 def test_l1_snapshotが読めないときは未検証として門を閉じる() -> None:
     # 取れなかったものを「衝突なし」と書かない — 未検証を missing に載せて赤にする
     def broken() -> tuple[list[str], set[int]]:
-        raise adr_guard.SnapshotError("docs/adr が見えない (cwd が repo root でない?)")
+        raise adr_guard.SnapshotError("main の docs/adr に番号付き ADR が 1 本も見えない")
 
     files = [{"filename": "docs/adr/0048-x.md", "status": "added"}]
-    messages = check.adr_gate_conflicts(files, load_snapshot=broken)
-    assert messages == ["ADR 衝突検査 未検証 (docs/adr が見えない (cwd が repo root でない?))"]
+    messages = check.adr_gate_conflicts("o/r", files, fetch_snapshot=broken)
+    assert messages == ["ADR 衝突検査 未検証 (main の docs/adr に番号付き ADR が 1 本も見えない)"]
     assert not decide(
         HEAD, [], [ACCEPT_OK], 0, False, False, adr_conflicts=messages
     ).ok
+
+
+def test_l1_sweepの1本目マージ後に2本目の同番号が捕まる() -> None:
+    """Codex P1 (PR #469) の再現: 同じ 0048 を足す武装済み PR が 2 本 sweep に載る。
+
+    無いと何が静かに通るか: 照合材料が run 冒頭の checkout (= 全評価で同じ
+    スナップショット) だと、1 本目のマージが 2 本目の照合に映らず**両方 main に
+    入る**。評価のたびに main を読み直すこと (= 2 回目の fetch が呼ばれ、進んだ
+    main が使われること) をこのテストが固定する — fetch を 1 回に間引く・結果を
+    キャッシュする退行はここで落ちる。
+    """
+    states = [
+        (["docs/adr/0047-a.md"], set()),  # PR A の評価時点: 0048 は未着地
+        (["docs/adr/0047-a.md", "docs/adr/0048-a.md"], set()),  # A マージ後 = B の評価時点
+    ]
+
+    def fetch() -> tuple[list[str], set[int]]:
+        return states.pop(0)
+
+    pr_a = [{"filename": "docs/adr/0048-a.md", "status": "added"}]
+    pr_b = [{"filename": "docs/adr/0048-b.md", "status": "added"}]
+    assert check.adr_gate_conflicts("o/r", pr_a, fetch_snapshot=fetch) == []  # A は通る
+    assert check.adr_gate_conflicts("o/r", pr_b, fetch_snapshot=fetch) == [
+        "ADR 0048 が今の main と衝突 (docs/adr/0048-a.md)"
+    ]
+    assert states == []  # 2 回とも読み直した (キャッシュしていない)
+
+
+def test_l1_既定のsnapshotはローカルではなくapiのmain_tipを読む(monkeypatch) -> None:
+    """Codex P1 (PR #469): 既定の照合材料が「この run が checkout した作業ツリー」
+    ではなく GitHub API の main tip であることを固定する。
+
+    無いと何が静かに通るか: ローカルの docs/adr を読む実装に戻ると、単体テストは
+    全部緑のまま、sweep のループ内でだけ (= 実運用でだけ) スナップショットが腐る。
+    """
+    calls: list[str] = []
+
+    def fake_gh(*args: str) -> object:
+        path = args[1]
+        calls.append(path)
+        if path == "repos/o/r/contents/docs/adr?ref=main":
+            return [
+                {"name": "0048-child.md", "type": "file"},
+                {"name": "template.md", "type": "file"},
+                {"name": "archive", "type": "dir"},
+            ]
+        if path == f"repos/o/r/contents/{adr_guard.RETIRED_FILE}?ref=main":
+            import base64
+
+            return {"content": base64.b64encode(b"# retired\n0031\n").decode()}
+        raise AssertionError(f"想定外の API 呼び出し: {path}")
+
+    monkeypatch.setattr(check, "gh", fake_gh)
+    files = [{"filename": "docs/adr/0048-readonly.md", "status": "added"}]
+    assert check.adr_gate_conflicts("o/r", files) == [
+        "ADR 0048 が今の main と衝突 (docs/adr/0048-child.md)"
+    ]
+    # 退役番号の再利用も同じ API 材料で見る
+    files = [{"filename": "docs/adr/0031-zombie.md", "status": "added"}]
+    assert check.adr_gate_conflicts("o/r", files) == ["ADR 0031 は退役番号 (再利用不可)"]
+    assert all("?ref=main" in c for c in calls)
 
 
 def test_l1_コード判定はappsとcicdのみ() -> None:

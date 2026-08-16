@@ -29,8 +29,11 @@
 それでも「guard 実行後〜マージ前」の窓は残る:
     マージ直前の再判定は review-gate が担う — `cicd/scripts/review-gate/check.py`
     が pm-accept のたび (issue_comment / sweep / マージ直前の再評価) に、この
-    module の gate_conflicts() で **checkout 済みの main 作業ツリー** (review-gate
-    は常に default branch を checkout する) と照合する。役割分担:
+    module の gate_conflicts() で照合する。照合材料は**評価のたびに GitHub API で
+    引く main tip** であって run 冒頭の checkout ではない — sweep は 1 回の run で
+    複数 PR を順にマージするため、ローカルの作業ツリーを読むと 1 本目のマージが
+    2 本目の照合に映らず、同じ番号の PR が 2 本とも通る (Codex P1 / PR #469)。
+    役割分担:
     ここ (CI) = push 時の早期フィードバック、review-gate = マージ門。
     `cicd/scripts/claude-hooks/adr_number_guard.py` はさらに前倒しの
     「書き始める前」の警告で、CI の置き換えではない (Issue #392)。
@@ -47,7 +50,6 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from pathlib import Path
 
 _ADR_PATH = re.compile(r"^docs/adr/(\d{4})-[^/]*\.md$")
 _RETIRED_LINE = re.compile(r"^\s*(\d{4})\s*$")
@@ -185,31 +187,13 @@ def gate_conflicts(
 
 
 class SnapshotError(RuntimeError):
-    """main 側 ADR 一覧の読み取り失敗。呼び出し側は**合格扱いにしてはいけない**。"""
+    """main 側 ADR 一覧の取得失敗。呼び出し側は**合格扱いにしてはいけない**。
 
-
-def load_main_snapshot(repo_root: str = ".") -> tuple[list[str], set[int]]:
-    """作業ツリー (review-gate では常に main の checkout) から ADR 一覧と退役一覧を読む。
-
-    読めないときは SnapshotError — 空リストを返して「衝突なし」に化けさせない。
-    docs/adr に番号付き ADR が 1 本も見えない場合も同じ (main には常に数十本ある。
-    見えない = cwd が repo root でない / checkout が壊れているのどちらかで、
-    そのまま照合すると**全 PR が無条件で衝突なしになる**)。
+    取得の実装は review-gate 側 (check.py の fetch_main_snapshot — GitHub API)。
+    ここに「作業ツリーを読む」loader を**足し戻さないこと**: sweep は 1 回の run で
+    複数 PR を順にマージするため、run 冒頭の checkout は照合中に腐る (Codex P1 /
+    PR #469)。
     """
-    root = Path(repo_root)
-    adr_dir = root / "docs" / "adr"
-    if not adr_dir.is_dir():
-        raise SnapshotError("docs/adr が見えない (cwd が repo root でない?)")
-    paths = sorted(f"docs/adr/{p.name}" for p in adr_dir.glob("*.md"))
-    if not adr_numbers(paths):
-        raise SnapshotError("docs/adr に番号付き ADR が 1 本も無い (checkout 異常?)")
-    retired_path = root / RETIRED_FILE
-    try:
-        retired = parse_retired(retired_path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        # main には退役一覧が常在する。読めない = 検査 3 が黙って素通りするので落とす
-        raise SnapshotError(f"{RETIRED_FILE} を読めない ({exc.__class__.__name__})") from exc
-    return paths, retired
 
 
 # ---- ここから下は git との入出力 (テスト対象は上の純関数) ----

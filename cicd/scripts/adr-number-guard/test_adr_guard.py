@@ -7,17 +7,12 @@
     (過去の実衝突: 0015→0019 / 0026→0027 / PR #222 の 0048 二重化寸前)。
 """
 
-from pathlib import Path
-
-import pytest
 from adr_guard import (
-    SnapshotError,
     Violation,
     adr_number_of,
     adr_numbers,
     gate_conflicts,
     judge,
-    load_main_snapshot,
     next_number,
     parse_retired,
 )
@@ -156,44 +151,6 @@ def test_gateはpr内重複も止める() -> None:
     assert gate_conflicts(files, OLD_MAIN, NO_RETIRED) == ["ADR 0050 が PR 内で重複"]
 
 
-# ---- load_main_snapshot (review-gate の材料取り) ----
-
-
-def _make_main_tree(root: Path) -> None:
-    adr = root / "docs" / "adr"
-    (adr / "archive").mkdir(parents=True)
-    (adr / "0001-first.md").write_text("x", encoding="utf-8")
-    (adr / "template.md").write_text("x", encoding="utf-8")
-    (adr / "archive" / "retired-numbers.txt").write_text(
-        "# retired\n0031\n", encoding="utf-8"
-    )
-
-
-def test_snapshotは一覧と退役番号を返す(tmp_path: Path) -> None:
-    _make_main_tree(tmp_path)
-    paths, retired = load_main_snapshot(str(tmp_path))
-    assert paths == ["docs/adr/0001-first.md", "docs/adr/template.md"]
-    assert retired == {31}
-
-
-def test_snapshotはdocsadrが無ければ落ちる(tmp_path: Path) -> None:
-    # cwd 違い等で main の一覧が見えないとき、空を返すと**全 PR が無条件で
-    # 衝突なし**になる — 合格に化けさせず SnapshotError で止める
-    with pytest.raises(SnapshotError):
-        load_main_snapshot(str(tmp_path))
-
-
-def test_snapshotは番号付きadrゼロでも落ちる(tmp_path: Path) -> None:
-    adr = tmp_path / "docs" / "adr"
-    adr.mkdir(parents=True)
-    (adr / "template.md").write_text("x", encoding="utf-8")
-    with pytest.raises(SnapshotError):
-        load_main_snapshot(str(tmp_path))
-
-
-def test_snapshotは退役一覧が読めなくても落ちる(tmp_path: Path) -> None:
-    adr = tmp_path / "docs" / "adr"
-    adr.mkdir(parents=True)
-    (adr / "0001-first.md").write_text("x", encoding="utf-8")
-    with pytest.raises(SnapshotError):
-        load_main_snapshot(str(tmp_path))
+# main snapshot の取得は review-gate 側 (check.py fetch_main_snapshot — GitHub API) が
+# 持ち、テストもそちら (test_check.py)。作業ツリーを読む loader はここに置かない
+# (sweep のループ内で腐る — Codex P1 / PR #469)。
