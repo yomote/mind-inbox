@@ -1,0 +1,70 @@
+<!doctype html>
+<!--
+  GitHub App を manifest flow で作るローカルページ (Issue #387 / #390)。
+
+  使い方: このファイルをブラウザで開き (file:// のまま)、内容を確認して
+  「GitHub App を作成する」を押す。GitHub の確認画面で Create すると App ができる。
+
+  manifest (下の textarea) が唯一の正典。権限の 1 行ずつの根拠は README.md の
+  「App 権限の最小化と根拠」。**根拠を書けない権限はここに足さないこと** —
+  test_bootstrap.py がこの HTML から manifest を抜き出し、権限集合が
+  {administration: write, metadata: read} だけであること / webhook が無効で
+  あることを固定している (足すならテストと README の根拠を同じ PR で更新する)。
+
+  webhook は使わないので hook_attributes を書かない (= webhook 無効で作られる)。
+  受け側エンドポイントを持たない pull 型の運用なので、開けておく面が無い。
+
+  redirect_url は App 一覧に戻すだけ。manifest flow の code (?code=...) は使わない —
+  code 変換 API (POST /app-manifests/{code}/conversions) は pem を HTTP 応答として
+  受ける経路で、端末・履歴への露出面が増える。pem は App ページの
+  "Generate a private key" で直接ファイルとしてダウンロードする。
+-->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>mind-inbox settings-mgmt App 作成</title>
+<style>
+  body { font-family: sans-serif; max-width: 44rem; margin: 3rem auto; padding: 0 1rem; line-height: 1.7; }
+  textarea { width: 100%; height: 16rem; font-family: monospace; font-size: 0.85rem; }
+  button { font-size: 1.1rem; padding: 0.6rem 1.6rem; cursor: pointer; }
+  ol li { margin: 0.4rem 0; }
+</style>
+</head>
+<body>
+<h1>GitHub App を作成する (settings-mgmt)</h1>
+<p>
+  mind-inbox の GitHub 設定管理 (mgmt) 層 — <code>cicd/github/terraform/</code> — の
+  plan/apply 専用 App を作ります。権限は <strong>Repository administration (write) と
+  Metadata (read) だけ</strong>で、webhook は持ちません。各権限の根拠は同じディレクトリの
+  README.md にあります。
+</p>
+<form action="https://github.com/settings/apps/new" method="post">
+  <p>送信される manifest (編集しないでください — 変えるときはリポジトリ側で PR):</p>
+  <textarea name="manifest" readonly>
+{
+  "name": "mind-inbox-settings-mgmt",
+  "url": "https://github.com/yomote/mind-inbox",
+  "redirect_url": "https://github.com/settings/apps",
+  "public": false,
+  "default_permissions": {
+    "administration": "write",
+    "metadata": "read"
+  },
+  "default_events": []
+}
+  </textarea>
+  <p><button type="submit">GitHub App を作成する</button></p>
+</form>
+<h2>作成後にやること (この順で)</h2>
+<ol>
+  <li>App の settings ページで <strong>App ID</strong> を控える</li>
+  <li><strong>Install App</strong> から <code>yomote/mind-inbox</code> (このリポジトリだけ) にインストールする</li>
+  <li><strong>Generate a private key</strong> で pem をダウンロードする (ダウンロード先のパスを次の手順で使う)</li>
+  <li><code>cicd/scripts/mgmt-bootstrap/bootstrap.sh</code> を実行する (手順: <code>docs/runbooks/mgmt-layer-apply.md</code>)</li>
+</ol>
+<p>
+  ⚠️ pem は<strong>スクリプトに渡し終えて格納を確認したら削除</strong>します
+  (スクリプトが最後に手順を出します)。メール・チャット・クラウドドライブに置かないこと。
+</p>
+</body>
+</html>
