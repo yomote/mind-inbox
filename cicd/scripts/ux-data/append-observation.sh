@@ -31,6 +31,18 @@ MAX_ATTEMPTS=3
 
 log() { echo "$@" >&2; }
 
+# hooks を無効化する (#466)。**commit だけでなく、このスクリプトが撃つすべての git に効かせる** —
+# worktree は呼び出し元 repo の config を共有するので、core.hooksPath が絶対パスで入っている
+# checkout では `git worktree add` の post-checkout や (将来 .husky/pre-push を足せば) push でも
+# 親のフックが発火する。データブランチ側に lint-staged 等の設定は無いため必ず落ち、
+# push まで到達せず観測が黙って失われる。commit に `-c` を足すだけだと、後から git コマンドを
+# 1 本足した人が同じ穴を開け直せてしまう (PR #475 の代役レビュー指摘)。
+# 見えなくなるもの: このブランチ相手の git では hook が一切走らない。データブランチは
+# JSONL + README だけで main のコードを含まないので、失う検査は無い。
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=core.hooksPath
+export GIT_CONFIG_VALUE_0=/dev/null
+
 if [ "$#" -lt 1 ]; then
   log "使い方: $0 <payload.json> [<payload.json>...]"
   exit 1
@@ -107,6 +119,7 @@ EOF
     exit 0
   fi
 
+  # hooks の無効化はスクリプト冒頭の GIT_CONFIG_* で全 git に効かせている (#466)
   git -C "$WT" -c user.name="$COMMIT_NAME" -c user.email="$COMMIT_EMAIL" \
     commit --quiet -m "ux-data: 観測 $# 件を追記 ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
 

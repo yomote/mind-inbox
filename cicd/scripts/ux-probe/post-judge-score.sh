@@ -66,6 +66,18 @@ with open(sys.argv[1], "w", encoding="utf-8") as f:
     f.write(json.dumps(score, ensure_ascii=False))
 EOF
 
+# 成功表示は push が通った後だけ (#466)。`set -e` に頼らず終了コードを明示的に見る —
+# 上の validate と同じ理由で、判定を `if ! cmd` に書き換えられても失敗を拾えるようにする。
+set +e
 "$HERE/../ux-data/append-observation.sh" "$PAYLOAD"
+rc=$?
+set -e
+
+if [ "$rc" -ne 0 ]; then
+  log ""
+  log "データブランチへの追記に失敗しました (exit $rc) — 採点は載っていません。"
+  log "レポートは $REPORT に残っています。原因を直して再実行してください。"
+  exit 1
+fi
 
 log "追記しました: data/ux-observations の evals/ (kind: ux-judge-score)"

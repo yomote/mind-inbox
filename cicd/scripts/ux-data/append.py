@@ -24,6 +24,8 @@ evaluatedAt/scoredAt/startedAt) で判定する — 同じプローブの再採�
       payload.json = 1 観測の JSON オブジェクト (kind と recordedAt が必須)
 
 stdout には追記したファイルの相対パスだけを出す (診断は stderr — PR #88 の規律)。
+**このスクリプトの成功は「ローカルの JSONL に書けた」までを意味する。** 蓄積が
+データブランチに載ったことを名乗れるのは push 後の append-observation.sh だけ (#466)。
 
 終了コード:
     0 = 追記した (または同一観測につきスキップ)
@@ -141,7 +143,14 @@ def append(data_dir: Path, payload_path: Path) -> int:
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    log(f"追記しました: {target} (kind={payload.get('kind')})")
+    # 「追記しました」と書かない (#466) — この時点では作業用 worktree のファイルに
+    # 書いただけで、commit / push はまだ。ここで完了を名乗ると、後段が落ちたときに
+    # 失敗が成功に見える (蓄積が載っていないのに載ったと読める)。
+    # 蓄積が確定したことを名乗ってよいのは push 後の append-observation.sh だけ。
+    log(
+        f"ローカルに書きました (commit/push はこの後): {target} "
+        f"(kind={payload.get('kind')})"
+    )
     print(target.relative_to(data_dir))
     return EXIT_OK
 
