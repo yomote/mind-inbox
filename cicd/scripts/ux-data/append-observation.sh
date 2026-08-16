@@ -107,7 +107,16 @@ EOF
     exit 0
   fi
 
-  git -C "$WT" -c user.name="$COMMIT_NAME" -c user.email="$COMMIT_EMAIL" \
+  # hooks を無効化して commit する (#466)。worktree は呼び出し元 repo の config を
+  # 共有するので、core.hooksPath が**絶対パス**で入っている checkout では親の
+  # pre-commit (husky → lint-staged) がこの commit でも発火する。データブランチ側に
+  # lint-staged の設定は無いため必ず落ち、push まで到達せず追記が黙って失われる。
+  # (相対値 `.husky/_` のときは worktree の top-level 基準で解決されるため発火しない
+  #  — 2026-08-16 に両方を実測。#466 の当日がどちらだったかは特定できていない)
+  # 見えなくなるもの: このブランチへの commit では pre-commit の検査が一切走らない。
+  # データブランチは JSONL の追記だけで main のコードを含まないので、失うものは無い。
+  git -C "$WT" -c core.hooksPath=/dev/null \
+    -c user.name="$COMMIT_NAME" -c user.email="$COMMIT_EMAIL" \
     commit --quiet -m "ux-data: 観測 $# 件を追記 ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
 
   if git -C "$WT" push --quiet "$REMOTE" "HEAD:refs/heads/$BRANCH"; then

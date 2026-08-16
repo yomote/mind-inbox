@@ -220,6 +220,66 @@ def test_l1_壊れたpayloadでは何もpushしない(tmp_path) -> None:
     assert branches == ""
 
 
+def test_l1_呼び出し元にpre_commitフックがあっても追記はpushされる(tmp_path) -> None:
+    """#466 の再発防止。
+
+    無いと何が静かに通るか:
+        worktree は呼び出し元 repo の config を共有するので、core.hooksPath が
+        絶対パスで入っている checkout では親の pre-commit がこの commit でも発火する。
+        データブランチに lint-staged の設定は無いので必ず落ち、**commit も push も
+        されないまま**その朝の観測が消える (2026-08-15 に採点 2 本を実際に失った)。
+        commit から `-c core.hooksPath=/dev/null` を外すとこのテストが落ちる。
+    """
+    origin, work = _setup_repo(tmp_path)
+    hooks = work / "fake-husky"
+    hooks.mkdir()
+    pre_commit = hooks / "pre-commit"
+    pre_commit.write_text("#!/bin/sh\necho 'lint-staged なんて無い' >&2\nexit 1\n")
+    pre_commit.chmod(0o755)
+    _git("config", "core.hooksPath", str(hooks), cwd=work)
+
+    # フックが実際に効いている checkout であることをまず確かめる (対照実験)。
+    # これが通ってしまうと、下の assert は「フックが元から無い」でも緑になる
+    (work / "canary.txt").write_text("x\n")
+    _git("add", "-A", cwd=work)
+    blocked = subprocess.run(
+        ["git", "commit", "-m", "フックに止められるはず"],
+        cwd=work,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert blocked.returncode != 0, "pre-commit フックが効いていない — 前提が崩れている"
+
+    p1 = _write(tmp_path, "p1.json", _payload())
+    r = _run_shell(work, p1)
+    assert r.returncode == 0, r.stderr
+    content = _git("show", "data/ux-observations:probes/2026-08.jsonl", cwd=origin)
+    assert json.loads(content.strip())["probeId"] == _payload()["probeId"]
+
+
+def test_l1_pushできなかったときに成功を名乗らない(tmp_path) -> None:
+    """#466 の本体。「取れなかったものを異常なしと書かない」をスクリプトに効かせる。
+
+    無いと何が静かに通るか:
+        append.py がローカル書き込みの時点で「追記しました」と出すため、後段の
+        commit / push が落ちても**画面には成功が出る**。運用者は蓄積が載ったと
+        読み、データブランチには何も無い、という取り違えが起きる (2026-08-15 の実例)。
+        成功表示を push より前に戻すとこのテストが落ちる。
+    """
+    _, work = _setup_repo(tmp_path)
+    _git("remote", "set-url", "origin", str(tmp_path / "居ないリモート.git"), cwd=work)
+    p1 = _write(tmp_path, "p1.json", _payload())
+
+    r = _run_shell(work, p1)
+    assert r.returncode != 0, "push できていないのに成功で終わっている"
+    combined = r.stdout + r.stderr
+    assert "push しました" not in combined
+    # 完了を名乗る語で終わっていないこと。append.py はローカル書き込みを
+    # 「追記しました」と呼ばない (呼ぶと push 失敗時に成功と区別できない)
+    assert "追記しました" not in combined, combined
+
+
 # --- migrate-issue-comments.py -------------------------------------------
 
 
