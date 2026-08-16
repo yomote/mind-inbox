@@ -156,3 +156,25 @@ def test_main_writes_classified_roles_and_excludes_browser(tmp_path):
     edges = json.loads(logical.read_text(encoding="utf-8"))
     assert any(e["rel"] == "cosmosData" for e in edges)
     assert any(e["rel"] == "spaAssets" for e in edges)
+
+
+def test_roles_md_table_delimiter_satisfies_md060(tmp_path):
+    """[L2] 生成 md の表区切り行はスペース入り形式 (`| --- | ... |`) で書く。
+
+    無いと何が静かに通るか: 区切り行が compact 形式 (`|---|`) に戻っても enrich の
+    テストは緑のままで、毎週の自動 PR (refresh-infra-diagram) だけが markdownlint
+    MD060/table-column-style で赤になり、着地しなくなる (#483)。
+    """
+    graph_path = tmp_path / "graph.json"
+    graph_path.write_text(json.dumps({"nodes": dev_env_nodes(), "edges": []}), encoding="utf-8")
+    logical = tmp_path / "logical-edges.json"
+    tsv = tmp_path / "roles.tsv"
+    md = tmp_path / "roles.md"
+
+    enrich.main(["enrich.py", str(graph_path), str(REPO_ROOT), str(logical), str(tsv), str(md)])
+
+    lines = md.read_text(encoding="utf-8").splitlines()
+    delimiter_lines = [l for l in lines if l.replace(" ", "").startswith("|---")]
+    assert delimiter_lines, "表の区切り行が生成されていない"
+    for line in delimiter_lines:
+        assert line == "| --- | --- | --- | --- | --- |"
