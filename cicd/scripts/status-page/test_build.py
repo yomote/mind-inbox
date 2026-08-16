@@ -313,6 +313,50 @@ def test_L1_eventフィルタ無しのwatcherは従来どおり全runで判定�
     assert "🟢" in html
 
 
+def test_L1_no_heartbeatのwatcherは成功runでも緑にしない(tmp_path):
+    """無いと何が静かに通るか: update-graph (発火が依存変更 push のみ) のような
+    発火保証の無い行は expect_hours を置けないため、一度 success run を取ると
+    Dependency Graph が無効化されても・依存を変えたのに run が出なくなっても、
+    **無期限に 🟢 のまま**になる (PR #468 Codex P1)。「生きているか確かめる方法が
+    無い」は ❓ の定義 (ページ脚注) なので、成功と区別できる ❓ に倒す。
+
+    🟢 の不在は wf テーブルの行クラス (`tr class=\"ok\"`) で見る — マーク文字での
+    否定はプロダクト節 (product_status の gate マーク) の 🟢 と衝突して偽赤になる。
+    """
+    html = _run(tmp_path, defs={
+        "workflows": [{
+            "id": "333008434",
+            "name": "依存グラフの更新",
+            "what": "発火保証の無い dynamic workflow",
+            "expect": "依存 manifest の変更ごと",
+            "no_heartbeat": True,
+        }],
+        "routines": [],
+    })
+    assert 'class="unknown"' in html, "成功 run が ❓ (判定不能) になっていない"
+    assert 'tr class="ok"' not in html, "no_heartbeat の行が 🟢 で出ている"
+    assert "発火保証が無く" in html, "❓ の理由が行に出ていない"
+    # 取得失敗 ("(未検証" 接頭辞) と混同していないこと — 混同すると headline が
+    # 「生成そのものが失敗」に化ける
+    assert "取得できませんでした (" not in html
+
+
+def test_L1_no_heartbeatのwatcherでも失敗runは赤のまま(tmp_path):
+    """no_heartbeat は「成功を緑と書かない」だけで、失敗の検出力は落とさない。
+    (stub は event=schedule で絞った照会に failure run を返す — それを流用)"""
+    html = _run(tmp_path, defs={
+        "workflows": [{
+            "id": "333008434",
+            "name": "依存グラフの更新",
+            "what": "発火保証の無い dynamic workflow",
+            "event": "schedule",
+            "no_heartbeat": True,
+        }],
+        "routines": [],
+    })
+    assert "🔴" in html, "no_heartbeat が失敗 run まで ❓ に丸めている"
+
+
 def test_L1_定義ファイルが読める():
     defs = json.loads((pathlib.Path(__file__).with_name("watchers.json")).read_text())
     assert defs["workflows"]

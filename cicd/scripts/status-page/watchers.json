@@ -73,7 +73,8 @@
       "name": "依存グラフの更新 (Dependency Graph)",
       "what": "lockfile (uv.lock / requirements 等) の変更 push を GitHub が取り込み、Dependabot / alerts の照合元になる依存グラフを更新する",
       "expect": "依存 manifest の変更ごと",
-      "note": "**id が数字なのは仕様** (path は `dynamic/dependabot/update-graph` — 上の行と同じ手筋)。expect_hours を置かないのは**発火が依存変更のあった push だけ**で不定期のため (2026-08-15 実測: 有効化 08-12 以降 6 run、全て manifest 変更時) — 時間で締めると静かな週が毎回偽の 🟡 になる。この行で見えるのは**直近 run の成否だけ**で、「依存を変えたのにグラフ更新が走らなかった」型の沈黙は検出できない (その層の破れは Dependabot 行の 800h か security-sweep の照合ズレで間接的に現れる)。"
+      "no_heartbeat": true,
+      "note": "**id が数字なのは仕様** (path は `dynamic/dependabot/update-graph` — 上の行と同じ手筋)。expect_hours を置かないのは**発火が依存変更のあった push だけ**で不定期のため (2026-08-15 実測: 有効化 08-12 以降 6 run、全て manifest 変更時) — 時間で締めると静かな週が毎回偽の 🟡 になる。**no_heartbeat: 成功 run があってもこの行は 🟢 ではなく ❓ で出す** (PR #468 Codex P1) — 発火保証が無い行は一度 success を取ると無期限に緑のままになり、Dependency Graph が無効化されても「依存を変えたのにグラフ更新が走らなかった」でも見た目が変わらないため、「生きているか確かめる方法が無い」を正直に ❓ と書く。失敗 run は従来どおり 🔴 (検出力は落とさない)。その層の破れは Dependabot 行の 800h か security-sweep の照合ズレでも間接的に現れる。"
     },
     {
       "id": "security-sweep.yml",
