@@ -54,7 +54,9 @@ VAULT_NAME="kv-dev-mindbox"
 # 命名は既存の Key Vault シークレット規約 (`e2e-artifact-private-key`) に合わせる。
 SECRET_NAME="github-app-mgmt-private-key"
 BUDGET_NAME="budget-mgmt-mindbox"
-GITHUB_API="${GITHUB_API:-https://api.github.com}"
+# 定数。上書きノブにしない — 環境変数で API 先を差し替えられると、資格情報 (JWT /
+# installation token) を別ホストへ送らせる足場になる (sec info)。
+GITHUB_API="https://api.github.com"
 
 # ---------------------------------------------------------------------------
 # 進捗の台帳 — 途中で落ちたとき「何が済んで何が済んでいないか」を必ず出す。
@@ -67,8 +69,8 @@ STEP_NAMES=(
   "Azure: what-if (差分確認)"
   "Azure: mgmt 層 apply"
   "Azure: apply 後の検証 (層タグ / 鍵 / 予算)"
-  "Key Vault: pem 格納"
   "GitHub: App 認証確認 (JWT → installation token)"
+  "Key Vault: pem 格納"
   "Terraform: mgmt 層 plan"
   "Terraform: mgmt 層 apply (import-only のみ)"
 )
@@ -90,14 +92,31 @@ print_ledger() {
   echo "---------------------------------------------"
 }
 
+# pem の格納 (または格納済みの照合) が完了したかどうか。失敗時のエピローグで
+# 「もうローカル pem を消してよいか」を言い分けるための状態。
+PEM_STORED="false"
+PEM_PATH=""
+
+# 失敗時の共通エピローグ。台帳に加えて、**KV 格納が済んでいる場合だけ** pem 削除の
+# 手順を出す (格納前に削除を促すと、失敗からの再実行で鍵を失う)。
+failure_epilogue() {
+  print_ledger >&2
+  echo "再実行は安全です (冪等)。上の台帳で「失敗」のステップから原因を直してください。" >&2
+  if [ "$PEM_STORED" = "true" ]; then
+    cat >&2 <<EOF
+なお pem の Key Vault 格納は完了しています。この失敗の切り分けにローカル pem が
+不要なら、先に削除して構いません: rm "$PEM_PATH"
+EOF
+  fi
+}
+
 # fail-closed: どこで落ちても台帳を出して非ゼロで止まる。握り潰さない。
 on_error() {
   local rc=$?
   if [ "$CURRENT_STEP" -ge 0 ]; then STEP_STATUS[$CURRENT_STEP]="失敗"; fi
   echo
   echo "ERROR: 手順の途中で失敗しました (exit=$rc)。" >&2
-  print_ledger >&2
-  echo "再実行は安全です (冪等)。上の台帳で「失敗」のステップから原因を直してください。" >&2
+  failure_epilogue
   exit "$rc"
 }
 trap on_error ERR
@@ -108,8 +127,7 @@ trap on_error ERR
 abort() {
   if [ "$CURRENT_STEP" -ge 0 ]; then STEP_STATUS[$CURRENT_STEP]="失敗"; fi
   echo "ERROR: $*" >&2
-  print_ledger >&2
-  echo "再実行は安全です (冪等)。上の台帳で「失敗」のステップから原因を直してください。" >&2
+  failure_epilogue
   exit 1
 }
 
@@ -277,9 +295,78 @@ echo "検証 5c: 予算あり (通知先 $budget_contacts 件) OK"
 step_done 5
 
 # ===========================================================================
-# 6. pem を Key Vault へ格納 (冪等)
+# 6. GitHub App の認証確認 — pem と App ID の対応 / インストール / 権限
 # ===========================================================================
+# ⚠️ **KV 格納より先に**やる (Codex P1)。逆順だと、別 App の「有効な」pem を渡した
+#    取り違えで、KV の最新バージョンを誤った鍵で潰してから不一致に気づく —
+#    既存資格情報の破壊経路になる。ここで pem↔App ID の対応まで実測してから格納する。
 step_begin 6
+
+# 作業用の一時ディレクトリ (認証ヘッダと terraform の作業場)。
+# ヘッダをファイル渡しにするのは、`curl -H "Authorization: ..."` だと共有マシンで
+# プロセス一覧 (ps) から資格情報が読めてしまうため。
+WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/mgmt-bootstrap.XXXXXX")"
+chmod 700 "$WORKDIR"
+
+b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+
+# App JWT (RS256 / 10 分)。秘密鍵は openssl にパスで渡す。JWT 自体も資格情報なので
+# 標準出力へは出さず、ヘッダファイル経由でだけ使う。
+jwt_iat=$(( $(date +%s) - 60 ))
+jwt_exp=$(( jwt_iat + 600 ))
+jwt_head_payload="$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url).$(printf '%s' "{\"iat\":$jwt_iat,\"exp\":$jwt_exp,\"iss\":\"$APP_ID\"}" | b64url)"
+jwt_sig="$(printf '%s' "$jwt_head_payload" | openssl dgst -sha256 -sign "$PEM_PATH" -binary | b64url)"
+printf 'Authorization: Bearer %s.%s\n' "$jwt_head_payload" "$jwt_sig" > "$WORKDIR/jwt.h"
+printf 'Accept: application/vnd.github+json\n' > "$WORKDIR/accept.h"
+
+gh_api() { # $1: メソッド, $2: パス, $3: ヘッダファイル, [$4: body]
+  local body_args=()
+  [ $# -ge 4 ] && body_args=(--data "$4")
+  curl -sS -H @"$3" -H @"$WORKDIR/accept.h" -X "$1" \
+    -o "$WORKDIR/resp.json" -w '%{http_code}' "${body_args[@]}" "$GITHUB_API$2"
+}
+
+# 6a. pem と App ID が同じ App のものか。違う App の pem を掴む取り違えをここで止める。
+code="$(gh_api GET /app "$WORKDIR/jwt.h")"
+[ "$code" = "200" ] || abort "GET /app が $code でした (pem が App のものでない / 期限切れ / 失効の可能性)"
+actual_app_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$WORKDIR/resp.json")"
+app_slug="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("slug",""))' "$WORKDIR/resp.json")"
+[ "$actual_app_id" = "$APP_ID" ] \
+  || abort "pem が指す App ID ($actual_app_id) と --app-id ($APP_ID) が一致しません (取り違え)"
+echo "App 確認 OK: $app_slug (id=$APP_ID)"
+
+# 6b. 対象 owner にインストールされているか。
+code="$(gh_api GET '/app/installations?per_page=100' "$WORKDIR/jwt.h")"
+[ "$code" = "200" ] || abort "GET /app/installations が $code でした"
+installation_id="$(python3 -c '
+import json, sys
+owner = sys.argv[2].lower()
+for ins in json.load(open(sys.argv[1])):
+    if ins.get("account", {}).get("login", "").lower() == owner:
+        print(ins["id"]); break
+' "$WORKDIR/resp.json" "$GH_OWNER")"
+if [ -z "$installation_id" ]; then
+  abort "App が $GH_OWNER にインストールされていません。https://github.com/apps/$app_slug/installations/new から $GH_OWNER/$GH_REPO にインストールして再実行してください"
+fi
+
+# 6c. installation token (1 時間 / 対象リポジトリに限定)。
+code="$(gh_api POST "/app/installations/$installation_id/access_tokens" "$WORKDIR/jwt.h" "{\"repositories\":[\"$GH_REPO\"]}")"
+[ "$code" = "201" ] || abort "installation token の発行が $code でした"
+# token は変数と子プロセス環境にだけ置く。echo しない。
+installation_token="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$WORKDIR/resp.json")"
+admin_perm="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("permissions",{}).get("administration",""))' "$WORKDIR/resp.json")"
+rm -f "$WORKDIR/resp.json" # token を含む応答ファイルは用が済んだら消す
+# JWT ヘッダも以降使わない。作業ディレクトリに資格情報を残さない (sec P3-1)。
+rm -f "$WORKDIR/jwt.h"
+[ "$admin_perm" = "write" ] \
+  || abort "installation token の administration 権限が '$admin_perm' です (write が必要。App の権限設定と再インストール承認を確認)"
+echo "installation token 発行 OK (administration=write / 対象: $GH_REPO / 有効 1 時間)"
+step_done 6
+
+# ===========================================================================
+# 7. pem を Key Vault へ格納 (冪等) — App の実在確認が済んだ pem だけを入れる
+# ===========================================================================
+step_begin 7
 
 pem_sha256="$(openssl dgst -sha256 -r "$PEM_PATH" | cut -d' ' -f1)"
 
@@ -293,7 +380,7 @@ existing_sha="$(az keyvault secret show --vault-name "$VAULT_NAME" -n "$SECRET_N
 
 if [ "$existing_sha" = "$pem_sha256" ]; then
   echo "同じ内容のシークレットが既にあります (sha256 一致)。格納をスキップします (冪等)。"
-  step_skip 6 "格納済み"
+  step_skip 7 "格納済み"
 else
   if [ -n "$existing_sha" ]; then
     echo "既存シークレットと内容が異なります。新しいバージョンとして格納します (旧バージョンは Key Vault に残る)。"
@@ -321,72 +408,10 @@ EOF
     abort "Key Vault へ格納できませんでした (上の指示を実行後に再実行。再実行は安全です)"
   fi
   echo "格納しました: $secret_id"
-  step_done 6
+  step_done 7
 fi
-
-# ===========================================================================
-# 7. GitHub App の認証確認 — pem と App ID の対応 / インストール / 権限
-# ===========================================================================
-step_begin 7
-
-# 作業用の一時ディレクトリ (認証ヘッダと terraform の作業場)。
-# ヘッダをファイル渡しにするのは、`curl -H "Authorization: ..."` だと共有マシンで
-# プロセス一覧 (ps) から資格情報が読めてしまうため。
-WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/mgmt-bootstrap.XXXXXX")"
-chmod 700 "$WORKDIR"
-
-b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
-
-# App JWT (RS256 / 10 分)。秘密鍵は openssl にパスで渡す。JWT 自体も資格情報なので
-# 標準出力へは出さず、ヘッダファイル経由でだけ使う。
-jwt_iat=$(( $(date +%s) - 60 ))
-jwt_exp=$(( jwt_iat + 600 ))
-jwt_head_payload="$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url).$(printf '%s' "{\"iat\":$jwt_iat,\"exp\":$jwt_exp,\"iss\":\"$APP_ID\"}" | b64url)"
-jwt_sig="$(printf '%s' "$jwt_head_payload" | openssl dgst -sha256 -sign "$PEM_PATH" -binary | b64url)"
-printf 'Authorization: Bearer %s.%s\n' "$jwt_head_payload" "$jwt_sig" > "$WORKDIR/jwt.h"
-printf 'Accept: application/vnd.github+json\n' > "$WORKDIR/accept.h"
-
-gh_api() { # $1: メソッド, $2: パス, $3: ヘッダファイル, [$4: body]
-  local body_args=()
-  [ $# -ge 4 ] && body_args=(--data "$4")
-  curl -sS -H @"$3" -H @"$WORKDIR/accept.h" -X "$1" \
-    -o "$WORKDIR/resp.json" -w '%{http_code}' "${body_args[@]}" "$GITHUB_API$2"
-}
-
-# 7a. pem と App ID が同じ App のものか。違う App の pem を掴む取り違えをここで止める。
-code="$(gh_api GET /app "$WORKDIR/jwt.h")"
-[ "$code" = "200" ] || abort "GET /app が $code でした (pem が App のものでない / 期限切れ / 失効の可能性)"
-actual_app_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$WORKDIR/resp.json")"
-app_slug="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("slug",""))' "$WORKDIR/resp.json")"
-[ "$actual_app_id" = "$APP_ID" ] \
-  || abort "pem が指す App ID ($actual_app_id) と --app-id ($APP_ID) が一致しません (取り違え)"
-echo "App 確認 OK: $app_slug (id=$APP_ID)"
-
-# 7b. 対象 owner にインストールされているか。
-code="$(gh_api GET '/app/installations?per_page=100' "$WORKDIR/jwt.h")"
-[ "$code" = "200" ] || abort "GET /app/installations が $code でした"
-installation_id="$(python3 -c '
-import json, sys
-owner = sys.argv[2].lower()
-for ins in json.load(open(sys.argv[1])):
-    if ins.get("account", {}).get("login", "").lower() == owner:
-        print(ins["id"]); break
-' "$WORKDIR/resp.json" "$GH_OWNER")"
-if [ -z "$installation_id" ]; then
-  abort "App が $GH_OWNER にインストールされていません。https://github.com/apps/$app_slug/installations/new から $GH_OWNER/$GH_REPO にインストールして再実行してください"
-fi
-
-# 7c. installation token (1 時間 / 対象リポジトリに限定)。
-code="$(gh_api POST "/app/installations/$installation_id/access_tokens" "$WORKDIR/jwt.h" "{\"repositories\":[\"$GH_REPO\"]}")"
-[ "$code" = "201" ] || abort "installation token の発行が $code でした"
-# token は変数と子プロセス環境にだけ置く。echo しない。
-installation_token="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$WORKDIR/resp.json")"
-admin_perm="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("permissions",{}).get("administration",""))' "$WORKDIR/resp.json")"
-rm -f "$WORKDIR/resp.json" # token を含む応答ファイルは用が済んだら消す
-[ "$admin_perm" = "write" ] \
-  || abort "installation token の administration 権限が '$admin_perm' です (write が必要。App の権限設定と再インストール承認を確認)"
-echo "installation token 発行 OK (administration=write / 対象: $GH_REPO / 有効 1 時間)"
-step_done 7
+# ここから先の失敗では「pem は格納済み」を前提に削除案内を出してよい (Codex P2)。
+PEM_STORED="true"
 
 # ===========================================================================
 # 8. Terraform: mgmt 層 (cicd/github/terraform) の plan
@@ -471,7 +496,8 @@ cat <<EOF
    (値ではなくタグの sha256 で照合。値を端末に出さないこと)
 
 2. terraform の作業ディレクトリは $WORKDIR に残っています。
-   state (tfstate) に秘密は入りませんが、用が済んだら消してください: rm -rf "$WORKDIR"
+   資格情報は残していません (JWT ヘッダ・token 応答は使用後に削除済み) が、state と
+   plan ログには GitHub 設定の写しが入ります。用が済んだら消してください: rm -rf "$WORKDIR"
 
 3. 撤収ガードの検証 (Runbook の Verification 4) は対話が要るため未実施です:
    docs/runbooks/mgmt-layer-apply.md の手順で 2 本とも exit 3 になることを確認してください。

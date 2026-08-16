@@ -220,18 +220,29 @@ def calls_matching(kit, tool: str, *needles: str) -> list[list[str]]:
 
 
 def assert_no_credential_leak(kit, result: subprocess.CompletedProcess) -> None:
-    """pem 本文が argv / env / 出力のどこにも無く、token が argv / 出力に無いこと。"""
+    """pem 本文が argv / env / 出力 / 一時領域のどこにも無く、token が argv / 出力に無いこと。
+
+    一時領域 (TMPDIR) の走査は sec P3-2 — スクリプトは TMPDIR に作業ディレクトリを
+    作るので、「pem を作業ディレクトリへ cp する」変異は記録と出力だけの検査では
+    緑のまま通る (実測)。source の pem ファイル自身だけは除外する。
+    """
     # pem の判定材料は base64 本文の行 (ヘッダ行は一般的すぎて検出力が無い)
     pem_lines = [l for l in kit["pem"].read_text().splitlines() if "-----" not in l]
     assert pem_lines, "捨て鍵の生成が壊れている (テスト自身の前提エラー)"
     haystacks = {"stdout": result.stdout, "stderr": result.stderr}
-    for f in kit["record"].glob("*"):
-        haystacks[f.name] = f.read_text()
+    for f in kit["tmp"].rglob("*"):
+        if not f.is_file():
+            continue
+        # テスト自身の fixture (source の pem / スタブのソース) は走査対象外。
+        # スクリプトが**書いた**ものだけを見る。
+        if f == kit["pem"] or kit["bin"] in f.parents:
+            continue
+        haystacks[str(f.relative_to(kit["tmp"]))] = f.read_text(errors="replace")
     for name, text in haystacks.items():
         for line in pem_lines:
             assert line not in text, f"pem 本文が {name} に漏れている"
     # installation token: terraform の子プロセス env に載るのは設計どおりなので
-    # env 記録は除外し、argv と画面出力に出ないことを見る
+    # env 記録は除外し、argv と画面出力・一時領域に出ないことを見る
     for name, text in haystacks.items():
         if name.endswith(".env"):
             continue
@@ -321,6 +332,8 @@ def test_deploy_failure_is_fail_closed(kit):
     assert "失敗" in r.stderr and "未着手" in r.stderr, "何が済んで何が済んでいないかの台帳が出ていない"
     assert not calls_matching(kit, "az", "keyvault", "secret", "set"), "apply 失敗後に格納へ進んではいけない"
     assert not calls_matching(kit, "terraform", "plan")
+    # 格納前の失敗で pem 削除を促してはいけない (促すと再実行できる鍵を失う)
+    assert "格納は完了しています" not in r.stderr
 
 
 def test_untagged_resource_fails_verification(kit):
@@ -351,17 +364,22 @@ def test_kv_forbidden_prints_role_guidance(kit):
     assert r.returncode != 0
     assert "Key Vault Secrets Officer" in r.stderr
     assert not calls_matching(kit, "terraform"), "格納失敗後に terraform へ進んではいけない"
+    # 格納に失敗している = 未格納なので、pem 削除を促してはいけない
+    assert "格納は完了しています" not in r.stderr
 
 
 # ---------------------------------------------------------------------------
 # GitHub App 認証の fail-closed
 # ---------------------------------------------------------------------------
 
-def test_app_id_mismatch_is_detected(kit):
-    """違う App の pem を掴んだ取り違えは、格納後・terraform 前に止まる。"""
+def test_app_id_mismatch_is_detected_before_secret_set(kit):
+    """違う App の pem を掴んだ取り違えは、**KV 格納より前に**止まる (Codex P1)。
+    逆順だと、別 App の有効な pem で KV の最新バージョンを潰してから気づく。"""
     r = run_kit(kit, modes={"STUB_GH_APP": "mismatch"})
     assert r.returncode != 0
     assert "一致しません" in r.stderr
+    assert not calls_matching(kit, "az", "keyvault", "secret", "set"), \
+        "App 検証前に格納してはいけない (既存資格情報の破壊経路)"
     assert not calls_matching(kit, "terraform")
 
 
@@ -369,6 +387,8 @@ def test_not_installed_gives_install_url(kit):
     r = run_kit(kit, modes={"STUB_GH_INSTALLS": "none"})
     assert r.returncode != 0
     assert "installations/new" in r.stderr
+    assert not calls_matching(kit, "az", "keyvault", "secret", "set"), \
+        "App 検証前に格納してはいけない (Codex P1)"
     assert not calls_matching(kit, "terraform")
 
 
@@ -376,6 +396,8 @@ def test_token_without_admin_write_is_rejected(kit):
     r = run_kit(kit, modes={"STUB_GH_TOKEN": "noadmin"})
     assert r.returncode != 0
     assert "administration" in r.stderr
+    assert not calls_matching(kit, "az", "keyvault", "secret", "set"), \
+        "App 検証前に格納してはいけない (Codex P1)"
     assert not calls_matching(kit, "terraform")
 
 
@@ -389,6 +411,9 @@ def test_plan_drift_refuses_apply(kit):
     assert r.returncode != 0
     assert "#387" in r.stderr
     assert not calls_matching(kit, "terraform", "apply", "tfplan")
+    # KV 格納後の失敗なので、pem 削除の案内がエラー側にも出る (Codex P2)
+    assert "格納は完了しています" in r.stderr and "rm " in r.stderr, \
+        "格納済みの失敗経路で pem 削除手順を出していない"
 
 
 def test_plan_without_summary_is_not_success(kit):
@@ -414,6 +439,9 @@ def test_no_set_x_in_script():
     text = SCRIPT.read_text()
     assert re.search(r"^\s*set\s+[-+]?\w*x", text, re.M) is None, \
         "bootstrap.sh に set -x を足してはいけない (冒頭コメント参照)"
+    # 同義の別表記も塞ぐ (sec P3-3): set -o xtrace / set +o xtrace
+    assert re.search(r"^\s*set\s+[-+]o\s+xtrace\b", text, re.M) is None, \
+        "bootstrap.sh に set -o xtrace を足してはいけない (set -x と同義)"
 
 
 def test_manifest_is_minimal_and_webhookless():

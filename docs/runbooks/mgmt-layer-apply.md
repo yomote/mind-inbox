@@ -15,7 +15,7 @@
 ### PO の 3 手
 
 1. **リンクを開いて Create** — [`cicd/scripts/mgmt-bootstrap/create-github-app.html`](../../cicd/scripts/mgmt-bootstrap/create-github-app.html) をブラウザで開き (file:// のまま)、manifest を確認して「GitHub App を作成する」→ GitHub の確認画面で **Create GitHub App**。権限は administration:write + metadata:read の 2 つだけ・webhook 無効 (根拠 1 行ずつは[キットの README](../../cicd/scripts/mgmt-bootstrap/README.md))
-2. **App ID を控え、インストールして pem を取る** — App の settings ページで **App ID** を控え、**Install App** でこのリポジトリだけにインストールし、**Generate a private key** で pem をダウンロード
+2. **App ID を控え、インストールして pem を取る** — App の settings ページで **App ID** を控え、**Install App** でこのリポジトリだけにインストールし、**Generate a private key** で pem をダウンロード。このとき **Private keys の一覧に自分が作った鍵以外が無いこと**も確認する (manifest flow の残留 `?code=` を第三者が 1 時間以内に変換すると、こちらの知らない鍵が発行されうるため — 見覚えの無い鍵があれば Delete で即失効)
 3. **スクリプトを流す**:
 
    ```bash
