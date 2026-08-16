@@ -220,7 +220,7 @@ def test_l1_壊れたpayloadでは何もpushしない(tmp_path) -> None:
     assert branches == ""
 
 
-def test_l1_呼び出し元にpre_commitフックがあっても追記はpushされる(tmp_path) -> None:
+def test_単体_呼び出し元にpre_commitフックがあっても追記はpushされる(tmp_path) -> None:
     """#466 の再発防止。
 
     無いと何が静かに通るか:
@@ -258,7 +258,7 @@ def test_l1_呼び出し元にpre_commitフックがあっても追記はpushさ
     assert json.loads(content.strip())["probeId"] == _payload()["probeId"]
 
 
-def test_l1_pushできなかったときに成功を名乗らない(tmp_path) -> None:
+def test_単体_pushできなかったときに成功を名乗らない(tmp_path) -> None:
     """#466 の本体。「取れなかったものを異常なしと書かない」をスクリプトに効かせる。
 
     無いと何が静かに通るか:

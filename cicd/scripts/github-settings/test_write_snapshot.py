@@ -1,4 +1,4 @@
-"""[L1] write-snapshot.sh の git 運搬 — #466 と同型のフック事故を防ぐ。
+"""[単体] write-snapshot.sh の git 運搬 — #466 と同型のフック事故を防ぐ。
 
 **無いと何が静かに通るか**: このスクリプトはデータブランチ `data/github-settings`
 への唯一の書き込み口で、GitHub 設定ドリフトの記録 (`git log -p` がそのまま
@@ -66,7 +66,7 @@ def _run(work: Path, snapshot: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_l1_呼び出し元にpre_commitフックがあってもスナップショットはpushされる(
+def test_単体_呼び出し元にpre_commitフックがあってもスナップショットはpushされる(
     tmp_path,
 ) -> None:
     """commit から `-c core.hooksPath=/dev/null` を外すとこのテストが落ちる。"""
@@ -97,7 +97,7 @@ def test_l1_呼び出し元にpre_commitフックがあってもスナップシ�
     assert json.loads(content)["observedAt"] == "2026-08-16T00:00:00Z"
 
 
-def test_l1_内容が同じならpushしない(tmp_path) -> None:
+def test_単体_内容が同じならpushしない(tmp_path) -> None:
     """点検のたびにコミットを立てない (履歴が「変化の記録」であり続ける)。"""
     origin, work = _setup_repo(tmp_path)
     snapshot = _snapshot(tmp_path)

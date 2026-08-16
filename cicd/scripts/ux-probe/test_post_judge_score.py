@@ -1,4 +1,4 @@
-"""[L1] post-judge-score.sh の失敗検知 — #466。
+"""[単体] post-judge-score.sh の失敗検知 — #466。
 
 **無いと何が静かに通るか**: このスクリプトは UX 採点をデータブランチへ載せる
 最後の 1 本で、#466 の実測ログ (「追記しました」の後に husky で落ちた) を出した
@@ -77,7 +77,7 @@ def _run(script: Path, report: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_l1_追記が落ちたら失敗として終わり成功を名乗らない(tmp_path) -> None:
+def test_単体_追記が落ちたら失敗として終わり成功を名乗らない(tmp_path) -> None:
     """#466 の本体。追記側が落ちた朝を「載った」と読ませない。
 
     無いと何が静かに通るか:
@@ -99,7 +99,7 @@ def test_l1_追記が落ちたら失敗として終わり成功を名乗らな�
     assert "追記しました" not in combined, combined
 
 
-def test_l1_追記が通ったときだけ成功を名乗る(tmp_path) -> None:
+def test_単体_追記が通ったときだけ成功を名乗る(tmp_path) -> None:
     """対照実験。上の assert が「常に失敗する」で緑になっていないことを示す。"""
     script, report = _tree(tmp_path, "#!/bin/sh\nexit 0\n")
     r = _run(script, report)
@@ -110,7 +110,7 @@ def test_l1_追記が通ったときだけ成功を名乗る(tmp_path) -> None:
     assert "採点は載っていません" not in combined, combined
 
 
-def test_l1_検証に落ちた採点は追記側を呼ばない(tmp_path) -> None:
+def test_単体_検証に落ちた採点は追記側を呼ばない(tmp_path) -> None:
     """壊れた採点が蓄積に入らないこと (スクリプト冒頭の門が生きていること)。
 
     無いと何が静かに通るか:
