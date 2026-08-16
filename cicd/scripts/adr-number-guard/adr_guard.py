@@ -33,6 +33,10 @@
     引く main tip** であって run 冒頭の checkout ではない — sweep は 1 回の run で
     複数 PR を順にマージするため、ローカルの作業ツリーを読むと 1 本目のマージが
     2 本目の照合に映らず、同じ番号の PR が 2 本とも通る (Codex P1 / PR #469)。
+    それでも残余窓はある: review-gate.yml の concurrency は PR 番号単位のため、
+    同番号を足す 2 PR がほぼ同時に pm-accept されると**別 run が並走**し、双方が
+    「評価 (衝突なし) → マージ執行」の間に相手のマージを見ない数十秒の窓が残る
+    (standin judge / PR #469。塞ぐなら番号横断の直列化が要る — 現状は許容)。
     役割分担:
     ここ (CI) = push 時の早期フィードバック、review-gate = マージ門。
     `cicd/scripts/claude-hooks/adr_number_guard.py` はさらに前倒しの

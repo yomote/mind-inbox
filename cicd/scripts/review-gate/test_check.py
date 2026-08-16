@@ -212,6 +212,43 @@ def test_l1_既定のsnapshotはローカルではなくapiのmain_tipを読む(
     assert all("?ref=main" in c for c in calls)
 
 
+def test_l1_evaluate_gateはadr衝突をverdictに配線する(monkeypatch) -> None:
+    """standin judge major (PR #469): `adr_conflicts=adr_gate_conflicts(repo, files)`
+    の配線 1 行を evaluate_gate から消しても、当時のテストは全緑だった。
+
+    無いと何が静かに通るか: 純関数 (adr_gate_conflicts / decide) が個別に緑でも、
+    evaluate_gate が結果を decide に**渡さなければ**門は ADR 衝突を一度も見ない —
+    #381 の腐った緑がマージ門でそのまま再発する。他の条件 (受け入れ・スレッド・
+    レビュー) が全部揃った PR で、ADR 衝突だけを理由に verdict が閉じることを
+    evaluate_gate 経由で assert する。
+    """
+    accepted = [{"body": "[pm-accept] abc1234", "author_association": "OWNER"}]
+
+    def fake_gh(*args):
+        path = args[1]
+        if path.endswith("/files"):
+            return [{"filename": "docs/adr/0048-readonly.md", "status": "added"}]
+        if path.endswith("/comments"):
+            return accepted
+        raise AssertionError(f"想定外の gh 呼び出し: {args}")
+
+    monkeypatch.setattr(check, "gh", fake_gh)
+    monkeypatch.setattr(check, "fetch_unresolved_threads", lambda *a: 0)
+    monkeypatch.setattr(check, "fetch_codex_present", lambda *a: True)
+    monkeypatch.setattr(
+        check, "fetch_main_snapshot", lambda repo: (["docs/adr/0048-child.md"], set())
+    )
+
+    ev = check.evaluate_gate("o/r", 1, "abc1234def5678")
+    assert not ev.verdict.ok, "ADR 衝突だけで門が閉じること (配線の固定)"
+    assert "ADR 0048 が今の main と衝突 (docs/adr/0048-child.md)" in ev.verdict.missing
+    # 衝突が解ければ (= main 側に同番号なし) 同じ条件で緑に戻る
+    monkeypatch.setattr(
+        check, "fetch_main_snapshot", lambda repo: (["docs/adr/0047-other.md"], set())
+    )
+    assert check.evaluate_gate("o/r", 1, "abc1234def5678").verdict.ok
+
+
 def test_l1_コード判定はappsとcicdのみ() -> None:
     assert is_code_pr(["apps/bff/src/x.ts"])
     assert is_code_pr(["cicd/scripts/deploy/x.sh"])

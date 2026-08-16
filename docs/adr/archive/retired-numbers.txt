@@ -5,9 +5,12 @@
 #
 # **この番号は二度と使わない。** ファイル名から番号を落としているため、
 # docs/adr/NNNN-*.md を数えるだけでは「使用済み」と分からなくなる。
-# この一覧を docs/adr/ の実ファイルと合算するのは次の 3 つ:
-#   - .github/workflows/adr-number-guard.yml (CI) — 退役番号の再利用と、この一覧からの
-#     行の削除を赤にする
+# この一覧を docs/adr/ の実ファイルと合算するのは次の 5 つ:
+#   - cicd/scripts/adr-number-guard/adr_guard.py — CI (adr-number-guard.yml) の判定本体。
+#     退役番号の再利用と、この一覧からの行の削除を赤にする (#381)
+#   - cicd/scripts/review-gate/check.py (fetch_main_snapshot) — マージ直前の再判定。
+#     contents API 経由で「今の main」のこのファイルを読む (#381 / PR #469)
+#   - cicd/scripts/claude-hooks/adr_number_guard.py — ADR を書き始める瞬間の前倒し警告 (#396)
 #   - docs/adr/README.md 「1. 番号を決める」 — 採番手順の正典
 #   - .claude/skills/adr/SKILL.md Step 2 — README のコマンドの写し
 # SessionStart フックは採番を出さない (書く瞬間に取らないと腐るため)。

@@ -86,7 +86,7 @@ merge_group イベントの checkout は queue の一時 branch = **PR が改変
 - **review-gate の merge_group 判定は専用 job に分離し、`ref: main` で checkout した信頼版スクリプトだけを実行する** (判定材料は全て API 経由 — queue ref の作業ツリー自体が不要)。permissions は `contents: read` + `statuses: write` のみ (`pull-requests: write` は持たない — advisory は merge_group で投稿しないため)
 - **未信頼コード (PR 由来の npm / pnpm スクリプト) を実行する job には write を持たせない** — `test.yml` の workflow permissions を `contents: read` に落とし、PR への sticky コメント投稿は未信頼コードを実行しない別 job (`pr-comment`、`pull-requests: write` のみ) へ artifact 経由で分離した
 - `pull_request` イベント側の review-gate は従来どおり PR 版 `check.py` を実行する (PR #258 / ADR 0040 D1 が導入した `gate-pr` job — `contents: write` を持たず `REVIEW_GATE_EXECUTE_MERGE=false`)。fork PR は token が read-only で偽 status を貼れず、same-repo PR の作者は信頼境界の内側 (単一アカウント運用)。挙動を変えないことを選ぶ
-- auto-improve-guard / adr-number-guard の merge_group 経路はリポジトリのスクリプトを実行しない (インライン bash + git / gh API のみ) かつ read 権限のみで、この穴の対象外
+- auto-improve-guard の merge_group 経路はリポジトリのスクリプトを実行しない (インライン bash + git / gh API のみ) かつ read 権限のみで、この穴の対象外。adr-number-guard は #381 (PR #469) 以降 queue ref の checkout から `cicd/scripts/adr-number-guard/adr_guard.py` を実行するが、job の permissions は `contents: read` のみで `statuses: write` を持たない — 改変されたスクリプトが実行されても偽の status を貼る経路が無く、引き続きこの穴の対象外
 - 帰結: **required check の workflow に merge_group を足すときは「queue ref のコードを write 権限で実行していないか」を必ず確認する** (Runbook の Common Issues に追記)
 
 本項は PR #258 (ADR 0040 D1) が同じ理由で入れた job 分離 (`gate-pr` / `gate-trusted` / `sweep` — イベントの由来で権限を分ける) と**同じ原則の merge_group への拡張**であり、`gate-merge-group` はその 4 本目にあたる。
