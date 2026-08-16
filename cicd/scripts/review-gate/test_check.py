@@ -10,6 +10,9 @@ from datetime import datetime as real_datetime
 from datetime import timezone
 
 import check
+
+# check が sys.path に足す adr-number-guard 側の module (Issue #381 の共有純関数)
+import adr_guard  # noqa: E402
 from check import (
     CODEX_RETRIGGER_MARKER,
     HUMAN_STALL_MARKER,
@@ -90,6 +93,160 @@ def test_l1_未解決スレッドがあると赤() -> None:
     v = decide(HEAD, [], [ACCEPT_OK], 2, False, False)
     assert not v.ok
     assert any("2 件" in m for m in v.missing)
+
+
+# ---- ADR 採番衝突の再判定 (Issue #381) ----
+# 無いと何が静かに通るか: CI の adr-number-guard は PR push 時点の判定で、その後
+# main に同じ番号が着地しても緑のまま腐る (PR #222 で 0048 が二重化寸前)。門の
+# 最後の再判定はここ — 壊れると同じ番号の ADR が 2 つ main に入る。
+
+
+def test_l1_adr衝突があると受け入れ済みでも門が閉じる() -> None:
+    conflict = "ADR 0048 が今の main と衝突 (docs/adr/0048-child.md)"
+    v = decide(
+        HEAD, ["docs/adr/0048-x.md"], [ACCEPT_OK], 0, False, False,
+        adr_conflicts=[conflict],
+    )
+    assert not v.ok
+    assert conflict in v.missing
+
+
+def test_l1_adr衝突なしなら従来どおりの判定() -> None:
+    v = decide(
+        HEAD, ["docs/adr/0048-x.md"], [ACCEPT_OK], 0, False, False,
+        adr_conflicts=(),
+    )
+    assert v.ok
+
+
+def test_l1_adr変更のないprはmainのsnapshotを読まない() -> None:
+    def boom() -> tuple[list[str], set[int]]:
+        raise AssertionError("ADR 変更なしの PR で main snapshot を読んだ")
+
+    files = [{"filename": "apps/bff/x.ts", "status": "modified"}]
+    assert check.adr_gate_conflicts("o/r", files, fetch_snapshot=boom) == []
+
+
+def test_l1_adr追加は今のmainのsnapshotと照合される() -> None:
+    # PR #222 の腐り方の再現: guard が緑を出した後に main へ 0048 が着地しても、
+    # この照合は評価のたびに「今の main」を読むので捕まえる
+    def snapshot() -> tuple[list[str], set[int]]:
+        return (["docs/adr/0048-child.md"], set())
+
+    files = [{"filename": "docs/adr/0048-readonly.md", "status": "added"}]
+    messages = check.adr_gate_conflicts("o/r", files, fetch_snapshot=snapshot)
+    assert messages == ["ADR 0048 が今の main と衝突 (docs/adr/0048-child.md)"]
+
+
+def test_l1_snapshotが読めないときは未検証として門を閉じる() -> None:
+    # 取れなかったものを「衝突なし」と書かない — 未検証を missing に載せて赤にする
+    def broken() -> tuple[list[str], set[int]]:
+        raise adr_guard.SnapshotError("main の docs/adr に番号付き ADR が 1 本も見えない")
+
+    files = [{"filename": "docs/adr/0048-x.md", "status": "added"}]
+    messages = check.adr_gate_conflicts("o/r", files, fetch_snapshot=broken)
+    assert messages == ["ADR 衝突検査 未検証 (main の docs/adr に番号付き ADR が 1 本も見えない)"]
+    assert not decide(
+        HEAD, [], [ACCEPT_OK], 0, False, False, adr_conflicts=messages
+    ).ok
+
+
+def test_l1_sweepの1本目マージ後に2本目の同番号が捕まる() -> None:
+    """Codex P1 (PR #469) の再現: 同じ 0048 を足す武装済み PR が 2 本 sweep に載る。
+
+    無いと何が静かに通るか: 照合材料が run 冒頭の checkout (= 全評価で同じ
+    スナップショット) だと、1 本目のマージが 2 本目の照合に映らず**両方 main に
+    入る**。評価のたびに main を読み直すこと (= 2 回目の fetch が呼ばれ、進んだ
+    main が使われること) をこのテストが固定する — fetch を 1 回に間引く・結果を
+    キャッシュする退行はここで落ちる。
+    """
+    states = [
+        (["docs/adr/0047-a.md"], set()),  # PR A の評価時点: 0048 は未着地
+        (["docs/adr/0047-a.md", "docs/adr/0048-a.md"], set()),  # A マージ後 = B の評価時点
+    ]
+
+    def fetch() -> tuple[list[str], set[int]]:
+        return states.pop(0)
+
+    pr_a = [{"filename": "docs/adr/0048-a.md", "status": "added"}]
+    pr_b = [{"filename": "docs/adr/0048-b.md", "status": "added"}]
+    assert check.adr_gate_conflicts("o/r", pr_a, fetch_snapshot=fetch) == []  # A は通る
+    assert check.adr_gate_conflicts("o/r", pr_b, fetch_snapshot=fetch) == [
+        "ADR 0048 が今の main と衝突 (docs/adr/0048-a.md)"
+    ]
+    assert states == []  # 2 回とも読み直した (キャッシュしていない)
+
+
+def test_l1_既定のsnapshotはローカルではなくapiのmain_tipを読む(monkeypatch) -> None:
+    """Codex P1 (PR #469): 既定の照合材料が「この run が checkout した作業ツリー」
+    ではなく GitHub API の main tip であることを固定する。
+
+    無いと何が静かに通るか: ローカルの docs/adr を読む実装に戻ると、単体テストは
+    全部緑のまま、sweep のループ内でだけ (= 実運用でだけ) スナップショットが腐る。
+    """
+    calls: list[str] = []
+
+    def fake_gh(*args: str) -> object:
+        path = args[1]
+        calls.append(path)
+        if path == "repos/o/r/contents/docs/adr?ref=main":
+            return [
+                {"name": "0048-child.md", "type": "file"},
+                {"name": "template.md", "type": "file"},
+                {"name": "archive", "type": "dir"},
+            ]
+        if path == f"repos/o/r/contents/{adr_guard.RETIRED_FILE}?ref=main":
+            import base64
+
+            return {"content": base64.b64encode(b"# retired\n0031\n").decode()}
+        raise AssertionError(f"想定外の API 呼び出し: {path}")
+
+    monkeypatch.setattr(check, "gh", fake_gh)
+    files = [{"filename": "docs/adr/0048-readonly.md", "status": "added"}]
+    assert check.adr_gate_conflicts("o/r", files) == [
+        "ADR 0048 が今の main と衝突 (docs/adr/0048-child.md)"
+    ]
+    # 退役番号の再利用も同じ API 材料で見る
+    files = [{"filename": "docs/adr/0031-zombie.md", "status": "added"}]
+    assert check.adr_gate_conflicts("o/r", files) == ["ADR 0031 は退役番号 (再利用不可)"]
+    assert all("?ref=main" in c for c in calls)
+
+
+def test_l1_evaluate_gateはadr衝突をverdictに配線する(monkeypatch) -> None:
+    """standin judge major (PR #469): `adr_conflicts=adr_gate_conflicts(repo, files)`
+    の配線 1 行を evaluate_gate から消しても、当時のテストは全緑だった。
+
+    無いと何が静かに通るか: 純関数 (adr_gate_conflicts / decide) が個別に緑でも、
+    evaluate_gate が結果を decide に**渡さなければ**門は ADR 衝突を一度も見ない —
+    #381 の腐った緑がマージ門でそのまま再発する。他の条件 (受け入れ・スレッド・
+    レビュー) が全部揃った PR で、ADR 衝突だけを理由に verdict が閉じることを
+    evaluate_gate 経由で assert する。
+    """
+    accepted = [{"body": "[pm-accept] abc1234", "author_association": "OWNER"}]
+
+    def fake_gh(*args):
+        path = args[1]
+        if path.endswith("/files"):
+            return [{"filename": "docs/adr/0048-readonly.md", "status": "added"}]
+        if path.endswith("/comments"):
+            return accepted
+        raise AssertionError(f"想定外の gh 呼び出し: {args}")
+
+    monkeypatch.setattr(check, "gh", fake_gh)
+    monkeypatch.setattr(check, "fetch_unresolved_threads", lambda *a: 0)
+    monkeypatch.setattr(check, "fetch_codex_present", lambda *a: True)
+    monkeypatch.setattr(
+        check, "fetch_main_snapshot", lambda repo: (["docs/adr/0048-child.md"], set())
+    )
+
+    ev = check.evaluate_gate("o/r", 1, "abc1234def5678")
+    assert not ev.verdict.ok, "ADR 衝突だけで門が閉じること (配線の固定)"
+    assert "ADR 0048 が今の main と衝突 (docs/adr/0048-child.md)" in ev.verdict.missing
+    # 衝突が解ければ (= main 側に同番号なし) 同じ条件で緑に戻る
+    monkeypatch.setattr(
+        check, "fetch_main_snapshot", lambda repo: (["docs/adr/0047-other.md"], set())
+    )
+    assert check.evaluate_gate("o/r", 1, "abc1234def5678").verdict.ok
 
 
 def test_l1_コード判定はappsとcicdのみ() -> None:

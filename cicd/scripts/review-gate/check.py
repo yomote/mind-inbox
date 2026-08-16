@@ -47,6 +47,12 @@
            **Codex と違い SHA を縛る** (代役の投稿は実装者と同じアカウントから
            出るため / has_standin_review)。代役で通した PR には degrade を可視化する
            コメントを 1 回だけ貼り、status の文言にも担い手を出す (Issue #400 D3)
+    4. PR が変更する ADR の採番が**今の main** と衝突していない (Issue #381) —
+       CI の adr-number-guard は PR push 時点の判定で、その後 main に同じ番号が
+       着地しても再判定されず緑のまま腐る。この門は pm-accept / sweep のたびに
+       再評価され、照合材料は**評価のたびに API で引く main tip** (run 冒頭の
+       checkout を読むと sweep がループ内で複数 PR をマージする間に腐る — Codex
+       P1 / PR #469)。判定は cicd/scripts/adr-number-guard/adr_guard.py と共有の純関数
 
 付随して、合否とは別に advisory のコメントを 2 種類だけ自動投稿する (ADR 0038):
     A. Codex 自動レビューの再トリガー依頼 — コード PR に Codex レビューが
@@ -91,16 +97,25 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+
+# ADR 採番衝突の判定 (Issue #381): CI の adr-number-guard と同じ純関数を共有する。
+# CI 側 guard の緑は「push 時点のスナップショット」で、その後 main に同じ番号が
+# 着地しても再判定されない — review-gate は pm-accept のたびに走り直すので、
+# マージ直前の再判定をここが担う。ディレクトリ名にハイフンがあり package import
+# できないため sys.path で読む (claude-hooks の hook_io と同じ方式)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adr-number-guard"))
+import adr_guard  # noqa: E402
 
 PM_ACCEPT_MARKER = "[pm-accept]"
 # 受け入れ行の構文 (Issue #380): **行頭にマーカー、直後に SHA (7〜40 桁 hex)**。
@@ -1049,6 +1064,74 @@ def evaluate_carryover(
     return Carryover(ok=True, accepted_short=accepted[:SHORT_SHA_LEN])
 
 
+def fetch_main_snapshot(repo: str) -> tuple[list[str], set[int]]:
+    """今の main の ADR 一覧と退役一覧を **GitHub API から** 読む (Codex P1 / PR #469)。
+
+    ローカルの checkout を読んではいけない: schedule の sweep は main を run 冒頭に
+    一度 checkout してからループで複数 PR を順にマージするため、同じ番号を足す
+    武装済み PR が 2 本あると、1 本目のマージ後もローカルの作業ツリーは古いままで
+    2 本目の照合が素通りし、**両方 main に入る**。評価のたびに API で main tip を
+    引けば、直前のマージが次の PR の照合に必ず映る (マージ直前の再評価
+    reverify_and_merge も evaluate_gate 経由でここを通る)。
+
+    読めない・形が想定外のときは SnapshotError — 空を返して「衝突なし」に
+    化けさせない (呼び出し側が「未検証」として門を閉じる)。
+    """
+    listing = gh("api", f"repos/{repo}/contents/docs/adr?ref=main")
+    if not isinstance(listing, list):
+        raise adr_guard.SnapshotError("docs/adr の一覧が API から配列で返らない")
+    paths = sorted(
+        f"docs/adr/{entry.get('name')}"
+        for entry in listing
+        if entry.get("type") == "file"
+    )
+    if not adr_guard.adr_numbers(paths):
+        # ここが空のまま照合すると全 PR が無条件で「衝突なし」になる
+        raise adr_guard.SnapshotError("main の docs/adr に番号付き ADR が 1 本も見えない")
+    blob = gh("api", f"repos/{repo}/contents/{adr_guard.RETIRED_FILE}?ref=main")
+    try:
+        content = base64.b64decode((blob or {}).get("content") or "").decode("utf-8")  # type: ignore[union-attr]
+    except (ValueError, UnicodeDecodeError) as exc:
+        # main には退役一覧が常在する。読めない = 退役番号の再利用検査が黙って素通り
+        raise adr_guard.SnapshotError(
+            f"{adr_guard.RETIRED_FILE} を API から読めない ({exc.__class__.__name__})"
+        ) from exc
+    return paths, adr_guard.parse_retired(content)
+
+
+def adr_gate_conflicts(
+    repo: str,
+    files: list[dict],
+    fetch_snapshot: Callable[[], tuple[list[str], set[int]]] | None = None,
+) -> list[str]:
+    """PR の ADR 変更を「今の main」と照合する (Issue #381)。
+
+    CI の adr-number-guard は PR push 時点の判定で、その後 main に同じ番号が
+    着地しても緑のまま腐る。review-gate は pm-accept / コメント / sweep のたびに
+    ここを通るので、マージ直前の再判定が最後の門になる。照合材料は評価のたびに
+    API で引く main tip (fetch_main_snapshot) — run 冒頭の checkout を読むと
+    sweep のループ内で腐る (Codex P1 / PR #469。詳細はそちらの docstring)。
+
+    ADR を変更しない PR では main 側を読まない (空 = 検査対象なし)。読み取りに
+    失敗したときは**衝突なしと書かず**「未検証」を missing に載せて門を閉じる
+    (取れなかったものを合格と書かない — この workflow の規律)。
+    """
+    changed = [
+        ((f.get("filename") or ""), (f.get("status") or "")) for f in files
+    ]
+    if not any(adr_guard.adr_number_of(name) is not None for name, _ in changed):
+        return []
+    fetcher = fetch_snapshot or (lambda: fetch_main_snapshot(repo))
+    try:
+        main_paths, main_retired = fetcher()
+    except adr_guard.SnapshotError as exc:
+        return [f"ADR 衝突検査 未検証 ({exc})"]
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        # API 自体の失敗も「衝突なし」に化けさせない
+        return [f"ADR 衝突検査 未検証 (main の取得に失敗: {exc.__class__.__name__})"]
+    return adr_guard.gate_conflicts(changed, main_paths, main_retired)
+
+
 def decide(
     head_sha: str,
     changed_paths: list[str],
@@ -1057,8 +1140,13 @@ def decide(
     codex_present: bool,
     require_independent_review: bool,
     carryover: Carryover | None = None,
+    adr_conflicts: Sequence[str] = (),
 ) -> Verdict:
-    missing: list[str] = []
+    # adr_conflicts: adr_gate_conflicts() の結果 (Issue #381)。既定 () は
+    # 「ADR 変更なし = 検査対象なし」と同じ形 — 本番の呼び出し元は evaluate_gate
+    # だけで、そこは必ず計算して渡す (省略が「未検査の緑」に化けるのは既存テストの
+    # 呼び出し互換のためだけに許す)
+    missing: list[str] = list(adr_conflicts)
     # 緑のときの内訳 (Issue #400 D3-1)。固定文言は「レビューを見ていないのに
     # 揃ったと書く」嘘の源だった (PR #338 実測) — 何で通ったかを毎回組み立てる
     notes: list[str] = []
@@ -1458,6 +1546,10 @@ def evaluate_gate(
         codex_present=codex_present,
         require_independent_review=REQUIRE_INDEPENDENT_REVIEW,
         carryover=carryover,
+        # ADR 採番の衝突を「今の main」と再照合する (#381)。CI の adr-number-guard
+        # は push 時点の判定で腐る — マージ直前の門はここ。材料は評価のたびに
+        # API で引く (run 冒頭の checkout は sweep のループ内で腐る — Codex P1)
+        adr_conflicts=adr_gate_conflicts(repo, files),  # type: ignore[arg-type]
     )
     return GateEval(
         verdict=verdict,
