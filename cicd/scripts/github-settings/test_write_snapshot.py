@@ -69,7 +69,7 @@ def _run(work: Path, snapshot: Path) -> subprocess.CompletedProcess[str]:
 def test_単体_呼び出し元にpre_commitフックがあってもスナップショットはpushされる(
     tmp_path,
 ) -> None:
-    """commit から `-c core.hooksPath=/dev/null` を外すとこのテストが落ちる。"""
+    """スクリプト冒頭の `GIT_CONFIG_*` (hooks 無効化) を外すとこのテストが落ちる。"""
     origin, work = _setup_repo(tmp_path)
     hooks = work / "fake-husky"
     hooks.mkdir()

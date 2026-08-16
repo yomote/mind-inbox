@@ -228,7 +228,9 @@ def test_単体_呼び出し元にpre_commitフックがあっても追記はpus
         絶対パスで入っている checkout では親の pre-commit がこの commit でも発火する。
         データブランチに lint-staged の設定は無いので必ず落ち、**commit も push も
         されないまま**その朝の観測が消える (2026-08-15 に採点 2 本を実際に失った)。
-        commit から `-c core.hooksPath=/dev/null` を外すとこのテストが落ちる。
+        スクリプト冒頭の `GIT_CONFIG_*` (hooks 無効化) を外すとこのテストが落ちる。
+        `git worktree add` の post-checkout も同じ config で撃たれるので、commit だけを
+        守っても足りない (PR #475 の代役レビュー)。
     """
     origin, work = _setup_repo(tmp_path)
     hooks = work / "fake-husky"

@@ -35,6 +35,18 @@ MAX_ATTEMPTS=3
 
 log() { echo "$@" >&2; }
 
+# hooks を無効化する (#466 と同型 / PR #475 の代役レビューで検出)。**commit だけでなく、
+# このスクリプトが撃つすべての git に効かせる** — worktree は呼び出し元 repo の config を
+# 共有するので、core.hooksPath が絶対パスで入っている checkout では `git worktree add` の
+# post-checkout や (将来 .husky/pre-push を足せば) push でも親のフックが発火する。
+# データブランチ側に lint-staged 等の設定は無いため必ず落ち、GitHub 設定ドリフトの
+# 唯一の記録が古いまま静かに止まる (点検 run は緑で終わるので誰にも見えない)。
+# 見えなくなるもの: このブランチ相手の git では hook が一切走らない。
+# data/github-settings は snapshot の JSON だけで main のコードを含まないので問題ない。
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=core.hooksPath
+export GIT_CONFIG_VALUE_0=/dev/null
+
 if [ "$#" -ne 2 ]; then
   log "使い方: $0 <snapshot.json> <owner/repo>"
   exit 1
@@ -114,15 +126,8 @@ EOF
     exit 0
   fi
 
-  # hooks を無効化して commit する (#466 と同型 — PR #475 の代役レビューで検出)。
-  # worktree は呼び出し元 repo の config を共有するので、core.hooksPath が絶対パスの
-  # checkout では親の pre-commit (husky → lint-staged) がこの commit でも発火する。
-  # データブランチ側に lint-staged の設定は無いため必ず落ち、push まで到達せず
-  # GitHub 設定ドリフトの唯一の記録が古いまま静かに止まる。
-  # 見えなくなるもの: このブランチへの commit では pre-commit の検査が一切走らない。
-  # data/github-settings は snapshot の JSON だけで main のコードを含まないので問題ない。
-  git -C "$WT" -c core.hooksPath=/dev/null \
-    -c user.name="$COMMIT_NAME" -c user.email="$COMMIT_EMAIL" \
+  # hooks の無効化はスクリプト冒頭の GIT_CONFIG_* で全 git に効かせている (#466 と同型)
+  git -C "$WT" -c user.name="$COMMIT_NAME" -c user.email="$COMMIT_EMAIL" \
     commit --quiet -m "github-settings: $REPO_SLUG の観測を更新"
 
   if git -C "$WT" push --quiet "$REMOTE" "HEAD:refs/heads/$BRANCH"; then
