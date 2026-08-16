@@ -71,6 +71,8 @@ gh api --paginate "repos/$REPO/labels" --jq '.[] | {name, color, description}'
 
 現在は **D**。決めるのは #390 (needs-human)。A と B は排他ではなく、「PR ごとは D、節目は A」も取れます。
 
+> **2026-08-16 更新**: B の弱点 (「private key を GitHub secret に置く」) を外した **B' のキット**ができました ([`cicd/scripts/mgmt-bootstrap/`](../../cicd/scripts/mgmt-bootstrap/README.md) / PO 裁定 2026-08-16)。App の pem は **管理系 Key Vault のシークレット `github-app-mgmt-private-key`** に置き、GitHub Actions の secret には置きません (同一リポジトリの PR から secret を読める #331 と同型の経路を作らない)。**PO がローカルでキットを叩くと plan まで回り、plan が import-only のときだけ apply できます** — 差分がある plan の適用は引き続き #387 の裁定が先です。CI から自動で plan を回す経路は未配線のまま (KV への RBAC 付与という明示の 1 手が要る形にしてあります)。PR ごとの CI は D のままです。
+
 ### 4. ロックファイルをローカルで作って commit する
 
 **`.terraform.lock.hcl` は CI が作ってくれません。** provider を足した / 版を上げたときは、自分で生成して commit します。

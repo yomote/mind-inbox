@@ -8,6 +8,50 @@
 
 > **Cosmos / OpenAI / Speech はここには来ません。** これらは「アプリそのもの」なのでアプリ系 RG (`rg-dev-mind-inbox`) に残します (2026-08-12 / 2026-08-14 の PO 裁定)。Cosmos のデータは RG を移して守るのではなく、**この RG の非公開 Storage へバックアップして戻せるようにします** (ADR 0056 D2 / 経路の実装は ADR 0046 D9)。
 
+## ワンショットキット (PO 作業 約 10 分 / 推奨)
+
+[`cicd/scripts/mgmt-bootstrap/`](../../cicd/scripts/mgmt-bootstrap/README.md) が、下の Steps 1〜5 と Verification の大半に加えて、**GitHub 設定管理 (mgmt) 層 ([`cicd/github/terraform/`](../../cicd/github/terraform/README.md)) の資格情報の準備**までを 1 本にまとめています ([#387](https://github.com/yomote/mind-inbox/issues/387) / [#390](https://github.com/yomote/mind-inbox/issues/390) / PO 裁定 2026-08-16: キット化可・セキュリティ最優先)。手作業でやる場合や中身の理解には、下の Steps がそのまま生きています。
+
+### PO の 3 手
+
+1. **リンクを開いて Create** — [`cicd/scripts/mgmt-bootstrap/create-github-app.html`](../../cicd/scripts/mgmt-bootstrap/create-github-app.html) をブラウザで開き (file:// のまま)、manifest を確認して「GitHub App を作成する」→ GitHub の確認画面で **Create GitHub App**。権限は administration:write + metadata:read の 2 つだけ・webhook 無効 (根拠 1 行ずつは[キットの README](../../cicd/scripts/mgmt-bootstrap/README.md))
+2. **App ID を控え、インストールして pem を取る** — App の settings ページで **App ID** を控え、**Install App** でこのリポジトリだけにインストールし、**Generate a private key** で pem をダウンロード。このとき **Private keys の一覧に自分が作った鍵以外が無いこと**も確認する (manifest flow の残留 `?code=` を第三者が 1 時間以内に変換すると、こちらの知らない鍵が発行されうるため — 見覚えの無い鍵があれば Delete で即失効)
+3. **スクリプトを流す**:
+
+   ```bash
+   cicd/scripts/mgmt-bootstrap/bootstrap.sh \
+     --pem ~/Downloads/<app名>.<日付>.private-key.pem \
+     --app-id <App ID> \
+     --budget-email <通知先メール>
+   ```
+
+   what-if と terraform plan を目視確認しながら進みます (確認プロンプトあり)。plan が **import-only** (`0 to add, 0 to change, 0 to destroy`) であることを見たら、`--tf-apply` を足して再実行すると terraform の初回 apply (**state への取り込みだけで、GitHub の実設定は変更しない**) まで終わります。**差分が 1 つでもある plan は `--tf-apply` でも適用されません** — その差分の裁定は #387 (`enforce_admins`) で、キットが黙って倒してはいけない判断だからです。**再実行は冪等で安全**です。
+
+   終わったら、スクリプトが最後に出す手順どおり**ローカルの pem を削除**します (自動では消しません — 格納が「成功に見えて壊れていた」場合に鍵を失うため、削除の確定だけ人間が行います)。
+
+### 何が緑になれば成功か
+
+スクリプト自身が fail-closed で検証します (1 つでも落ちれば exit≠0 で「何が済んで何が済んでいないか」の台帳が出ます):
+
+- デプロイ `Succeeded` / 全資源に層タグ / 鍵が非エクスポート / 予算が実在して通知先あり (下の Verification 1・2・3・5 と同じ判定)
+- Key Vault にシークレット `github-app-mgmt-private-key` が入った (照合はタグの sha256 — 値は読み戻さない)
+- pem ↔ App ID の対応・インストール先・`administration=write` を GitHub API で実測
+- terraform plan の集計行が `Plan: N to import, 0 to add, 0 to change, 0 to destroy.`
+
+キットが**検証しないもの** (手動で確認):
+
+- [ ] 撤収ガードの 2 本 (下の Verification 4 — 対話するため手動のまま)
+- [ ] `--tf-apply` まで行った場合、以後の `terraform plan` も同じ import-only で回ること
+
+### 失敗時の巻き戻し
+
+| どこで失敗したか                | 巻き戻し                                                                                                                                                                                              |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Azure の apply                  | 下の Rollback 節 (個別リソース削除 / `recoverKeyVault`)。キットの再実行は冪等                                                                                                                         |
+| pem の格納 (誤った鍵を入れた等) | 正しい pem で再実行すると**新バージョン**として格納される (旧バージョンは Key Vault に残る)。**鍵そのものを失効させたいときは GitHub 側** — App settings の Private keys から該当鍵を Delete (即失効) |
+| App を作り直したい              | App settings から Delete GitHub App (インストールも消える)。新 App で 3 手をやり直し、pem は新バージョンとして格納される                                                                              |
+| terraform apply (import-only)   | GitHub の実設定は変更していないので巻き戻し対象なし。一時作業ディレクトリ (tfstate) を消すだけ (スクリプトが場所を表示)                                                                               |
+
 ## Prerequisites
 
 - **必要なロールは `keyVaultCryptoUserPrincipalIds` を指定するかで変わります。**
@@ -28,6 +72,7 @@
 
   権限を分けたい場合は、**空のまま適用して**あとから Crypto User を付ける運用にしてください (適用は Contributor、付与だけを User Access Administrator が行う)。`main-mgmt.parameters.json` の既定は空なので、通常はこちらになります。
 
+- **キット (bootstrap.sh) を使う場合はさらに**: **Key Vault Secrets Officer** (pem 格納は data-plane 権限で、Contributor / Owner の control-plane には含まれない — 無いと格納の手前で止まり、付与コマンドが表示される) / **Terraform 1.5+** / **GitHub リポジトリの admin** (App の作成・インストールは PO 本人にしかできない)。**キットは PO のローカルでだけ実行する** — pem (長期クレデンシャル) をサンドボックスに持ち込まない (ADR 0031)
 - `az` (Azure CLI) と Bicep CLI。サンドボックスからは device-code で入る → [`claude-web-azure-access.md`](claude-web-azure-access.md)
 - 宣言と値: [`cicd/iac/main-mgmt.bicep`](../../cicd/iac/main-mgmt.bicep) / [`cicd/iac/main-mgmt.parameters.json`](../../cicd/iac/main-mgmt.parameters.json)
 - **`enable*` の既定値を確認してから流す** — 既定で作るのは「まだどこにも無いもの」だけ。理由は [`cicd/iac/README.md`](../../cicd/iac/README.md#1-5-管理系レイヤrg-mgmt-mindbox--一度きり)
@@ -204,6 +249,7 @@ az rest --method get --url "https://management.azure.com/subscriptions/$(az acco
 ## Related
 
 - ADR: [0056 管理系 / アプリ系とバックアップによるデータ保護](../adr/0056-management-and-app-layers-with-backup-based-data-protection.md) (**層の定義の正典**。Accepted / 2026-08-15 PO 裁定) / [0046 環境は宣言から再構築できる](../adr/0046-environment-rebuildable-from-declaration.md) D6/D9 (D1 は 0056 が supersede 済み / 2026-08-15 発効) / [E2E artifact は既定で秘密 (2026-08-12 の裁定記録)](../adr/archive/operations/e2e-artifacts-are-secret-by-default.md) D5 (**ADR ではありません** — #385 で運用文書へ退避。鍵の運用手順の正典は [`e2e-trace-keys.md`](e2e-trace-keys.md)) / [0003 2 フェーズ Bicep](../adr/0003-two-phase-bicep.md)
-- 関連 Runbook: [`claude-web-azure-access.md`](claude-web-azure-access.md) / [`cosmos-persistence.md`](cosmos-persistence.md)
+- 関連 Runbook: [`claude-web-azure-access.md`](claude-web-azure-access.md) / [`cosmos-persistence.md`](cosmos-persistence.md) / [`github-terraform.md`](github-terraform.md) (キットが資格情報を用意する先の GitHub 設定 mgmt 層)
+- キット: [`cicd/scripts/mgmt-bootstrap/`](../../cicd/scripts/mgmt-bootstrap/README.md) ([#387](https://github.com/yomote/mind-inbox/issues/387) / [#390](https://github.com/yomote/mind-inbox/issues/390))
 - 宣言とパラメータの説明: [`cicd/iac/README.md`](../../cicd/iac/README.md#1-5-管理系レイヤrg-mgmt-mindbox--一度きり)
 - 撤収ガード: `cicd/scripts/env/` ([README](../../cicd/scripts/env/README.md))
