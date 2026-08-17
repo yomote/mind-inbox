@@ -40,7 +40,8 @@
 #   import-only apply (= 実設定の変更ゼロ) 以外では書き込まない。
 #
 # 使い方・前提・巻き戻しは docs/runbooks/mgmt-layer-apply.md と同ディレクトリの
-# README.md。テストは test_bootstrap.py (az / terraform / curl をスタブして全分岐)。
+# README.md。テストは test_bootstrap.py (az / terraform / curl をスタブして全分岐 +
+# check_permissions.py の判定を直接叩く単体)。
 #
 # ⚠️ `set -x` をこのファイルに足さないこと — トレースは変数展開 (installation
 #    token を含む) をそのまま stderr に吐く。テストが grep で禁止を固定している。
@@ -367,20 +368,11 @@ code="$(gh_api POST "/app/installations/$installation_id/access_tokens" "$WORKDI
 # token は変数と子プロセス環境にだけ置く。echo しない。
 installation_token="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$WORKDIR/resp.json")"
 # 6d. 権限集合を **完全一致**で検証する (余分・値ちがい・不足のすべてを見る)。
-#     応答は「余分|値ちがい|不足」の 3 欄を | 区切りで 1 行返す (空欄 = 問題なし)。
-perm_report="$(python3 - "$WORKDIR/resp.json" "${EXPECTED_PERMISSIONS[@]}" <<'PY'
-import json, sys
-
-path, pairs = sys.argv[1], sys.argv[2:]
-expected = dict(p.split("=", 1) for p in pairs)
-got = json.load(open(path)).get("permissions", {})
-extra = sorted(f"{k}={v}" for k, v in got.items() if k not in expected)
-wrong = sorted(f"{k}={v} (期待 {expected[k]})" for k, v in got.items()
-               if k in expected and v != expected[k])
-missing = sorted(f"{k}={expected[k]}" for k in expected if k not in got)
-print("|".join([",".join(extra), ",".join(wrong), ",".join(missing)]))
-PY
-)"
+#     判定そのものは check_permissions.py が持つ (シェルには埋めない —
+#     cicd/CLAUDE.md「判定ロジックをシェルや workflow の中に埋めない」)。
+#     戻りは「余分|値ちがい|不足」の 3 欄を | 区切りで 1 行 (空欄 = 問題なし)。
+perm_report="$(python3 "$SCRIPT_DIR/check_permissions.py" \
+  "$WORKDIR/resp.json" "${EXPECTED_PERMISSIONS[@]}")"
 rm -f "$WORKDIR/resp.json" # token を含む応答ファイルは用が済んだら消す
 # JWT ヘッダも以降使わない。作業ディレクトリに資格情報を残さない (sec P3-1)。
 rm -f "$WORKDIR/jwt.h"

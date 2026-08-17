@@ -2,10 +2,11 @@
 
 PO の手作業 30 分+ ([`docs/runbooks/mgmt-layer-apply.md`](../../../docs/runbooks/mgmt-layer-apply.md) + GitHub App 作成 + 資格情報の置き場作り) を約 10 分に圧縮する。Issue [#387](https://github.com/yomote/mind-inbox/issues/387) (apply 前提の裁定) / [#390](https://github.com/yomote/mind-inbox/issues/390) (plan 用トークンの置き場) の実装。**手順の正典は Runbook** ([`mgmt-layer-apply.md`](../../../docs/runbooks/mgmt-layer-apply.md)) で、ここはキットの仕様と根拠だけを書く。
 
-| ファイル                                 | 何                                                                                                                                                                                             |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`bootstrap.sh`](bootstrap.sh)           | pem パスと App ID を受け取り、Azure mgmt 層 apply → pem の Key Vault 格納 → terraform plan (import-only なら `--tf-apply` で apply) まで。信頼境界と「無いと何が静かに通るか」はスクリプト冒頭 |
-| [`test_bootstrap.py`](test_bootstrap.py) | az / terraform / curl をスタブして全分岐を実測。**pem 本文と installation token が出力・argv に現れないこと**を固定                                                                            |
+| ファイル                                       | 何                                                                                                                                                                                             |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`bootstrap.sh`](bootstrap.sh)                 | pem パスと App ID を受け取り、Azure mgmt 層 apply → pem の Key Vault 格納 → terraform plan (import-only なら `--tf-apply` で apply) まで。信頼境界と「無いと何が静かに通るか」はスクリプト冒頭 |
+| [`check_permissions.py`](check_permissions.py) | installation token の権限集合を想定と**完全一致**で照合する判定 (余分 / 値ちがい / 不足に分類)。**シェルに埋めない**ための純粋関数 ([`cicd/CLAUDE.md`](../../CLAUDE.md))。CLI としても叩ける   |
+| [`test_bootstrap.py`](test_bootstrap.py)       | az / terraform / curl をスタブして全分岐を実測 (**pem 本文と installation token が出力・argv に現れないこと**を固定) + `check_permissions.py` の判定を直接叩く単体                             |
 
 GitHub App の作成そのものはスクリプト化していない (下の「GitHub App を作る」が正典)。**bootstrap.sh は App の作成経路に依存せず**、pem ↔ App ID の対応・インストール先・`administration=write` を GitHub API で実測して誤設定を捕まえる。
 
@@ -34,7 +35,7 @@ GitHub App の作成そのものはスクリプト化していない (下の「G
 | Administration        | Read and write |
 | Metadata              | Read-only      |
 
-**写し間違いはここで捕まる** — [`bootstrap.sh`](bootstrap.sh) は installation token の権限集合をこの 2 つと**完全一致**で検証し、余分 (例: Contents を付けてしまった) / 値ちがい / 不足のいずれかがあれば**何が余分・不足かを名指しして Key Vault 格納の前に停止する**。手動フォームなので「2 つだけ」を機械が見る場所はここしかない (下限だけ見ると過剰権限 App の pem が格納されてしまう — [#498](https://github.com/yomote/mind-inbox/pull/498) Codex P2)。
+**写し間違いはここで捕まる** — [`bootstrap.sh`](bootstrap.sh) は installation token の権限集合をこの 2 つと**完全一致**で照合し ([`check_permissions.py`](check_permissions.py) が判定・シェルは結果を受け取るだけ)、余分 (例: Contents を付けてしまった) / 値ちがい / 不足のいずれかがあれば**何が余分・不足かを名指しして Key Vault 格納の前に停止する**。手動フォームなので「2 つだけ」を機械が見る場所はここしかない (下限だけ見ると過剰権限 App の pem が格納されてしまう — [#498](https://github.com/yomote/mind-inbox/pull/498) Codex P2)。
 
 ### 作った後にやること (この順で)
 

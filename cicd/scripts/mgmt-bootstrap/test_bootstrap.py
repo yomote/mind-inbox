@@ -17,16 +17,27 @@ bootstrap.sh の判断と、資格情報の取り回しだけ。
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
+from check_permissions import PermissionReport, compare_permissions
+
 KIT_DIR = Path(__file__).resolve().parent
 SCRIPT = KIT_DIR / "bootstrap.sh"
 README = KIT_DIR / "README.md"
+CHECK_PERMISSIONS = KIT_DIR / "check_permissions.py"
+
+# 想定する権限集合。**bootstrap.sh から読み込まずに直書きする** — シェル側を読んで
+# しまうと、シェルの EXPECTED_PERMISSIONS を書き換えたときに期待値も一緒に動いて
+# しまい、「想定が黙って広がった」を検出できなくなる。両者の一致は
+# test_単体_シェルの想定権限集合が単体テストの期待値と一致する が見る。
+EXPECTED = {"administration": "write", "metadata": "read"}
 
 # ---------------------------------------------------------------------------
 # スタブ — 呼び出しごとに argv と env を記録ディレクトリへ残す。
@@ -441,6 +452,106 @@ def test_単体_想定どおりの_2_権限なら_KV_格納まで到達する(ki
     assert r.returncode == 0, r.stderr
     assert "完全一致" in r.stdout, "権限集合を完全一致で検証した旨が出ていない"
     assert calls_matching(kit, "az", "keyvault", "secret", "set")
+
+
+# ---------------------------------------------------------------------------
+# 権限集合の照合そのもの — 判定を純粋関数として直接叩く (#498 Codex P2 3 回目)
+#
+# 上のスタブ経由テストは「シェルが判定を呼び、結果どおりに止まる / 進む」という
+# **配線**を見る。ここで見るのは**判定の中身**で、Azure も curl も openssl も要らない。
+#
+# 無いと何が静かに通るか:
+#   分類 (余分 / 値ちがい / 不足) を 1 種類でも見落とす変更が、スクリプト全体を
+#   スタブで流す経路でしか検出できなくなる。スタブは curl の応答パターンを足した
+#   ぶんしか分岐を持てないので、**用意し忘れた組み合わせ (値ちがいと不足の同時発生
+#   など) は誰も見ない**まま「下限チェックへの退行」に戻れてしまう。
+# ---------------------------------------------------------------------------
+
+def test_単体_余分な権限は余分として名指しされる():
+    got = {"administration": "write", "metadata": "read",
+           "contents": "read", "actions": "write"}
+    report = compare_permissions(EXPECTED, got)
+    assert not report.matches
+    assert report.extra == ("actions=write", "contents=read")
+    assert report.wrong == () and report.missing == ()
+
+
+def test_単体_レベルが違う権限は値ちがいとして名指しされる():
+    """`administration: read` は「余分」でも「不足」でもない。**別欄**にしないと
+    PO は権限を外そうとしてしまい、直し方を間違える。"""
+    report = compare_permissions(EXPECTED, {"administration": "read", "metadata": "read"})
+    assert not report.matches
+    assert report.wrong == ("administration=read (期待 write)",)
+    assert report.extra == () and report.missing == ()
+
+
+def test_単体_欠けている権限は不足として名指しされる():
+    report = compare_permissions(EXPECTED, {"administration": "write"})
+    assert not report.matches
+    assert report.missing == ("metadata=read",)
+    assert report.extra == () and report.wrong == ()
+
+
+def test_単体_想定と完全一致なら_3_欄すべてが空になる():
+    """対照実験。上の 3 本が「常に何か言う検査」になっていないことをここで固定する。
+    これが無いと、`extra = 全部` のような雑な実装でも 3 本とも緑になる。"""
+    report = compare_permissions(EXPECTED, dict(EXPECTED))
+    assert report.matches
+    assert report == PermissionReport(extra=(), wrong=(), missing=())
+    assert report.render() == "||", "一致時は 3 欄とも空 (シェルは空文字で分岐する)"
+
+
+def test_単体_余分と値ちがいと不足は同時に報告される():
+    """3 つが同時に起きる App でも、最初の 1 つで打ち切らずに全部出す
+    (打ち切ると PO は直して再実行するたびに 1 つずつしか進めない)。"""
+    report = compare_permissions(
+        EXPECTED, {"administration": "read", "contents": "write"}
+    )
+    assert report.extra == ("contents=write",)
+    assert report.wrong == ("administration=read (期待 write)",)
+    assert report.missing == ("metadata=read",)
+    # シェル (bootstrap.sh の ${perm_report%%|*} 系) が読む 1 行の書式そのもの
+    assert report.render() == "contents=write|administration=read (期待 write)|metadata=read"
+
+
+def test_単体_CLI_は不一致でも終了コード_0_で_3_欄を返す(tmp_path: Path):
+    """シェルは `set -euo pipefail` 下の `$(...)` で受ける。ここで非ゼロを返すと、
+    「何が余分か」を出す前に errexit で落ちて PO 向けの文面が消える。"""
+    resp = tmp_path / "resp.json"
+    resp.write_text(json.dumps(
+        {"token": "ghs_x", "permissions": {"administration": "write", "contents": "read"}}
+    ))
+    r = subprocess.run(
+        [sys.executable, str(CHECK_PERMISSIONS), str(resp),
+         "administration=write", "metadata=read"],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "contents=read||metadata=read"
+
+
+def test_単体_シェルの想定権限集合が単体テストの期待値と一致する():
+    """`EXPECTED_PERMISSIONS` を根拠なく広げる変更をここで止める。
+
+    無いと何が静かに通るか: 判定関数の単体テストは EXPECTED を直書きしているので、
+    シェル側に `contents=read` を足しても単体は全部緑のまま通る。"""
+    m = re.search(r"^EXPECTED_PERMISSIONS=\(([^)]*)\)", SCRIPT.read_text(), re.M)
+    assert m, "bootstrap.sh に EXPECTED_PERMISSIONS の宣言が無い (表記が変わった?)"
+    pairs = dict(tok.strip('"').split("=", 1) for tok in m.group(1).split())
+    assert pairs == EXPECTED, \
+        f"bootstrap.sh の想定権限 {pairs} が単体テストの期待値 {EXPECTED} とずれている"
+
+
+def test_単体_判定は_bootstrap_sh_の中に埋め戻されていない():
+    """判定を heredoc で書き戻す退行を静的に止める (cicd/CLAUDE.md)。
+
+    無いと何が静かに通るか: check_permissions.py を残したまま、シェル側に
+    `python3 - <<PY` で判定を書き戻しても、振る舞いテストは全部緑のまま通る
+    (= 純粋関数のテストが実際には何も守っていない状態に戻る)。"""
+    text = SCRIPT.read_text()
+    assert "check_permissions.py" in text, "bootstrap.sh が判定モジュールを呼んでいない"
+    assert "<<'PY'" not in text and "<<PY" not in text, \
+        "bootstrap.sh に Python の heredoc を戻さない (判定は check_permissions.py へ)"
 
 
 # ---------------------------------------------------------------------------
