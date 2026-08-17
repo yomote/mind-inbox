@@ -17,6 +17,11 @@
 # 4. **GitHub 設定への意図しない適用** — terraform plan に差分 (add/change/destroy)
 #    がある状態での apply は、#387 (enforce_admins の裁定待ち) を黙って踏み抜く。
 #    ここでは import-only の plan しか apply させない。
+# 5. **過剰権限の App が「動くので」そのまま定着する** — App は手動フォームで作る
+#    (#497) ので、権限を 2 つに絞れているかを機械が見る場所はここしかない。
+#    「administration が write か」だけの下限チェックだと、Contents や Actions を
+#    余分に付けた App でも通ってしまい、その pem が Key Vault に入って以後の
+#    plan/apply が過剰権限で回り続ける。ここでは**完全一致**で検証する。
 #
 # ============================================================================
 # 信頼境界 (誰が・どの資格情報で・どこまでやるか)
@@ -57,6 +62,13 @@ BUDGET_NAME="budget-mgmt-mindbox"
 # 定数。上書きノブにしない — 環境変数で API 先を差し替えられると、資格情報 (JWT /
 # installation token) を別ホストへ送らせる足場になる (sec info)。
 GITHUB_API="https://api.github.com"
+
+# App に許す権限の**完全集合**。正典は README.md の「Repository permissions」の表で、
+# ここはその機械側の写し (増やすときは README の 2 表と同じ PR で)。
+# ⚠️ 「administration が write か」だけを見る**下限**チェックにしないこと — App は
+#    手動フォームで作るので、Contents や Actions を余分に付けた App でも下限は満たす。
+#    素通りさせると、過剰権限 App の pem をそのまま Key Vault に格納してしまう。
+EXPECTED_PERMISSIONS=("administration=write" "metadata=read")
 
 # ---------------------------------------------------------------------------
 # 進捗の台帳 — 途中で落ちたとき「何が済んで何が済んでいないか」を必ず出す。
@@ -354,13 +366,47 @@ code="$(gh_api POST "/app/installations/$installation_id/access_tokens" "$WORKDI
 [ "$code" = "201" ] || abort "installation token の発行が $code でした"
 # token は変数と子プロセス環境にだけ置く。echo しない。
 installation_token="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$WORKDIR/resp.json")"
-admin_perm="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("permissions",{}).get("administration",""))' "$WORKDIR/resp.json")"
+# 6d. 権限集合を **完全一致**で検証する (余分・値ちがい・不足のすべてを見る)。
+#     応答は「余分|値ちがい|不足」の 3 欄を | 区切りで 1 行返す (空欄 = 問題なし)。
+perm_report="$(python3 - "$WORKDIR/resp.json" "${EXPECTED_PERMISSIONS[@]}" <<'PY'
+import json, sys
+
+path, pairs = sys.argv[1], sys.argv[2:]
+expected = dict(p.split("=", 1) for p in pairs)
+got = json.load(open(path)).get("permissions", {})
+extra = sorted(f"{k}={v}" for k, v in got.items() if k not in expected)
+wrong = sorted(f"{k}={v} (期待 {expected[k]})" for k, v in got.items()
+               if k in expected and v != expected[k])
+missing = sorted(f"{k}={expected[k]}" for k in expected if k not in got)
+print("|".join([",".join(extra), ",".join(wrong), ",".join(missing)]))
+PY
+)"
 rm -f "$WORKDIR/resp.json" # token を含む応答ファイルは用が済んだら消す
 # JWT ヘッダも以降使わない。作業ディレクトリに資格情報を残さない (sec P3-1)。
 rm -f "$WORKDIR/jwt.h"
-[ "$admin_perm" = "write" ] \
-  || abort "installation token の administration 権限が '$admin_perm' です (write が必要。App の権限設定と再インストール承認を確認)"
-echo "installation token 発行 OK (administration=write / 対象: $GH_REPO / 有効 1 時間)"
+
+perm_extra="${perm_report%%|*}"
+perm_rest="${perm_report#*|}"
+perm_wrong="${perm_rest%%|*}"
+perm_missing="${perm_rest##*|}"
+if [ -n "$perm_extra$perm_wrong$perm_missing" ]; then
+  # ⚠️ `[ ... ] && msg=...` で組み立ててはいけない — 偽のとき && が非ゼロを返し、
+  #    errexit がここで台帳を出さずに落ちる (fail-closed の出力が崩れる)。
+  msg="installation token の権限集合が想定と一致しません。"
+  if [ -n "$perm_extra" ]; then
+    msg="$msg"$'\n'"  余分:     $perm_extra"
+  fi
+  if [ -n "$perm_wrong" ]; then
+    msg="$msg"$'\n'"  値ちがい: $perm_wrong"
+  fi
+  if [ -n "$perm_missing" ]; then
+    msg="$msg"$'\n'"  不足:     $perm_missing"
+  fi
+  msg="$msg"$'\n'"  想定:     ${EXPECTED_PERMISSIONS[*]}"
+  msg="$msg"$'\n'"App settings の Permissions & events を直し、Install App 側で更新後の権限を承認してから再実行してください (根拠は $SCRIPT_DIR/README.md の「App 権限の最小化と根拠」)。"
+  abort "$msg"
+fi
+echo "installation token 発行 OK (権限 ${EXPECTED_PERMISSIONS[*]} と完全一致 / 対象: $GH_REPO / 有効 1 時間)"
 step_done 6
 
 # ===========================================================================

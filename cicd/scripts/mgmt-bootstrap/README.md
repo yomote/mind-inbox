@@ -34,6 +34,8 @@ GitHub App の作成そのものはスクリプト化していない (下の「G
 | Administration        | Read and write |
 | Metadata              | Read-only      |
 
+**写し間違いはここで捕まる** — [`bootstrap.sh`](bootstrap.sh) は installation token の権限集合をこの 2 つと**完全一致**で検証し、余分 (例: Contents を付けてしまった) / 値ちがい / 不足のいずれかがあれば**何が余分・不足かを名指しして Key Vault 格納の前に停止する**。手動フォームなので「2 つだけ」を機械が見る場所はここしかない (下限だけ見ると過剰権限 App の pem が格納されてしまう — [#498](https://github.com/yomote/mind-inbox/pull/498) Codex P2)。
+
 ### 作った後にやること (この順で)
 
 1. App の settings ページで **App ID** を控える

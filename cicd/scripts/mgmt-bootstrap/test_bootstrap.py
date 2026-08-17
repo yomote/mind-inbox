@@ -123,11 +123,16 @@ case "$url" in
     fi ;;
   */app/installations/42/access_tokens)
     code=201
-    if [ "${STUB_GH_TOKEN:-ok}" = "noadmin" ]; then
-      echo '{"token": "ghs_STUBTOKEN_SECRET", "permissions": {"administration": "read", "metadata": "read"}}' > "$out"
-    else
-      echo '{"token": "ghs_STUBTOKEN_SECRET", "permissions": {"administration": "write", "metadata": "read"}}' > "$out"
-    fi ;;
+    # permissions は App の実権限がそのまま返る欄。手動フォーム作成 (#497) では
+    # ここが「2 つに絞れているか」を機械が見られる唯一の場所なので、下限割れ
+    # (noadmin) だけでなく余分 (extra) / 不足 (nometa) も再現する。
+    case "${STUB_GH_TOKEN:-ok}" in
+      noadmin) perms='{"administration": "read", "metadata": "read"}' ;;
+      extra)   perms='{"administration": "write", "metadata": "read", "contents": "read", "actions": "write"}' ;;
+      nometa)  perms='{"administration": "write"}' ;;
+      *)       perms='{"administration": "write", "metadata": "read"}' ;;
+    esac
+    echo "{\"token\": \"ghs_STUBTOKEN_SECRET\", \"permissions\": $perms}" > "$out" ;;
   *) echo "curl stub: 未対応 URL: $url" >&2; exit 9 ;;
 esac
 printf '%s' "$code"
@@ -398,6 +403,44 @@ def test_token_without_admin_write_is_rejected(kit):
     assert not calls_matching(kit, "az", "keyvault", "secret", "set"), \
         "App 検証前に格納してはいけない (Codex P1)"
     assert not calls_matching(kit, "terraform")
+
+
+def test_token_with_extra_permission_is_rejected(kit):
+    """余分な権限を持つ App は **KV 格納より前に**止まる (#498 Codex P2)。
+
+    無いと何が静かに通るか:
+        **過剰権限の App が「動くので」そのまま定着する。** App は手動フォームで
+        作る (#497) ため、権限が 2 つに絞れているかを機械が見る場所はこの
+        installation token 応答しかない。「administration が write か」だけの
+        下限チェックだと Contents / Actions を余分に付けた App でも満たすので、
+        その pem が Key Vault に入り、以後の plan/apply が過剰権限で回り続ける。
+    """
+    r = run_kit(kit, modes={"STUB_GH_TOKEN": "extra"})
+    assert r.returncode != 0
+    assert "余分" in r.stderr, "何が余分なのかを言わずに止まっている"
+    # 何が余分かが名指しで出る (「権限が違います」だけでは PO が直せない)
+    assert "contents=read" in r.stderr and "actions=write" in r.stderr
+    assert not calls_matching(kit, "az", "keyvault", "secret", "set"), \
+        "過剰権限 App の pem を Key Vault へ入れてはいけない"
+    assert not calls_matching(kit, "terraform")
+
+
+def test_token_missing_metadata_is_rejected(kit):
+    """不足側も落とす (完全一致であって「余分が無ければ OK」ではない)。"""
+    r = run_kit(kit, modes={"STUB_GH_TOKEN": "nometa"})
+    assert r.returncode != 0
+    assert "不足" in r.stderr and "metadata=read" in r.stderr
+    assert not calls_matching(kit, "az", "keyvault", "secret", "set")
+    assert not calls_matching(kit, "terraform")
+
+
+def test_exact_expected_permissions_pass_through(kit):
+    """対照実験: 想定どおりの 2 権限ちょうどなら通り、KV 格納まで到達する。
+    上の 3 つが「常に落ちるだけの検査」になっていないことをここで固定する。"""
+    r = run_kit(kit)
+    assert r.returncode == 0, r.stderr
+    assert "完全一致" in r.stdout, "権限集合を完全一致で検証した旨が出ていない"
+    assert calls_matching(kit, "az", "keyvault", "secret", "set")
 
 
 # ---------------------------------------------------------------------------
