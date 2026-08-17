@@ -362,7 +362,7 @@ class TestPlan:
         assert res.status_code == 200
         assert res.json() == {"title": "プラン", "steps": ["step1", "step2"]}
 
-    async def test_l2_plan_returns_502_when_llm_response_is_not_json(
+    async def test_単体_plan_returns_502_when_llm_response_is_not_json(
         self, client, monkeypatch, make_client
     ):
         # 無いと: PlanParseError → HTTPException(502) マッピング (#485) が切れて
