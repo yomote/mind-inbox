@@ -427,7 +427,9 @@ def main(argv):
     with roles_md_path.open("w", encoding="utf-8") as f:
         f.write("# Resource Roles\n\n")
         f.write("| Name | Type | RG | Role | Note |\n")
-        f.write("|---|---|---|---|---|\n")
+        # markdownlint MD060 (table-column-style: compact) はパイプの左右にスペースを要求する。
+        # `|---|` 形式に戻すと毎週の自動 PR (refresh-infra-diagram) が lint で赤になる (#483)
+        f.write("| --- | --- | --- | --- | --- |\n")
         for r in rows:
             f.write(
                 f"| {r['name']} | {r['type']} | {r['resourceGroup']} | {r['role']} | {r['note']} |\n"
