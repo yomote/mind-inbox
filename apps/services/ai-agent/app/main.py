@@ -25,7 +25,7 @@ from .observability import (
     exception_kind,
     new_ref,
 )
-from .planner import generate_plan
+from .planner import PlanParseError, generate_plan
 from .repositories import (
     ApprovalRepository,
     SessionRepository,
@@ -222,6 +222,12 @@ async def extract_endpoint(
 async def plan_endpoint(req: PlanRequest) -> PlanResponse:
     try:
         return await generate_plan(req, get_chat_client())
+    except PlanParseError as exc:
+        # 固定文言の偽プラン (200) と区別できるようにする。502 = 上流 (LLM) の応答が
+        # 壊れている (#485 / /extract の ExtractionParseError と同じ写し方)。
+        # 例外文は planner が作った一般化済みの文言 + ref (壊れた応答本文は含まない)。
+        logger.error("POST /plan parse error: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
         raise _fail("POST /plan", exc) from exc
 

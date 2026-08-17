@@ -12,10 +12,21 @@ import logging
 from agent_framework import BaseChatClient
 
 from .agents import complete
-from .observability import fingerprint
+from .observability import client_detail, fingerprint, new_ref
 from .schemas import PlanRequest, PlanResponse
 
 logger = logging.getLogger(__name__)
+
+
+class PlanParseError(Exception):
+    """LLM の応答を JSON として解釈できなかった (#485)。
+
+    **「正常にプランが作れた」と混同しないための独立した失敗**。以前はここで warning を
+    出して固定文言の PlanResponse (「具体的なステップを考えてみましょう」) を返しており、
+    ユーザーには正常なプランに見えていた — 壊れているのに正常終了に見える、#183 で
+    /extract に対して塞いだのと同種の穴。呼び出し側 (main.py) は 502 で返す。
+    """
+
 
 _PLAN_PROMPT = """\
 以下の状況分析をもとに、具体的な行動プランを JSON 形式のみで作成してください。
@@ -56,10 +67,19 @@ async def generate_plan(
             title=data.get("title", "アクションプラン"),
             steps=data.get("steps", []),
         )
-    except json.JSONDecodeError:
-        # raw は Problem の要約から生成された行動プラン = 機微。指紋だけ残す (Issue #313)
-        logger.warning("Plan JSON parse failed: %s", fingerprint(raw))
-        return PlanResponse(
-            title="アクションプラン",
-            steps=["具体的なステップを考えてみましょう"],
+    except json.JSONDecodeError as exc:
+        # 固定文言のプランを返すと、ユーザーには正常応答に見えて壊れたことが伝わらない
+        # (#485)。/extract と同じく失敗として上げ、main.py が 502 に写す。
+        #
+        # ただし `raw` は Problem の要約から生成された行動プラン = 機微。ログに出すのは
+        # 指紋 (長さ + ハッシュ先頭) までに留め、ref でクライアント側のエラーと
+        # 突き合わせられるようにする (Issue #313)。
+        ref = new_ref()
+        logger.error(
+            "Plan JSON parse failed ref=%s response=%s",
+            ref,
+            fingerprint(raw),
         )
+        raise PlanParseError(
+            client_detail(ref, "LLM の応答を解釈できませんでした")
+        ) from exc
