@@ -1,8 +1,8 @@
 """[L1] InMemory repository の "状態を跨いだ" 不変条件を pin する。
 
-InMemory* は dev/test stub であり、本番は SQL/Cosmos に置き換わる予定 (#7)。
-本番 repository が実装された時点でこの test 群は **意味を失う** ので、
-本番 repository test の追加と同時に削除する想定。
+InMemory* は **ローカル / テストの恒久的な既定実装** (ADR 0030 D7 / #188)。
+`COSMOS_ENDPOINT` 未設定なら in-memory で動き、設定時のみ Cosmos 実装
+(tests/test_cosmos_repositories.py が担当) に切り替わる。削除予定ではない。
 
 ここで test しないこと:
 - 単発の get/save (= dict 操作の wrapper) — 本番 repository 実装時の対象
