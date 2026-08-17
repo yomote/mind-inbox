@@ -27,7 +27,7 @@ GitHub App の作成そのものはスクリプト化していない (下の「G
 ### Repository permissions (この 2 つだけ / 他は No access のまま)
 
 <!-- この表が App の権限集合の正典。次節「入れた権限」の根拠表と 1 対 1 で対応させる。
-     両表のズレは test_bootstrap.py::test_readme_permission_tables_agree が落とす。 -->
+     両表のズレは test_bootstrap.py::test_単体_README_の権限表_2_つが同じ権限集合を指す が落とす。 -->
 
 | Repository permission | 設定値         |
 | --------------------- | -------------- |
@@ -47,7 +47,7 @@ GitHub App の作成そのものはスクリプト化していない (下の「G
 
 ## App 権限の最小化と根拠
 
-mgmt 層の Terraform ([`cicd/github/terraform/`](../../../cicd/github/terraform/)) が**実際に叩く API** から導出した。**根拠を書けない権限は入れない** — 足すときは対応する resource / API を 1 行で書き、**上の「Repository permissions」の表と同じ PR で**更新する (片方だけ直すと `test_bootstrap.py::test_readme_permission_tables_agree` が落ちる)。
+mgmt 層の Terraform ([`cicd/github/terraform/`](../../../cicd/github/terraform/)) が**実際に叩く API** から導出した。**根拠を書けない権限は入れない** — 足すときは対応する resource / API を 1 行で書き、**上の「Repository permissions」の表と同じ PR で**更新する (片方だけ直すと `test_bootstrap.py::test_単体_README_の権限表_2_つが同じ権限集合を指す` が落ちる)。
 
 ### 入れた権限 (2 つだけ)
 

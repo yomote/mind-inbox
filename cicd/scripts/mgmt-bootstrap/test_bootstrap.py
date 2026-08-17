@@ -1,4 +1,4 @@
-"""bootstrap.sh の分岐を、az / terraform / curl をスタブして振る舞いで固定する。
+"""[単体] bootstrap.sh の分岐を、az / terraform / curl をスタブして振る舞いで固定する。
 
 無いと何が静かに通るか:
     1. **pem の漏えい** — `az keyvault secret set` は既定でシークレット値を含む JSON を
@@ -405,7 +405,7 @@ def test_token_without_admin_write_is_rejected(kit):
     assert not calls_matching(kit, "terraform")
 
 
-def test_token_with_extra_permission_is_rejected(kit):
+def test_単体_余分な権限を持つ_App_は_KV_格納の前に止まる(kit):
     """余分な権限を持つ App は **KV 格納より前に**止まる (#498 Codex P2)。
 
     無いと何が静かに通るか:
@@ -425,7 +425,7 @@ def test_token_with_extra_permission_is_rejected(kit):
     assert not calls_matching(kit, "terraform")
 
 
-def test_token_missing_metadata_is_rejected(kit):
+def test_単体_権限が不足している_App_も止まる(kit):
     """不足側も落とす (完全一致であって「余分が無ければ OK」ではない)。"""
     r = run_kit(kit, modes={"STUB_GH_TOKEN": "nometa"})
     assert r.returncode != 0
@@ -434,7 +434,7 @@ def test_token_missing_metadata_is_rejected(kit):
     assert not calls_matching(kit, "terraform")
 
 
-def test_exact_expected_permissions_pass_through(kit):
+def test_単体_想定どおりの_2_権限なら_KV_格納まで到達する(kit):
     """対照実験: 想定どおりの 2 権限ちょうどなら通り、KV 格納まで到達する。
     上の 3 つが「常に落ちるだけの検査」になっていないことをここで固定する。"""
     r = run_kit(kit)
@@ -516,7 +516,7 @@ def _table_rows_after_heading(md: str, heading_needle: str) -> list[list[str]]:
 FORM_LEVEL_TO_API = {"Read and write": "write", "Read-only": "read"}
 
 
-def test_readme_permission_tables_agree():
+def test_単体_README_の権限表_2_つが同じ権限集合を指す():
     """README の 2 つの表 —「フォームに入れる値」(PO が画面に写す正典) と
     「入れた権限」(1 行ずつの根拠) — が同じ権限集合を指していること。
 
@@ -551,7 +551,7 @@ def test_readme_permission_tables_agree():
         f"根拠表 {granted} とフォームの表 {set(form.items())} がずれている (足すなら両方同じ PR で)"
 
 
-def test_readme_rejected_permissions_are_not_granted():
+def test_単体_却下した権限がフォームの表に入っていない():
     """「入れなかった権限」に挙げた権限が、フォームの表に入り込んでいないこと
     (= 却下の記録を残したまま黙って付与する、を落とす)。"""
     md = README.read_text()
