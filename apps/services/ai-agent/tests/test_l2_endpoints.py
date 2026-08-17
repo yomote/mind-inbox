@@ -362,6 +362,29 @@ class TestPlan:
         assert res.status_code == 200
         assert res.json() == {"title": "プラン", "steps": ["step1", "step2"]}
 
+    async def test_単体_plan_returns_502_when_llm_response_is_not_json(
+        self, client, monkeypatch, make_client
+    ):
+        # 無いと: PlanParseError → HTTPException(502) マッピング (#485) が切れて
+        #         _fail の 500 に落ちても緑のまま通り、BFF が「上流 (LLM) の応答が
+        #         壊れている」と「ai-agent 自身の障害」を切り分けられなくなる
+        client_mock = make_client("not valid json at all")
+        monkeypatch.setattr(app_main, "get_chat_client", lambda: client_mock)
+
+        res = await client.post(
+            "/plan",
+            json={
+                "summary": "仕事のストレス",
+                "emotions": ["疲労"],
+                "priorities": ["休息"],
+            },
+        )
+        assert res.status_code == 502
+        # 偽の成功プラン (固定文言) がユーザーに届く経路が閉じていることも pin する
+        assert "具体的なステップを考えてみましょう" not in res.text
+        # 追える形は残っている (ref でサーバのログ行に辿り着ける)
+        assert "ref:" in res.json()["detail"]
+
     async def test_l2_plan_returns_422_on_missing_required_field(self, client):
         # 無いと: PlanRequest pydantic validation が外れて malformed input が pipeline を流れる退行が静かに通る
         res = await client.post("/plan", json={})
