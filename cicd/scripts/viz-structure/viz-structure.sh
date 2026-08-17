@@ -387,7 +387,30 @@ if [[ -n "$ICONS_DIR" ]]; then
   AVAILABLE_ICONS_JSON="$(find "$ICONS_DIR" -maxdepth 1 -type f -name '*.png' -printf '%f\n' | jq -R -s -c 'split("\n") | map(select(length > 0))')"
 fi
 
-jq -r --arg iconsDir "$ICONS_DIR" --arg generatedAt "$GENERATED_AT_UTC" --arg subs "$SUBS" --arg rgs "$RGS" --argjson availableIcons "$AVAILABLE_ICONS_JSON" '
+# タイプ → アイコンの唯一の真実は enrich.py の ICON_MAP (判定を jq に埋めない —
+# cicd/CLAUDE.md)。jq には --argjson で渡す
+ICON_MAP_JSON="$(python3 -c 'import json, sys; sys.path.insert(0, sys.argv[1]); import enrich; print(json.dumps(enrich.ICON_MAP))' "$HERE_DIR")"
+
+# アイコンを出せないノードを無言で素の箱にしない (#478)。判定は enrich.icon_warnings
+# (純粋関数 / pytest 対象) に置き、ここは呼んで stderr に流すだけ
+if [[ -n "$ICONS_DIR" ]]; then
+  python3 - "$HERE_DIR" "$OUT/graph.json" "$ICONS_DIR" >&2 <<'PY'
+import json
+import pathlib
+import sys
+
+here_dir, graph_path, icons_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.path.insert(0, here_dir)
+import enrich
+
+graph = json.loads(pathlib.Path(graph_path).read_text(encoding="utf-8"))
+available = [p.name for p in pathlib.Path(icons_dir).glob("*.png")]
+for warning in enrich.icon_warnings(graph.get("nodes", []), available):
+    print("WARN: " + warning)
+PY
+fi
+
+jq -r --arg iconsDir "$ICONS_DIR" --arg generatedAt "$GENERATED_AT_UTC" --arg subs "$SUBS" --arg rgs "$RGS" --argjson availableIcons "$AVAILABLE_ICONS_JSON" --argjson iconMap "$ICON_MAP_JSON" '
   def esc: gsub("\\\\";"\\\\\\\\") | gsub("\"";"\\\\\"");
   def htmlesc:
     gsub("&";"&amp;")
@@ -399,43 +422,11 @@ jq -r --arg iconsDir "$ICONS_DIR" --arg generatedAt "$GENERATED_AT_UTC" --arg su
     ($t | split("/") as $p
      | if ($p|length) >= 2 then ($p[-2] + "/" + $p[-1]) else $t end);
 
-  # Minimal mapping. Provide your own icons in --icons dir with these filenames.
-  def iconMap: {
-    "microsoft.app/containerapps": "container-apps.png",
-    "microsoft.app/managedenvironments": "container-apps-environment.png",
-    "microsoft.keyvault/vaults": "keyvault.png",
-    "microsoft.network/privateendpoints": "private-endpoint.png",
-    "microsoft.network/virtualnetworks": "vnet.png",
-    "microsoft.network/privatednszones": "private-dns.png",
-    "microsoft.network/privatednszones/virtualnetworklinks": "vnet-link.png",
-    "microsoft.operationalinsights/workspaces": "log-analytics.png",
-    "microsoft.sql/servers": "sql-server.png",
-    "microsoft.sql/servers/databases": "sql-db.png",
-    "microsoft.storage/storageaccounts": "storage-account.png",
-    "microsoft.web/serverfarms": "app-service-plan.png",
-    "microsoft.web/sites": "function-app.png",
-    "microsoft.web/staticsites": "static-web-app.png",
-    "microsoft.documentdb/databaseaccounts": "cosmos-db.png",
-    "microsoft.cognitiveservices/accounts": "cognitive-services.png",
-    "microsoft.insights/components": "app-insights.png",
-    "microsoft.insights/actiongroups": "action-group.png"
-  };
-
+  # タイプ → アイコンの対応表は enrich.py の ICON_MAP が正 ($iconMap で受け取る)。
+  # 「出せないアイコン」の警告も enrich.icon_warnings (pytest 対象) が担う
   def icon_for($t):
-    (iconMap[($t|ascii_downcase)] // null) as $icon
+    ($iconMap[($t|ascii_downcase)] // null) as $icon
     | if ($icon != null and (($availableIcons | index($icon)) != null)) then $icon else null end;
-
-  # アイコンが無いノードを無言で素の箱にしない (#478): 種別が iconMap に無い /
-  # PNG 実体が icons/ に無いときに stderr へ 1 行出す。出さないと、劣化した図が
-  # 公開 docs に載っても生成ログから気づけない。
-  def warn_missing_icon($t):
-    (iconMap[($t|ascii_downcase)] // null) as $mapped
-    | if ($mapped == null)
-      then (("WARN: アイコン未登録: " + $t + " (素の箱で描画)\n") | stderr | empty)
-      elif (($availableIcons | index($mapped)) == null)
-      then (("WARN: アイコン PNG 未配置: " + $mapped + " (" + $t + " は素の箱で描画)\n") | stderr | empty)
-      else empty
-      end;
 
   def edgeStyle: {
     "privatelink": { color: "#0078D4", style: "solid", label: "Private Link" },
@@ -471,13 +462,7 @@ jq -r --arg iconsDir "$ICONS_DIR" --arg generatedAt "$GENERATED_AT_UTC" --arg su
 
   def node_stmt($n):
     (icon_for($n.type)) as $icon
-    # 警告はアイコン描画が有効なとき ($iconsDir あり) の Azure リソースだけ。
-    # external 擬似ノード (ブラウザ) はアイコン対象外なので黙って箱でよい
-    | (if ($iconsDir != "" and (($n.external // false) | not))
-       then warn_missing_icon($n.type)
-       else empty
-       end),
-      if ($iconsDir != "" and ($icon|type) == "string" and ($icon|length) > 0) then
+    | if ($iconsDir != "" and ($icon|type) == "string" and ($icon|length) > 0) then
         "    \"" + ($n.id|esc) + "\" [shape=plain, label=<" +
           "<TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLPADDING=\"3\" COLOR=\"#D0E6F9\" BGCOLOR=\"#F7FBFF\">" +
             "<TR><TD><IMG SRC=\"" + ($iconsDir|htmlesc) + "/" + ($icon|htmlesc) + "\" SCALE=\"TRUE\"/></TD></TR>" +
