@@ -1,5 +1,5 @@
 import uuid
-from typing import Literal, Optional
+from typing import Literal, Optional, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -109,6 +109,16 @@ class Plan(BaseModel):
     is_side_effecting: bool = False
 
 
+# 承認レコードを `pending` から動かせる先。**決着済みの 2 つだけ** で、
+# `ApprovalRepository.claim` の引数型がこれ (#488)。文字列で受けていた頃は
+# `claim(id, "approve", ...)` のような綴り違いがそのまま Cosmos に書かれ、
+# 以後その承認は「pending でも approved でもない」レコードとして残った
+# (`/approve` の 409 応答も UI の文言も、この status をそのまま運ぶ)。
+# `ApprovalRecord.status` はこれに `pending` を足したものだが、そちらは
+# 生成される OpenAPI (docs/api/ai-agent.yaml) の enum をずらさないために直書きのまま。
+ApprovalDecision = Literal["approved", "rejected"]
+
+
 class ApprovalRecord(BaseModel):
     """承認レコード (Cosmos の永続モデル / `CosmosApprovalRepository`)。
 
@@ -158,17 +168,6 @@ class PlanResponse(BaseModel):
 # 既定で by_alias=True 直列化するため、/extract の出力は domain.ts の型と一致する。
 
 # domain.ts THEMES と同一 (固定7分類 + 未分類)
-THEMES = (
-    "仕事・キャリア",
-    "お金",
-    "心と体",
-    "家族・パートナー",
-    "人間関係",
-    "自己理解・生き方",
-    "日常・生活",
-    "未分類",
-)
-
 Theme = Literal[
     "仕事・キャリア",
     "お金",
@@ -179,6 +178,12 @@ Theme = Literal[
     "日常・生活",
     "未分類",
 ]
+
+# **Theme から導出する** (#488)。以前は同じ 8 個を tuple でも直書きしており、
+# 片方だけ足す/直すと `_coerce_theme` が「知っているテーマ」として通した値を
+# pydantic (Theme) が弾き、/extract が実行時 500 になる — 型では止まらなかった。
+# get_args にしておけば Literal が唯一の宣言になり、ずらしようがない。
+THEMES: tuple[Theme, ...] = get_args(Theme)
 
 AffectValence = Literal["negative", "neutral", "positive"]
 ProblemStatus = Literal["open", "resolved", "shelved"]

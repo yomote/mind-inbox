@@ -35,7 +35,47 @@ dev-dependencies = [
     # 依存の依存として入ってはいるが、それに乗ると上流が外した瞬間に
     # 「CI の OpenAPI 再生成だけが落ちる」ので明示する。
     "pyyaml>=6.0",
+    # 型検査 (#488)。`npm run lint:py` が ruff の次に呼ぶ。
+    # pyright ではなく mypy を選んだ理由: この venv (uv) にそのまま入る Python 実装で、
+    # ローカルと CI で追加のランタイム (Node) を引かない。pydantic のプラグインが
+    # あり、alias (populate_by_name) を使う schemas.py で偽陽性が出ない
+    # (プラグイン無しだと `Unexpected keyword argument "session_id"` が 21 本出る)。
+    "mypy>=1.11",
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+# ── 型検査 (#488) ─────────────────────────────────────────────────────────────
+#
+# `uv run --directory apps/services/ai-agent mypy` = ローカルも CI も同じ 1 コマンド
+# (`npm run lint:py` 経由)。files をここに書いてあるので引数は要らない。
+#
+# **strict は入れていない**。目的は「Literal / Protocol で書いた不変条件が、
+# 直書きの文字列や二重宣言で静かに外れるのを止める」ことに絞る (#488 の finding D)。
+# 未注釈の関数を赤くする層はここには無い = 型注釈が無い箇所は今も無検査。
+[tool.mypy]
+python_version = "3.11"
+files = ["app"]
+plugins = ["pydantic.mypy"]
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+# MAF (agent-framework) 由来の型を Any として扱う。
+# 見えなくなるもの: MAF の API 誤用 (WorkflowContext の型引数・get_response の
+# オーバーロード・CheckpointStorage の Optional) は型では止まらない。これらは
+# app/ を 1 行も触らなくても 15 本のエラーを出しており、載せると赤が常態化して
+# 誰も読まなくなる (= 型検査を入れた意味が消える)。MAF 側の誤用は
+# tests/test_workflow_*.py が実際に workflow を回して見ている層に残す。
+module = ["agent_framework", "agent_framework.*", "agent_framework_azure_cosmos"]
+follow_imports = "skip"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# workflow.py だけ「注釈の無い変数の再代入」を許す。
+# 見えなくなるもの: 同じ関数の中で 1 つの変数を別の型で使い回す書き方
+# (`_record_tool_outcomes` の `ref` が str と str|None を兼ねている 1 箇所)。
+# ここは #486 (履歴まわり) が並行で触る予定なので、型検査の導入 PR では
+# コードに手を入れない。**#486 のマージ後にこの override を消して直す** (#488)。
+module = ["app.workflow"]
+allow_redefinition = true
