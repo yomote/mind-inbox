@@ -50,6 +50,8 @@ def dev_env_nodes():
         _node("id-vnet", "vnet-dev-mindbox", "microsoft.network/virtualnetworks"),
         _node("id-law", "law-dev-mindbox-ops", "microsoft.operationalinsights/workspaces"),
         _node("id-st", "stdevmindboxfunc", "microsoft.storage/storageaccounts"),
+        _node("id-appi", "appi-dev-mindbox", "microsoft.insights/components"),
+        _node("id-ag-smart", "Application Insights Smart Detection", "microsoft.insights/actiongroups"),
     ]
 
 
@@ -100,6 +102,54 @@ def test_role_notes_match_current_adrs():
     spch_role, spch_note = enrich.role_for(nodes["id-spch"])
     assert "LLM" not in spch_role and "LLM" not in spch_note
     assert "STT" in spch_role or "speech-to-text" in spch_note
+
+
+def test_app_insights_and_smart_detection_are_classified():
+    """[単体] appi (App Insights) と Smart Detection action group が
+    「Role not yet classified」のまま公開 docs に載り続けない (#478)。"""
+    nodes = {n["id"]: n for n in dev_env_nodes()}
+
+    appi_role, appi_note = enrich.role_for(nodes["id-appi"])
+    assert appi_role != "General Azure resource"
+    # 根拠を指す: BFF 専用 (Functions ホストの自動収集 / ADR 0055) で、
+    # 宣言は main-bootstrap.bicep の enableAppInsights。AI Agent は exporter 未配線
+    # (#463) なので「OTel の出口」と書いたら嘘になる
+    assert "BFF" in appi_role or "BFF" in appi_note
+    assert "enableAppInsights" in appi_note and "main-bootstrap.bicep" in appi_note
+    assert "ADR 0055" in appi_note
+    assert "OTel" not in appi_note
+
+    ag_role, ag_note = enrich.role_for(nodes["id-ag-smart"])
+    assert ag_role != "General Azure resource"
+    assert "Smart Detection" in ag_note
+
+
+def test_icon_warnings_flag_unregistered_type_and_missing_png():
+    """[単体] アイコンを出せないノードの警告判定 (純粋関数)。無いと何が静かに通るか:
+    ICON_MAP 未登録 / PNG 未配置の劣化が生成ログに出ず、素の箱だらけの図が
+    公開 docs を黙って上書きする (2026-08-09 のアイコン全滅事故の再発経路)。"""
+    nodes = dev_env_nodes()
+    nodes.append(_node("id-ds", "ds-entra-auth", "microsoft.resources/deploymentscripts"))
+    browser = dict(_node("id-browser", "User (Browser)", "external/client"), external=True)
+    nodes.append(browser)
+
+    warnings = "\n".join(enrich.icon_warnings(nodes, ["function-app.png"]))
+
+    # ICON_MAP に無い種別 → 「未登録」
+    assert "アイコン未登録: microsoft.resources/deploymentscripts" in warnings
+    # 登録済みだが PNG 実体が無い → 「PNG 未配置」(#478 の 2 種別で確認)
+    assert "アイコン PNG 未配置: app-insights.png" in warnings
+    assert "アイコン PNG 未配置: action-group.png" in warnings
+    # PNG があるものと external 擬似ノードは警告しない
+    assert "function-app.png" not in warnings
+    assert "external/client" not in warnings
+
+
+def test_icon_map_covers_dev_env_types():
+    """[単体] 実 dev 環境の顔ぶれは全種別が ICON_MAP 登録済み。無いと何が静かに通るか:
+    「アイコン未登録」警告が定常ログ化し、本当に新種別が増えたときに埋もれる。"""
+    for n in dev_env_nodes():
+        assert enrich.lc(n["type"]) in enrich.ICON_MAP, n["type"]
 
 
 def test_cross_rg_pairs_are_not_wired():

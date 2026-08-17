@@ -11,8 +11,13 @@ ICONS_DIR="$HERE_DIR/icons"
 CACHE_DIR="$ICONS_DIR/.cache"
 RAW_DIR="$ICONS_DIR/raw"
 
-ZIP_URL="https://arch-center.azureedge.net/icons/Azure_Public_Service_Icons_V23.zip"
-ZIP_PATH="$CACHE_DIR/Azure_Public_Service_Icons_V23.zip"
+# 注意: この URL は learn.microsoft.com の公式ページが 2026-08 時点で案内している最新版だが、
+# 配布 CDN (arch-center.azureedge.net) は廃止済みで到達できない (icons/README.md 参照)。
+# 取得に失敗したら、手元の .cache に残る旧バージョン zip (例: V23) があればそれで続行する —
+# CDN 廃止下では既存キャッシュが公式パックから再生成できる唯一の経路のため。
+# キャッシュも無ければ ERROR で落とす (失敗を成功と混同しない)。
+ZIP_URL="https://arch-center.azureedge.net/icons/Azure_Public_Service_Icons_V24.zip"
+ZIP_PATH="$CACHE_DIR/Azure_Public_Service_Icons_V24.zip"
 
 need() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -32,7 +37,21 @@ if [[ -f "$ZIP_PATH" ]]; then
   echo "Using cached: $ZIP_PATH"
 else
   echo "Fetching: $ZIP_URL"
-  curl -fsSL -o "$ZIP_PATH" "$ZIP_URL"
+  # 部分ダウンロードをキャッシュとして残さないよう .tmp に受けてから昇格する
+  if curl -fsSL -o "$ZIP_PATH.tmp" "$ZIP_URL"; then
+    mv "$ZIP_PATH.tmp" "$ZIP_PATH"
+  else
+    rm -f "$ZIP_PATH.tmp"
+    # 最新版が取れない → 手元にある旧バージョンのキャッシュへフォールバック (最新優先)
+    FALLBACK_ZIP="$(find "$CACHE_DIR" -maxdepth 1 -type f -name 'Azure_Public_Service_Icons_V*.zip' | sort -V | tail -n 1)"
+    if [[ -n "$FALLBACK_ZIP" ]]; then
+      echo "WARN: could not fetch $ZIP_URL — falling back to cached: $FALLBACK_ZIP" >&2
+      ZIP_PATH="$FALLBACK_ZIP"
+    else
+      echo "ERROR: could not fetch $ZIP_URL and no cached icon pack exists in $CACHE_DIR" >&2
+      exit 1
+    fi
+  fi
 fi
 
 extract_zip() {
@@ -103,6 +122,8 @@ MAP["container-apps.svg"]="*icon-service-Worker-Container-App.svg"
 MAP["container-apps-environment.svg"]="*icon-service-Container-Apps-Environments.svg"
 MAP["cosmos-db.svg"]="*icon-service-Azure-Cosmos-DB.svg"
 MAP["cognitive-services.svg"]="*icon-service-Cognitive-Services.svg"
+MAP["app-insights.svg"]="*icon-service-Application-Insights.svg"
+MAP["action-group.svg"]="*icon-service-Action-Groups.svg"
 
 echo "== Map (best-effort) =="
 missing=0

@@ -16,7 +16,8 @@
 
 ## ファイル名 = 種別マッピング
 
-`viz-structure.sh` の `iconMap` が参照する名前。**変えると図からアイコンが消える。**
+[`enrich.py`](../enrich.py) の `ICON_MAP` が参照する名前 (viz-structure.sh は
+この表を `--argjson` で jq に渡すだけ)。**変えると図からアイコンが消える。**
 
 | ファイル                         | Azure リソース種別                         |
 | -------------------------------- | ------------------------------------------ |
@@ -43,13 +44,24 @@
 ## 追加するとき
 
 1. 64x64 の PNG を上の命名規則で置く
-2. `viz-structure.sh` の `iconMap` に種別 → ファイル名を足す
+2. [`enrich.py`](../enrich.py) の `ICON_MAP` に種別 → ファイル名を足す
 3. `refresh-infra-diagram` が「図に 1 個も入っていなければ中止」を見ているので、
    壊れれば CI が赤になる
 
 ## 未入手のアイコン
 
-`iconMap` には `cosmos-db.png` (`microsoft.documentdb/databaseaccounts`) と
-`cognitive-services.png` (`microsoft.cognitiveservices/accounts`) も登録済みだが、
-配布 CDN 廃止のため **PNG 実体は未入手**。無い間は箱 (アイコン無しノード) で描画される。
+`ICON_MAP` には以下も登録済みだが、配布 CDN 廃止のため **PNG 実体は未入手**。
+無い間は箱 (アイコン無しノード) で描画される。
 公式パックを入手できたら、この名前で PNG を置くだけで図に載る。
+
+| ファイル (未入手)        | Azure リソース種別                       |
+| ------------------------ | ---------------------------------------- |
+| `cosmos-db.png`          | `microsoft.documentdb/databaseaccounts`  |
+| `cognitive-services.png` | `microsoft.cognitiveservices/accounts`   |
+| `app-insights.png`       | `microsoft.insights/components` (#478)   |
+| `action-group.png`       | `microsoft.insights/actiongroups` (#478) |
+
+アイコンが出せないノードは無言で箱にならず、生成時に stderr へ
+`WARN: アイコン未登録: <type>` (`ICON_MAP` に無い) /
+`WARN: アイコン PNG 未配置: <file>` (登録済みだが実体が無い) が出る (#478)。
+判定は [`enrich.py`](../enrich.py) の `icon_warnings` (純粋関数 / pytest 対象)。
