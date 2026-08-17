@@ -114,7 +114,9 @@ def _build_client() -> BaseChatClient:
     timeout = settings.llm_request_timeout_seconds
     if settings.azure_openai_endpoint:
         if settings.use_managed_identity:
-            from azure.identity import DefaultAzureCredential  # type: ignore[import]
+            # 型検査の導入 (#488) で `# type: ignore[import]` が不要と分かったので外した
+            # (azure-identity は依存に入っており型情報も付いてくる)
+            from azure.identity import DefaultAzureCredential
 
             logger.info(
                 "Using Azure OpenAI with Managed Identity: %s",

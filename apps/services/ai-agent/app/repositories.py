@@ -22,7 +22,7 @@ from azure.cosmos.exceptions import (
 
 from .config import get_settings
 from .history import ChatHistory
-from .schemas import ApprovalRecord
+from .schemas import ApprovalDecision, ApprovalRecord
 
 if TYPE_CHECKING:
     from azure.cosmos.aio import ContainerProxy
@@ -39,7 +39,7 @@ class ApprovalRepository(Protocol):
     async def save(self, record: ApprovalRecord) -> None: ...
 
     async def claim(
-        self, approval_id: str, status: str, processed_at: str
+        self, approval_id: str, status: ApprovalDecision, processed_at: str
     ) -> ApprovalRecord | None:
         """`pending` → `status` の遷移を**原子的に**獲得する。
 
@@ -89,7 +89,7 @@ class InMemoryApprovalRepository:
         self._store[record.id] = record
 
     async def claim(
-        self, approval_id: str, status: str, processed_at: str
+        self, approval_id: str, status: ApprovalDecision, processed_at: str
     ) -> ApprovalRecord | None:
         async with self._claim_lock:
             record: ApprovalRecord | None = self._store.get(approval_id)  # type: ignore[assignment]
@@ -162,7 +162,7 @@ class CosmosApprovalRepository:
         await self._container.upsert_item(body=record.model_dump(mode="json"))
 
     async def claim(
-        self, approval_id: str, status: str, processed_at: str
+        self, approval_id: str, status: ApprovalDecision, processed_at: str
     ) -> ApprovalRecord | None:
         """ETag 条件付き置換で `pending` からの遷移を 1 本だけ通す (PR #430 Codex P1)。
 

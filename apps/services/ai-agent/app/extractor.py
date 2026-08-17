@@ -36,6 +36,7 @@ from .schemas import (
     ExtractionResult,
     GroupingOutcome,
     Mention,
+    Theme,
     ThinkingMap,
     ThinkingNode,
 )
@@ -152,9 +153,16 @@ def _format_existing(problems: list[ExistingProblemRef]) -> str:
     return "\n".join(lines)
 
 
-def _coerce_theme(value: object) -> str:
-    """LLM が返したテーマを固定分類に丸める。未知なら「未分類」。"""
-    return value if value in THEMES else "未分類"
+def _coerce_theme(value: object) -> Theme:
+    """LLM が返したテーマを固定分類に丸める。未知なら「未分類」。
+
+    戻り値は `str` ではなく `Theme` (#488)。ここが str のままだと、THEMES と
+    Theme がずれたとき (= 丸めた先が pydantic に弾かれる) を型検査が見逃す。
+    """
+    for theme in THEMES:
+        if value == theme:
+            return theme
+    return "未分類"
 
 
 def _coerce_affect(raw: object) -> Affect:
@@ -276,6 +284,12 @@ def _resolve_parent(
 def _clamp_confidence(value: object) -> float | None:
     if value is None:
         return None
+    # 入力は JSON 由来のスカラー (数値 / 文字列 / bool は int のサブクラス) だけ。
+    # それ以外 (dict / list / 任意のオブジェクト) は従来も float() が TypeError を
+    # 出して None に落ちていたので、振る舞いは変えずに「float に渡せる型だけ渡す」を
+    # 型の上でも示す (#488)。
+    if not isinstance(value, (int, float, str)):
+        return None
     try:
         return min(1.0, max(0.0, float(value)))
     except (TypeError, ValueError):
@@ -336,7 +350,7 @@ async def extract(
     now = datetime.now(timezone.utc).isoformat()
     items: list[ExtractedItem] = []
     # problem_id -> このバッチ反映後の mention_count。同一 Dump 内で同じ既存 Problem に
-    # 複数 Mention が寄る場合に累積させる (ref は共有オブジェクトで更新されないため)。
+    # 複数 Mention が寄る場合に累積させる (existing は共有オブジェクトで更新されないため)。
     running_count: dict[str, int] = {}
     updated_ids: set[str] = set()
     new_count = 0
@@ -345,28 +359,31 @@ async def extract(
         if not isinstance(m, dict):
             continue
         theme = _coerce_theme(m.get("theme"))
-        grouping_raw = m.get("grouping") if isinstance(m.get("grouping"), dict) else {}
+        grouping_value = m.get("grouping")
+        grouping_raw = grouping_value if isinstance(grouping_value, dict) else {}
         confidence = _clamp_confidence(grouping_raw.get("confidence"))
 
         existing_id = grouping_raw.get("existingProblemId")
-        ref = known.get(existing_id) if existing_id else None
+        # 変数名は `existing` (この関数の上流にある `ref` = ログ突き合わせ用の
+        # エラー参照 ID と同名だった / #488 の型検査導入で表面化)
+        existing = known.get(existing_id) if existing_id else None
 
-        if ref is not None:
+        if existing is not None:
             # 既存 Problem への再出現。同一バッチ内の重複ヒットを累積する。
-            problem_id = ref.id
+            problem_id = existing.id
             running_count[problem_id] = (
-                running_count.get(problem_id, ref.mention_count) + 1
+                running_count.get(problem_id, existing.mention_count) + 1
             )
             # 既存への寄せは「既存との類似度スコア」を持つ
             grouping_conf = confidence
             outcome = GroupingOutcome(
                 kind="existing",
                 problem_id=problem_id,
-                problem_title=ref.title,
-                problem_theme=ref.theme,
+                problem_title=existing.title,
+                problem_theme=existing.theme,
                 is_recurrence=True,
                 mention_count=running_count[problem_id],
-                reignited=ref.status != "open",
+                reignited=existing.status != "open",
                 grouping_confidence=grouping_conf,
             )
             updated_ids.add(problem_id)
