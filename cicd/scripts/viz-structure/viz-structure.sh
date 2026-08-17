@@ -416,12 +416,26 @@ jq -r --arg iconsDir "$ICONS_DIR" --arg generatedAt "$GENERATED_AT_UTC" --arg su
     "microsoft.web/sites": "function-app.png",
     "microsoft.web/staticsites": "static-web-app.png",
     "microsoft.documentdb/databaseaccounts": "cosmos-db.png",
-    "microsoft.cognitiveservices/accounts": "cognitive-services.png"
+    "microsoft.cognitiveservices/accounts": "cognitive-services.png",
+    "microsoft.insights/components": "app-insights.png",
+    "microsoft.insights/actiongroups": "action-group.png"
   };
 
   def icon_for($t):
     (iconMap[($t|ascii_downcase)] // null) as $icon
     | if ($icon != null and (($availableIcons | index($icon)) != null)) then $icon else null end;
+
+  # アイコンが無いノードを無言で素の箱にしない (#478): 種別が iconMap に無い /
+  # PNG 実体が icons/ に無いときに stderr へ 1 行出す。出さないと、劣化した図が
+  # 公開 docs に載っても生成ログから気づけない。
+  def warn_missing_icon($t):
+    (iconMap[($t|ascii_downcase)] // null) as $mapped
+    | if ($mapped == null)
+      then (("WARN: アイコン未登録: " + $t + " (素の箱で描画)\n") | stderr | empty)
+      elif (($availableIcons | index($mapped)) == null)
+      then (("WARN: アイコン PNG 未配置: " + $mapped + " (" + $t + " は素の箱で描画)\n") | stderr | empty)
+      else empty
+      end;
 
   def edgeStyle: {
     "privatelink": { color: "#0078D4", style: "solid", label: "Private Link" },
@@ -457,7 +471,13 @@ jq -r --arg iconsDir "$ICONS_DIR" --arg generatedAt "$GENERATED_AT_UTC" --arg su
 
   def node_stmt($n):
     (icon_for($n.type)) as $icon
-    | if ($iconsDir != "" and ($icon|type) == "string" and ($icon|length) > 0) then
+    # 警告はアイコン描画が有効なとき ($iconsDir あり) の Azure リソースだけ。
+    # external 擬似ノード (ブラウザ) はアイコン対象外なので黙って箱でよい
+    | (if ($iconsDir != "" and (($n.external // false) | not))
+       then warn_missing_icon($n.type)
+       else empty
+       end),
+      if ($iconsDir != "" and ($icon|type) == "string" and ($icon|length) > 0) then
         "    \"" + ($n.id|esc) + "\" [shape=plain, label=<" +
           "<TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLPADDING=\"3\" COLOR=\"#D0E6F9\" BGCOLOR=\"#F7FBFF\">" +
             "<TR><TD><IMG SRC=\"" + ($iconsDir|htmlesc) + "/" + ($icon|htmlesc) + "\" SCALE=\"TRUE\"/></TD></TR>" +

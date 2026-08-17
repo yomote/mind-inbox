@@ -50,6 +50,8 @@ def dev_env_nodes():
         _node("id-vnet", "vnet-dev-mindbox", "microsoft.network/virtualnetworks"),
         _node("id-law", "law-dev-mindbox-ops", "microsoft.operationalinsights/workspaces"),
         _node("id-st", "stdevmindboxfunc", "microsoft.storage/storageaccounts"),
+        _node("id-appi", "appi-dev-mindbox", "microsoft.insights/components"),
+        _node("id-ag-smart", "Application Insights Smart Detection", "microsoft.insights/actiongroups"),
     ]
 
 
@@ -100,6 +102,22 @@ def test_role_notes_match_current_adrs():
     spch_role, spch_note = enrich.role_for(nodes["id-spch"])
     assert "LLM" not in spch_role and "LLM" not in spch_note
     assert "STT" in spch_role or "speech-to-text" in spch_note
+
+
+def test_app_insights_and_smart_detection_are_classified():
+    """[L1] appi (App Insights) と Smart Detection action group が
+    「Role not yet classified」のまま公開 docs に載り続けない (#478)。"""
+    nodes = {n["id"]: n for n in dev_env_nodes()}
+
+    appi_role, appi_note = enrich.role_for(nodes["id-appi"])
+    assert appi_role != "General Azure resource"
+    # 根拠 (enableAppInsights / main-bootstrap.bicep) と用途 (#463 の OTel 受け皿) を指す
+    assert "enableAppInsights" in appi_note and "main-bootstrap.bicep" in appi_note
+    assert "#463" in appi_note
+
+    ag_role, ag_note = enrich.role_for(nodes["id-ag-smart"])
+    assert ag_role != "General Azure resource"
+    assert "Smart Detection" in ag_note
 
 
 def test_cross_rg_pairs_are_not_wired():

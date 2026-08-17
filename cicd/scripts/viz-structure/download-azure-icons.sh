@@ -11,8 +11,11 @@ ICONS_DIR="$HERE_DIR/icons"
 CACHE_DIR="$ICONS_DIR/.cache"
 RAW_DIR="$ICONS_DIR/raw"
 
-ZIP_URL="https://arch-center.azureedge.net/icons/Azure_Public_Service_Icons_V23.zip"
-ZIP_PATH="$CACHE_DIR/Azure_Public_Service_Icons_V23.zip"
+# 注意: この URL は learn.microsoft.com の公式ページが 2026-08 時点で案内している最新版だが、
+# 配布 CDN (arch-center.azureedge.net) は廃止済みで到達できない (icons/README.md 参照)。
+# 取得に失敗したら curl -f がそのまま落とすので、成功と混同されることはない。
+ZIP_URL="https://arch-center.azureedge.net/icons/Azure_Public_Service_Icons_V24.zip"
+ZIP_PATH="$CACHE_DIR/Azure_Public_Service_Icons_V24.zip"
 
 need() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -103,6 +106,8 @@ MAP["container-apps.svg"]="*icon-service-Worker-Container-App.svg"
 MAP["container-apps-environment.svg"]="*icon-service-Container-Apps-Environments.svg"
 MAP["cosmos-db.svg"]="*icon-service-Azure-Cosmos-DB.svg"
 MAP["cognitive-services.svg"]="*icon-service-Cognitive-Services.svg"
+MAP["app-insights.svg"]="*icon-service-Application-Insights.svg"
+MAP["action-group.svg"]="*icon-service-Action-Groups.svg"
 
 echo "== Map (best-effort) =="
 missing=0
