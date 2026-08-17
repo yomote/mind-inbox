@@ -17,7 +17,6 @@ bootstrap.sh の判断と、資格情報の取り回しだけ。
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
@@ -27,7 +26,7 @@ import pytest
 
 KIT_DIR = Path(__file__).resolve().parent
 SCRIPT = KIT_DIR / "bootstrap.sh"
-HTML = KIT_DIR / "create-github-app.html"
+README = KIT_DIR / "README.md"
 
 # ---------------------------------------------------------------------------
 # スタブ — 呼び出しごとに argv と env を記録ディレクトリへ残す。
@@ -444,17 +443,82 @@ def test_no_set_x_in_script():
         "bootstrap.sh に set -o xtrace を足してはいけない (set -x と同義)"
 
 
-def test_manifest_is_minimal_and_webhookless():
-    """manifest の権限集合が README の根拠表と同じ 2 つだけで、webhook が無いこと。
-    権限を足す変更は、この固定を根拠 (README) ごと更新しない限り通らない。"""
-    html = HTML.read_text()
-    m = re.search(r'<textarea name="manifest"[^>]*>\s*(\{.*?\})\s*</textarea>', html, re.S)
-    assert m, "manifest の textarea が見つからない"
-    manifest = json.loads(m.group(1))
-    assert manifest["default_permissions"] == {
-        "administration": "write",
-        "metadata": "read",
-    }, "権限は根拠を書いた 2 つだけ (足すなら README の根拠表と同じ PR で)"
-    assert manifest["public"] is False
-    assert "hook_attributes" not in manifest, "webhook は無効 (受け側エンドポイントを持たない)"
-    assert manifest.get("default_events") == []
+def _table_rows_after_heading(md: str, heading_needle: str) -> list[list[str]]:
+    """見出し `heading_needle` を含む行の**直後に最初に現れる** markdown テーブルの
+    データ行を、セルのリストとして返す。見つからなければ落とす (取れなかったものを
+    「空でした」として返さない)。"""
+    lines = md.splitlines()
+    start = next(
+        (i for i, ln in enumerate(lines) if ln.startswith("#") and heading_needle in ln),
+        None,
+    )
+    assert start is not None, f"README に見出し '{heading_needle}' が無い"
+    rows: list[list[str]] = []
+    for line in lines[start + 1 :]:
+        stripped = line.strip()
+        if stripped.startswith("|"):
+            cells = [c.strip() for c in stripped.strip("|").split("|")]
+            if all(set(c) <= set("-: ") and c for c in cells):
+                continue  # 区切り行
+            rows.append(cells)
+        elif rows:
+            break  # テーブルが終わった
+        elif stripped.startswith("#"):
+            pytest.fail(f"'{heading_needle}' の直後にテーブルが無い (次の見出しに到達)")
+    assert rows, f"'{heading_needle}' の下にテーブルの行が無い"
+    return rows[1:]  # ヘッダ行を落とす
+
+
+# フォーム表記 (PO が画面で選ぶ文言) ↔ API 表記 (根拠表・installation token の permissions)
+FORM_LEVEL_TO_API = {"Read and write": "write", "Read-only": "read"}
+
+
+def test_readme_permission_tables_agree():
+    """README の 2 つの表 —「フォームに入れる値」(PO が画面に写す正典) と
+    「入れた権限」(1 行ずつの根拠) — が同じ権限集合を指していること。
+
+    無いと何が静かに通るか:
+        **根拠の無い権限を持つ App が作られる。** App の作成は手動フォームなので、
+        権限集合を機械が読む場所は README のこの 2 表しか無い。bootstrap.sh は
+        installation token の `administration` が write **であること**しか見ておらず
+        (下限の確認)、余分な権限が付いていても素通りする。よって片方の表にだけ
+        権限行を足す / 値をずらす変更は、テストも実行も緑のまま通ってしまう。
+    """
+    md = README.read_text()
+
+    form = {}
+    for cells in _table_rows_after_heading(md, "Repository permissions"):
+        name, level = cells[0].strip("`* "), cells[1].strip("`* ")
+        assert level in FORM_LEVEL_TO_API, \
+            f"'{name}' の設定値 '{level}' は GitHub のフォームに無い表記 (Read and write / Read-only)"
+        form[name.lower()] = FORM_LEVEL_TO_API[level]
+
+    granted = set()
+    for cells in _table_rows_after_heading(md, "入れた権限"):
+        cell = cells[0].strip()
+        if cell in ("〃", "同上", ""):
+            continue  # 直前の権限に対する追加の根拠行
+        m = re.fullmatch(r"`([a-z_]+):\s*(read|write)`", cell)
+        assert m, f"「入れた権限」表の権限セルが `name: level` 形式でない: {cell!r}"
+        granted.add((m.group(1), m.group(2)))
+
+    assert form == {"administration": "write", "metadata": "read"}, \
+        f"フォームに入れる権限は根拠を書いた 2 つだけ: {form}"
+    assert granted == set(form.items()), \
+        f"根拠表 {granted} とフォームの表 {set(form.items())} がずれている (足すなら両方同じ PR で)"
+
+
+def test_readme_rejected_permissions_are_not_granted():
+    """「入れなかった権限」に挙げた権限が、フォームの表に入り込んでいないこと
+    (= 却下の記録を残したまま黙って付与する、を落とす)。"""
+    md = README.read_text()
+    granted = {
+        cells[0].strip("`* ").lower()
+        for cells in _table_rows_after_heading(md, "Repository permissions")
+    }
+    rejected = set()
+    for cells in _table_rows_after_heading(md, "入れなかった権限"):
+        rejected |= {n.lower() for n in re.findall(r"`([a-z_]+)`", cells[0])}
+    assert rejected, "「入れなかった権限」表から権限名を 1 つも読めていない (表記が変わった?)"
+    assert not (rejected & granted), \
+        f"却下したはずの権限がフォームの表に入っている: {sorted(rejected & granted)}"

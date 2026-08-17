@@ -14,8 +14,11 @@
 
 ### PO の 3 手
 
-1. **リンクを開いて Create** — [`cicd/scripts/mgmt-bootstrap/create-github-app.html`](../../cicd/scripts/mgmt-bootstrap/create-github-app.html) をブラウザで開き (file:// のまま)、manifest を確認して「GitHub App を作成する」→ GitHub の確認画面で **Create GitHub App**。権限は administration:write + metadata:read の 2 つだけ・webhook 無効 (根拠 1 行ずつは[キットの README](../../cicd/scripts/mgmt-bootstrap/README.md))
-2. **App ID を控え、インストールして pem を取る** — App の settings ページで **App ID** を控え、**Install App** でこのリポジトリだけにインストールし、**Generate a private key** で pem をダウンロード。このとき **Private keys の一覧に自分が作った鍵以外が無いこと**も確認する (manifest flow の残留 `?code=` を第三者が 1 時間以内に変換すると、こちらの知らない鍵が発行されうるため — 見覚えの無い鍵があれば Delete で即失効)
+1. **GitHub App を手動フォームで作る** — <https://github.com/settings/apps/new> に[キットの README の「GitHub App を作る」](../../cicd/scripts/mgmt-bootstrap/README.md#github-app-を作る-手動フォーム--ここが正典)の値を写して **Create GitHub App**。**設定値の正典はその README の表**で、ここには写しません (二重管理してずれるため)。要点だけ: name `mind-inbox-settings-mgmt` / Webhook の **Active を外す** / Repository permissions は **Administration = Read and write** と **Metadata = Read-only** の 2 つだけ / **Only on this account**
+
+   > 以前あった manifest flow のワンクリックページ (`create-github-app.html`) は**削除しました** — code 変換まで到達しないと App が登録されず、実際に作成されませんでした ([#497](https://github.com/yomote/mind-inbox/issues/497) / PO 裁定 2026-08-17)。
+
+2. **App ID を控え、インストールして pem を取る** — App の settings ページで **App ID** を控え、**Install App** でこのリポジトリだけにインストールし、**Generate a private key** で pem をダウンロード。このとき **Private keys の一覧に自分が作った鍵以外が無いこと**も確認する (見覚えの無い鍵があれば Delete で即失効)
 3. **スクリプトを流す**:
 
    ```bash
