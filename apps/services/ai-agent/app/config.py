@@ -75,6 +75,27 @@ class Settings(BaseSettings):
     llm_max_function_calls: int = 4
     llm_max_tool_iterations: int = 4
 
+    # ── 会話履歴の窓 (#486 / design-gate 承認 2026-08-17) ─────────────────────
+    #
+    # ChatHistory は毎ターン全量が LLM へ再送される。上限が無いと TTL 7 日の間に
+    # セッションが無限に育ち、①トークン費が線形に増え ②context 超過でその
+    # セッションが**恒久 500** になり ③Cosmos の 2MB 上限で save が落ちる。
+    # 窓の判定 (何を落とすか) は `history.select_window` が正典 — ターン境界で切り、
+    # 先頭の system プロンプトは常時保持する。
+    #
+    # 値の根拠:
+    # - `history_window_max_messages` = 40: 1 ターンは user + ツール結果 (最大
+    #   `llm_max_function_calls`=4) + assistant で最大 6 通。40 通で直近 7 ターン以上は
+    #   必ず残る (ツールを使わないターンなら 20 ターン)。
+    # - `history_window_max_chars` = 40,000: tokenizer を持ち込まない代理指標。
+    #   日本語は 1 文字 ≒ 1 トークン前後なので gpt-4o の 128k context に対して
+    #   出力 (max_tokens=1024) と system プロンプトを引いても十分内側に収まる。
+    #   BFF の MAX_MESSAGE_LENGTH=8,000 は**入力 1 通のみ**の上限で、累積は縛らない。
+    #
+    # **両方が同時に効く** (件数に余裕があっても文字数で切れる)。
+    history_window_max_messages: int = 40
+    history_window_max_chars: int = 40000
+
     # Cosmos DB (ADR 0030 / #188) — 会話セッション・承認レコード・MAF checkpoint の永続化。
     # **cosmos_endpoint の有無が分岐点**: 未設定なら従来どおり in-memory で動く
     # (ローカル / テストの既定 = BFF の COSMOS_ENDPOINT と同じ流儀 / ADR 0030 D7)。

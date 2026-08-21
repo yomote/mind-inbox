@@ -58,7 +58,7 @@ from pydantic import BaseModel
 
 from .agents import chat, chat_stream, get_chat_client
 from .config import get_settings
-from .history import ChatHistory
+from .history import ChatHistory, select_window
 from .observability import fingerprint, new_ref
 from .prompts import CHAT_SYSTEM_PROMPT
 from .repositories import ApprovalRepository, SessionRepository
@@ -189,6 +189,84 @@ def get_pending_checkpoint_storage(approval_id: str) -> Optional[CheckpointStora
 # ── Session history helpers (v1 から不変の防御仕様) ───────────────────────────
 
 
+def _window_limits() -> tuple[int, int]:
+    """会話履歴の窓の上限 (件数, 文字数) — env で調整可 (#486)。"""
+    settings = get_settings()
+    return settings.history_window_max_messages, settings.history_window_max_chars
+
+
+def _log_window(
+    source: str, before: Sequence[Message], after: Sequence[Message]
+) -> None:
+    """窓が何を落としたかを声に出す (#486)。落としていなければ何も言わない。
+
+    **刈ったこと自体は正常** — ここで出すのは「本番のセッションで窓が実際に効いて
+    いる」という運用の裏取りと、下の縮退の検出。
+    """
+    if len(after) == len(before):
+        return
+    max_messages, max_chars = _window_limits()
+    logger.info(
+        "Workflow[HISTORY_WINDOW] source=%s kept=%d/%d messages %d/%d chars (limits %d/%d)",
+        source,
+        len(after),
+        len(before),
+        sum(len(m.text or "") for m in after),
+        sum(len(m.text or "") for m in before),
+        max_messages,
+        max_chars,
+    )
+    if sum(1 for m in after if m.role == "user") <= 1:
+        # 窓が最新ターンだけまで縮んだ = エージェントが**会話の記憶を失っている**。
+        # 上限を system プロンプト長より小さく設定すると起きるが、応答は普通に返る
+        # ので画面からは「なんとなく話が噛み合わない」としか見えない。縮退したことは
+        # 必ず声に出す (握り潰すと設定ミスが永久に見つからない)
+        logger.warning(
+            "Workflow[HISTORY_WINDOW] 窓が最新ターンのみまで縮退した source=%s "
+            "(HISTORY_WINDOW_MAX_MESSAGES=%d / HISTORY_WINDOW_MAX_CHARS=%d が "
+            "system プロンプトに対して小さすぎる可能性)",
+            source,
+            max_messages,
+            max_chars,
+        )
+
+
+def _windowed(history: ChatHistory) -> list[Message]:
+    """LLM へ渡す messages (窓の内側だけ / #486)。
+
+    **`_save_session` が保存側でも刈っているのに、渡す側でも掛ける。** 片方だけでは
+    ①この変更より前に保存された既存セッション ②env で上限を下げた直後
+    ③失敗ターンの再試行 (`_append_user_message_once` が save ごと省く経路) が、
+    丸ごと LLM へ飛ぶ = 恒久 500 を踏む経路として残る。
+    """
+    max_messages, max_chars = _window_limits()
+    window = select_window(
+        history.messages, max_messages=max_messages, max_chars=max_chars
+    )
+    _log_window("llm", history.messages, window)
+    return window
+
+
+async def _save_session(
+    session_id: str,
+    history: ChatHistory,
+    session_repo: SessionRepository,
+) -> None:
+    """窓まで刈ってから保存する (#486)。
+
+    **保存の入口をここ 1 箇所に絞ってある** — `session_repo.save` を直接呼ぶ経路を
+    足すと、そのターンだけ刈られないまま文書が育ち、Cosmos の 2MB 上限に当たった
+    ときに save が落ちる (会話がそこで永久に進まなくなる)。
+
+    通常のターンでは**保存側が先に刈る**ので、窓が実際に効いた記録が残るのはここ。
+    """
+    max_messages, max_chars = _window_limits()
+    before = list(history.messages)
+    history.prune(max_messages=max_messages, max_chars=max_chars)
+    _log_window("save", before, history.messages)
+    await session_repo.save(session_id, history)
+
+
 async def _get_or_create_session(
     session_id: str,
     session_repo: SessionRepository,
@@ -197,7 +275,7 @@ async def _get_or_create_session(
     if history is None:
         history = ChatHistory()
         history.add_system_message(CHAT_SYSTEM_PROMPT)
-        await session_repo.save(session_id, history)
+        await _save_session(session_id, history, session_repo)
     return history
 
 
@@ -238,7 +316,7 @@ async def _append_user_message_once(
         )
         return
     history.add_user_message(message)
-    await session_repo.save(session_id, history)
+    await _save_session(session_id, history, session_repo)
 
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────
@@ -510,7 +588,7 @@ class ConverseExecutor(Executor):
             executions=tool_context.executions,
             drop_tools=TURN_LOCAL_TOOLS,
         )
-        await self._session_repo.save(session_id, history)
+        await _save_session(session_id, history, self._session_repo)
 
     async def _settle(
         self,
@@ -568,7 +646,7 @@ class ConverseExecutor(Executor):
         _record_tool_outcomes(
             history, response, call_names, executions=tool_context.executions
         )
-        await self._session_repo.save(session_id, history)
+        await _save_session(session_id, history, self._session_repo)
         await ctx.request_info(
             ApprovalRequest(
                 session_id=session_id,
@@ -600,7 +678,7 @@ class ConverseExecutor(Executor):
         )
         reply = response.text
         history.add_assistant_message(reply)
-        await self._session_repo.save(session_id, history)
+        await _save_session(session_id, history, self._session_repo)
         await ctx.send_message(
             FinalReply(
                 session_id=session_id,
@@ -620,7 +698,7 @@ class ConverseExecutor(Executor):
         try:
             response = await self._call_llm(
                 turn.session_id,
-                list(history.messages),
+                _windowed(history),
                 ctx,
                 stream=self._stream,
                 updates=updates,
@@ -648,7 +726,7 @@ class ConverseExecutor(Executor):
                 request.session_id, self._session_repo
             )
             history.add_assistant_message(_REJECTION_REPLY)
-            await self._session_repo.save(request.session_id, history)
+            await _save_session(request.session_id, history, self._session_repo)
             await ctx.send_message(
                 FinalReply(session_id=request.session_id, reply=_REJECTION_REPLY)
             )
@@ -666,8 +744,12 @@ class ConverseExecutor(Executor):
             raise RuntimeError(
                 f"Approval content not found in checkpoint: {request.approval_content_id!r}"
             )
+        # **窓は履歴にだけ掛け、`pending` は丸ごと残す** (#486)。pending は中断した
+        # ターンの function_call とその承認要求で、ここを削ると承認応答が対を失って
+        # 再開そのものが壊れる (窓の目的は「古いターンを落とす」であって、いま
+        # 再開しようとしているターンを削ることではない)。
         messages = [
-            *history.messages,
+            *_windowed(history),
             *pending,
             Message(
                 role="user",
