@@ -75,7 +75,23 @@
 
   権限を分けたい場合は、**空のまま適用して**あとから Crypto User を付ける運用にしてください (適用は Contributor、付与だけを User Access Administrator が行う)。`main-mgmt.parameters.json` の既定は空なので、通常はこちらになります。
 
-- **キット (bootstrap.sh) を使う場合はさらに**: **Key Vault Secrets Officer** (pem 格納は data-plane 権限で、Contributor / Owner の control-plane には含まれない — 無いと格納の手前で止まり、付与コマンドが表示される) / **Terraform 1.5+** / **GitHub リポジトリの admin** (App の作成・インストールは PO 本人にしかできない)。**キットは PO のローカルでだけ実行する** — pem (長期クレデンシャル) をサンドボックスに持ち込まない (ADR 0031)
+- **Key Vault の data-plane ロールは control-plane とは別に要ります。** サブスクリプション Owner でも**自動では付きません** — 実測 (PO / 2026-08-17) では Verification 3 が `ForbiddenByRbac` (`Assignment: (not found)`) で止まりました ([#499](https://github.com/yomote/mind-inbox/issues/499))。
+
+  | 要る権限               | 何に使うか                                        | 付けるロール (vault スコープ) |
+  | ---------------------- | ------------------------------------------------- | ----------------------------- |
+  | 鍵メタデータの読み取り | Verification 3 (`az keyvault key show`)           | **Key Vault Reader**          |
+  | シークレットの読み書き | キットの pem 格納 (`az keyvault secret show/set`) | **Key Vault Secrets Officer** |
+
+  ```bash
+  # 例: 自分に付ける (付与には Owner / User Access Administrator が要ります。反映まで数分)
+  az role assignment create --role "Key Vault Reader" \
+    --assignee "$(az ad signed-in-user show --query id -o tsv)" \
+    --scope "$(az keyvault show -n kv-dev-mindbox --query id -o tsv)"
+  ```
+
+  2 つまとめてなら **Key Vault Administrator** でも通りますが、鍵マテリアルまで触れるので上の 2 つを推奨します。**Vault は手順 5 の apply で作られる**ので、付与できるのは apply の後です。
+
+- **キット (bootstrap.sh) を使う場合はさらに**: 上の data-plane ロール 2 つ (キットは apply の直後に**使う前**へ確認を入れており、無ければ付与コマンドを名指しして止まります) / **Terraform 1.5+** / **GitHub リポジトリの admin** (App の作成・インストールは PO 本人にしかできない)。**キットは PO のローカルでだけ実行する** — pem (長期クレデンシャル) をサンドボックスに持ち込まない (ADR 0031)
 - `az` (Azure CLI) と Bicep CLI。サンドボックスからは device-code で入る → [`claude-web-azure-access.md`](claude-web-azure-access.md)
 - 宣言と値: [`cicd/iac/main-mgmt.bicep`](../../cicd/iac/main-mgmt.bicep) / [`cicd/iac/main-mgmt.parameters.json`](../../cicd/iac/main-mgmt.parameters.json)
 - **`enable*` の既定値を確認してから流す** — 既定で作るのは「まだどこにも無いもの」だけ。理由は [`cicd/iac/README.md`](../../cicd/iac/README.md#1-5-管理系レイヤrg-mgmt-mindbox--一度きり)
@@ -147,7 +163,7 @@
 
 - [ ] デプロイが `Succeeded` (下の 1)
 - [ ] **作ったリソース全部に層タグが付いている** (下の 2) — このタグが撤収ガードの判定入力なので、**付いていないものはアプリ系と見なされて撤収で消えます**
-- [ ] 鍵が**エクスポート不可**で作られている (下の 3 が `false` を返すこと)
+- [ ] 鍵が**エクスポート不可**で作られている (下の 3 が**空**か `false` を返すこと — 空が正常。後述)
 - [ ] **撤収ガードが管理系 RG を拒否する** (下の 4 が **2 回とも** exit 3 で、何も消えないこと) — 2 本目は `MGMT_RG` を別名に向けて `ALLOW_PROTECTED_DELETE=true` を足した場合で、**組み込みの保護が設定で外せない**ことを見ています
 - [ ] **月次予算が実在する** (下の 5 が `budget-mgmt-mindbox` を 1 件返し、`contacts` が空でないこと) — 空 (`[]`) なら `budgetContactEmails` を渡し忘れており、**管理系 RG のコストがどの予算にも載っていません**
 
@@ -160,9 +176,10 @@ az deployment group show -g rg-mgmt-mindbox -n main-mgmt \
 az resource list -g rg-mgmt-mindbox \
   --query "[].{name:name,layer:tags.mindInboxLayer}" -o table
 
-# 3. 鍵がエクスポート不可か
+# 3. 鍵がエクスポート不可か。**空が正常** (下の注記)。exportable は attributes の下で、
+#    key.exportable は存在しないパス -- 常に空を返すので判定に使えない (#499)
 az keyvault key show --vault-name kv-dev-mindbox -n e2e-artifacts \
-  --query key.exportable -o tsv
+  --query attributes.exportable -o tsv
 
 # 4. 撤収ガードが管理系 RG を拒否するか。**逃げ道が無いことまで見る** --
 #    MGMT_RG を別名に向けて override を足しても exit 3 で何も消えないこと。
@@ -177,6 +194,8 @@ az consumption budget list -g rg-mgmt-mindbox \
   --query "[?name=='budget-mgmt-mindbox'].{name:name,amount:amount,contacts:notifications.actual50.contactEmails}" \
   -o json
 ```
+
+**Verification 3 は空が正常です。** Key Vault は**エクスポート不可の鍵に `exportable` 属性を持たせません** (省略が既定)。したがって `--query attributes.exportable` は**空を返すのが正常**で、`false` と一致するかで判定すると正常な鍵で必ず止まります。**落とすのは明示的に `true` が返ったときだけ**です ([#499](https://github.com/yomote/mind-inbox/issues/499) 発見 2 / キット側の判定は [`check_key_vault.py`](../../cicd/scripts/mgmt-bootstrap/check_key_vault.py))。
 
 `[]` が返ったら budget は**存在しません** (下の「予算アラートが来ない」を参照)。`az consumption` が使えないサブスクリプション / CLI バージョンでは ARM を直接叩きます (存在しなければ `BudgetNotFound` で落ちるので、**沈黙と区別できます**)。
 
@@ -228,6 +247,16 @@ az rest --method get --url "https://management.azure.com/subscriptions/$(az acco
 
 - 原因: 逆のパターン。**User Access Administrator / RBAC Administrator しか持っていない** — これらは**ロール割り当て専用**で、Key Vault や Storage、deployment を作る権限がない
 - 対処: Contributor (または Owner) を足す。この 2 つは片方だけでは足りない (Prerequisites の表を参照)
+
+### Verification 3 が `ForbiddenByRbac` (`Assignment: (not found)`) で落ちる
+
+- 原因: **Key Vault の data-plane ロールが無い。** control-plane のロール (Contributor / Owner) には含まれず、サブスクリプション Owner でも自動では付きません (実測 / [#499](https://github.com/yomote/mind-inbox/issues/499))
+- 対処: Prerequisites の表のロール (**Key Vault Reader** / **Key Vault Secrets Officer**) を vault スコープで自分に付与してから再実行する。反映まで数分かかることがあります。キット (`bootstrap.sh`) は apply の直後に**使う前**の確認を入れており、足りなければ付与コマンドを名指しして止まります
+
+### Verification 3 が空を返す
+
+- 原因: **異常ではありません。** エクスポート不可の鍵は `attributes` に `exportable` を持ちません (省略が既定)
+- 対処: 判定は「**明示的に `true` なら異常**」で行ってください。`false` との一致で判定すると正常な鍵で止まります。`--query key.exportable` は**存在しないパス**なので、鍵の状態に関係なく常に空です (誤りの実例 / [#499](https://github.com/yomote/mind-inbox/issues/499) 発見 2)
 
 ### 予算アラートが来ない / Verification 5 が `[]` を返す
 
