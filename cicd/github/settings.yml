@@ -114,10 +114,19 @@ branch_protection:
     # この構成で PR #213 が `review-gate` 🔴 のまま squash マージできた記録がある。
     #
     # 🚪 **緊急時の脱出口は「恒久的に開けておく」ではなく「一時的に開ける」**。
-    #    門が壊れて PO 本人しか直せない状態になったら、この行を `false` にする PR を
-    #    出して apply し、**用が済んだら `true` に戻す** (または ruleset を一時 Disable
-    #    する)。開いた状態を常態にしないための書き方であって、脱出口を塞いだのではない。
-    #    一時的に開けたことは PR に残るので、戻し忘れが記録から追える。
+    #    手順の正典は docs/runbooks/github-settings.md「🚨 緊急解除 — 門が壊れて誰も
+    #    マージできないとき」。**GitHub の UI / API で保護そのものを一時的に外し、
+    #    復旧したら apply で塞ぎ直す** (この宣言は true のままにしておく)。
+    #
+    #    ⚠️ **「この行を false にする PR を出して apply」は脱出口にならない。**
+    #    github-settings workflow は **main の版でしか動かない**ので、弱めた宣言を
+    #    適用するには先にその PR を main へマージする必要があり、マージできないから
+    #    困っている場面では循環する。**ruleset を Disable しても classic branch
+    #    protection のこの設定は残る**ので、そちらも脱出口ではない (PR #512 Codex P1)。
+    #
+    #    宣言を書き換えないのが要点 — 書き換えると**開けた状態が「正常」として
+    #    記録され**、戻し忘れが静かに続く。宣言を true のままにしておけば、
+    #    次の check が「差分あり」で赤くなって戻し忘れを教えてくれる。
     enforce_admins: true
     allow_force_pushes: false
     allow_deletions: false

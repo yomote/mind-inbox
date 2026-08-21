@@ -84,6 +84,44 @@
 - [ ] `data/github-settings` ブランチに新しいコミットが立っている (**設定が変わったときだけ**立つ。変わっていなければコミットは立たない — それが正常)
 - [ ] `[github-settings]` の Issue が閉じている (ズレが解消すると自動で閉じる)
 
+## 🚨 緊急解除 — 門が壊れて誰もマージできないとき
+
+**`enforce_admins: true` (2026-08-21 / #387 の PO 裁定 A) を入れた以上、この節が唯一の脱出口です。**
+
+⚠️ **「宣言を弱める PR を出して apply する」は成立しません。** この workflow は
+**main の版でしか動かない** (上の「main の版であることを確認する」ステップ) ので、
+弱める宣言を適用するには**まずその PR を main にマージ**する必要があり、
+マージできないから困っている場面では循環します。**ruleset を Disable しても
+classic branch protection の `enforce_admins` は残る**ので、そちらも脱出口になりません。
+
+**main を一切変えずに保護そのものを外す**のが正しい手順です (PO 本人の admin 権限が要る):
+
+1. **保護を外す** — GitHub の Web UI: `Settings` → `Branches` → `main` のルールの
+   `Edit` → **`Do not allow bypassing the above settings` のチェックを外す**
+   (ルールごと消す必要はない)。
+   API なら (PO のトークンで):
+
+   ```bash
+   # 管理者バイパスだけを無効化する (保護そのものは残す)
+   gh api -X DELETE "repos/yomote/mind-inbox/branches/main/protection/enforce_admins"
+   ```
+
+2. **壊れた門を直す PR をマージする** (これで復旧作業が進む)
+
+3. **必ず戻す** — 復旧したら `github-settings` workflow を `mode=check` → `mode=apply`
+   で流す。宣言 (`cicd/github/settings.yml`) は `enforce_admins: true` のままなので、
+   **apply が管理者バイパスを再び塞ぎます**。
+
+   ```bash
+   # 戻したことの確認 (true が返る)
+   gh api "repos/yomote/mind-inbox/branches/main/protection/enforce_admins" --jq '.enabled'
+   ```
+
+**開けたことは run 履歴とデータブランチ `data/github-settings` の差分に残ります** —
+手順 3 を忘れると次の `check` が「差分あり」で赤くなるので、**開けっぱなしは静かに
+続きません**。それがこの手順を「宣言を書き換える」形にしていない理由でもあります
+(宣言を書き換えると、開けた状態が正常として記録されてしまう)。
+
 ## Rollback
 
 - **`apply` を途中で止めたい** → run を Cancel する。**操作は 1 つずつ独立して完了する**ので「操作の途中」で止まることはない。何が適用済みかは Summary の「適用の結果」に出る

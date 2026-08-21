@@ -581,6 +581,21 @@ def test_単体_fenced_code_の中のコメントは見出しに数えない(tmp
     assert not reference_resolves("偽の節", "section", body), (
         "コード例の中のコメントを見出しとして数えている"
     )
+    # `~~~` も CommonMark の fence (PR #512 Codex P2)
+    tilde = "# 本物の見出し\n\n~~~sh\n# 偽の節\necho hi\n~~~\n"
+    assert not reference_resolves("偽の節", "section", tilde), (
+        "tilde fence の中のコメントを見出しとして数えている"
+    )
+    # **4 文字以上のインデントは Markdown ではコードブロック** — その中の `#` は
+    # 見出しではない (実物: docs/design/archive/basic_design_poc.md / PR #512 Codex P2)
+    indented = "# 本物の見出し\n\n    # 偽の節\n"
+    assert not reference_resolves("偽の節", "section", indented), (
+        "インデントされたコードブロックのコメントを見出しとして数えている"
+    )
+    # 3 文字までは見出し (境界そのものを固定する)
+    assert reference_resolves("端の見出し", "section", "# 本物\n\n   ### 端の見出し\n")
+    # `#` の直後に空白が要る
+    assert not reference_resolves("空白なし", "section", "# 本物\n\n#空白なし\n")
     root = _repo(tmp_path)
     (root / "cicd" / "CLAUDE.md").write_text(body, encoding="utf-8")
     (root / "cicd" / "x.py").write_text(

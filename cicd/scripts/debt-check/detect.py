@@ -191,7 +191,14 @@ _LINE_LEAD = re.compile(r"^[ \t]*(?:#+|//+|\*+|--+)[ \t]+")
 # `.github/claude/review-rubric.md` / PR #512 Codex)。
 _ELLIPSIS = re.compile(r"…+|\.\.\.+")
 
-_FENCED_CODE = re.compile(r"```.*?```", re.DOTALL)
+# fenced code。**`~~~` も fence** (CommonMark) なので両方落とす — 片方だけだと、
+# tilde fence の中のコメントが見出しに化ける (PR #512 Codex P2)。
+_FENCED_CODE = re.compile(r"```.*?```|~~~.*?~~~", re.DOTALL)
+# ATX 見出し行。**インデントは 0〜3 文字まで**で、`#` のあとに空白 (または行末) が要る
+# — 4 文字以上のインデントは Markdown ではコードブロックであり、その中の
+# `# コメント` は見出しではない (実物: docs/design/archive/basic_design_poc.md)。
+# `lstrip()` で判定すると、この差が消えて**削除済みの節への参照が解決済みに化ける**。
+_ATX_HEADING = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
 # インラインリンク [text](target) / 画像 ![alt](target)。title 付き (target "title") も拾う
 _INLINE_LINK = re.compile(r"\]\(\s*<?([^)<>\s]+)>?(?:\s+\"[^\"]*\")?\s*\)")
 
@@ -298,12 +305,15 @@ def headings_of(markdown: str) -> str:
 
     **fenced code の中は見出しではない。** 落とさないと ```sh ブロックの
     `# 何とか` がシェルのコメントのまま見出しに化け、**実際には削除済みの節への参照を
-    「解決済み」として 0 件に数える** (PR #512 Codex P2)。
+    「解決済み」として 0 件に数える** (PR #512 Codex P2)。`~~~` fence も同じ。
+
+    **4 文字以上インデントされた `#` も見出しではない** (Markdown ではコードブロック)。
+    `#` のあとに空白が要ることも含め、ATX 見出しの規則で判定する。
     """
     return "\n".join(
         line
         for line in strip_fenced_code(markdown).splitlines()
-        if line.lstrip().startswith("#")
+        if _ATX_HEADING.match(line)
     )
 
 
