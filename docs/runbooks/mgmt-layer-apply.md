@@ -91,7 +91,7 @@
 
   2 つまとめてなら **Key Vault Administrator** でも通りますが、鍵マテリアルまで触れるので上の 2 つを推奨します。**Vault は手順 5 の apply で作られる**ので、付与できるのは apply の後です。
 
-- **キット (bootstrap.sh) を使う場合はさらに**: 上の data-plane ロール 2 つ (キットは apply の直後に**使う前**へ確認を入れており、無ければ付与コマンドを名指しして止まります) / **Terraform 1.5+** / **GitHub リポジトリの admin** (App の作成・インストールは PO 本人にしかできない)。**キットは PO のローカルでだけ実行する** — pem (長期クレデンシャル) をサンドボックスに持ち込まない (ADR 0031)
+- **キット (bootstrap.sh) を使う場合はさらに**: 上の data-plane ロール 2 つ (キットは apply の直後に**使う前**の確認を入れており、無ければ付与コマンドを名指しして止まります。ただし確認は**読み取りだけ**なので、**シークレットの書き込み可否は pem 格納を実際に叩くまで未検証**です — そこでも付与コマンドが表示されます) / **Terraform 1.5+** / **GitHub リポジトリの admin** (App の作成・インストールは PO 本人にしかできない)。**キットは PO のローカルでだけ実行する** — pem (長期クレデンシャル) をサンドボックスに持ち込まない (ADR 0031)
 - `az` (Azure CLI) と Bicep CLI。サンドボックスからは device-code で入る → [`claude-web-azure-access.md`](claude-web-azure-access.md)
 - 宣言と値: [`cicd/iac/main-mgmt.bicep`](../../cicd/iac/main-mgmt.bicep) / [`cicd/iac/main-mgmt.parameters.json`](../../cicd/iac/main-mgmt.parameters.json)
 - **`enable*` の既定値を確認してから流す** — 既定で作るのは「まだどこにも無いもの」だけ。理由は [`cicd/iac/README.md`](../../cicd/iac/README.md#1-5-管理系レイヤrg-mgmt-mindbox--一度きり)

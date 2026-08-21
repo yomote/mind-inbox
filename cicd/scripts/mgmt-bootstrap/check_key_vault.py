@@ -46,9 +46,11 @@ ITEM_SEPARATOR = ","
 #            Key Vault Reader の DataActions `Microsoft.KeyVault/vaults/*/read` で足りる
 #            (鍵マテリアルは読めない = 最小)。
 # - secrets: 手順 8 の `az keyvault secret show/set` (pem の格納)。
+#            ⚠️ プローブは**読み取りだけ**なので、ここが ok でも**書き込みの可否は未検証**
+#            (Key Vault Reader だけでも一覧は通る)。呼び出し元はそう表示すること。
 PROBE_ROLES: dict[str, tuple[str, str]] = {
     "keys": ("Key Vault Reader", "鍵メタデータの読み取り (検証 6b)"),
-    "secrets": ("Key Vault Secrets Officer", "pem の格納 (手順 8)"),
+    "secrets": ("Key Vault Secrets Officer", "シークレットの読み取り (手順 8 の pem 格納の前提)"),
 }
 
 # az が data-plane の RBAC 不足を返すときの目印 (小文字で照合)。

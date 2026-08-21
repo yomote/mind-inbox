@@ -561,6 +561,29 @@ def test_単体_権限が揃っていれば事前確認は素通りする(kit):
     assert calls_matching(kit, "az", "keyvault", "key", "show"), "事前確認の後に検証へ進んでいない"
 
 
+def test_単体_事前確認はシークレットの書き込みを未検証として明示する(kit):
+    """確かめた範囲だけを言う (#508 Codex P2)。
+
+    無いと何が静かに通るか:
+        **未検証の権限が台帳の [済] に化ける。** プローブは読み取りだけなので、
+        `Key Vault Reader` しか持たない実行者でも `key list` / `secret list` は両方
+        成功する。それを「pem の格納の権限確認 OK」と表示すると、**書き込みは一度も
+        確かめていないのに成功扱い**になり、失敗時の台帳も嘘をつく
+        (root CLAUDE.md「取れなかったものを『異常なし』と書かない」)。
+    """
+    r = run_kit(kit)
+    assert r.returncode == 0, r.stderr
+    assert "未検証" in r.stdout, "書き込み権限が未検証であることを言っていない"
+    # 台帳のステップ名が「pem の格納まで確認した」と読めないこと
+    ledger_line = next(
+        (ln for ln in r.stdout.splitlines() if "データプレーン権限の確認" in ln and "[済]" in ln),
+        None,
+    )
+    assert ledger_line is not None, "台帳に事前確認の行が出ていない"
+    assert "pem の格納" not in ledger_line, \
+        f"確かめていない pem 格納まで [済] に見える台帳になっている: {ledger_line}"
+
+
 def test_missing_budget_fails_verification(kit):
     """予算の不在は「どの予算にも載らない RG」なので成功扱いにしない。"""
     r = run_kit(kit, modes={"STUB_AZ_BUDGET": "absent"})
