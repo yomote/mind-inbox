@@ -38,6 +38,7 @@ __all__ = [
     "OPEN",
     "FAILURE_COMMENT_MARKER",
     "RECOVERY_COMMENT_MARKER",
+    "Failure",
     "StepVerdict",
     "classify_label_create",
     "effective_status",
@@ -158,6 +159,30 @@ def next_call_timeout(
     return min(per_call_seconds, remaining_seconds)
 
 
+class Failure(NamedTuple):
+    """通報の失敗 1 件。**kind を持つのは「何が失われたか」を推測で書かないため。**
+
+    kind を捨てて文字列だけにすると、step_verdict() が失敗の種類を区別できず、
+    「閉じ損ねた Issue が open のまま残る」のような**測っていない結末**を一律に
+    書くことになる (PR #509 Codex P2)。ラベル作成だけ失敗した回や、復旧コメントは
+    失敗したが close は成功した回では、その断定は事実と逆になる。
+    """
+
+    kind: str  # lookup / label / comment / close / create / input / unexpected
+    message: str
+
+
+LOOKUP, LABEL_FAILURE, COMMENT, CLOSE_FAILURE, CREATE, INPUT, UNEXPECTED = (
+    "lookup",
+    "label",
+    "comment",
+    "close",
+    "create",
+    "input",
+    "unexpected",
+)
+
+
 class StepVerdict(NamedTuple):
     """通報ステップ自身の後始末。fail_step が True のときだけ step を赤にする。"""
 
@@ -168,7 +193,7 @@ class StepVerdict(NamedTuple):
 def step_verdict(
     job_status: str,
     cancelled_is_failure: bool,
-    failures: Sequence[str],
+    failures: Sequence[Failure],
 ) -> StepVerdict:
     """通報に失敗したとき step を赤にするかを決める (#507 の設計判断)。
 
@@ -183,22 +208,30 @@ def step_verdict(
         失敗側のときだけ。job が失敗側なら run はもともと赤なので、赤を足しても
         「デプロイの緑」は汚れない (= (b))
 
-    job が成功側で通報に失敗した場合に失うのは「open Issue を閉じる」だけで、
-    その取りこぼしは **Issue が open のまま残る = 状況ページが赤に倒れる** という
-    形で自分で見える (偽の緑にならない)。次に緑で通った run が閉じ直す。
+    **結末は測った範囲でしか書かない** (PR #509 Codex P2)。「Issue が open のまま残る」
+    と言えるのは close が実際に失敗した回だけで、一覧が引けなかった回は
+    「確認できていない」までしか言えない。ラベル作成だけ失敗した回はどちらでもない。
     """
     if not failures:
         return StepVerdict(False, "通報は完了した")
-    detail = " / ".join(failures)
+    detail = " / ".join(f.message for f in failures)
     if effective_status(job_status, cancelled_is_failure) == "failure":
         return StepVerdict(
             True,
             f"job が失敗した回の通報に失敗したため step も赤にする ({detail})",
         )
+
+    kinds = {f.kind for f in failures}
+    if CLOSE_FAILURE in kinds:
+        consequence = "閉じられなかった Issue が open のまま残る (次の緑の run が閉じ直す)。"
+    elif LOOKUP in kinds:
+        consequence = "open Issue を閉じられたかを確認できていない (次の緑の run が閉じ直す)。"
+    else:
+        consequence = ""
     return StepVerdict(
         False,
-        "通報に失敗したが job は成功しているため step は赤にしない "
-        f"(閉じ損ねた Issue は open のまま残り、次の緑の run が閉じ直す): {detail}",
+        f"通報に失敗したが job は成功しているため step は赤にしない。{consequence}"
+        f"失敗: {detail}",
     )
 
 

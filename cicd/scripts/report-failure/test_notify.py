@@ -137,6 +137,7 @@ def test_単体_成功デプロイで一覧が引けなくても緑のまま理�
     assert "gh issue list" in proc.stdout  # どのコマンドが落ちたか
     assert "502 Bad Gateway" in proc.stdout  # gh の stderr を捨てていない
     assert "赤にしない" in proc.stdout
+    assert "確認できていない" in proc.stdout  # 閉じ損ねたと断定はしない (測っていない)
     assert "通報ステップ" in summary  # ログを開かなくても気づける
     # 一覧が引けない成功側では Issue を触らない (直っているのに障害 Issue を湧かせない)
     assert "issue-create" not in _keys(calls)
@@ -210,6 +211,9 @@ def test_単体_閉じられなくても成功デプロイは緑のまま理由�
     )
     assert proc.returncode == 0
     assert "::error::" in proc.stdout and "#42 を閉じられなかった" in proc.stdout
+    # verdict 側の断定 (失敗行の文言とは別) — close 失敗を別種別で積むと消える
+    assert "閉じられなかった Issue が open のまま残る" in summary
+    assert "確認できていない" not in summary  # 確認できているので曖昧に濁さない
     assert summary.strip()
 
 

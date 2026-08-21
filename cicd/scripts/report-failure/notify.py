@@ -196,10 +196,12 @@ def main() -> int:
     )
 
     budget = Budget(_total_budget_seconds())
-    failures: list[str] = []
+    failures: list[rules.Failure] = []
     if not job_status.strip():
         # job.status が取れないと「復旧」も「障害」も判定できない。黙って noop にしない。
-        failures.append("JOB_STATUS が空 (呼び出し元の job-status 入力を確認)")
+        failures.append(
+            rules.Failure(rules.INPUT, "JOB_STATUS が空 (呼び出し元の job-status 入力を確認)")
+        )
 
     ensure_label(repo, budget, failures)
     lookup_ok, existing = find_open_issue(repo, title, budget, failures)
@@ -227,13 +229,13 @@ def main() -> int:
     verdict = rules.step_verdict(job_status, cancelled_is_failure, failures)
     if failures:
         for item in failures:
-            log(f"::error::通報に失敗: {item}")
+            log(f"::error::通報に失敗: {item.message}")
         summary(f"### ⚠️ {workflow} の通報ステップ\n\n{verdict.message}\n")
     log(f"通報ステップ終了: {verdict.message}")
     return 1 if verdict.fail_step else 0
 
 
-def ensure_label(repo: str, budget: Budget, failures: list[str]) -> None:
+def ensure_label(repo: str, budget: Budget, failures: list[rules.Failure]) -> None:
     result = run_gh(
         [
             "label",
@@ -257,13 +259,16 @@ def ensure_label(repo: str, budget: Budget, failures: list[str]) -> None:
         log(f"ラベル {LABEL} は既にある (正常)")
     else:
         failures.append(
-            f"ラベル {LABEL} を用意できなかった (rc={result.returncode}): "
-            f"{_one_line(result.stderr)}"
+            rules.Failure(
+                rules.LABEL_FAILURE,
+                f"ラベル {LABEL} を用意できなかった (rc={result.returncode}): "
+                f"{_one_line(result.stderr)}",
+            )
         )
 
 
 def find_open_issue(
-    repo: str, title: str, budget: Budget, failures: list[str]
+    repo: str, title: str, budget: Budget, failures: list[rules.Failure]
 ) -> tuple[bool, list[int]]:
     """open な ci-failure Issue を探す。戻り値は (一覧が引けたか, 番号の一覧)。
 
@@ -292,17 +297,26 @@ def find_open_issue(
     )
     if not result.ok:
         failures.append(
-            f"open Issue の一覧を取得できなかった (rc={result.returncode}): "
-            f"{_one_line(result.stderr)}"
+            rules.Failure(
+                rules.LOOKUP,
+                f"open Issue の一覧を取得できなかった (rc={result.returncode}): "
+                f"{_one_line(result.stderr)}",
+            )
         )
         return False, []
     try:
         issues = json.loads(result.stdout or "[]")
     except json.JSONDecodeError as exc:
-        failures.append(f"open Issue の一覧を JSON として読めなかった: {exc}")
+        failures.append(
+            rules.Failure(rules.LOOKUP, f"open Issue の一覧を JSON として読めなかった: {exc}")
+        )
         return False, []
     if not isinstance(issues, list):
-        failures.append(f"open Issue の一覧が配列ではない: {_one_line(str(issues))}")
+        failures.append(
+            rules.Failure(
+                rules.LOOKUP, f"open Issue の一覧が配列ではない: {_one_line(str(issues))}"
+            )
+        )
         return False, []
     return True, rules.select_issue_numbers(issues, title)
 
@@ -318,7 +332,7 @@ def apply_action(
     sha: str,
     ref: str,
     budget: Budget,
-    failures: list[str],
+    failures: list[rules.Failure],
 ) -> None:
     if action == rules.NOOP:
         log("何もしない")
@@ -326,7 +340,12 @@ def apply_action(
 
     if action in (rules.CLOSE, rules.APPEND):
         if not existing:
-            failures.append(f"{action} と判定したのに対象 Issue 番号が無い (実装の不整合)")
+            failures.append(
+                rules.Failure(
+                    rules.UNEXPECTED,
+                    f"{action} と判定したのに対象 Issue 番号が無い (実装の不整合)",
+                )
+            )
             return
         if action == rules.APPEND:
             append_recurrence(repo, existing[0], run_url, sha, ref, budget, failures)
@@ -357,7 +376,9 @@ def apply_action(
     if created.ok:
         log(f"新規 Issue を立てた: {_one_line(created.stdout)}")
     else:
-        failures.append(f"Issue を作成できなかった: {_one_line(created.stderr)}")
+        failures.append(
+            rules.Failure(rules.CREATE, f"Issue を作成できなかった: {_one_line(created.stderr)}")
+        )
 
 
 def append_recurrence(
@@ -367,7 +388,7 @@ def append_recurrence(
     sha: str,
     ref: str,
     budget: Budget,
-    failures: list[str],
+    failures: list[rules.Failure],
 ) -> None:
     """再発を既存 Issue に追記する。**成功したときだけ「追記した」と出す。**
 
@@ -393,8 +414,11 @@ def append_recurrence(
         log(f"既存の #{number} に追記した")
     else:
         failures.append(
-            f"#{number} に再発を追記できなかった (追記されていない / "
-            f"状況ページの再発時刻が進まない): {_one_line(result.stderr)}"
+            rules.Failure(
+                rules.COMMENT,
+                f"#{number} に再発を追記できなかった (追記されていない / "
+                f"状況ページの再発時刻が進まない): {_one_line(result.stderr)}",
+            )
         )
 
 
@@ -405,7 +429,7 @@ def close_all(
     sha: str,
     ref: str,
     budget: Budget,
-    failures: list[str],
+    failures: list[rules.Failure],
 ) -> None:
     """復旧したので**完全一致した Issue を全部**閉じる。
 
@@ -432,7 +456,10 @@ def close_all(
         )
         if not comment.ok:
             failures.append(
-                f"#{number} に復旧コメントを書けなかった: {_one_line(comment.stderr)}"
+                rules.Failure(
+                    rules.COMMENT,
+                    f"#{number} に復旧コメントを書けなかった: {_one_line(comment.stderr)}",
+                )
             )
         closed = run_gh(
             ["issue", "close", str(number), "-R", repo, "--reason", "completed"],
@@ -444,7 +471,11 @@ def close_all(
             log(f"復旧したので #{number} を閉じた")
         else:
             failures.append(
-                f"#{number} を閉じられなかった (open のまま残る): {_one_line(closed.stderr)}"
+                rules.Failure(
+                    rules.CLOSE_FAILURE,
+                    f"#{number} を閉じられなかった (open のまま残る): "
+                    f"{_one_line(closed.stderr)}",
+                )
             )
 
 
@@ -462,7 +493,7 @@ def run() -> int:
         verdict = rules.step_verdict(
             os.environ.get("JOB_STATUS", ""),
             _flag(os.environ.get("CANCELLED_IS_FAILURE", "true")),
-            ["通報ステップが想定外の例外で落ちた"],
+            [rules.Failure(rules.UNEXPECTED, "通報ステップが想定外の例外で落ちた")],
         )
         summary(f"### ⚠️ 通報ステップが想定外の例外で落ちた\n\n{verdict.message}\n")
         log(f"通報ステップ終了: {verdict.message}")

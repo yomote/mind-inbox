@@ -28,18 +28,39 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 def test_単体_失敗側は通報できないと赤にし成功側は赤にしない() -> None:
     """#507 の中心。ここを 1 行壊すとどちらかの事故が復活する。"""
-    failures = ["open Issue の一覧を取得できなかった (rc=1)"]
+    failures = [rules.Failure(rules.LOOKUP, "open Issue の一覧を取得できなかった (rc=1)")]
 
     # デプロイが成功した回: 失うのは「open Issue を閉じる」だけなので step は赤にしない
     ok = rules.step_verdict("success", True, failures)
     assert ok.fail_step is False
     assert "赤にしない" in ok.message
-    assert failures[0] in ok.message  # 何に失敗したかを必ず持ち回る
+    assert failures[0].message in ok.message  # 何に失敗したかを必ず持ち回る
 
     # job が落ちた回: 通報できない = 障害が Issue に出ない。ここは赤のままにする
     ng = rules.step_verdict("failure", True, failures)
     assert ng.fail_step is True
-    assert failures[0] in ng.message
+    assert failures[0].message in ng.message
+
+
+def test_単体_サマリに書く結末は測った範囲だけ() -> None:
+    """無いと何が静かに通るか: 失敗の種類を見ずに「閉じ損ねた Issue が open のまま残る」と
+    書くと、**ラベル作成だけ失敗した回**や**復旧コメントは失敗したが close は成功した回**で
+    事実と逆のことを断定し、運用者に不要な再実行を促す (PR #509 Codex P2)。
+    これは「取れなかったものを異常なしと書かない」の裏返し (測っていないものを書かない)。
+    """
+    def msg(*failures: rules.Failure) -> str:
+        return rules.step_verdict("success", True, list(failures)).message
+
+    # close が本当に失敗した回だけ「open のまま残る」と断定してよい
+    assert "open のまま残る" in msg(rules.Failure(rules.CLOSE_FAILURE, "#42 を閉じられなかった"))
+    # 一覧が引けなかった回は「確認できていない」までしか言えない
+    lookup = msg(rules.Failure(rules.LOOKUP, "一覧を取得できなかった"))
+    assert "確認できていない" in lookup and "open のまま残る" not in lookup
+    # ラベル / 復旧コメントだけの失敗では Issue の状態に触れない
+    for kind in (rules.LABEL_FAILURE, rules.COMMENT, rules.CREATE, rules.INPUT):
+        only = msg(rules.Failure(kind, "なにかに失敗した"))
+        assert "open のまま残る" not in only and "確認できていない" not in only
+        assert "なにかに失敗した" in only  # 失敗そのものは必ず出す
 
 
 def test_単体_通報に失敗していなければ赤にしない() -> None:
@@ -52,14 +73,15 @@ def test_単体_cancelled_の扱いは呼び出し元の意図に従う() -> Non
     deploy / golden-path はタイムアウトが障害 (= failure 側)。"""
     assert rules.effective_status("cancelled", True) == "failure"
     assert rules.effective_status("cancelled", False) == "success"
-    assert rules.step_verdict("cancelled", True, ["x"]).fail_step is True
-    assert rules.step_verdict("cancelled", False, ["x"]).fail_step is False
+    x = [rules.Failure(rules.LOOKUP, "x")]
+    assert rules.step_verdict("cancelled", True, x).fail_step is True
+    assert rules.step_verdict("cancelled", False, x).fail_step is False
 
 
 def test_単体_未知の_job_status_は異常なしに丸めない() -> None:
     assert rules.effective_status("", True) == "failure"
     assert rules.effective_status("neutral", True) == "failure"
-    assert rules.step_verdict("", True, ["x"]).fail_step is True
+    assert rules.step_verdict("", True, [rules.Failure(rules.LOOKUP, "x")]).fail_step is True
 
 
 def test_単体_一覧が引けないときは失敗側だけ新規に立てる() -> None:
