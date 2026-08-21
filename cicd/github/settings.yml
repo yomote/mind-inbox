@@ -121,8 +121,13 @@ branch_protection:
     #    ⚠️ **「この行を false にする PR を出して apply」は脱出口にならない。**
     #    github-settings workflow は **main の版でしか動かない**ので、弱めた宣言を
     #    適用するには先にその PR を main へマージする必要があり、マージできないから
-    #    困っている場面では循環する。**ruleset を Disable しても classic branch
-    #    protection のこの設定は残る**ので、そちらも脱出口ではない (PR #512 Codex P1)。
+    #    困っている場面では循環する (PR #512 Codex P1)。
+    #
+    #    ⚠️ **門は 2 枚ある。** 実際にマージを止めているのは **ruleset** の方で
+    #    (#373 が `405 Repository rule violations found` を実測)、この設定が属する
+    #    classic branch protection とは別物。**緊急時は 2 枚とも外し、2 枚とも戻す。**
+    #    ruleset は宣言に入っていない (中身が未取得 / #390) ので、**戻し忘れても
+    #    どのレポートも赤くならない** — そこだけは規律で持つしかない。
     #
     #    宣言を書き換えないのが要点 — 書き換えると**開けた状態が「正常」として
     #    記録され**、戻し忘れが静かに続く。宣言を true のままにしておけば、

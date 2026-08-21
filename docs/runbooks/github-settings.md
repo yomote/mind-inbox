@@ -91,36 +91,52 @@
 ⚠️ **「宣言を弱める PR を出して apply する」は成立しません。** この workflow は
 **main の版でしか動かない** (上の「main の版であることを確認する」ステップ) ので、
 弱める宣言を適用するには**まずその PR を main にマージ**する必要があり、
-マージできないから困っている場面では循環します。**ruleset を Disable しても
-classic branch protection の `enforce_admins` は残る**ので、そちらも脱出口になりません。
+マージできないから困っている場面では循環します。
 
-**main を一切変えずに保護そのものを外す**のが正しい手順です (PO 本人の admin 権限が要る):
+⚠️ **門は 2 枚あります。片方だけ外しても通れません** (PR #512 Codex P1):
 
-1. **保護を外す** — GitHub の Web UI: `Settings` → `Branches` → `main` のルールの
-   `Edit` → **`Do not allow bypassing the above settings` のチェックを外す**
-   (ルールごと消す必要はない)。
-   API なら (PO のトークンで):
+| 層                            | 実体                                                                                                                                            | 宣言で管理しているか                                                                     |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| **ruleset**                   | **実際にマージを止めているのはこちら** (#373 が `405 Repository rule violations found / Required status check "review-gate" is failing` を実測) | **していない** — 中身が未取得 ([`rulesets.tf`](../../cicd/github/terraform/rulesets.tf)) |
+| **classic branch protection** | `enforce_admins` はこちら。管理者バイパスを塞ぐ                                                                                                 | している (`settings.yml`)                                                                |
+
+**main を一切変えずに、2 枚とも一時的に外す**のが正しい手順です (PO 本人の admin 権限が要る):
+
+### 開ける
+
+1. **ruleset を Disable にする** — `Settings` → `Rules` → `Rulesets` → 対象の ruleset →
+   `Enforcement status` を **`Disabled`** に。(ruleset id が分かっていれば API でも可。
+   **id は未取得**なので、まず `gh api "repos/yomote/mind-inbox/rulesets"` で引く)
+2. **classic の管理者バイパスを開ける** — `Settings` → `Branches` → `main` のルールの
+   `Edit` → **`Do not allow bypassing the above settings` のチェックを外す**。API なら:
 
    ```bash
-   # 管理者バイパスだけを無効化する (保護そのものは残す)
    gh api -X DELETE "repos/yomote/mind-inbox/branches/main/protection/enforce_admins"
    ```
 
-2. **壊れた門を直す PR をマージする** (これで復旧作業が進む)
+3. **壊れた門を直す PR をマージする**
 
-3. **必ず戻す** — 復旧したら `github-settings` workflow を `mode=check` → `mode=apply`
-   で流す。宣言 (`cicd/github/settings.yml`) は `enforce_admins: true` のままなので、
-   **apply が管理者バイパスを再び塞ぎます**。
+### 必ず戻す (2 枚とも)
+
+4. **ruleset の `Enforcement status` を `Active` に戻す**
+5. **classic を戻す** — `github-settings` workflow を `mode=check` → `mode=apply` で流す。
+   宣言 (`cicd/github/settings.yml`) は `enforce_admins: true` のままなので、
+   **apply が管理者バイパスを塞ぎ直します**。確認:
 
    ```bash
-   # 戻したことの確認 (true が返る)
-   gh api "repos/yomote/mind-inbox/branches/main/protection/enforce_admins" --jq '.enabled'
+   gh api "repos/yomote/mind-inbox/branches/main/protection/enforce_admins" --jq '.enabled'  # true
    ```
 
-**開けたことは run 履歴とデータブランチ `data/github-settings` の差分に残ります** —
-手順 3 を忘れると次の `check` が「差分あり」で赤くなるので、**開けっぱなしは静かに
-続きません**。それがこの手順を「宣言を書き換える」形にしていない理由でもあります
-(宣言を書き換えると、開けた状態が正常として記録されてしまう)。
+### 戻し忘れをどう検出するか — **半分しか機械が見ていない**
+
+- **classic 側は機械が見ます。** 宣言を `true` のままにしてあるので、戻し忘れると
+  次の `check` が「差分あり」で赤くなります。**だから宣言は書き換えない** —
+  書き換えると*開けた状態が「正常」として記録され*、戻し忘れが静かに続きます
+- 🔴 **ruleset 側は誰も見ていません。** `settings.yml` に ruleset の宣言は無く
+  (中身が未取得 / #373・#390)、`check` の比較対象にも入りません。**Disabled のまま
+  放置しても、どのレポートも赤くなりません** — 手順 4 を飛ばすと**門が開いたまま
+  静かに残ります**。ruleset が宣言に入るまでは、ここは**規律で持つしかない**箇所です。
+  開けたときは Issue を 1 本立てて、戻したらそれを閉じること
 
 ## Rollback
 
