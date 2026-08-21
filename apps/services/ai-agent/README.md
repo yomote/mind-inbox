@@ -126,6 +126,8 @@ curl -X POST https://${FQDN}/chat \
 | `LLM_TOTAL_TIMEOUT_SECONDS`          | -    | リトライ込みの 1 回の LLM 呼び出しの実時間上限秒（デフォルト: `120` / #313）。**上流 Functions の 230s より必ず先に切れる**ことが条件                                                                      |
 | `LLM_STREAM_IDLE_TIMEOUT_SECONDS`    | -    | ストリーミングのチャンク間無音の上限秒（デフォルト: `45` / #313）。総時間ではなく無音で測る（長い応答を正常に流し切るため）。最初のトークンまでの待ちもこの上限                                            |
 | `COSMOS_REQUEST_TIMEOUT_SECONDS`     | -    | Cosmos への永続化 I/O のタイムアウト秒（デフォルト: `20` / #313）。ここが詰まると `/chat` 全体が詰まるので LLM より短く切る                                                                                |
+| `HISTORY_WINDOW_MAX_MESSAGES`        | -    | LLM へ渡す会話履歴の件数上限（デフォルト: `40` / #486）。**ターン境界で切り、先頭の system プロンプトは常に残す**（判定は `app/history.py` の `select_window` が正典）。保存時にも同じ窓まで刈る           |
+| `HISTORY_WINDOW_MAX_CHARS`           | -    | LLM へ渡す会話履歴の文字数予算（デフォルト: `40000` / #486）。tokenizer は持ち込まない代理指標。件数と**両方が同時に効く**。BFF の `MAX_MESSAGE_LENGTH`（8,000）は入力 1 通のみの上限で累積は縛らない      |
 | `COSMOS_ENDPOINT`                    | -    | Cosmos DB エンドポイント（#188 / ADR 0030）。**未設定なら in-memory で動く**（ローカル既定）。設定時はセッション・承認レコード・MAF checkpoint を TTL 付きコンテナへ永続化（認証は Managed Identity のみ） |
 | `COSMOS_DATABASE`                    | -    | Cosmos DB データベース名（デフォルト: `mindinbox`）                                                                                                                                                        |
 | `COSMOS_SESSIONS_CONTAINER`          | -    | セッションコンテナ名（デフォルト: `sessions`。bicep の宣言と揃える）                                                                                                                                       |

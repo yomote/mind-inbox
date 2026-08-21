@@ -99,6 +99,8 @@ class ScriptedChatClient(
     - `steps`: モデルの往復ごとの返答。使い切ったら `default_reply` を返す。
     - `inner_calls`: `_inner_get_response` が呼ばれた回数 = **LLM 往復の実測値**。
     - `seen_options`: 各往復で渡された options (`tools` の中身の検証に使う)。
+    - `seen_messages`: 各往復で**実際に LLM へ渡った messages** (履歴の窓 #486 の
+      検証に使う)。呼び出し側が組んだ配列ではなくこの層まで届いたものを見る。
     """
 
     OTEL_PROVIDER_NAME = "fake"
@@ -114,6 +116,7 @@ class ScriptedChatClient(
         self._default_reply = default_reply
         self.inner_calls = 0
         self.seen_options: list[dict[str, Any]] = []
+        self.seen_messages: list[list[Message]] = []
 
     @property
     def tool_names_seen(self) -> list[list[str]]:
@@ -131,6 +134,7 @@ class ScriptedChatClient(
     def _inner_get_response(self, *, messages, stream, options=None, **kwargs):
         self.inner_calls += 1
         self.seen_options.append(dict(options or {}))
+        self.seen_messages.append(list(messages))
         step = self._next_step()
 
         if not stream:
