@@ -536,16 +536,22 @@ def test_単体_fenced_code_の中のコメントは見出しに数えない(tmp
     assert [f["file"] for f in detect_unresolved_md_references(root)] == ["cicd/x.py"]
 
 
-def test_単体_識別子のアンダースコアは照合で落とさない() -> None:
-    """PR #512 Codex P2。
+def test_単体_文言そのものの文字は照合で落とさない() -> None:
+    """PR #512 Codex P2 (2 ラウンド分)。
 
     無いと何が静かに通るか:
-        `_` を位置に関係なく落とすと `auto_merge` と `automerge` が同じ文言になる。
-        コード識別子を引用している箇所が多いリポジトリでは、**まさに検出したい
-        文言変更 (識別子の改名) が 0 件で通る**。
+        正規化で落としてよいのは**構造上の装飾** (強調・鉤括弧・行頭のコメント記号・
+        改行) だけ。文言そのものの文字まで落とすと、**まさに検出したい文言変更が
+        0 件で通る**:
+        - `_`: `auto_merge` と `automerge` が同じ文言になる (識別子の改名)
+        - `?` `！`: 「無いと何が静かに通るか?」から `?` が消えても気づけない
     """
     assert not reference_resolves("auto_merge", "quote", "automerge を使う")
     assert reference_resolves("auto_merge", "quote", "**auto_merge** を使う")
+    assert not reference_resolves("静かに通るか?", "quote", "静かに通るか を書く")
+    assert not reference_resolves("大事だ！", "quote", "大事だ と書く")
+    # 構造上の装飾は落とす (折り返しの `#` / 強調 / 全角空白)
+    assert reference_resolves("静かに通るか?", "quote", "**静かに通るか?**")
 
 
 def test_単体_引用検査の対象拡張子には_tf_と_bicep_が入っている(tmp_path) -> None:
@@ -620,9 +626,14 @@ def test_単体_つなぎに別の参照先が挟まったら引用として拾�
         読み違え、**直しようのない finding** を毎週報告する (偽陽性は検出器の死)。
         実物が `apps/bff/src/domain/sentences.property.test.ts` にある。
     """
-    quoted = _Q_OPEN + "ADR の文言" + _Q_CLOSE
+    quoted = _Q_OPEN + "別の参照先の文言" + _Q_CLOSE
     assert iter_md_references("docs/design/domain_rules.md \u00a71 と ADR 0024" + quoted) == []
     assert iter_md_references("docs/testing/strategy.md \u00a71.2 の" + quoted) == []
+    # つなぎに別の md が現れたら、**鉤括弧にいちばん近い方**を参照先にする
+    # (`foo.md と bar.md「X」` の「X」は bar.md のもの / PR #512 Codex P2)
+    assert iter_md_references("docs/foo.md と docs/bar.md" + quoted) == [
+        ("docs/bar.md", "別の参照先の文言", "quote")
+    ]
 
 
 def test_単体_省略記号を含む引用は断片ごとに実在を確かめる() -> None:
@@ -632,8 +643,12 @@ def test_単体_省略記号を含む引用は断片ごとに実在を確かめ�
         - 省略を丸ごと 1 文字列として照合すると、**正しい引用が毎週偽陽性**になる
           (実物が `.github/claude/review-rubric.md` にある)
         - 逆に省略があるからと素通しすると、**片方の断片が消えていても気づけない**
+        - 順番を見ないと、**参照先で並びが逆転していても**解決済みになる
     """
     body = "前半の文言 — 途中は関係ない話 — 後半の文言\n"
     assert reference_resolves("前半の文言 … 後半の文言", "quote", body)
     assert not reference_resolves("前半の文言 … 消えた文言", "quote", body)
     assert not reference_resolves("消えた文言 … 後半の文言", "quote", body)
+    # **出現順まで見る** — 断片が「どこかにある」だけで通すと、参照先で順序が
+    # 逆転していても解決済みになる (PR #512 Codex P2)
+    assert not reference_resolves("前半の文言 … 後半の文言", "quote", "後半の文言 — 前半の文言")
