@@ -628,11 +628,15 @@ def test_単体_つなぎに別の参照先が挟まったら引用として拾�
     """
     quoted = _Q_OPEN + "別の参照先の文言" + _Q_CLOSE
     assert iter_md_references("docs/design/domain_rules.md \u00a71 と ADR 0024" + quoted) == []
-    assert iter_md_references("docs/testing/strategy.md \u00a71.2 の" + quoted) == []
     # つなぎに別の md が現れたら、**鉤括弧にいちばん近い方**を参照先にする
     # (`foo.md と bar.md「X」` の「X」は bar.md のもの / PR #512 Codex P2)
     assert iter_md_references("docs/foo.md と docs/bar.md" + quoted) == [
         ("docs/bar.md", "別の参照先の文言", "quote")
+    ]
+    # **`\u00a7` は別の参照先ではない** — 同じファイルの節を指すだけなので拾う。
+    # 一律に弾くとこの形が丸ごと未検査になる (実物: docs/testing/property-based-testing.md)
+    assert iter_md_references("docs/testing/strategy.md \u00a71.3 の" + quoted) == [
+        ("docs/testing/strategy.md", "別の参照先の文言", "quote")
     ]
 
 
