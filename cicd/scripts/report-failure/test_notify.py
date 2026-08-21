@@ -89,6 +89,11 @@ def run_notify(
     hang: str = "",
     deadline: str = "",
 ) -> tuple[subprocess.CompletedProcess, list[list[str]], str]:
+    # 呼び出し元が未作成のディレクトリを渡すことがある。作らずに進むと gh スタブが
+    # GH_STUB_LOG の書き込みで FileNotFoundError を起こして**全呼び出しが自壊**し、
+    # 「注入した 1 コマンドだけが失敗する」はずのテストが「gh が丸ごと壊れた」に
+    # 静かに縮退する (PR #509 代役 judge C4 / 実測: calls.json 空・502 が一度も出ない)。
+    tmp_path.mkdir(parents=True, exist_ok=True)
     log = tmp_path / "calls.json"
     summary = tmp_path / "summary.md"
     env = {
@@ -253,22 +258,47 @@ def test_単体_job_status_が空でも黙らない(gh_stub, tmp_path) -> None:
     assert proc.returncode == 1  # 未知の状態は報告側に倒す (effective_status)
 
 
-@pytest.mark.parametrize(
-    "fail",
-    ["label-create", "issue-list", "issue-comment", "issue-close", "issue-create"],
-)
-def test_単体_どこで失敗しても出力が空にならない(gh_stub, tmp_path, fail: str) -> None:
-    """#507 の再発検知。**どの 1 手が落ちても** ログが 0 バイトにならないことを固定する。"""
-    for job_status in ("success", "failure"):
-        proc, _calls, _ = run_notify(
-            gh_stub,
-            tmp_path / f"{fail}-{job_status}",
-            job_status=job_status,
-            fail=fail,
-            issues=[{"number": 42, "title": TITLE_DEPLOY}],
-        )
-        assert proc.stdout.strip(), f"{fail}/{job_status} で無言になった"
-        assert "通報ステップ終了" in proc.stdout
+# (落とすコマンド, job の成否, 一覧が返す Issue) — **その組み合わせで実際にそのコマンドに
+# 到達するものだけ**を並べる。総当たりにすると `issue-close` × 失敗 (= 追記経路で close に
+# 到達しない) のような「到達しないセル」が混ざり、何も検証していない緑になる。
+_REACHABLE_FAILURES = [
+    ("label-create", "success", [{"number": 42, "title": TITLE_DEPLOY}]),
+    ("label-create", "failure", [{"number": 42, "title": TITLE_DEPLOY}]),
+    ("issue-list", "success", [{"number": 42, "title": TITLE_DEPLOY}]),
+    ("issue-list", "failure", [{"number": 42, "title": TITLE_DEPLOY}]),
+    # 成功側は復旧コメント、失敗側は再発の追記 — どちらも issue comment を通る
+    ("issue-comment", "success", [{"number": 42, "title": TITLE_DEPLOY}]),
+    ("issue-comment", "failure", [{"number": 42, "title": TITLE_DEPLOY}]),
+    ("issue-close", "success", [{"number": 42, "title": TITLE_DEPLOY}]),  # 復旧経路だけ
+    ("issue-create", "failure", []),  # open Issue が無い失敗回だけ新規作成に入る
+]
+
+
+@pytest.mark.parametrize(("fail", "job_status", "issues"), _REACHABLE_FAILURES)
+def test_単体_どこで失敗しても出力が空にならない(
+    gh_stub, tmp_path, fail: str, job_status: str, issues: list[dict]
+) -> None:
+    """#507 の再発検知。**どの 1 手が落ちても** ログが 0 バイトにならないことを固定する。
+
+    「無言にならない」だけを見ると、**gh スタブ自身が壊れて全滅した回も緑になる**
+    (PR #509 代役 judge C4 — 実際にそうなっていた。呼び出し元が未作成のディレクトリを
+    渡し、スタブが GH_STUB_LOG の書き込みで自壊していた)。狙ったコマンドが本当に
+    試行され、注入した失敗が本当に起きたことを併せて固定し、自壊を機械で検知する。
+    """
+    proc, calls, _ = run_notify(
+        gh_stub,
+        tmp_path / f"{fail}-{job_status}",
+        job_status=job_status,
+        fail=fail,
+        issues=issues,
+    )
+    assert proc.stdout.strip(), f"{fail}/{job_status} で無言になった"
+    assert "通報ステップ終了" in proc.stdout
+    # スタブが生きていて、狙ったコマンドが実際に試行されたか (到達しないと検証にならない)
+    assert fail in _keys(calls), f"{fail}/{job_status}: {fail} が試行されていない ({calls})"
+    # 注入した失敗が実際に起き、その理由がログに残ったか
+    assert "502 Bad Gateway" in proc.stdout, f"{fail}/{job_status}: 注入した失敗が出ていない"
+    assert "::error::" in proc.stdout, f"{fail}/{job_status}: 失敗が ::error:: に出ていない"
 
 
 def test_単体_gh_が存在しなくても無言で死なない(gh_stub, tmp_path) -> None:

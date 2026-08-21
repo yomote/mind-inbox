@@ -36,8 +36,9 @@ TEARDOWN_STEP = "Tear down (cleanup-env)"
 # (PR #281 Codex P2-b)。marker は失敗し得る処理より**前**に置いてある。
 MARKER_STEP = "デプロイ経路に入った (marker)"
 
-# report-failure (.github/actions/report-failure/action.yml) が「まだ落ちている」
-# 追記に使う固定文言。**変えたら action.yml 側のコメントの指示どおりここも直すこと。**
+# report-failure (cicd/scripts/report-failure/notify_rules.py) が「まだ落ちている」
+# 追記に使う固定文言。**正典は notify_rules.FAILURE_COMMENT_MARKER で、両者の一致は
+# test_notify_rules.py が固定している** (片方だけ変えるとそのテストが落ちる)。
 # これで「再発の時刻」を測る — Issue の created_at は初回の障害で固定されるため、
 # 閉じ損ねた Issue に再発が追記された場合を取り違える (PR #281 Codex P2)。
 FAILURE_COMMENT_MARKER = "🔴 まだ落ちています"
