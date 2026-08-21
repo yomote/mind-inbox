@@ -43,14 +43,14 @@ Mind Inbox は **コーディングエージェント駆動の高速開発** を
 
 ### 1.3 設計原則
 
-| 原則               | 内容                                                                                                                       |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| **契約集約**       | tRPC の `zod` と AI Agent の `pydantic` は同じ I/O を別言語で書いている。両者の対称性を契約テストで担保                    |
-| **偽物を作らない** | 層の境界は「何を偽物にするか」(§2)。**偽物は外部 (AI / 音声) だけ、それもスモークの異常系に限る**                          |
-| **性質で書く**     | 単体テストは例ではなくプロパティ (性質) で書くのを既定にする (§3)                                                          |
-| **mock 一元化**    | `apps/frontend/src/mockApi.ts` を共通 fixture に。テストごとに別の mock を増やさない                                       |
-| **snapshot 最小**  | 境界 (tRPC レスポンス JSON / extract 出力 JSON) のみ。UI snapshot は採用しない                                             |
-| **失敗の局所化**   | テスト名に `[契約]` `[単体]` `[スモーク]` `[E2E]` プレフィックスを付け、ログで層を即特定 (移行中の旧プレフィックスは §6.2) |
+| 原則               | 内容                                                                                                                                                                                                                                             |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **契約集約**       | tRPC の `zod` と AI Agent の `pydantic` は同じ I/O を別言語で書いている。両者の対称性を契約テストで担保                                                                                                                                          |
+| **偽物を作らない** | 層の境界は「何を偽物にするか」(§2)。**プロダクトの依存で偽物にしてよいのは外部 (AI / 音声) だけ、それもスモークの異常系に限る**。唯一の例外が `cicd/scripts/` の配線テストで、そこでは CLI 実行ファイル (`gh` / `az` など) をスタブにする (§2.2) |
+| **性質で書く**     | 単体テストは例ではなくプロパティ (性質) で書くのを既定にする (§3)                                                                                                                                                                                |
+| **mock 一元化**    | `apps/frontend/src/mockApi.ts` を共通 fixture に。テストごとに別の mock を増やさない                                                                                                                                                             |
+| **snapshot 最小**  | 境界 (tRPC レスポンス JSON / extract 出力 JSON) のみ。UI snapshot は採用しない                                                                                                                                                                   |
+| **失敗の局所化**   | テスト名に `[契約]` `[単体]` `[スモーク]` `[E2E]` プレフィックスを付け、ログで層を即特定 (移行中の旧プレフィックスは §6.2)                                                                                                                       |
 
 ### 1.4 テスト可能性を設計基準にする
 
@@ -91,11 +91,13 @@ Mind Inbox は **コーディングエージェント駆動の高速開発** を
 │ 層           │ 偽物にするもの       │ ここでやること                     │
 ├──────────────┼────────────────────┼──────────────────────────────────┤
 │ 契約テスト    │ 何も動かさない       │ 2 言語 (zod/pydantic) の定義のズレ │
-│ 単体テスト    │ 何も偽物にしない     │ BFF のドメインルール + 配線 (§2.2) │
+│ 単体テスト    │ 何も偽物にしない*    │ BFF のドメインルール + 配線 (§2.2) │
 │ スモークテスト │ 外部だけ (AI/音声)  │ 異常系。500/タイムアウト/壊れた JSON │
 │ E2E テスト   │ 何も偽物にしない     │ ゴールデンパス (実環境)。本数を増やさない │
 └──────────────┴────────────────────┴──────────────────────────────────┘
 ```
+
+\* `cicd/scripts/` の配線テストだけは例外で、CLI 実行ファイル (`gh` / `az` など) をスタブにする。**条件と根拠は §2.2 が正典**で、ここには書かない。
 
 **層ごとに役割が重複しないように書く**。同じことを 2 つの層で書かない。
 
@@ -137,18 +139,18 @@ Mind Inbox は **コーディングエージェント駆動の高速開発** を
 
 根拠: これらの自動化は **PR の CI に実動作経路が無い** (走るのは deploy 後・定期実行・特定イベントの時だけ)。判定を純粋関数に切り出して単体で守っても、**その関数を呼ぶ YAML やシェルの結線が外れたら赤くならない** — 配線テストが唯一の検出点になる。実例が #507 で、composite action の結線が無言で死んだまま 3 run 連続で誰も気づかなかった。[`cicd/CLAUDE.md`](../../cicd/CLAUDE.md) の「動いたら痕跡が残ること」と同じ狙いを、テスト側に置いたものと読む。
 
-慣例の実例 (この形で既に置かれている 8 ファイル):
+慣例の実例 — **「スタブを PATH に置く」と「対象を通しで実行する」の両方を満たすものだけ**を挙げる (2026-08-21 に全ファイルの実装を開いて確認した結果が次の 6 件):
 
-| 対象の自動化    | 配線テスト                                           |
-| --------------- | ---------------------------------------------------- |
-| deploy          | `cicd/scripts/deploy/test_encrypt_e2e_traces.py`     |
-| env 撤収ガード  | `cicd/scripts/env/test_cleanup_env_guard_wiring.py`  |
-| github-settings | `cicd/scripts/github-settings/test_settings_diff.py` |
-| github-settings | `cicd/scripts/github-settings/test_sync.py`          |
-| mgmt-bootstrap  | `cicd/scripts/mgmt-bootstrap/test_bootstrap.py`      |
-| smoke-test      | `cicd/scripts/smoke-test/test_golden_path.py`        |
-| ux-data         | `cicd/scripts/ux-data/test_ux_data.py`               |
-| ux-probe        | `cicd/scripts/ux-probe/test_post_judge_score.py`     |
+| 対象の自動化    | 配線テスト                                          | PATH に置くスタブ           | 通しの実行                        |
+| --------------- | --------------------------------------------------- | --------------------------- | --------------------------------- |
+| deploy          | `cicd/scripts/deploy/test_encrypt_e2e_traces.py`    | `gpg`                       | `bash encrypt-e2e-traces.sh`      |
+| env 撤収ガード  | `cicd/scripts/env/test_cleanup_env_guard_wiring.py` | `az`                        | `bash cleanup-env.sh`             |
+| github-settings | `cicd/scripts/github-settings/test_sync.py`         | `gh`                        | `sync.main(argv)` (argv から通し) |
+| mgmt-bootstrap  | `cicd/scripts/mgmt-bootstrap/test_bootstrap.py`     | `az` / `curl` / `terraform` | `bootstrap.sh`                    |
+| smoke-test      | `cicd/scripts/smoke-test/test_golden_path.py`       | `az` / `curl`               | `bash golden-path.sh`             |
+| status-page     | `cicd/scripts/status-page/test_build.py`            | `gh`                        | `python build.py <out>`           |
+
+**この形に当たらないもの**を実例に混ぜない。`cicd/scripts/` 配下でも、関数を直接 import する純粋ロジックのテスト (`github-settings/test_settings_diff.py`) は通常の単体テストであって例外の対象ではないし、スタブを PATH ではなく一時ツリーに置くもの (`ux-probe/test_post_judge_score.py`) や本物の依存をサンドボックスで動かすもの (`ux-data/test_ux_data.py` の実 git) も、この節が許可している形とは別物。
 
 **この例外を広げない境界**: 対象は `cicd/scripts/` 配下の自動化に限る。アプリ (BFF / frontend / ai-agent) のコードは入場条件のままで、外部を触る検証はスモーク (§2.3) / E2E (§2.4) が持つ。また例外はテストの**置き場所**の話であって、§1.2 の「無いと何が静かに通るか / 期待値はどの仕様から来たか」は配線テストにもそのまま掛かる。
 
