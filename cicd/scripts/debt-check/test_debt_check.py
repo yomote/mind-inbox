@@ -427,6 +427,26 @@ def test_単体_参照先のmdが見つからない引用は報告しない(tmp_
     )
 
 
+def test_単体_節番号の正しさは検証していないと明示する() -> None:
+    """検証していないものを 0 件に混ぜない (PR #512 Codex P2)。
+
+    無いと何が静かに通るか:
+        `strategy.md \u00a71.3 の「X」` の `\u00a71.3` は**照合に使っていない** (本文の
+        どこかに「X」があれば解決とする)。節が消えて文言だけ別の節へ移ると、
+        明示された参照位置は腐っているのに検出されない。**その狭さを毎回出さないと、
+        「検証した」と読まれる**。
+    """
+    body = "# 見出し\n\n## 1.1 別の節\n\n移動した文言\n\n## 1.3 元の節\n\n別の話\n"
+    # 現状の仕様: 節の外にあっても解決とする (だから UNCOVERED に書く)
+    assert reference_resolves("移動した文言", "quote", body)
+    # **他の項目と重ならない文言で照合する** — 「節番号」だけだと、別の
+    # UNCOVERED 項目 (`\u00a78.3` のような節番号指定) にも含まれるので、この項目を
+    # 消しても素通りする空テストになる (この PR の変異測定で実際に素通りした)
+    assert any("その節の中にあるかまでは見ていない" in item for item in UNCOVERED), (
+        "節番号を照合に使っていないことを UNCOVERED に書いていない (silent caps)"
+    )
+
+
 def test_単体_凍結された記録は走査しない(tmp_path) -> None:
     """ADR 本文・実測記録・セッション記録は「当時の引用」が正しい姿。
 
@@ -550,8 +570,14 @@ def test_単体_文言そのものの文字は照合で落とさない() -> None
     assert reference_resolves("auto_merge", "quote", "**auto_merge** を使う")
     assert not reference_resolves("静かに通るか?", "quote", "静かに通るか を書く")
     assert not reference_resolves("大事だ！", "quote", "大事だ と書く")
-    # 構造上の装飾は落とす (折り返しの `#` / 強調 / 全角空白)
+    # `#` も同じ — **行頭のコメント記号としてだけ**落とす。位置を問わず落とすと
+    # `Issue #323` と `Issue 323` が同じ文言になる (PR #512 Codex P2)
+    assert not reference_resolves("Issue #323", "quote", "Issue 323 を見る")
+    assert reference_resolves("Issue #323", "quote", "**Issue #323** を見る")
+    # 構造上の装飾は落とす (折り返しの行頭 `#` / `//` / 強調 / 全角空白)
     assert reference_resolves("静かに通るか?", "quote", "**静かに通るか?**")
+    assert reference_resolves("前半 後半", "quote", "# 前半\n#   後半\n")
+    assert reference_resolves("前半 後半", "quote", "// 前半\n//   後半\n")
 
 
 def test_単体_引用検査の対象拡張子には_tf_と_bicep_が入っている(tmp_path) -> None:
