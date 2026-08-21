@@ -43,10 +43,11 @@ UNCOVERED = [
     "次に移動したとき unresolved-md-references が拾う",
     "参照先の md 自体が見つからない引用 — パス表記の揺れ (`$SCRIPT_DIR/README.md` 等) と"
     "区別できないため報告しない。ファイルの実在は broken-doc-links が md → md についてのみ見る",
-    "凍結された記録の中の引用 — ADR 本文 (`docs/adr/**`。退役分を含む。索引の README.md は除く) と "
-    "`docs/debrief/journal.md` は**当時の引用として正しい**ので走査しない。"
-    "**`Accepted` の ADR 本文は書き換えない**規約 (AGENTS.md) があり、報告しても直せないため — "
-    "腐った参照は supersede か索引側で扱う",
+    "凍結された記録の中の引用 — ADR 本文 (`docs/adr/**`。退役分を含む) / 実測記録 "
+    "(`docs/reviews/**`) / `docs/debrief/journal.md` は**当時の引用として正しい**ので走査しない "
+    "(索引の README.md は除く = 走査する)。**`Accepted` の ADR 本文は書き換えない** (AGENTS.md)、"
+    "**実測記録は測定日時点の事実として残す** (docs/documentation/strategy.md) という規約があり、"
+    "報告しても直せないため — 腐った参照は supersede か索引側で扱う",
     "引用検査の対象外にある拡張子 — 検査するのは detect.py の MD_REF_SCAN_EXTS に並べた "
     "拡張子だけ (.py/.ts/.tsx/.js/.mjs/.sh/.yml/.yaml/.md/.tf/.bicep)。"
     "ここに無い形式のファイルが md を引用していても 1 行も検査されない",
@@ -108,7 +109,13 @@ MD_REF_SCAN_EXTS = frozenset(
 # ADR の**索引** (`docs/adr/README.md` / `docs/adr/archive/README.md`) は記録ではなく
 # 現役の案内なので走査する。判定は下の is_frozen_record。
 FROZEN_RECORD_PREFIXES = ("docs/debrief/journal.md",)
-ADR_DIR_PREFIX = "docs/adr/"
+# **中身が記録で、索引 (README.md) だけが現役**のディレクトリ:
+#   - `docs/adr/` — ADR 本文 (退役分の `archive/` を含む)
+#   - `docs/reviews/` — rubric の導出元となる**実測記録**。「測定日時点の事実として残す /
+#     書き換えない」と `docs/documentation/strategy.md` と各ファイル冒頭が明記している
+#     (PR #512 Codex P1)。書き換えると rubric の根拠だったときの表現が失われ、
+#     測定スナップショットを再現できなくなる
+RECORD_DIR_PREFIXES = ("docs/adr/", "docs/reviews/")
 
 # 参照先 md → (任意の閉じ括弧) → 「引用」 または 「の X 節」。
 #
@@ -309,13 +316,15 @@ def is_frozen_record(relative_path: str) -> bool:
     """引用検査の対象外 (= 当時の引用が正しい記録) か。
 
     - `docs/debrief/journal.md` — セッション記録
-    - `docs/adr/**` の ADR 本文 (退役分の `archive/` を含む) — **`Accepted` の ADR 本文は
-      書き換えない**規約 (AGENTS.md) があるので、報告しても直せない
-    - ただし ADR の**索引** (`README.md`) は現役の案内なので対象に**含める**
+    - `docs/adr/**` の ADR 本文 — **`Accepted` の ADR 本文は書き換えない**規約
+      (AGENTS.md) があるので、報告しても直せない
+    - `docs/reviews/**` の実測記録 — **測定日時点の事実として残す**規約
+      (`docs/documentation/strategy.md`)。直すと測定スナップショットが再現できない
+    - ただし**索引** (`README.md`) は現役の案内なので対象に**含める**
     """
     if relative_path.startswith(FROZEN_RECORD_PREFIXES):
         return True
-    if relative_path.startswith(ADR_DIR_PREFIX):
+    if relative_path.startswith(RECORD_DIR_PREFIXES):
         return not relative_path.endswith("/README.md")
     return False
 

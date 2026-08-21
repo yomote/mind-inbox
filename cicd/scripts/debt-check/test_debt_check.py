@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 
 from detect import (
-    ADR_DIR_PREFIX,
+    RECORD_DIR_PREFIXES,
     EXCLUDED_DIR_NAMES,
     FROZEN_RECORD_PREFIXES,
     LINK_SCAN_DIRS,
@@ -428,20 +428,24 @@ def test_単体_参照先のmdが見つからない引用は報告しない(tmp_
 
 
 def test_単体_凍結された記録は走査しない(tmp_path) -> None:
-    """ADR 本文とセッション記録は「当時の引用」が正しい姿。
+    """ADR 本文・実測記録・セッション記録は「当時の引用」が正しい姿。
 
     無いと何が静かに通るか:
         - 過去の記録を現在の文面に追随させろという finding が毎週立ち、直すと
           **記録が記録でなくなる** (書いた時点で何と書いてあったかが失われる)
-        - `Accepted` の ADR 本文は AGENTS.md が書き換えを禁じているので、報告しても
-          **直せない finding が毎週残り続ける** (ノイズで本物が読まれなくなる /
+        - `Accepted` の ADR 本文 (AGENTS.md) と `docs/reviews/` の実測記録
+          (`docs/documentation/strategy.md`) は規約で書き換えを禁じられているので、
+          報告しても**直せない finding が毎週残り続ける** (ノイズで本物が読まれなくなる /
           PR #512 Codex P1)
         - 逆に除外が効きすぎると、**現役の案内である索引 (README.md)** の腐った参照まで
           見逃す
     """
     root = _repo(tmp_path)
     assert FROZEN_RECORD_PREFIXES == ("docs/debrief/journal.md",), "凍結範囲が変わっている"
-    assert ADR_DIR_PREFIX == "docs/adr/", "ADR の置き場が変わっている"
+    assert RECORD_DIR_PREFIXES == (
+        "docs/adr/",
+        "docs/reviews/",
+    ), "記録ディレクトリが変わっている"
     (root / "CLAUDE.md").write_text("# root\n", encoding="utf-8")
     stale = f"- {_quote_ref('CLAUDE.md', '当時はこう書いてあった')}\n"
     (root / "docs" / "adr" / "archive" / "operations").mkdir(parents=True)
@@ -449,17 +453,24 @@ def test_単体_凍結された記録は走査しない(tmp_path) -> None:
         stale, encoding="utf-8"
     )
     (root / "docs" / "adr" / "0001-x.md").write_text(stale, encoding="utf-8")
+    # 実測記録も同じ (「測定日時点の事実として残す」= 書き換えられない / PR #512 Codex P1)
+    (root / "docs" / "reviews").mkdir(parents=True)
+    (root / "docs" / "reviews" / "analysis-2026-08-12.md").write_text(
+        stale, encoding="utf-8"
+    )
     (root / "docs" / "debrief").mkdir(parents=True)
     (root / "docs" / "debrief" / "journal.md").write_text(stale, encoding="utf-8")
     assert detect_unresolved_md_references(root) == []
     # 索引と、凍結範囲の外に同じものを置けば報告される (= 除外が効きすぎていない)
     (root / "docs" / "adr" / "README.md").write_text(stale, encoding="utf-8")
     (root / "docs" / "adr" / "archive" / "README.md").write_text(stale, encoding="utf-8")
+    (root / "docs" / "reviews" / "README.md").write_text(stale, encoding="utf-8")
     (root / "docs" / "live.md").write_text(stale, encoding="utf-8")
     assert sorted(f["file"] for f in detect_unresolved_md_references(root)) == [
         "docs/adr/README.md",
         "docs/adr/archive/README.md",
         "docs/live.md",
+        "docs/reviews/README.md",
     ]
 
 

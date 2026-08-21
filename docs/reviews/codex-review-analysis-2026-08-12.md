@@ -5,7 +5,7 @@
 
 調査日: 2026-08-12 / 調査対象リポジトリ: `yomote/mind-inbox`
 目的: Codex ([Issue #345](https://github.com/yomote/mind-inbox/issues/345) で利用上限に到達) の代役エージェントを仕立てるため、**実際に効いた指摘の形**を実データから写し取る。
-関連: ADR 0035 の「未決」に残っていた計画 ([`docs/adr/archive/operations/role-split-across-agents-and-actions.md`](../adr/archive/operations/role-split-across-agents-and-actions.md) の `:132`「Codex の指摘の質」— 最初の 3〜5 本で分類して測る、という宿題) の実行。
+関連: ADR 0035 の「未決」に残っていた計画 ([`docs/adr/archive/operations/role-split-across-agents-and-actions.md`](../adr/archive/operations/role-split-across-agents-and-actions.md) の `:132` 「Codex の指摘の質を分類して測る」) の実行。
 
 ---
 
