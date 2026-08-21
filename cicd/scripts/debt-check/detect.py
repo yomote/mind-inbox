@@ -43,8 +43,15 @@ UNCOVERED = [
     "次に移動したとき unresolved-md-references が拾う",
     "参照先の md 自体が見つからない引用 — パス表記の揺れ (`$SCRIPT_DIR/README.md` 等) と"
     "区別できないため報告しない。ファイルの実在は broken-doc-links が md → md についてのみ見る",
-    "凍結された記録の中の引用 — `docs/adr/archive/**` と `docs/debrief/journal.md` は"
-    "**当時の引用として正しい**ので走査しない (直すと記録が記録でなくなる)",
+    "凍結された記録の中の引用 — ADR 本文 (`docs/adr/**`。退役分を含む。索引の README.md は除く) と "
+    "`docs/debrief/journal.md` は**当時の引用として正しい**ので走査しない。"
+    "**`Accepted` の ADR 本文は書き換えない**規約 (AGENTS.md) があり、報告しても直せないため — "
+    "腐った参照は supersede か索引側で扱う",
+    "引用検査の対象外にある拡張子 — 検査するのは detect.py の MD_REF_SCAN_EXTS に並べた "
+    "拡張子だけ (.py/.ts/.tsx/.js/.mjs/.sh/.yml/.yaml/.md/.tf/.bicep)。"
+    "ここに無い形式のファイルが md を引用していても 1 行も検査されない",
+    "参照先の fenced code の中にある文言 — 「引用」の照合では本文全体を見るので、"
+    "**コード例の中の文字列にも当たる**。節 (`の X 節`) の照合では fenced code を落としている",
 ]
 
 # リンク検査の走査対象。ここに無いディレクトリの md は**検査されない** —
@@ -72,15 +79,44 @@ EXCLUDED_DIR_NAMES = {"node_modules", ".venv", "worktrees", ".git"}
 # 事故を拾う (#387 の 2)。broken-doc-links はリンク先ファイルの実在しか見ないので、
 # **ファイルは在るのに中身が別物**というこの形は素通りしていた。
 MD_REF_SCAN_DIRS = ("apps", "cicd", "docs", ".github", ".claude")
+# 拡張子は**リポジトリ内で実際に md を引用しているもの**を並べる。`.tf` / `.bicep` は
+# 実物がある (`cicd/github/terraform/rulesets.tf` が docs/team.md を、`cicd/iac/*.bicep` が
+# runbook を引いている) ので入れてある。**ここに無い拡張子は 1 行も検査されない** —
+# 走査範囲の狭さは 0 件と区別が付かないので UNCOVERED にも書く (PR #512 Codex P2)。
 MD_REF_SCAN_EXTS = frozenset(
-    {".py", ".ts", ".tsx", ".js", ".mjs", ".sh", ".yml", ".yaml", ".md"}
+    {
+        ".py",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".mjs",
+        ".sh",
+        ".yml",
+        ".yaml",
+        ".md",
+        ".tf",
+        ".bicep",
+    }
 )
-# **凍結された記録は走査しない。** 退役 ADR とセッション記録は「その時点の引用」が
-# 正しい姿で、現在の文面に追随させると記録として壊れる。黙って狭めないため UNCOVERED
-# にも書いてある。
-FROZEN_RECORD_PREFIXES = ("docs/adr/archive/", "docs/debrief/journal.md")
+# **凍結された記録は走査しない。** ADR 本文 (退役分を含む) とセッション記録は
+# 「その時点の引用」が正しい姿で、現在の文面に追随させると記録として壊れる。加えて
+# **`Accepted` の ADR 本文は書き換えない**のがこのリポジトリの規約 (AGENTS.md /
+# `docs/adr/README.md`) なので、直せないものを毎週報告しても finding が消えない
+# (PR #512 Codex P1)。腐った参照は supersede か索引側で扱う。
+# 黙って狭めないため UNCOVERED にも書いてある。
+#
+# ADR の**索引** (`docs/adr/README.md` / `docs/adr/archive/README.md`) は記録ではなく
+# 現役の案内なので走査する。判定は下の is_frozen_record。
+FROZEN_RECORD_PREFIXES = ("docs/debrief/journal.md",)
+ADR_DIR_PREFIX = "docs/adr/"
 
 # 参照先 md → (任意の閉じ括弧) → 「引用」 または 「の X 節」。
+#
+# ⚠️ **引用と「例示」は機械では区別できない。** md 名の直後に来る鉤括弧は引用として
+# 扱うので、「〜は誤り」という取り消し線が `CLAUDE.md` に溜まる …を md 名が先に来る
+# 語順で書くと、**例示のつもりの鉤括弧が引用として拾われる**。逃げ道を検出器側に作る
+# (助詞を絞る等) と本物の引用も落ちるので、**書き手側で語順を変えて** (鉤括弧を md 名の
+# 前に置く。この段落自身がその書き方) 曖昧さを外すこと。
 # 閉じ括弧を許すのは `[`a.md`](path/a.md)「X」` という書き方が普通にあるため。
 # 「の <12 文字まで>」を挟めるのは `CLAUDE.md の不変条件「X」` の形を拾うため
 # (句読点と鉤括弧は挟めないので、別の文の引用符まで飲み込むことはない)。
@@ -92,7 +128,11 @@ _MD_REFERENCE = re.compile(
 )
 # 比較のときに落とす飾り。**強調・引用符・改行・行頭のコメント記号は「文言が同じか」に
 # 関係しない** — コメントの折り返しで `#` や `*` が挟まるだけで偽陽性になるのを防ぐ。
-_DECORATION = re.compile(r"[\s*`「」『』\"'　_#]")
+#
+# ⚠️ **`_` は落とさない。** Markdown の強調記号でもあるが、コード識別子の一部でもある
+# (`auto_merge` / `enforce_admins`)。位置を問わず消すと `auto_merge` と `automerge` が
+# 同じ文言になり、**まさに検出したい文言変更が 0 件で通る** (PR #512 Codex P2)。
+_DECORATION = re.compile(r"[\s*`「」『』\"'　#]")
 
 _FENCED_CODE = re.compile(r"```.*?```", re.DOTALL)
 # インラインリンク [text](target) / 画像 ![alt](target)。title 付き (target "title") も拾う
@@ -182,9 +222,16 @@ def iter_md_references(text: str) -> list[tuple[str, str, str]]:
 
 
 def headings_of(markdown: str) -> str:
-    """ATX 見出し行だけを連ねたもの ("section" 参照の照合先)。"""
+    """ATX 見出し行だけを連ねたもの ("section" 参照の照合先)。
+
+    **fenced code の中は見出しではない。** 落とさないと ```sh ブロックの
+    `# 何とか` がシェルのコメントのまま見出しに化け、**実際には削除済みの節への参照を
+    「解決済み」として 0 件に数える** (PR #512 Codex P2)。
+    """
     return "\n".join(
-        line for line in markdown.splitlines() if line.lstrip().startswith("#")
+        line
+        for line in strip_fenced_code(markdown).splitlines()
+        if line.lstrip().startswith("#")
     )
 
 
@@ -258,6 +305,21 @@ def unresolved_md_references_in(src_file: Path, text: str, root: Path) -> list[d
     return findings
 
 
+def is_frozen_record(relative_path: str) -> bool:
+    """引用検査の対象外 (= 当時の引用が正しい記録) か。
+
+    - `docs/debrief/journal.md` — セッション記録
+    - `docs/adr/**` の ADR 本文 (退役分の `archive/` を含む) — **`Accepted` の ADR 本文は
+      書き換えない**規約 (AGENTS.md) があるので、報告しても直せない
+    - ただし ADR の**索引** (`README.md`) は現役の案内なので対象に**含める**
+    """
+    if relative_path.startswith(FROZEN_RECORD_PREFIXES):
+        return True
+    if relative_path.startswith(ADR_DIR_PREFIX):
+        return not relative_path.endswith("/README.md")
+    return False
+
+
 def iter_reference_scanned_files(root: Path) -> list[Path]:
     """引用検査の対象ファイル (走査範囲は MD_REF_SCAN_DIRS + リポジトリ直下の *.md)。"""
     files: list[Path] = []
@@ -272,7 +334,7 @@ def iter_reference_scanned_files(root: Path) -> list[Path]:
         relative = f.relative_to(root).as_posix()
         if EXCLUDED_DIR_NAMES & set(f.relative_to(root).parts):
             continue
-        if relative.startswith(FROZEN_RECORD_PREFIXES):
+        if is_frozen_record(relative):
             continue
         selected.append(f)
     return sorted(set(selected))

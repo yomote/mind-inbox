@@ -14,10 +14,12 @@ import json
 from pathlib import Path
 
 from detect import (
+    ADR_DIR_PREFIX,
     EXCLUDED_DIR_NAMES,
     FROZEN_RECORD_PREFIXES,
     LINK_SCAN_DIRS,
     MD_REF_SCAN_DIRS,
+    MD_REF_SCAN_EXTS,
     UNCOVERED,
     detect_all,
     detect_broken_doc_links,
@@ -26,6 +28,7 @@ from detect import (
     is_checkable_relative,
     iter_inline_links,
     iter_md_references,
+    iter_reference_scanned_files,
     iter_scanned_markdown,
     main,
     reference_resolves,
@@ -303,7 +306,7 @@ def _section_ref(target: str, heading: str) -> str:
     return f"{target} の {heading} 節"
 
 
-def test_l1_引用した文言が参照先に無ければ報告し_在れば報告しない(tmp_path) -> None:
+def test_単体_引用した文言が参照先に無ければ報告し_在れば報告しない(tmp_path) -> None:
     """#387 の 2 そのもの。
 
     無いと何が静かに通るか:
@@ -329,7 +332,7 @@ def test_l1_引用した文言が参照先に無ければ報告し_在れば報�
     ]
 
 
-def test_l1_折り返しや強調が挟まっても同じ文言なら解決する(tmp_path) -> None:
+def test_単体_折り返しや強調が挟まっても同じ文言なら解決する(tmp_path) -> None:
     """偽陽性は検出器の死 (この repo の既存規律)。
 
     無いと何が静かに通るか:
@@ -347,7 +350,7 @@ def test_l1_折り返しや強調が挟まっても同じ文言なら解決す�
     assert detect_unresolved_md_references(root) == []
 
 
-def test_l1_節の引用は見出しにだけ解決する(tmp_path) -> None:
+def test_単体_節の引用は見出しにだけ解決する(tmp_path) -> None:
     """`の X 節` は「節がある」という主張なので、本文一致では通さない。
 
     無いと何が静かに通るか:
@@ -369,7 +372,7 @@ def test_l1_節の引用は見出しにだけ解決する(tmp_path) -> None:
     assert [f["file"] for f in detect_unresolved_md_references(root)] == ["cicd/ng.py"]
 
 
-def test_l1_素のCLAUDE_mdは参照元から遡る階層だけを候補にする(tmp_path) -> None:
+def test_単体_素のCLAUDE_mdは参照元から遡る階層だけを候補にする(tmp_path) -> None:
     """`CLAUDE.md` とだけ書いたとき、どこを指したことになるか。
 
     無いと何が静かに通るか:
@@ -405,7 +408,7 @@ def test_l1_素のCLAUDE_mdは参照元から遡る階層だけを候補にす�
     ]
 
 
-def test_l1_参照先のmdが見つからない引用は報告しない(tmp_path) -> None:
+def test_単体_参照先のmdが見つからない引用は報告しない(tmp_path) -> None:
     """UNCOVERED に明示した線引き。
 
     無いと何が静かに通るか:
@@ -424,31 +427,39 @@ def test_l1_参照先のmdが見つからない引用は報告しない(tmp_path
     )
 
 
-def test_l1_凍結された記録は走査しない(tmp_path) -> None:
-    """退役 ADR とセッション記録は「当時の引用」が正しい姿。
+def test_単体_凍結された記録は走査しない(tmp_path) -> None:
+    """ADR 本文とセッション記録は「当時の引用」が正しい姿。
 
     無いと何が静かに通るか:
-        過去の記録を現在の文面に追随させろという finding が毎週立ち、直すと
-        **記録が記録でなくなる** (書いた時点で何と書いてあったかが失われる)。
+        - 過去の記録を現在の文面に追随させろという finding が毎週立ち、直すと
+          **記録が記録でなくなる** (書いた時点で何と書いてあったかが失われる)
+        - `Accepted` の ADR 本文は AGENTS.md が書き換えを禁じているので、報告しても
+          **直せない finding が毎週残り続ける** (ノイズで本物が読まれなくなる /
+          PR #512 Codex P1)
+        - 逆に除外が効きすぎると、**現役の案内である索引 (README.md)** の腐った参照まで
+          見逃す
     """
     root = _repo(tmp_path)
-    assert FROZEN_RECORD_PREFIXES == (
-        "docs/adr/archive/",
-        "docs/debrief/journal.md",
-    ), "凍結範囲が変わっている"
+    assert FROZEN_RECORD_PREFIXES == ("docs/debrief/journal.md",), "凍結範囲が変わっている"
+    assert ADR_DIR_PREFIX == "docs/adr/", "ADR の置き場が変わっている"
     (root / "CLAUDE.md").write_text("# root\n", encoding="utf-8")
     stale = f"- {_quote_ref('CLAUDE.md', '当時はこう書いてあった')}\n"
     (root / "docs" / "adr" / "archive" / "operations").mkdir(parents=True)
     (root / "docs" / "adr" / "archive" / "operations" / "old.md").write_text(
         stale, encoding="utf-8"
     )
+    (root / "docs" / "adr" / "0001-x.md").write_text(stale, encoding="utf-8")
     (root / "docs" / "debrief").mkdir(parents=True)
     (root / "docs" / "debrief" / "journal.md").write_text(stale, encoding="utf-8")
     assert detect_unresolved_md_references(root) == []
-    # 凍結範囲の外に同じものを置けば報告される (= 除外が効きすぎていない)
+    # 索引と、凍結範囲の外に同じものを置けば報告される (= 除外が効きすぎていない)
+    (root / "docs" / "adr" / "README.md").write_text(stale, encoding="utf-8")
+    (root / "docs" / "adr" / "archive" / "README.md").write_text(stale, encoding="utf-8")
     (root / "docs" / "live.md").write_text(stale, encoding="utf-8")
-    assert [f["file"] for f in detect_unresolved_md_references(root)] == [
-        "docs/live.md"
+    assert sorted(f["file"] for f in detect_unresolved_md_references(root)) == [
+        "docs/adr/README.md",
+        "docs/adr/archive/README.md",
+        "docs/live.md",
     ]
 
 
@@ -476,7 +487,7 @@ def test_単体_引用の切り出しと照合は純粋関数で決まる() -> N
     assert not reference_resolves("存在しない文言", "quote", body)
 
 
-def test_l1_新しい検出器がレポートに載っている(tmp_path) -> None:
+def test_単体_新しい検出器がレポートに載っている(tmp_path) -> None:
     """検出器を書いても detect_all に繋がなければ 1 度も走らない。
 
     無いと何が静かに通るか:
@@ -491,3 +502,62 @@ def test_l1_新しい検出器がレポートに載っている(tmp_path) -> Non
         d for d in report["detectors"] if d["id"] == "unresolved-md-references"
     )
     assert section["name"] in report["markdown"]
+
+
+def test_単体_fenced_code_の中のコメントは見出しに数えない(tmp_path) -> None:
+    """PR #512 Codex P2。
+
+    無いと何が静かに通るか:
+        参照先に ```sh ブロックがあると、その中の `# 何とか` がシェルのコメントのまま
+        ATX 見出しとして数えられる。**実際には削除済みの節への参照が「解決済み」に化け、
+        検証できていないものが 0 件に混じる**。
+    """
+    body = "# 本物の見出し\n\n```sh\n# 偽の節\necho hi\n```\n"
+    assert reference_resolves("本物の見出し", "section", body)
+    assert not reference_resolves("偽の節", "section", body), (
+        "コード例の中のコメントを見出しとして数えている"
+    )
+    root = _repo(tmp_path)
+    (root / "cicd" / "CLAUDE.md").write_text(body, encoding="utf-8")
+    (root / "cicd" / "x.py").write_text(
+        f"# {_section_ref('cicd/CLAUDE.md', '偽の節')}\n", encoding="utf-8"
+    )
+    assert [f["file"] for f in detect_unresolved_md_references(root)] == ["cicd/x.py"]
+
+
+def test_単体_識別子のアンダースコアは照合で落とさない() -> None:
+    """PR #512 Codex P2。
+
+    無いと何が静かに通るか:
+        `_` を位置に関係なく落とすと `auto_merge` と `automerge` が同じ文言になる。
+        コード識別子を引用している箇所が多いリポジトリでは、**まさに検出したい
+        文言変更 (識別子の改名) が 0 件で通る**。
+    """
+    assert not reference_resolves("auto_merge", "quote", "automerge を使う")
+    assert reference_resolves("auto_merge", "quote", "**auto_merge** を使う")
+
+
+def test_単体_引用検査の対象拡張子には_tf_と_bicep_が入っている(tmp_path) -> None:
+    """PR #512 Codex P2。
+
+    無いと何が静かに通るか:
+        走査対象に `cicd` を掲げながら拡張子を絞ると、実在する
+        `cicd/github/terraform/*.tf` や `cicd/iac/*.bicep` の md 引用が**一度も
+        検査されない**。参照先の文言が動いても 0 件のままで、**見ていないだけの範囲が
+        「壊れていない」ことにされる**。
+    """
+    # 集合から生成しない — 拡張子を落とす変異で fixture も一緒に消え、
+    # 「常に自分と一致する」空テストになる
+    assert {".tf", ".bicep"} <= MD_REF_SCAN_EXTS, "宣言ファイルが引用検査の対象外"
+    root = _repo(tmp_path)
+    (root / "cicd" / "CLAUDE.md").write_text("# cicd\n\n実在する文言\n", encoding="utf-8")
+    for name in ("a.tf", "b.bicep"):
+        (root / "cicd" / name).write_text(
+            f"// {_quote_ref('cicd/CLAUDE.md', '実在しない文言')}\n", encoding="utf-8"
+        )
+    scanned = {p.name for p in iter_reference_scanned_files(root)}
+    assert {"a.tf", "b.bicep"} <= scanned
+    assert sorted(f["file"] for f in detect_unresolved_md_references(root)) == [
+        "cicd/a.tf",
+        "cicd/b.bicep",
+    ]

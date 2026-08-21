@@ -81,4 +81,4 @@ PaaS でのコンテナ実行。
 
 - 実装: `cicd/scripts/deploy/deploy-ai-agent.sh` / `deploy-voicevox-wrapper.sh`
 - 関連 ADR: [0003](0003-two-phase-bicep.md) — Container App 環境を含む IaC の 2-phase 構成
-- 戦略: [`cicd/CLAUDE.md`](../../cicd/CLAUDE.md)「コストと公開面で覆さない前提」 (#387 で参照先を追随)
+- 戦略: CLAUDE.md「Key Design Decisions」
