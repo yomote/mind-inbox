@@ -129,7 +129,9 @@ RECORD_DIR_PREFIXES = ("docs/adr/", "docs/reviews/")
 # (句読点と鉤括弧は挟めないので、別の文の引用符まで飲み込むことはない)。
 _MD_REFERENCE = re.compile(
     r"((?:[\w.-]+/)*[\w.-]+\.md)"
-    r"[)\]`]{0,2}\s*"
+    # 閉じ括弧 / 行番号 (`strategy.md:59`) / 区切りのコロン (`CLAUDE.md:「X」`)。
+    # コロン区切りは実物がある (`cicd/modules/bootstrap-core.bicep` / PR #512 Codex P2)。
+    r"[)\]`]{0,2}(?::\d+)?\s*[:：]?\s*"
     r"(?:(?:の[^「」\n。、]{0,12})?「([^」]{2,120})」"
     r"|の\s*([^\s「」()（）,、。]{2,40})\s*節)"
 )

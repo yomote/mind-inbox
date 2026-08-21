@@ -572,3 +572,29 @@ def test_単体_引用検査の対象拡張子には_tf_と_bicep_が入って�
         "cicd/a.tf",
         "cicd/b.bicep",
     ]
+
+
+def test_単体_コロン区切りと行番号つきの引用も拾う(tmp_path) -> None:
+    """PR #512 Codex P2。
+
+    無いと何が静かに通るか:
+        `CLAUDE.md:「X」` (コロン区切り) や `strategy.md:59「X」` (行番号つき) は
+        リポジトリに実在する書き方 (`cicd/modules/bootstrap-core.bicep` ほか) なのに、
+        区切り規則から外れていると**その引用元だけ文言が移動しても 0 件のまま**になる。
+        走査しているつもりの範囲に穴が開き、狭さが 0 件と区別できない。
+    """
+    expected = [("CLAUDE.md", "実在する文言", "quote")]
+    colon = "CLAUDE.md:" + _Q_OPEN + "実在する文言" + _Q_CLOSE
+    wide = "CLAUDE.md\uff1a" + _Q_OPEN + "実在する文言" + _Q_CLOSE  # 全角コロン
+    numbered = "CLAUDE.md:12" + _Q_OPEN + "実在する文言" + _Q_CLOSE
+    assert iter_md_references(colon) == expected
+    assert iter_md_references(wide) == expected
+    assert iter_md_references(numbered) == expected
+
+    root = _repo(tmp_path)
+    (root / "CLAUDE.md").write_text("# root\n\n実在する文言\n", encoding="utf-8")
+    (root / "cicd" / "ok.bicep").write_text(f"// {colon}\n", encoding="utf-8")
+    (root / "cicd" / "ng.bicep").write_text(
+        "// CLAUDE.md:" + _Q_OPEN + "移動した文言" + _Q_CLOSE + "\n", encoding="utf-8"
+    )
+    assert [f["file"] for f in detect_unresolved_md_references(root)] == ["cicd/ng.bicep"]
