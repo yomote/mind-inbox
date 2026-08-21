@@ -191,9 +191,14 @@ _LINE_LEAD = re.compile(r"^[ \t]*(?:#+|//+|\*+|--+)[ \t]+")
 # `.github/claude/review-rubric.md` / PR #512 Codex)。
 _ELLIPSIS = re.compile(r"…+|\.\.\.+")
 
-# fenced code。**`~~~` も fence** (CommonMark) なので両方落とす — 片方だけだと、
-# tilde fence の中のコメントが見出しに化ける (PR #512 Codex P2)。
-_FENCED_CODE = re.compile(r"```.*?```|~~~.*?~~~", re.DOTALL)
+# fenced code の開始・終了行。**行頭 (インデント 0〜3) でしか fence にならない**
+# のが要点 — 正規表現で `` ``` `` を素朴に対応付けると、**表の中に出てくる
+# インラインの `` ``` `` を開始と誤認して、そこから次の `` ``` `` までを丸ごと
+# 落とす**。実物では docs/testing/property-based-testing.md の見出し
+# `### 6.2` / `### 6.3` が消え、その節を引用している箇所が腐敗扱いになっていた
+# (PR #512 Codex P2)。**`~~~` も fence** (CommonMark) なので両方見る。
+_FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})([^`]*)$")
+_FENCE_CLOSE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
 # ATX 見出し行。**インデントは 0〜3 文字まで**で、`#` のあとに空白 (または行末) が要る
 # — 4 文字以上のインデントは Markdown ではコードブロックであり、その中の
 # `# コメント` は見出しではない (実物: docs/design/archive/basic_design_poc.md)。
@@ -208,8 +213,33 @@ def log(message: str) -> None:
 
 
 def strip_fenced_code(text: str) -> str:
-    """コード fence 内を検査対象から外す (例示のリンクを壊れ扱いしない)。"""
-    return _FENCED_CODE.sub("", text)
+    """コード fence 内を検査対象から外す (例示のリンクを壊れ扱いしない)。
+
+    **行単位で開始 fence を認識し、同じ記号で長さが足りる終了 fence にだけ対応させる**
+    (CommonMark の規則)。正規表現で素朴に対応付けると、行の途中に出てくる
+    `` ``` `` を開始と誤認して**本物の見出しごと落とす** (PR #512 Codex P2)。
+    閉じ忘れた fence は文書末まで続く扱い — これも CommonMark と同じ。
+    """
+    kept: list[str] = []
+    fence: str | None = None
+    for line in text.splitlines():
+        if fence is None:
+            opening = _FENCE_OPEN.match(line)
+            # backtick fence の情報文字列に backtick は入れられない (CommonMark)。
+            # これを見ないと `` ```py `x` `` のような行を fence と誤認する
+            if opening and (opening.group(1)[0] == "~" or "`" not in opening.group(2)):
+                fence = opening.group(1)
+                continue
+            kept.append(line)
+            continue
+        closing = _FENCE_CLOSE.match(line)
+        if (
+            closing
+            and closing.group(1)[0] == fence[0]
+            and len(closing.group(1)) >= len(fence)
+        ):
+            fence = None
+    return "\n".join(kept)
 
 
 def iter_inline_links(text: str) -> list[str]:

@@ -594,6 +594,20 @@ def test_単体_fenced_code_の中のコメントは見出しに数えない(tmp
     )
     # 3 文字までは見出し (境界そのものを固定する)
     assert reference_resolves("端の見出し", "section", "# 本物\n\n   ### 端の見出し\n")
+    # **行の途中の ``` は fence ではない** — 表の中のインラインリテラルを開始と
+    # 誤認すると、その先の**本物の見出しごと落ちる** (実物:
+    # docs/testing/property-based-testing.md の §6.2 / §6.3 / PR #512 Codex P2)
+    inline = (
+        "# 本物\n\n| 例 | `" + "``" + " を含む行 |\n\n### 生きている見出し\n\n"
+        "| 例 | `" + "``" + " を含む行 |\n"
+    )
+    assert reference_resolves("生きている見出し", "section", inline), (
+        "行の途中の ``` を fence の開始と誤認して見出しを落としている"
+    )
+    # 終了 fence は**同じ記号で、開始と同じ長さ以上**でないと閉じない (CommonMark)
+    nested = "````\n# 中\n```\n# まだ中\n````\n\n# 外\n"
+    assert reference_resolves("外", "section", nested)
+    assert not reference_resolves("まだ中", "section", nested)
     # `#` の直後に空白が要る
     assert not reference_resolves("空白なし", "section", "# 本物\n\n#空白なし\n")
     root = _repo(tmp_path)
