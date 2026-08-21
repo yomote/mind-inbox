@@ -612,6 +612,12 @@ def test_単体_文言そのものの文字は照合で落とさない() -> None
     assert not reference_resolves("--force", "quote", "force を付ける")
     assert not reference_resolves("#323", "quote", "Issue 323")
     assert reference_resolves("--force", "quote", "`--force` を付ける")
+    # **2 行目以降も同じ** — 折り返しのコメント記号は必ず空白を挟むので、
+    # 空白の有無で「文言の接頭記号」と区別する (PR #512 Codex P2)
+    assert not reference_resolves("説明\n--force", "quote", "説明 force")
+    assert not reference_resolves("説明\n#323", "quote", "説明 323")
+    assert not reference_resolves("説明\n//host", "quote", "説明 host")
+    assert reference_resolves("説明\n--force", "quote", "説明 --force")
     # 構造上の装飾は落とす (強調 / 全角空白 / 引用 2 行目以降の折り返し)
     assert reference_resolves("静かに通るか?", "quote", "**静かに通るか?**")
     assert reference_resolves("前半\n#   後半", "quote", "前半 後半")
