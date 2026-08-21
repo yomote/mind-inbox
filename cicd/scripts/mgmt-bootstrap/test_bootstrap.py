@@ -141,6 +141,16 @@ case "$args" in
       # 権限ではない失敗 (Vault 名の間違い / 到達不能)。ロール付与を案内してはいけない側。
       echo "ERROR: (VaultNotFound) Vault not found: kv-dev-mindbox" >&2; exit 1
     fi
+    if [ "$mode" = "firewall" ]; then
+      # ⚠️ ネットワーク ACL による拒否。**ロールを付けても直らない**のに、文面には
+      #    "Forbidden" と "is not authorized" が入る (一般語で照合すると誤分類される)。
+      cat >&2 <<STUBERR
+ERROR: (ForbiddenByFirewall) Client address is not authorized and caller is not a trusted service.
+Client address: 203.0.113.10
+Vault: kv-dev-mindbox;location=japaneast
+STUBERR
+      exit 1
+    fi
     if [ "$mode" = "forbidden" ] || [ "$mode" = "$probe-forbidden" ]; then
       cat >&2 <<STUBERR
 ERROR: (ForbiddenByRbac) Caller is not authorized to perform action on resource.
@@ -552,6 +562,22 @@ def test_単体_権限確認そのものが失敗したら未検証として止�
     assert not calls_matching(kit, "az", "keyvault", "key", "show")
 
 
+def test_単体_ファイアウォール拒否はロール付与を案内せず未検証で止まる(kit):
+    """`ForbiddenByFirewall` は権限不足ではない (#508 Codex P2)。
+
+    無いと何が静かに通るか: 文面に "Forbidden" と "is not authorized" が入るので、
+    一般語で照合していると権限不足に化け、**ロールを付けても直らない**指示が出る。
+    ここでは「未検証」で止まり、付与コマンドを出さないことを固定する。
+    """
+    r = run_kit(kit, modes={"STUB_KV_DATAPLANE": "firewall"})
+    assert r.returncode != 0
+    assert "未検証" in r.stderr, "確かめられなかったことを成功とも権限不足とも区別していない"
+    assert "az role assignment create" not in r.stderr, \
+        "ロールを付けても直らない拒否に付与コマンドを案内している"
+    assert "ForbiddenByFirewall" in r.stderr, "az の生のエラーを隠している"
+    assert not calls_matching(kit, "az", "keyvault", "key", "show")
+
+
 def test_単体_権限が揃っていれば事前確認は素通りする(kit):
     """対照実験: 上の 3 本が「常に止まるだけの検査」になっていないこと。"""
     r = run_kit(kit)
@@ -815,10 +841,35 @@ def test_単体_プローブの分類は権限エラーとそれ以外を分け�
         "Assignment: (not found)\n"
     )
     assert classify_probe(1, forbidden) == "forbidden"
-    assert classify_probe(1, "The user does not have keys list permission on key vault") == "forbidden"
+    # 旧来の access policy 方式の Vault
+    assert classify_probe(
+        1,
+        "ERROR: (Forbidden) The user, group or application 'appid=...' does not have "
+        "keys list permission on key vault 'kv-dev-mindbox;location=japaneast'",
+    ) == "forbidden"
     assert classify_probe(1, "ERROR: (VaultNotFound) Vault not found") == "error"
     # rc が 0 なら stderr に何が出ていても ok (az は警告を stderr に書く)
     assert classify_probe(0, "WARNING: the default value will change") == "ok"
+
+
+def test_単体_ロールを付けても直らない拒否は権限不足に分類しない():
+    """ネットワーク拒否と認証失敗を `forbidden` にしない (#508 Codex P2)。
+
+    無いと何が静かに通るか:
+        **直らない付与コマンドを PO に踏ませる。** `forbidden` / `not authorized` /
+        `unauthorized` のような一般語で照合すると、Vault のファイアウォール拒否
+        (`ForbiddenByFirewall` — 文面に "is not authorized" を含む) や認証失敗
+        (`Unauthorized`) まで権限不足に化ける。どちらもロール付与では直らないので、
+        「権限以外の失敗は未検証で止める」というこのモジュールの目的そのものが崩れる。
+    """
+    firewall = (
+        "ERROR: (ForbiddenByFirewall) Client address is not authorized and caller is "
+        "not a trusted service.\nVault: kv-dev-mindbox;location=japaneast"
+    )
+    assert classify_probe(1, firewall) == "error"
+    assert classify_probe(1, "ERROR: (Unauthorized) AKV10032: Invalid issuer.") == "error"
+    # 一般語だけでは一致しない (マーカーが RBAC 固有であることの直接確認)
+    assert classify_probe(1, "ERROR: (Forbidden) something else entirely") == "error"
 
 
 def test_単体_拒否されたプローブに対応するロールだけを返す():

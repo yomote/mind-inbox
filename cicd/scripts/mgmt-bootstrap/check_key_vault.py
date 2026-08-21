@@ -53,15 +53,29 @@ PROBE_ROLES: dict[str, tuple[str, str]] = {
     "secrets": ("Key Vault Secrets Officer", "シークレットの読み取り (手順 8 の pem 格納の前提)"),
 }
 
-# az が data-plane の RBAC 不足を返すときの目印 (小文字で照合)。
-# 実測は `(Forbidden) ... Assignment: (not found)` / エラーコード `ForbiddenByRbac`。
-# 旧来の access policy 方式の Vault では `does not have keys get permission` になる。
-FORBIDDEN_MARKERS = (
-    "forbiddenbyrbac",
-    "forbidden",
-    "not authorized",
-    "unauthorized",
-    "does not have",
+# az が **data-plane の権限不足**を返すときの目印 (小文字で照合)。
+# 各要素は「すべて含まれていたら一致」の AND 条件、要素どうしは OR。
+#
+# ⚠️ **一般語で照合しないこと** (#508 Codex P2)。`forbidden` / `not authorized` /
+#    `unauthorized` は権限以外の拒否にも現れる:
+#      - `(ForbiddenByFirewall) Client address is not authorized and caller is not a
+#        trusted service.` — Vault のネットワーク ACL による拒否。**ロールを付けても直らない**
+#      - `(Unauthorized) AKV10032: Invalid issuer.` — 認証 (トークン) の失敗。同上
+#    これらを forbidden に分類すると、「権限以外の失敗は未検証で止める」というこの
+#    モジュールの目的そのものが崩れ、直らない付与コマンドを PO に踏ませる。
+#
+# 逆に、ここを絞ったことで**未知の表現の RBAC 拒否は `error` (未検証) に落ちる**。
+# それは意図した方向の失敗 — 「確かめられなかった」と言うだけで済み、誤った直し方を
+# 案内しない。マーカーを増やすときは、その文言が**データプレーン権限不足だと断定できる**
+# ことを根拠として書くこと。
+RBAC_FORBIDDEN_MARKERS: tuple[tuple[str, ...], ...] = (
+    # RBAC 方式の Vault。PO 実測 2026-08-17 (`Assignment: (not found)` を伴う)。
+    ("forbiddenbyrbac",),
+    # 旧来の access policy 方式の Vault。
+    # 例: `The user, group or application ... does not have keys list permission on
+    #      key vault 'kv-dev-mindbox;location=japaneast'`
+    ("does not have", "permission on key vault"),
+    ("caller was not found on any access policy",),
 )
 
 # 1 行に載せる detail の上限。az のエラーは複数行で長いので、原因の頭だけを運ぶ
@@ -109,11 +123,17 @@ def classify_probe(returncode: int, stderr: str) -> str:
 
     副作用なし。`returncode == 0` なら stderr に何が出ていても ok
     (az は警告を stderr に書くため)。
+
+    `forbidden` は **data-plane 権限不足だと断定できる**ときだけ。ファイアウォール
+    (`ForbiddenByFirewall`) や認証失敗 (`Unauthorized`) は**ロールを付けても直らない**ので
+    `error` (未検証) 側に落とす — 判断材料は `RBAC_FORBIDDEN_MARKERS` のコメント。
     """
     if returncode == 0:
         return "ok"
     lowered = stderr.lower()
-    if any(marker in lowered for marker in FORBIDDEN_MARKERS):
+    if any(
+        all(part in lowered for part in marker) for marker in RBAC_FORBIDDEN_MARKERS
+    ):
         return "forbidden"
     return "error"
 
