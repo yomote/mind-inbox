@@ -27,6 +27,7 @@ import {
 // 直接 import して縛る。inline コピーだと .int()/.min(1) などランタイムバリデータの
 // 乖離をこのテストが検知できなくなる（PR #44 レビュー指摘）。
 import { ExtractionResultSchema, ProblemSchema } from "../../bff/src/trpc/domain";
+import type { ExtractionResult } from "./api/types";
 
 // ── frontend 内 type と shape を縛る zod schema ──────────────────────────────
 // mockApi.ts が export している type 宣言と同じ shape を runtime でも縛る。
@@ -292,6 +293,154 @@ describe("[単体] mockApi.commitPreview — 表示中の下書きをそのま�
     const created = await loadProblem(newDraft?.grouping.problemId ?? "");
     expect(created?.title).toBe(newDraft?.grouping.problemTitle);
     expect(created?.mentions[0]?.excerpt).toBe(newDraft?.mention.excerpt);
+  });
+});
+
+describe("[単体] mockApi.commitPreview — BFF (#286) と同じ確定意味論 (#291)", () => {
+  beforeEach(() => {
+    __resetProblemStore();
+  });
+
+  /** p-career (seed: open / 3 言及) へ寄る下書きを、mention id だけ変えて作る。 */
+  const careerDraft = (mentionId: string, base: ExtractionResult["items"][number]) => ({
+    mention: { ...base.mention, id: mentionId },
+    grouping: { ...base.grouping },
+  });
+
+  // 無いと何が静かに通るか: 確定応答が失われてユーザーが「この内容で確定」を押し直すと、
+  // 同じ Mention が二重に積まれて mentionCount が水増しされる (「🔁 5回目」が実態とズレる)。
+  // 例外は出ないので、詳細画面の言及回数とタイムラインが静かに壊れるだけ。
+  // Mention は不変・追記専用 (domain_model.md §2.1) なので同 ID の再投入は no-op が正。
+  it("同じ下書きを再送しても保存データも応答も変わらない (冪等)", async () => {
+    const drafts = (await previewExtraction("s-idem", conversation(4))).items;
+    expect(drafts).toHaveLength(2);
+
+    const first = await commitPreview("s-idem", drafts);
+    const afterFirst = await loadProblems();
+
+    const second = await commitPreview("s-idem", drafts);
+
+    expect(second).toEqual(first);
+    expect(await loadProblems()).toEqual(afterFirst);
+    // 言及回数も増えない (seed 3 + 今回の 1 = 4 のまま)
+    expect((await loadProblem("p-career"))?.mentionCount).toBe(4);
+  });
+
+  // 無いと何が静かに通るか: 「消えた既存 → 新規作成」の確定応答が失われて再送すると、
+  // 作成済みの Problem が見つかるので応答だけ「既存に追加 1 件」に化ける (書き込みは冪等で
+  // 何も起きないのに、件数もカードのバッジも初回と食い違い「2 回押したら 2 件目ができた」
+  // ように見える)。BFF は Problem の先頭 Mention (種) がこの確定のものかで復元する (#286)。
+  it("消失後に作り直した Problem は、再送でも「新規」として同じ応答を返す", async () => {
+    const drafts = (await previewExtraction("s-revive", conversation(2))).items;
+    expect(drafts[0].grouping.problemId).toBe("p-career");
+    await triageProblem({ action: "dismiss", problemId: "p-career" });
+
+    const first = await commitPreview("s-revive", drafts);
+    const second = await commitPreview("s-revive", drafts);
+
+    expect(second).toEqual(first);
+    expect(second.newProblemCount).toBe(1);
+    expect(second.updatedProblemCount).toBe(0);
+    expect(second.items[0].grouping.kind).toBe("new");
+    // 保存データも増えない
+    expect((await loadProblem("p-career"))?.mentionCount).toBe(1);
+  });
+
+  // 無いと何が静かに通るか: 同じ消えた対象へ 2 件以上寄る下書きの再送で、種の Mention だけが
+  // 「この確定が起こした」と判定され 2 件目以降が「既存に追加」に化ける。同じ problemId が
+  // 「新規 1 / 既存 1」と二重計上され、レビュー画面の件数が初回と食い違う (#286 Codex P2)。
+  it("消失後に作り直した Problem へ 2 件寄せても、再送で全 item が「新規」のまま", async () => {
+    const base = (await previewExtraction("s-revive2", conversation(2))).items[0];
+    const drafts = [careerDraft("m-revive-a", base), careerDraft("m-revive-b", base)];
+    await triageProblem({ action: "dismiss", problemId: "p-career" });
+
+    const first = await commitPreview("s-revive2", drafts);
+    const second = await commitPreview("s-revive2", drafts);
+
+    expect(first.items.map((i) => i.grouping.kind)).toEqual(["new", "new"]);
+    expect(first.newProblemCount).toBe(1);
+    expect(first.updatedProblemCount).toBe(0);
+    expect(second).toEqual(first);
+    expect((await loadProblem("p-career"))?.mentionCount).toBe(2);
+  });
+
+  // 無いと何が静かに通るか: 同じ Problem に 2 件以上寄る下書きで「何回目の言及か」を
+  // Problem の最終件数から取ると、初回は追記しながら 4, 5 と返るのに、再送では全部が
+  // 保存済みなので最終件数 (5) が全 item に返る。書き込みは冪等なのにレビュー画面の
+  // 「🔁 N 回目」だけが初回と食い違う (#286 Codex P2)。保存順の位置なら追記専用なので不変。
+  it("item ごとの「何回目の言及か」は保存順の位置で、再送でも同じ", async () => {
+    const base = (await previewExtraction("s-pos", conversation(2))).items[0];
+    const drafts = [careerDraft("m-pos-a", base), careerDraft("m-pos-b", base)];
+
+    const first = await commitPreview("s-pos", drafts);
+    const second = await commitPreview("s-pos", drafts);
+
+    // seed 3 件 + 2 件なので 4 回目 / 5 回目
+    expect(first.items.map((i) => i.grouping.mentionCount)).toEqual([4, 5]);
+    expect(second).toEqual(first);
+    expect((await loadProblem("p-career"))?.mentionCount).toBe(5);
+  });
+
+  // 無いと何が静かに通るか: preview 後・確定前に別画面でタイトル / テーマを編集できるのに、
+  // 返却だけ下書き時点の申告のままだと、書き込みは最新の Problem に対して行うのに
+  // レビュー画面には**古いタイトル**が出る。ExtractReviewScreen はこの値を直接表示するので、
+  // 例外は出ず「確定したのに知らない見出しが一覧に増えている」という食い違いだけが残る。
+  it("確定直前に改題・改テーマされていたら、レビュー画面の表示は最新の Problem に揃う", async () => {
+    const drafts = (await previewExtraction("s-rename", conversation(2))).items;
+    expect(drafts[0].grouping.problemTitle).toBe("転職すべきか迷っている");
+
+    await triageProblem({ action: "editTitle", problemId: "p-career", title: "新しい見出し" });
+    await triageProblem({ action: "editTheme", problemId: "p-career", theme: "心と体" });
+
+    const committed = await commitPreview("s-rename", drafts);
+
+    expect(committed.items[0].grouping.problemTitle).toBe("新しい見出し");
+    expect(committed.items[0].grouping.problemTheme).toBe("心と体");
+    // 下書きの申告は古いままだったこと (= 正規化が効いたこと) を明示する
+    expect(drafts[0].grouping.problemTitle).toBe("転職すべきか迷っている");
+  });
+
+  // 無いと何が静かに通るか: 棚卸し済み (resolved / shelved) への確定は Problem を open へ
+  // 戻す (UC-03 の事後条件) のに、下書き時点の申告 `reignited: false` をそのまま返すと
+  // 「🔥 再燃」バッジが出ない。棚卸し日時を消し忘れると「解決済みの日時を持つ open」という
+  // 嘘の履歴も残る。どちらも例外は出ない。
+  it("棚卸し済み Problem への確定は再燃として返し、棚卸し日時を消して open に戻す", async () => {
+    const base = (await previewExtraction("s-reignite", conversation(2))).items[0];
+    const drafts = [
+      {
+        mention: { ...base.mention, id: "m-reignite" },
+        // 下書き時点では resolved と知らない (申告は false)
+        grouping: { ...base.grouping, problemId: "p-habit", reignited: false },
+      },
+    ];
+    expect((await loadProblem("p-habit"))?.status).toBe("resolved");
+
+    const committed = await commitPreview("s-reignite", drafts);
+
+    expect(committed.items[0].grouping.reignited).toBe(true);
+    const habit = await loadProblem("p-habit");
+    expect(habit?.status).toBe("open");
+    expect(habit?.resolvedAt).toBeNull();
+  });
+
+  // 無いと何が静かに通るか: 再燃は「**この** Mention が棚卸し済みを open に戻した」という
+  // 一回きりの事実で、追記後の Problem (open / Mention 保存済み) からは再構成できない。
+  // 来歴を残さないと、同じ確定操作なのに再送の応答からだけ「🔥 再燃」が静かに消える (#286)。
+  it("再燃した確定を再送しても「再燃」表示が消えない (応答も冪等)", async () => {
+    const base = (await previewExtraction("s-reignite2", conversation(2))).items[0];
+    const drafts = [
+      {
+        mention: { ...base.mention, id: "m-reignite2" },
+        grouping: { ...base.grouping, problemId: "p-habit", reignited: false },
+      },
+    ];
+
+    const first = await commitPreview("s-reignite2", drafts);
+    const second = await commitPreview("s-reignite2", drafts);
+
+    expect(first.items[0].grouping.reignited).toBe(true);
+    expect(second).toEqual(first);
+    expect((await loadProblem("p-habit"))?.mentionCount).toBe(2);
   });
 });
 

@@ -188,6 +188,32 @@ function makeMention(input: {
   };
 }
 
+/**
+ * 既存 Problem に確定 Mention を追記する (BFF `appendMention` — `apps/bff/src/domain/problem.ts`
+ * — と同じ意味論を store 直書きで写したもの)。mock は真実 (ADR 0004) なので、揃えるのは
+ * 「同じ入力列に対する状態遷移」:
+ *
+ *   - 棚卸し済み (resolved / shelved) への再言及は **`open` に戻し、棚卸し日時も消す**
+ *     (UC-03 の事後条件 / domain_model.md §4.2)。日時が残ると履歴が嘘になる
+ *   - 再オープンさせた Mention には来歴 `reopenedProblem: true` を残す (#283)。追記後の
+ *     Problem は必ず `open` なので「どの Mention が戻したか」は状態から再構成できず、
+ *     同じ下書きを再送すると確定応答の「🔥 再燃」表示だけが静かに消える
+ */
+function appendMentionInPlace(target: Problem, mention: Mention): void {
+  const wasClosed = target.status !== "open";
+  target.mentions.push({
+    ...clone(mention),
+    problemId: target.id,
+    ...(wasClosed ? { reopenedProblem: true } : {}),
+  });
+  Object.assign(target, deriveProblemDates(target));
+  if (wasClosed) {
+    target.status = "open";
+    target.resolvedAt = null;
+    target.shelvedAt = null;
+  }
+}
+
 function deriveProblemDates(problem: Problem): Problem {
   const sorted = [...problem.mentions].sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
   return {
@@ -749,27 +775,61 @@ export async function commitPreview(
 ): Promise<ExtractionResult> {
   await wait(400);
 
-  // このバッチで新しく起こした Problem。あとから同じ Problem へ寄る Mention が来ても
-  // 「既存に追加」ではなく新規の一部として数えるために覚えておく (BFF #283 と同じ) —
-  // でないと 1 つの Problem が「新規 1 件」かつ「既存に追加 1 件」に二重計上される。
-  const createdHere = new Set<string>();
+  // **この確定操作に含まれる Mention の集合** (BFF `materializeExtraction` と同じ)。
+  // 「その Problem をこの確定が起こしたか」を、追加の状態を持たず**保存済みデータから**
+  // 復元するために使う (下の seededByThisCommit)。
+  const commitMentionIds = new Set(drafts.map((d) => d.mention.id));
 
   const items: ExtractionResult["items"] = drafts.map(({ mention, grouping }) => {
     // kind を問わず problemId で引く (BFF の materialize と同じ意味論): 同じ id を持つ
     // 下書きが複数あっても Problem は 1 つで、2 件目以降は Mention の追記になる。
     // ここが id を見ずに新規を作ると、distinct 件数 (countProblems) と実態がズレる。
-    const existing = getProblem(grouping.problemId);
-    if (existing) {
-      // 既存 Problem への再出現: 下書きの Mention をそのまま追記する。
-      existing.mentions.push({ ...clone(mention), problemId: existing.id });
-      Object.assign(existing, deriveProblemDates({ ...existing, status: "open" }));
+    const target = getProblem(grouping.problemId);
+    if (target) {
+      // **冪等**: 同じ draft を再送しても蓄積データを変えない (#283 / #291)。確定応答が
+      // 失われてユーザーが「この内容で確定」を押し直すのは普通に起きるが、Mention は
+      // 不変・追記専用 (domain_model.md §2.1) なので同じ ID が既に入っていれば書くことは
+      // 何も無い。無いと同じ Mention が二重に入り mentionCount まで増える (静かな水増し)。
+      const committed = target.mentions.find((m) => m.id === mention.id);
+      const alreadyCommitted = committed !== undefined;
+
+      // **応答も冪等にする**: この Problem の "種" (最初の Mention) が**この確定操作のどれか**
+      // なら、その Problem はこの確定が起こしたもの = 実績は "new" だった。**この確定の
+      // Mention 全体で見る**のが要点 — 種の 1 件だけで見ると、同じ Problem へ 2 件以上寄る
+      // draft の再送で 2 件目以降が "existing" に化け、初回の「新規 1 / 既存 0」が
+      // 「新規 1 / 既存 1」に変わる (同じ problemId の二重計上)。種は追記でも merge でも
+      // 先頭に残るので、覚えておく状態は要らない (BFF #286 が検証済み)。
+      const seededByThisCommit = commitMentionIds.has(target.mentions[0]?.id ?? "");
+      const isNew = grouping.kind === "new" || seededByThisCommit;
+      // 再燃したか = **この確定で** 棚卸し済みを open に戻したか。再送では「今の状態」から
+      // 判定できない (Mention は保存済み・Problem はもう open) ので、初回に
+      // appendMentionInPlace が Mention へ残した来歴 (`reopenedProblem`) を読み戻す。
+      const reignited = alreadyCommitted
+        ? committed.reopenedProblem === true
+        : target.status !== "open";
+
+      if (!alreadyCommitted) appendMentionInPlace(target, mention);
+
+      // **「何回目の言及か」は保存済みの並び順から取る** — Problem の最終件数ではない。
+      // 同じ Problem に複数の Mention が寄る draft では、初回は 1 件ずつ追記しながら
+      // 処理するので item ごとに 2, 3, ... と増えるが、最終件数を返すと再送では全部が
+      // 保存済みなので最終件数が全 item に返り、「🔁 N 回目」が初回と食い違う (#283)。
+      const positionInProblem = target.mentions.findIndex((m) => m.id === mention.id) + 1;
+
       return {
         mention: clone(mention),
         grouping: {
           ...clone(grouping),
           // 実績に正規化する: このバッチで起こした Problem への追記は "new" のまま。
-          kind: createdHere.has(existing.id) || grouping.kind === "new" ? "new" : "existing",
-          mentionCount: existing.mentionCount,
+          kind: isNew ? "new" : "existing",
+          // **表示値は下書き時点ではなく確定時点の Problem から取る** — preview 後に別画面で
+          // タイトル / テーマを編集したり棚卸ししたりできる。書き込みは最新の target に対して
+          // 行うのに返却だけ下書き時点のままだと、レビュー画面が古い姿を見せる (#291)。
+          problemTitle: target.title,
+          problemTheme: target.theme,
+          mentionCount: positionInProblem > 0 ? positionInProblem : target.mentionCount,
+          isRecurrence: !isNew,
+          reignited,
         },
       };
     }
@@ -793,10 +853,18 @@ export async function commitPreview(
       shelvedAt: null,
     });
     problemStore = [problem, ...problemStore];
-    createdHere.add(problem.id);
+    // ここで起こした Problem の "種" はこの Mention なので、後続の item も再送時も
+    // seededByThisCommit で "new" と復元できる (覚えておく必要は無い)。
     return {
       mention: clone(mention),
-      grouping: { ...clone(grouping), kind: "new", mentionCount: 1, isRecurrence: false },
+      grouping: {
+        ...clone(grouping),
+        kind: "new",
+        mentionCount: 1,
+        isRecurrence: false,
+        // 何も再オープンしていない (寄せ先はもう無い)
+        reignited: false,
+      },
     };
   });
 
