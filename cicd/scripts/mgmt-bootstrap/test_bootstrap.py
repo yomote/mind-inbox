@@ -13,6 +13,21 @@
 
 az / terraform / curl 本体は検証しない (それは各ツールの仕事)。固定するのは
 bootstrap.sh の判断と、資格情報の取り回しだけ。
+
+## スタブは「実応答の形」を写す (#499 発見 3)
+
+**スタブがスクリプトの期待値を echo する作りにしてはいけない。** 以前の az スタブは
+`keyvault key show` に対して query を解釈せず `false` / `true` を返していたため、
+スクリプト側の JMESPath が誤っていても (`key.exportable` — 実際は `attributes` の下)
+**構造的に検出できなかった** (PO の実実行で初めて露見 / #499 発見 2)。
+
+いまの az スタブは**実 az の応答 JSON を持ち、スクリプトが渡した `--query` を実際に
+評価する** (`tsv_query`)。したがって query を誤ったパスに戻すと、鍵の検証は
+「エクスポート可能な鍵を見逃す」形でテストが赤くなる。
+
+写せていない経路は**そう書いておく** — 検証 6c の `az rest` は query にパイプと関数
+(`| length(@)`) を含み簡易評価器では写せないので、いまも固定値を返す。ここを
+「実応答を写している」と読まないこと。
 """
 
 from __future__ import annotations
@@ -26,12 +41,20 @@ from pathlib import Path
 
 import pytest
 
+from check_key_vault import (
+    FIELD_SEPARATOR,
+    DataPlaneReport,
+    classify_probe,
+    data_plane_verdict,
+    key_export_verdict,
+)
 from check_permissions import PermissionReport, compare_permissions
 
 KIT_DIR = Path(__file__).resolve().parent
 SCRIPT = KIT_DIR / "bootstrap.sh"
 README = KIT_DIR / "README.md"
 CHECK_PERMISSIONS = KIT_DIR / "check_permissions.py"
+CHECK_KEY_VAULT = KIT_DIR / "check_key_vault.py"
 
 # 想定する権限集合。**bootstrap.sh から読み込まずに直書きする** — シェル側を読んで
 # しまうと、シェルの EXPECTED_PERMISSIONS を書き換えたときに期待値も一緒に動いて
@@ -53,6 +76,41 @@ env > "$rec.env"
 AZ_STUB = (
     "#!/usr/bin/env bash\n" + RECORD_SNIPPET.format(tool="az") + r"""
 args="$*"
+
+# スクリプトが渡した --query を取り出す (実 az と同じく、無ければ応答全体)。
+query=""; prev=""
+for a in "$@"; do
+  [ "$prev" = "--query" ] && query="$a"
+  prev="$a"
+done
+
+# 実応答の JSON に対して**スクリプト側の query を実際に評価する**簡易 JMESPath。
+# ⚠️ ここが「スタブが実応答の形を写す」の要 (#499 発見 3)。期待値を echo する作りに
+#    戻すと、JMESPath の誤り (attributes.exportable を key.exportable と書く等) が
+#    構造的に検出できなくなる。
+# 対応するのはドット区切りのパスだけ。存在しないパスは実 az と同じく空行を返す。
+# bool の表記 (true / True) は az の版に依存するため STUB_AZ_TSV_BOOL で切り替える。
+tsv_query() { # $1: 応答 JSON, $2: query
+  STUB_TSV_BOOL="${STUB_AZ_TSV_BOOL:-lower}" python3 -c '
+import json, os, sys
+value = json.loads(sys.argv[1])
+query = sys.argv[2]
+if query:
+    for part in query.split("."):
+        value = value.get(part) if isinstance(value, dict) else None
+        if value is None:
+            break
+if value is None:
+    print("")
+elif isinstance(value, bool):
+    print(str(value).lower() if os.environ["STUB_TSV_BOOL"] == "lower" else str(value))
+elif isinstance(value, (dict, list)):
+    print(json.dumps(value))
+else:
+    print(value)
+' "$1" "$2"
+}
+
 # ⚠️ case は上から順に最初の一致だけが効く。"deployment group create" は
 #    "group create" にも部分一致するので、長いパターンを必ず先に置く。
 case "$args" in
@@ -74,15 +132,59 @@ case "$args" in
     else
       echo '[{"name":"kv-dev-mindbox","tags":{"mindInboxLayer":"management"}},{"name":"stdevmindboxbak","tags":{"mindInboxLayer":"management"}}]'
     fi ;;
+  *"keyvault key list"*|*"keyvault secret list"*)
+    # データプレーン権限の事前確認 (手順 5) のプローブ。実測 (PO / 2026-08-17) の
+    # 失敗はこの形 — Assignment: (not found) = ロールが 1 つも割り当たっていない。
+    case "$args" in *"keyvault key list"*) probe="keys" ;; *) probe="secrets" ;; esac
+    mode="${STUB_KV_DATAPLANE:-ok}"
+    if [ "$mode" = "error" ]; then
+      # 権限ではない失敗 (Vault 名の間違い / 到達不能)。ロール付与を案内してはいけない側。
+      echo "ERROR: (VaultNotFound) Vault not found: kv-dev-mindbox" >&2; exit 1
+    fi
+    if [ "$mode" = "firewall" ]; then
+      # ⚠️ ネットワーク ACL による拒否。**ロールを付けても直らない**のに、文面には
+      #    "Forbidden" と "is not authorized" が入る (一般語で照合すると誤分類される)。
+      cat >&2 <<STUBERR
+ERROR: (ForbiddenByFirewall) Client address is not authorized and caller is not a trusted service.
+Client address: 203.0.113.10
+Vault: kv-dev-mindbox;location=japaneast
+STUBERR
+      exit 1
+    fi
+    if [ "$mode" = "forbidden" ] || [ "$mode" = "$probe-forbidden" ]; then
+      cat >&2 <<STUBERR
+ERROR: (ForbiddenByRbac) Caller is not authorized to perform action on resource.
+If role assignments, deny assignments or role definitions were changed recently, please observe propagation time.
+Action: Microsoft.KeyVault/vaults/$probe/read
+Assignment: (not found)
+Vault: kv-dev-mindbox;location=japaneast
+STUBERR
+      exit 1
+    fi
+    : ;; # 通常時は -o none なので何も出さない
   *"keyvault key show"*)
-    if [ "${STUB_AZ_KEY:-ok}" = "exportable" ]; then echo "true"; else echo "false"; fi ;;
+    # 実 az の応答をそのまま写す。**エクスポート不可の鍵は attributes に exportable を
+    # 持たない** (省略が既定) — これが実物の形で、`key.exportable` は**どちらのモード
+    # でも空**になる (#499 発見 2 の再現。誤った query に戻すと exportable 側が素通りする)。
+    if [ "${STUB_AZ_KEY:-ok}" = "exportable" ]; then
+      body='{"attributes":{"created":1755400000,"enabled":true,"exportable":true,"recoverableDays":90,"recoveryLevel":"Recoverable+Purgeable","updated":1755400000},"key":{"e":"AQAB","key_ops":["decrypt","encrypt","sign","unwrapKey","verify","wrapKey"],"kid":"https://kv-dev-mindbox.vault.azure.net/keys/e2e-artifacts/stubkeyversion1","kty":"RSA","n":"c3R1Yi1wdWJsaWMtbW9kdWx1cw"},"managed":null,"tags":null}'
+    else
+      body='{"attributes":{"created":1755400000,"enabled":true,"recoverableDays":90,"recoveryLevel":"Recoverable+Purgeable","updated":1755400000},"key":{"e":"AQAB","key_ops":["decrypt","encrypt","sign","unwrapKey","verify","wrapKey"],"kid":"https://kv-dev-mindbox.vault.azure.net/keys/e2e-artifacts/stubkeyversion1","kty":"RSA","n":"c3R1Yi1wdWJsaWMtbW9kdWx1cw"},"managed":null,"tags":null}'
+    fi
+    tsv_query "$body" "$query" ;;
   *"rest --method get"*)
+    # ⚠️ ここは query を評価していない (`... | length(@)` はパイプと関数を含み、
+    #    上の簡易評価器では写せない)。**この経路のスタブは実応答の形を写していない**。
     [ "${STUB_AZ_BUDGET:-ok}" = "absent" ] && { echo "BudgetNotFound" >&2; exit 1; }
     echo "1" ;;
   *"keyvault secret show"*)
+    # 実応答は value (pem 本文) を含む。ここでは本文の代わりに目印を置き、
+    # --query tags.sha256 の絞りを外す変異が漏えい検査で落ちるようにしてある。
     case "${STUB_AZ_SECRET_SHOW:-absent}" in
-      match) echo "${STUB_PEM_SHA:?}" ;;
-      different) echo "deadbeefdeadbeef" ;;
+      match|different)
+        if [ "${STUB_AZ_SECRET_SHOW}" = "match" ]; then sha="${STUB_PEM_SHA:?}"; else sha="deadbeefdeadbeef"; fi
+        body="{\"attributes\":{\"created\":1755400000,\"enabled\":true},\"contentType\":null,\"id\":\"https://kv-dev-mindbox.vault.azure.net/secrets/github-app-mgmt-private-key/stubversion0\",\"name\":\"github-app-mgmt-private-key\",\"tags\":{\"app-id\":\"12345\",\"purpose\":\"github-settings-mgmt-terraform\",\"sha256\":\"$sha\"},\"value\":\"STUB_SECRET_VALUE_PEM\"}"
+        tsv_query "$body" "$query" ;;
       *) echo "SecretNotFound" >&2; exit 3 ;;
     esac ;;
   *"keyvault secret set"*)
@@ -262,6 +364,10 @@ def assert_no_credential_leak(kit, result: subprocess.CompletedProcess) -> None:
         if name.endswith(".env"):
             continue
         assert "ghs_STUBTOKEN_SECRET" not in text, f"installation token が {name} に漏れている"
+        # secret show の応答は実物と同じく value 欄を持つ。--query の絞りを外すと
+        # ここが丸ごと流れる — その目印 (実 pem の代わり) が出てこないこと。
+        assert "STUB_SECRET_VALUE_PEM" not in text, \
+            f"シークレットの value 欄が {name} に流れている (--query の絞りが外れた?)"
 
 
 # ---------------------------------------------------------------------------
@@ -360,9 +466,148 @@ def test_untagged_resource_fails_verification(kit):
 
 
 def test_exportable_key_fails_verification(kit):
+    """エクスポート可能な鍵で止まること。
+
+    無いと何が静かに通るか (#499 発見 2):
+        **鍵の検証が「常に空を見ている」状態に戻る。** `exportable` は応答の
+        `attributes` の下にあり、`key.exportable` は存在しないパス — az は空文字を
+        返すだけで非ゼロにならない。スタブが実応答の形を写している (query を実際に
+        評価する) いま、query を `key.exportable` に戻すとこのテストが赤くなる
+        (エクスポート可能な鍵を見逃して完走してしまうため)。
+    """
     r = run_kit(kit, modes={"STUB_AZ_KEY": "exportable"})
     assert r.returncode != 0
     assert "exportable" in r.stderr
+    # KV 格納より前に止まる (設計が崩れた Vault へ pem を入れない)
+    assert not calls_matching(kit, "az", "keyvault", "secret", "set")
+
+
+def test_単体_鍵の検証は_attributes_exportable_を問い合わせる(kit):
+    """問い合わせ先のパスそのものを固定する。
+
+    無いと何が静かに通るか: 上のテストは「エクスポート可能なら止まる」を見るが、
+    正常系 (空が返る) は誤った query でも同じく空なので素通りする。パスを直接
+    押さえておかないと、`key.exportable` への差し戻しが**正常系では**気づけない。
+    """
+    r = run_kit(kit)
+    assert r.returncode == 0, r.stderr
+    (call,) = calls_matching(kit, "az", "keyvault", "key", "show")
+    assert "attributes.exportable" in call, \
+        f"exportable は attributes の下 (key.exportable は常に空を返す): {call}"
+
+
+def test_単体_az_が_tsv_で_True_と返してもエクスポート可能を見逃さない(kit):
+    """az の tsv が bool を `True` と大文字で返す版でも落ちること。
+
+    無いと何が静かに通るか: 判定をシェルの `[ "$x" != "true" ]` 1 行に戻すと、
+    大文字で返す az では**エクスポート可能な鍵が素通りする**。ローカルから実 az を
+    叩けない以上、どちらの表記でも同じ判定になることをここで固定するしかない。
+    """
+    r = run_kit(kit, modes={"STUB_AZ_KEY": "exportable", "STUB_AZ_TSV_BOOL": "title"})
+    assert r.returncode != 0
+    assert "exportable" in r.stderr
+    assert not calls_matching(kit, "az", "keyvault", "secret", "set")
+
+
+# ---------------------------------------------------------------------------
+# Key Vault データプレーン権限の事前確認 (#499 発見 1)
+# ---------------------------------------------------------------------------
+
+def test_単体_データプレーン権限が無いと鍵の検証より前に止まり付与コマンドが出る(kit):
+    """RBAC 不足は**データプレーンを使う前に**止まり、ロールとコマンドを名指しする。
+
+    無いと何が静かに通るか:
+        **権限不足が「鍵が壊れている」「az が変」に見える。** Key Vault は RBAC 方式で
+        control-plane のロール (Contributor / Owner) に data-plane は含まれない。
+        事前確認が無いと、最初に data-plane を触る検証 6b が `ForbiddenByRbac` で
+        落ち、PO は「鍵の作られ方がおかしい」と読む (実測 2026-08-17)。しかも
+        直し方 (どのロールをどのスコープに) がどこにも出ない。
+    """
+    r = run_kit(kit, modes={"STUB_KV_DATAPLANE": "forbidden"})
+    assert r.returncode != 0
+    # 何をどう直すかが出る
+    assert "Key Vault Reader" in r.stderr and "Key Vault Secrets Officer" in r.stderr
+    assert "az role assignment create" in r.stderr
+    assert "/providers/Microsoft.KeyVault/vaults/kv-dev-mindbox" in r.stderr, \
+        "付与先スコープ (vault の resource id) を名指ししていない"
+    # data-plane を実際に使う手前で止まっている
+    assert not calls_matching(kit, "az", "keyvault", "key", "show"), \
+        "権限が無いまま鍵の検証へ進んではいけない (原因が鍵の側に見える)"
+    assert not calls_matching(kit, "az", "keyvault", "secret", "set")
+    assert not calls_matching(kit, "terraform")
+    assert "格納は完了しています" not in r.stderr
+
+
+def test_単体_鍵だけ拒否されたときは鍵側のロールだけを名指しする(kit):
+    """通っている方のロールまで付けさせない (確認の副作用で過剰権限を勧めない)。"""
+    r = run_kit(kit, modes={"STUB_KV_DATAPLANE": "keys-forbidden"})
+    assert r.returncode != 0
+    assert "Key Vault Reader" in r.stderr
+    assert "Key Vault Secrets Officer" not in r.stderr, \
+        "通っている secrets 側のロールまで付与させている"
+
+
+def test_単体_権限確認そのものが失敗したら未検証として止まる(kit):
+    """権限以外の失敗 (Vault 名の誤り / 到達不能) を「ロールを付けろ」と言わない。
+
+    無いと何が静かに通るか: 非ゼロを一律「権限不足」と読むと、PO はロールを付けても
+    直らない指示を踏み続ける。逆に握り潰せば**権限が無いまま「確認 OK」**になる。
+    """
+    r = run_kit(kit, modes={"STUB_KV_DATAPLANE": "error"})
+    assert r.returncode != 0
+    assert "未検証" in r.stderr, "確かめられなかったことを成功と区別していない"
+    assert "az role assignment create" not in r.stderr, \
+        "権限の問題ではないのにロール付与を案内している"
+    assert "VaultNotFound" in r.stderr, "az の生のエラーを隠している (原因に辿り着けない)"
+    assert not calls_matching(kit, "az", "keyvault", "key", "show")
+
+
+def test_単体_ファイアウォール拒否はロール付与を案内せず未検証で止まる(kit):
+    """`ForbiddenByFirewall` は権限不足ではない (#508 Codex P2)。
+
+    無いと何が静かに通るか: 文面に "Forbidden" と "is not authorized" が入るので、
+    一般語で照合していると権限不足に化け、**ロールを付けても直らない**指示が出る。
+    ここでは「未検証」で止まり、付与コマンドを出さないことを固定する。
+    """
+    r = run_kit(kit, modes={"STUB_KV_DATAPLANE": "firewall"})
+    assert r.returncode != 0
+    assert "未検証" in r.stderr, "確かめられなかったことを成功とも権限不足とも区別していない"
+    assert "az role assignment create" not in r.stderr, \
+        "ロールを付けても直らない拒否に付与コマンドを案内している"
+    assert "ForbiddenByFirewall" in r.stderr, "az の生のエラーを隠している"
+    assert not calls_matching(kit, "az", "keyvault", "key", "show")
+
+
+def test_単体_権限が揃っていれば事前確認は素通りする(kit):
+    """対照実験: 上の 3 本が「常に止まるだけの検査」になっていないこと。"""
+    r = run_kit(kit)
+    assert r.returncode == 0, r.stderr
+    assert calls_matching(kit, "az", "keyvault", "key", "list"), "鍵側のプローブが走っていない"
+    assert calls_matching(kit, "az", "keyvault", "secret", "list"), "シークレット側のプローブが走っていない"
+    assert calls_matching(kit, "az", "keyvault", "key", "show"), "事前確認の後に検証へ進んでいない"
+
+
+def test_単体_事前確認はシークレットの書き込みを未検証として明示する(kit):
+    """確かめた範囲だけを言う (#508 Codex P2)。
+
+    無いと何が静かに通るか:
+        **未検証の権限が台帳の [済] に化ける。** プローブは読み取りだけなので、
+        `Key Vault Reader` しか持たない実行者でも `key list` / `secret list` は両方
+        成功する。それを「pem の格納の権限確認 OK」と表示すると、**書き込みは一度も
+        確かめていないのに成功扱い**になり、失敗時の台帳も嘘をつく
+        (root CLAUDE.md「取れなかったものを『異常なし』と書かない」)。
+    """
+    r = run_kit(kit)
+    assert r.returncode == 0, r.stderr
+    assert "未検証" in r.stdout, "書き込み権限が未検証であることを言っていない"
+    # 台帳のステップ名が「pem の格納まで確認した」と読めないこと
+    ledger_line = next(
+        (ln for ln in r.stdout.splitlines() if "データプレーン権限の確認" in ln and "[済]" in ln),
+        None,
+    )
+    assert ledger_line is not None, "台帳に事前確認の行が出ていない"
+    assert "pem の格納" not in ledger_line, \
+        f"確かめていない pem 格納まで [済] に見える台帳になっている: {ledger_line}"
 
 
 def test_missing_budget_fails_verification(kit):
@@ -552,6 +797,162 @@ def test_単体_判定は_bootstrap_sh_の中に埋め戻されていない():
     assert "check_permissions.py" in text, "bootstrap.sh が判定モジュールを呼んでいない"
     assert "<<'PY'" not in text and "<<PY" not in text, \
         "bootstrap.sh に Python の heredoc を戻さない (判定は check_permissions.py へ)"
+
+
+# ---------------------------------------------------------------------------
+# Key Vault の判定そのもの — 判定を純粋関数として直接叩く (#499)
+#
+# 上のスタブ経由テストは「シェルが判定を呼び、結果どおりに止まる / 進む」という
+# **配線**を見る。ここで見るのは**判定の中身**で、az も Vault も要らない。
+#
+# 無いと何が静かに通るか:
+#   スタブは用意した分岐しか持てないので、**用意し忘れた組み合わせ** (片方だけ
+#   forbidden、rc は非ゼロだが権限とは別の失敗、bool の表記ゆれ) は誰も見ないまま
+#   「非ゼロ = 権限不足」「空 = false」の雑な判定に戻れてしまう。
+# ---------------------------------------------------------------------------
+
+def test_単体_exportable_は空でも_false_でも正常とみなす():
+    """**空が正常**。エクスポート不可の鍵は attributes に exportable を持たない。
+
+    ここを「`false` と一致したら OK」に戻すと、正常な鍵で必ず止まる (#499 発見 2 の実害)。
+    """
+    assert key_export_verdict("") == "ok"
+    assert key_export_verdict("\n") == "ok"
+    assert key_export_verdict("false") == "ok"
+    assert key_export_verdict("False") == "ok"  # az の tsv が大文字で返す版
+    assert key_export_verdict("null") == "ok"
+
+
+def test_単体_exportable_が_true_なら表記に関わらず落とす():
+    assert key_export_verdict("true") == "exportable"
+    assert key_export_verdict("True") == "exportable"
+    assert key_export_verdict(" TRUE\n") == "exportable"
+
+
+def test_単体_読めない_exportable_は_ok_にしない():
+    """判定できなかったものを「異常なし」にしない (root CLAUDE.md)。"""
+    assert key_export_verdict("yes") == "unknown"
+    assert key_export_verdict("{}") == "unknown"
+
+
+def test_単体_プローブの分類は権限エラーとそれ以外を分ける():
+    forbidden = (
+        "ERROR: (ForbiddenByRbac) Caller is not authorized to perform action on resource.\n"
+        "Assignment: (not found)\n"
+    )
+    assert classify_probe(1, forbidden) == "forbidden"
+    # 旧来の access policy 方式の Vault
+    assert classify_probe(
+        1,
+        "ERROR: (Forbidden) The user, group or application 'appid=...' does not have "
+        "keys list permission on key vault 'kv-dev-mindbox;location=japaneast'",
+    ) == "forbidden"
+    assert classify_probe(1, "ERROR: (VaultNotFound) Vault not found") == "error"
+    # rc が 0 なら stderr に何が出ていても ok (az は警告を stderr に書く)
+    assert classify_probe(0, "WARNING: the default value will change") == "ok"
+
+
+def test_単体_ロールを付けても直らない拒否は権限不足に分類しない():
+    """ネットワーク拒否と認証失敗を `forbidden` にしない (#508 Codex P2)。
+
+    無いと何が静かに通るか:
+        **直らない付与コマンドを PO に踏ませる。** `forbidden` / `not authorized` /
+        `unauthorized` のような一般語で照合すると、Vault のファイアウォール拒否
+        (`ForbiddenByFirewall` — 文面に "is not authorized" を含む) や認証失敗
+        (`Unauthorized`) まで権限不足に化ける。どちらもロール付与では直らないので、
+        「権限以外の失敗は未検証で止める」というこのモジュールの目的そのものが崩れる。
+    """
+    firewall = (
+        "ERROR: (ForbiddenByFirewall) Client address is not authorized and caller is "
+        "not a trusted service.\nVault: kv-dev-mindbox;location=japaneast"
+    )
+    assert classify_probe(1, firewall) == "error"
+    assert classify_probe(1, "ERROR: (Unauthorized) AKV10032: Invalid issuer.") == "error"
+    # 一般語だけでは一致しない (マーカーが RBAC 固有であることの直接確認)
+    assert classify_probe(1, "ERROR: (Forbidden) something else entirely") == "error"
+
+
+def test_単体_拒否されたプローブに対応するロールだけを返す():
+    report = data_plane_verdict({
+        "keys": (1, "ForbiddenByRbac: Assignment: (not found)"),
+        "secrets": (0, ""),
+    })
+    assert report.status == "forbidden"
+    assert report.roles == ("Key Vault Reader",)
+    assert "検証 6b" in report.detail
+
+
+def test_単体_両方拒否なら_2_つのロールを返す():
+    report = data_plane_verdict({
+        "keys": (1, "ForbiddenByRbac"),
+        "secrets": (1, "ForbiddenByRbac"),
+    })
+    assert report.status == "forbidden"
+    assert report.roles == ("Key Vault Reader", "Key Vault Secrets Officer")
+
+
+def test_単体_権限以外の失敗は_forbidden_より優先して_error_になる():
+    """片方が権限不足でも、もう片方が「確かめられなかった」なら error。
+
+    無いと何が静かに通るか: 先に forbidden を見て返すと、Vault 名の誤りやネットワーク断が
+    「ロールを付ければ直る」と案内され、PO は付与しても直らない指示を踏み続ける。
+    """
+    report = data_plane_verdict({
+        "keys": (1, "ForbiddenByRbac"),
+        "secrets": (1, "(VaultNotFound) Vault not found: kv-typo-mindbox"),
+    })
+    assert report.status == "error"
+    assert report.roles == ()
+    assert "VaultNotFound" in report.detail
+
+
+def test_単体_両方通れば_3_欄は_ok_と空になる():
+    """対照実験。上の 3 本が「常に何か言う検査」になっていないことをここで固定する。"""
+    report = data_plane_verdict({"keys": (0, ""), "secrets": (0, "")})
+    assert report == DataPlaneReport(status="ok", roles=(), detail="")
+    assert report.render() == "ok||", "一致時は 2 欄とも空 (シェルは空文字で分岐する)"
+
+
+def test_単体_未知のプローブ名は落とす():
+    """綴り間違いを「該当なし = OK」にしない。"""
+    with pytest.raises(KeyError):
+        data_plane_verdict({"keyz": (1, "ForbiddenByRbac")})
+
+
+def test_単体_detail_は改行と区切り文字を含まない():
+    """シェルは 1 行として読む。改行や `|` が混ざると欄の切り出しが壊れる。"""
+    report = data_plane_verdict({"keys": (1, "line one\nline|two\nline three")})
+    assert "\n" not in report.detail and FIELD_SEPARATOR not in report.detail
+    assert report.render().count(FIELD_SEPARATOR) == 2
+
+
+def test_単体_CLI_は判定結果で終了コードを変えない(tmp_path: Path):
+    """シェルは `set -euo pipefail` 下の `$(...)` で受ける。ここで非ゼロを返すと
+    PO 向けの付与手順を出す前に errexit で落ちる (check_permissions.py と同じ約束)。"""
+    err = tmp_path / "keys.err"
+    err.write_text("ERROR: (ForbiddenByRbac) ...\nAssignment: (not found)\n")
+    ok = tmp_path / "secrets.err"
+    ok.write_text("")
+    r = subprocess.run(
+        [sys.executable, str(CHECK_KEY_VAULT), "data-plane",
+         "keys", "1", str(err), "secrets", "0", str(ok)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip().startswith("forbidden|Key Vault Reader|")
+
+    r2 = subprocess.run(
+        [sys.executable, str(CHECK_KEY_VAULT), "key-export", "True"],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert r2.returncode == 0, r2.stderr
+    assert r2.stdout.strip() == "exportable"
+
+
+def test_単体_判定は_bootstrap_sh_の中に埋め戻されていない_key_vault():
+    """Key Vault 側の判定も heredoc で書き戻す退行を静的に止める (cicd/CLAUDE.md)。"""
+    text = SCRIPT.read_text()
+    assert "check_key_vault.py" in text, "bootstrap.sh が Key Vault の判定モジュールを呼んでいない"
 
 
 # ---------------------------------------------------------------------------

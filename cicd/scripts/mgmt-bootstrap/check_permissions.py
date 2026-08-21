@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """GitHub App の installation token が返す権限集合を、想定と**完全一致**で照合する判定。
 
-呼び出し元は bootstrap.sh の手順 6d (Key Vault へ pem を格納する**前**)。判定だけを
+呼び出し元は bootstrap.sh の手順 7d (Key Vault へ pem を格納する**前**)。判定だけを
 ここに持ち、シェル側は結果 (3 欄) を受け取って文面を組み立てるだけにしてある
 (cicd/CLAUDE.md「判定ロジックをシェルや workflow の中に埋めない — 純粋関数に
 切り出して pytest で押さえる」)。

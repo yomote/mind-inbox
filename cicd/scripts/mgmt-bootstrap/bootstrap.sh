@@ -22,6 +22,12 @@
 #    「administration が write か」だけの下限チェックだと、Contents や Actions を
 #    余分に付けた App でも通ってしまい、その pem が Key Vault に入って以後の
 #    plan/apply が過剰権限で回り続ける。ここでは**完全一致**で検証する。
+# 6. **Key Vault のデータプレーン権限不足が「鍵が壊れている」に見える** — Key Vault は
+#    RBAC 方式で、Contributor / Owner (control-plane) には data-plane が含まれない。
+#    確かめずに進むと、検証や格納の失敗が「設計が崩れた」「az が変」と読めてしまう
+#    (PO 実測 2026-08-17 / #499)。ここでは**使う前に**確かめ、足りなければ付与すべき
+#    ロールを名指しして止める。**確かめられなかった場合は成功と混ぜず「未検証」で止める**
+#    (読み取りしか叩かないので、シークレットの書き込み可否は手順 8 まで未検証のまま)。
 #
 # ============================================================================
 # 信頼境界 (誰が・どの資格情報で・どこまでやるか)
@@ -30,7 +36,9 @@
 # - **実行者は PO 本人のローカル環境のみ**。エージェント環境では動かさない
 #   (pem という長期クレデンシャルを扱うため / ADR 0031 の思想)。
 # - **Azure**: PO の `az login` 済みセッション。必要ロールは
-#   Contributor (リソース作成) + Key Vault Secrets Officer (pem の格納 / data-plane)。
+#   Contributor (リソース作成) + **Key Vault Reader** (鍵メタデータの読み取り / data-plane)
+#   + **Key Vault Secrets Officer** (pem の格納 / data-plane)。data-plane の 2 つは
+#   Contributor / Owner に含まれないので、手順 5 が使う前に確かめる (#499)。
 #   ロール割り当ての作成はしない (keyVaultCryptoUserPrincipalIds は既定の空)。
 # - **GitHub**: pem から 10 分間有効の App JWT を作り、対象リポジトリに絞った
 #   installation token (1 時間有効 / administration:write + metadata:read) を得る。
@@ -41,7 +49,7 @@
 #
 # 使い方・前提・巻き戻しは docs/runbooks/mgmt-layer-apply.md と同ディレクトリの
 # README.md。テストは test_bootstrap.py (az / terraform / curl をスタブして全分岐 +
-# check_permissions.py の判定を直接叩く単体)。
+# check_permissions.py / check_key_vault.py の判定を直接叩く単体)。
 #
 # ⚠️ `set -x` をこのファイルに足さないこと — トレースは変数展開 (installation
 #    token を含む) をそのまま stderr に吐く。テストが grep で禁止を固定している。
@@ -81,6 +89,7 @@ STEP_NAMES=(
   "Azure: bicep コンパイル"
   "Azure: what-if (差分確認)"
   "Azure: mgmt 層 apply"
+  "Key Vault: データプレーン権限の確認 (読み取りのみ / 書き込みは手順 8 で実測)"
   "Azure: apply 後の検証 (層タグ / 鍵 / 予算)"
   "GitHub: App 認証確認 (JWT → installation token)"
   "Key Vault: pem 格納"
@@ -244,11 +253,18 @@ acct_json="$(az account show --query '{name:name, id:id}' -o json)" \
 echo "Azure サブスクリプション:"
 echo "$acct_json"
 echo "適用先 GitHub リポジトリ: $GH_OWNER/$GH_REPO"
+
+# 作業用の一時ディレクトリ (プローブの stderr / 認証ヘッダ / terraform の作業場)。
+# ヘッダをファイル渡しにするのは、`curl -H "Authorization: ..."` だと共有マシンで
+# プロセス一覧 (ps) から資格情報が読めてしまうため。
+WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/mgmt-bootstrap.XXXXXX")"
+chmod 700 "$WORKDIR"
+
 confirm "このサブスクリプション / リポジトリで進めますか?"
 step_done 0
 
 # ===========================================================================
-# 1〜5. Azure mgmt 層 (docs/runbooks/mgmt-layer-apply.md の Steps 1〜5 相当 / 冪等)
+# 1〜4. Azure mgmt 層 (docs/runbooks/mgmt-layer-apply.md の Steps 1〜5 相当 / 冪等)
 # ===========================================================================
 step_begin 1
 az group create -n "$MGMT_RG" -l "$MGMT_LOCATION" --query properties.provisioningState -o tsv
@@ -278,24 +294,109 @@ provisioning_state="$(az deployment group create \
 echo "デプロイ: Succeeded"
 step_done 4
 
+# ===========================================================================
+# 5. Key Vault のデータプレーン権限を先に確かめる (#499 発見 1)
+# ===========================================================================
+# Key Vault は RBAC 方式で、**control-plane のロール (Contributor / Owner) に
+# data-plane は含まれない**。サブスクリプション Owner でも既定では鍵もシークレットも
+# 触れず、実測 (PO / 2026-08-17) では検証 6b が `ForbiddenByRbac`
+# (`Assignment: (not found)`) で停止した。
+#
+# ⚠️ この確認を apply より前に置くことはできない — Vault は直前の apply で作られる
+#    (初回は存在しない)。よって「data-plane を使う最初の操作 (検証 6b) の直前」が
+#    最も早い位置で、ここで一度だけまとめて確かめる。
 step_begin 5
+
+# プローブは**読み取りだけ**。書き込みを試すと、確認のために本物のシークレットを
+# 作ることになる (確認の副作用でゴミが残る)。
+# ⚠️ したがって secrets 側が通っても**書き込み権限まで保証はしない** (Key Vault Reader
+#    だけでも一覧は通る)。手順 8 は自前の失敗経路で Secrets Officer の付与を案内する。
+kv_keys_rc=0
+az keyvault key list --vault-name "$VAULT_NAME" --maxresults 1 -o none \
+  2>"$WORKDIR/kv-keys.err" || kv_keys_rc=$?
+kv_secrets_rc=0
+az keyvault secret list --vault-name "$VAULT_NAME" --maxresults 1 -o none \
+  2>"$WORKDIR/kv-secrets.err" || kv_secrets_rc=$?
+
+# 判定は check_key_vault.py が持つ (cicd/CLAUDE.md「判定ロジックをシェルに埋めない」)。
+# 戻りは `status|roles|detail` の 1 行。status は ok / forbidden / error。
+dp_report="$(python3 "$SCRIPT_DIR/check_key_vault.py" data-plane \
+  keys "$kv_keys_rc" "$WORKDIR/kv-keys.err" \
+  secrets "$kv_secrets_rc" "$WORKDIR/kv-secrets.err")"
+dp_status="${dp_report%%|*}"
+dp_rest="${dp_report#*|}"
+dp_roles="${dp_rest%%|*}"
+dp_detail="${dp_rest##*|}"
+
+if [ "$dp_status" != "ok" ]; then
+  # az の生のエラーは隠さない (原因が Vault 名なのか伝播待ちなのかはここにしか無い)。
+  cat "$WORKDIR/kv-keys.err" "$WORKDIR/kv-secrets.err" >&2
+fi
+
+if [ "$dp_status" = "error" ]; then
+  # **権限の話ではない**ので付与を案内しない。「確かめられなかった」を成功と混ぜない。
+  abort "Key Vault のデータプレーン権限を確認できませんでした (未検証: $dp_detail)"
+fi
+
+if [ "$dp_status" = "forbidden" ]; then
+  vault_scope="$(az keyvault show -n "$VAULT_NAME" --query id -o tsv 2>/dev/null || echo "<vault-resource-id>")"
+  # 握り潰し注記: ここで隠れるのは「scope を引けなかった」ことだけで、その場合は
+  # プレースホルダが出るので PO には「自分で埋める」と分かる (成功と混ざらない)。
+  msg="Key Vault ($VAULT_NAME) のデータプレーン権限がありません: $dp_detail"$'\n'
+  msg="$msg"$'\n'"Contributor / Owner には data-plane は含まれません。次を実行して付与してから再実行してください:"$'\n'
+  # ⚠️ `[ ... ] && msg=...` で組み立てないこと (偽のとき && が非ゼロを返し、errexit が
+  #    台帳を出さずに落ちる)。ロールは判定側が必要な分だけ返している。
+  old_ifs="$IFS"; IFS=','
+  for role in $dp_roles; do
+    msg="$msg"$'\n'"  az role assignment create --role \"$role\" \\"
+    msg="$msg"$'\n'"    --assignee \"\$(az ad signed-in-user show --query id -o tsv)\" \\"
+    msg="$msg"$'\n'"    --scope \"$vault_scope\""
+  done
+  IFS="$old_ifs"
+  msg="$msg"$'\n'
+  msg="$msg"$'\n'"(付与には Owner / User Access Administrator が必要。反映まで数分かかることがあります。"
+  msg="$msg"$'\n'" 2 つまとめてなら Key Vault Administrator でも通りますが、鍵マテリアルまで触れるので上の 2 つを推奨)"
+  abort "$msg"
+fi
+# ⚠️ 確かめた範囲だけを言う。**シークレットの書き込みはここでは未検証** — 確認のために
+#    本物のシークレットを作らない方針なので、読み取りしか叩いていない (Key Vault Reader
+#    だけでも一覧は通る)。「OK」だけ出すと、台帳の [済] が未検証の項目まで成功に見える。
+echo "データプレーン権限 OK (鍵の一覧 / シークレットの一覧まで)"
+echo "  未検証: シークレットの**書き込み** (pem 格納) — 読み取りだけでは判定できない。実測は手順 8"
+step_done 5
+
+# ===========================================================================
+# 6. apply 後の検証
+# ===========================================================================
+step_begin 6
 # 検証は Runbook の Verification 2/3/5 を機械化したもの。1 つでも落ちたら止まる。
 # (4 の撤収ガード検証は cleanup-env.sh の実行が必要で対話も長いので Runbook の手動確認に残す)
 
-# 5a. 層タグ — 付いていない資源は撤収ガードから見えず、撤収で黙って消える。
+# 6a. 層タグ — 付いていない資源は撤収ガードから見えず、撤収で黙って消える。
 untagged="$(az resource list -g "$MGMT_RG" -o json \
   | python3 -c 'import json,sys; rs=json.load(sys.stdin); print("\n".join(r["name"] for r in rs if (r.get("tags") or {}).get("mindInboxLayer")!="management"))')"
 if [ -n "$untagged" ]; then
   abort "層タグ mindInboxLayer=management の無い資源があります (撤収ガードの対象外 = 撤収で消える): $untagged"
 fi
-echo "検証 5a: 層タグ OK"
+echo "検証 6a: 層タグ OK"
 
-# 5b. E2E trace 鍵がエクスポート不可で作られていること。
-exportable="$(az keyvault key show --vault-name "$VAULT_NAME" -n e2e-artifacts --query key.exportable -o tsv)"
-[ "$exportable" = "false" ] || abort "e2e-artifacts 鍵が exportable=$exportable です (false でなければ設計が崩れている)"
-echo "検証 5b: 鍵は非エクスポート OK"
+# 6b. E2E trace 鍵がエクスポート不可で作られていること。
+# ⚠️ `exportable` は応答の **attributes の下**にある (#499 発見 2)。`key.exportable` は
+#    存在しないパスで、az は空文字を返すだけなので、`= "false"` で通す判定だと
+#    **正常な鍵で必ず止まる** (PO 実測 2026-08-17)。しかも「鍵が壊れている」と読める
+#    メッセージが出るので、原因に辿り着けない。
+# ⚠️ **空が正常**。エクスポート不可の鍵は attributes に exportable を持たない (省略が
+#    既定) ため。ここを「一致で通す」に戻さないこと。判定は check_key_vault.py。
+#    取得そのものの失敗は $(...) の非ゼロが ERR トラップに落ちるので、握り潰しではない。
+exportable_raw="$(az keyvault key show --vault-name "$VAULT_NAME" -n e2e-artifacts \
+  --query attributes.exportable -o tsv)"
+key_export="$(python3 "$SCRIPT_DIR/check_key_vault.py" key-export "$exportable_raw")"
+if [ "$key_export" != "ok" ]; then
+  abort "e2e-artifacts 鍵の exportable が '$exportable_raw' です ($key_export)。エクスポート可能な鍵は設計が崩れている (非エクスポートなら空か false)"
+fi
+echo "検証 6b: 鍵は非エクスポート OK (attributes.exportable=${exportable_raw:-<未設定 = 非エクスポート>})"
 
-# 5c. 予算の**実在** — deployment output は見ない (パラメータの写しにすぎない)。
+# 6c. 予算の**実在** — deployment output は見ない (パラメータの写しにすぎない)。
 #     az consumption が使えない環境があるので ARM を直接叩く。存在しなければ
 #     BudgetNotFound で非ゼロになり、沈黙と区別できる。
 subscription_id="$(az account show --query id -o tsv)"
@@ -304,22 +405,16 @@ budget_contacts="$(az rest --method get \
   --query "properties.notifications.actual50.contactEmails | length(@)" -o tsv)" \
   || abort "予算 $BUDGET_NAME が確認できません (BudgetNotFound なら budgetContactEmails の渡し忘れ)"
 [ "$budget_contacts" -ge 1 ] || abort "予算 $BUDGET_NAME の通知先が空です"
-echo "検証 5c: 予算あり (通知先 $budget_contacts 件) OK"
-step_done 5
+echo "検証 6c: 予算あり (通知先 $budget_contacts 件) OK"
+step_done 6
 
 # ===========================================================================
-# 6. GitHub App の認証確認 — pem と App ID の対応 / インストール / 権限
+# 7. GitHub App の認証確認 — pem と App ID の対応 / インストール / 権限
 # ===========================================================================
 # ⚠️ **KV 格納より先に**やる (Codex P1)。逆順だと、別 App の「有効な」pem を渡した
 #    取り違えで、KV の最新バージョンを誤った鍵で潰してから不一致に気づく —
 #    既存資格情報の破壊経路になる。ここで pem↔App ID の対応まで実測してから格納する。
-step_begin 6
-
-# 作業用の一時ディレクトリ (認証ヘッダと terraform の作業場)。
-# ヘッダをファイル渡しにするのは、`curl -H "Authorization: ..."` だと共有マシンで
-# プロセス一覧 (ps) から資格情報が読めてしまうため。
-WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/mgmt-bootstrap.XXXXXX")"
-chmod 700 "$WORKDIR"
+step_begin 7
 
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 
@@ -339,7 +434,7 @@ gh_api() { # $1: メソッド, $2: パス, $3: ヘッダファイル, [$4: body]
     -o "$WORKDIR/resp.json" -w '%{http_code}' "${body_args[@]}" "$GITHUB_API$2"
 }
 
-# 6a. pem と App ID が同じ App のものか。違う App の pem を掴む取り違えをここで止める。
+# 7a. pem と App ID が同じ App のものか。違う App の pem を掴む取り違えをここで止める。
 code="$(gh_api GET /app "$WORKDIR/jwt.h")"
 [ "$code" = "200" ] || abort "GET /app が $code でした (pem が App のものでない / 期限切れ / 失効の可能性)"
 actual_app_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$WORKDIR/resp.json")"
@@ -348,7 +443,7 @@ app_slug="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get(
   || abort "pem が指す App ID ($actual_app_id) と --app-id ($APP_ID) が一致しません (取り違え)"
 echo "App 確認 OK: $app_slug (id=$APP_ID)"
 
-# 6b. 対象 owner にインストールされているか。
+# 7b. 対象 owner にインストールされているか。
 code="$(gh_api GET '/app/installations?per_page=100' "$WORKDIR/jwt.h")"
 [ "$code" = "200" ] || abort "GET /app/installations が $code でした"
 installation_id="$(python3 -c '
@@ -362,12 +457,12 @@ if [ -z "$installation_id" ]; then
   abort "App が $GH_OWNER にインストールされていません。https://github.com/apps/$app_slug/installations/new から $GH_OWNER/$GH_REPO にインストールして再実行してください"
 fi
 
-# 6c. installation token (1 時間 / 対象リポジトリに限定)。
+# 7c. installation token (1 時間 / 対象リポジトリに限定)。
 code="$(gh_api POST "/app/installations/$installation_id/access_tokens" "$WORKDIR/jwt.h" "{\"repositories\":[\"$GH_REPO\"]}")"
 [ "$code" = "201" ] || abort "installation token の発行が $code でした"
 # token は変数と子プロセス環境にだけ置く。echo しない。
 installation_token="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$WORKDIR/resp.json")"
-# 6d. 権限集合を **完全一致**で検証する (余分・値ちがい・不足のすべてを見る)。
+# 7d. 権限集合を **完全一致**で検証する (余分・値ちがい・不足のすべてを見る)。
 #     判定そのものは check_permissions.py が持つ (シェルには埋めない —
 #     cicd/CLAUDE.md「判定ロジックをシェルや workflow の中に埋めない」)。
 #     戻りは「余分|値ちがい|不足」の 3 欄を | 区切りで 1 行 (空欄 = 問題なし)。
@@ -399,12 +494,12 @@ if [ -n "$perm_extra$perm_wrong$perm_missing" ]; then
   abort "$msg"
 fi
 echo "installation token 発行 OK (権限 ${EXPECTED_PERMISSIONS[*]} と完全一致 / 対象: $GH_REPO / 有効 1 時間)"
-step_done 6
+step_done 7
 
 # ===========================================================================
-# 7. pem を Key Vault へ格納 (冪等) — App の実在確認が済んだ pem だけを入れる
+# 8. pem を Key Vault へ格納 (冪等) — App の実在確認が済んだ pem だけを入れる
 # ===========================================================================
-step_begin 7
+step_begin 8
 
 pem_sha256="$(openssl dgst -sha256 -r "$PEM_PATH" | cut -d' ' -f1)"
 
@@ -418,7 +513,7 @@ existing_sha="$(az keyvault secret show --vault-name "$VAULT_NAME" -n "$SECRET_N
 
 if [ "$existing_sha" = "$pem_sha256" ]; then
   echo "同じ内容のシークレットが既にあります (sha256 一致)。格納をスキップします (冪等)。"
-  step_skip 7 "格納済み"
+  step_skip 8 "格納済み"
 else
   if [ -n "$existing_sha" ]; then
     echo "既存シークレットと内容が異なります。新しいバージョンとして格納します (旧バージョンは Key Vault に残る)。"
@@ -446,15 +541,15 @@ EOF
     abort "Key Vault へ格納できませんでした (上の指示を実行後に再実行。再実行は安全です)"
   fi
   echo "格納しました: $secret_id"
-  step_done 7
+  step_done 8
 fi
 # ここから先の失敗では「pem は格納済み」を前提に削除案内を出してよい (Codex P2)。
 PEM_STORED="true"
 
 # ===========================================================================
-# 8. Terraform: mgmt 層 (cicd/github/terraform) の plan
+# 9. Terraform: mgmt 層 (cicd/github/terraform) の plan
 # ===========================================================================
-step_begin 8
+step_begin 9
 
 # state は保管しない方式 (import ブロック / cicd/github/terraform/README.md) なので、
 # リポジトリを汚さないよう一時ディレクトリに写して回す。lockfile は readonly で
@@ -489,22 +584,22 @@ else:
 ')"
 [ "$changes" != "-1" ] && [ -n "$changes" ] || abort "plan の集計行を解釈できませんでした: $plan_summary"
 echo "plan 集計: $plan_summary"
-step_done 8
+step_done 9
 
 # ===========================================================================
-# 9. Terraform: apply — import-only のときだけ
+# 10. Terraform: apply — import-only のときだけ
 # ===========================================================================
-step_begin 9
+step_begin 10
 
 if [ "$changes" -ne 0 ]; then
   # #387 の領域。差分がある = 宣言 (現状の写し) と現実がズレている。どちらに揃えるかは
   # PO の裁定 (enforce_admins A/B) であって、このスクリプトが黙って倒してよい判断ではない。
-  STEP_STATUS[9]="拒否 (plan に差分)"
+  STEP_STATUS[10]="拒否 (plan に差分)"
   abort "plan に add/change/destroy の差分があります。apply しません — 差分の裁定は Issue #387 (上の plan 出力を Issue に貼って判断を仰いでください)"
 fi
 
 if [ "$TF_APPLY" != "true" ]; then
-  step_skip 9 "--tf-apply 未指定"
+  step_skip 10 "--tf-apply 未指定"
   echo "plan は import-only でした。apply するには --tf-apply を付けて再実行してください (再実行は安全です)。"
 else
   confirm "plan は import-only (GitHub 設定の変更ゼロ) です。apply しますか?"
@@ -513,7 +608,7 @@ else
   TF_VAR_github_repository="$GH_REPO" \
     terraform -chdir="$WORKDIR/tf" apply -input=false tfplan
   echo "apply 完了 (import のみ / GitHub の実設定は変更していません)"
-  step_done 9
+  step_done 10
 fi
 
 # ===========================================================================
