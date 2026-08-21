@@ -1135,8 +1135,8 @@ def test_l1_マージ執行はauto_merge武装済みのprだけ() -> None:
 
 def test_l1_リリースprとneeds_human_prはマージ執行しない() -> None:
     """無いと何が静かに通るか: リリース PR (main → release) は「judge 🟢 でも
-    merge は人間」(ADR 0019)、needs-human は「必ず人間が押す」(CLAUDE.md の
-    常設承認の例外)。ここが緩むと人間の門が機械に破られる。"""
+    merge は人間」(ADR 0019)、needs-human は「必ず人間が押す」
+    (.claude/skills/merge/SKILL.md「例外 (必ず人間が押す)」)。ここが緩むと人間の門が機械に破られる。"""
     ok, reason = should_execute_merge(_mergeable_pr(base={"ref": "release"}))
     assert not ok and "main" in reason
     ok, reason = should_execute_merge(_mergeable_pr(labels=[{"name": "needs-human"}]))

@@ -189,7 +189,7 @@ purge が要るのは「同名で作り直すために soft-delete を退かす�
 | `deploy-ai-agent.sh:197-203` / `deploy-voicevox-wrapper.sh:107-123` | **認証ゲート**（`az containerapp auth microsoft update`）                                  | `:1133` / `:1161` `authConfigs`（[ADR 0017](0017-container-apps-access-via-auth-gate.md)）    |
 | `deploy-voicevox-wrapper.sh:66-69`                                  | `VOICEVOX_ENGINE_BASE_URL` / `LOG_LEVEL`                                                   | Container App `:1080` の env                                                                  |
 
-**認証ゲートが二重宣言だったのは新しい発見**。[ADR 0017](0017-container-apps-access-via-auth-gate.md) の「Container Apps は組み込み認証で閉じる」は守るべき資源（OpenAI の課金）に直結する門なので、**宣言とスクリプトのどちらが勝つかが曖昧なまま放置してはいけない**（[ADR 0018](archive/operations/runtime-verification-in-the-loop.md) の「到達経路を全部数える」）。
+**認証ゲートが二重宣言だったのは新しい発見**。[ADR 0017](0017-container-apps-access-via-auth-gate.md) の「認証の門」(ai-agent / vv-wrap に Container Apps 組み込み認証を有効化する決定) は守るべき資源（OpenAI の課金）に直結する門なので、**宣言とスクリプトのどちらが勝つかが曖昧なまま放置してはいけない**（[ADR 0018](archive/operations/runtime-verification-in-the-loop.md) の「到達経路を全部数える」）。
 
 ロール割り当てについては **[PR #292](https://github.com/yomote/mind-inbox/pull/292)（持ち主を bicep 1 本にする）が本治療**であり、本 ADR はその方針を追認する。
 

@@ -1,5 +1,14 @@
 # このリポジトリの GitHub 設定の「あるべき姿」の宣言 (Issue #344)。
 #
+# ⚠️ **apply されるのはこのファイル。** GitHub 設定の宣言はこの YAML と
+#    `cicd/github/terraform/*.tf` の 2 か所にあるが、**実際にリポジトリへ PUT するのは
+#    こちらだけ** (`.github/workflows/github-settings.yml` の mode=apply が読む先が
+#    このファイル)。Terraform 側は「現状の写し」で、2026-08-21 時点では plan までしか
+#    回っておらず apply されない (例外は state 取り込みだけの import-only apply)。
+#    → **あるべき姿を直すときはここ**。Terraform 側は現実を写す場所なので、
+#      直した意図をそのまま書き写すと plan が現実との差分を出さなくなる。
+#    (経緯: docs/runbooks/github-terraform.md / cicd/github/terraform/README.md)
+#
 # ⚠️ ここに書いてあるのは **意図 (宣言)** であって **現実ではない**。
 #    エージェントはリポジトリ管理系 API に到達できない (実測 2026-08-12:
 #    GET /repos/.../branches/main/protection → 403 "GitHub access is not enabled
@@ -97,7 +106,19 @@ branch_protection:
     # 二重にかけるかは check の結果を見てから決める (今は現実に寄せて false)
     required_conversation_resolution: false
     required_linear_history: false
-    enforce_admins: false # 壊れたときに PO 本人が直せる余地を残す
+    # 管理者バイパスを無効にする (= Bypass list を空にする / PO 裁定 2026-08-21 の案 A、
+    # #387)。docs/team.md「規律は破られ、機構は守られる」節が「main のブランチ保護は
+    # Bypass list を空にする」と書いているのに、ここは長らく false = 正反対だった。
+    # false のままだと門は門でなくなる — 実測が残っている: 退役記録
+    # docs/adr/archive/operations/merge-gate-as-required-check-and-pm-cadence.md に、
+    # この構成で PR #213 が `review-gate` 🔴 のまま squash マージできた記録がある。
+    #
+    # 🚪 **緊急時の脱出口は「恒久的に開けておく」ではなく「一時的に開ける」**。
+    #    門が壊れて PO 本人しか直せない状態になったら、この行を `false` にする PR を
+    #    出して apply し、**用が済んだら `true` に戻す** (または ruleset を一時 Disable
+    #    する)。開いた状態を常態にしないための書き方であって、脱出口を塞いだのではない。
+    #    一時的に開けたことは PR に残るので、戻し忘れが記録から追える。
+    enforce_admins: true
     allow_force_pushes: false
     allow_deletions: false
     block_creations: false
@@ -122,6 +143,12 @@ branch_protection:
       require_last_push_approval: false
     required_conversation_resolution: false
     required_linear_history: false
+    # release だけは false のまま。**書き忘れではなく、#387 の裁定範囲の外**である。
+    # 裁定 (2026-08-21) が正としたのは docs/team.md の「**main の**ブランチ保護は
+    # Bypass list を空にする」で、release は対象に入っていない。加えて release には
+    # required check が 1 つも無く (上の `required_status_checks: null`)、承認数も 0 —
+    # つまり enforce_admins が塞ぐ門がそもそも存在しない。リリースの門は release-gate の
+    # 独立 judge と**人間のマージ**が持つ (ADR 0019)。ここを true にするかは別の裁定。
     enforce_admins: false
     allow_force_pushes: false
     allow_deletions: false

@@ -8,7 +8,7 @@ import * as React from "react";
  * 公開リポジトリの GitHub Actions API を匿名で読み、deploy workflow の状態を導出する。
  *
  * VITE_ENV_STATUS_REPO 未設定 (ローカル / mock / テスト) では一切 fetch しない —
- * 外部サービス無しでも動く特性 (CLAUDE.md の stub fallback) を壊さないため。
+ * 外部サービス無しでも動く特性 (apps/bff/CLAUDE.md「stub fallback を壊さない」節) を壊さないため。
  *
  * 匿名 API の rate limit は 60 req/h/IP で、複数タブで共有される。超えないための 3 段:
  * 前面タブしか fetch しない / 結果を localStorage で全タブ共有 (TTL 内は fetch しない) /

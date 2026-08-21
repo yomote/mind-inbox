@@ -91,7 +91,7 @@ Chosen option: **"Option A"**、because 層の軸を「運用のためか / ア�
 
 ### D3 — 復元を 1 回通すまで、撤収ガードは Cosmos が居る RG を拒否する（**暫定**）
 
-[ADR 0018](archive/operations/runtime-verification-in-the-loop.md)「復元したことのないバックアップはバックアップではない」をそのまま適用する。エクスポートを作っても、**空の Cosmos へ復元して Problem が戻ることを 1 回通す**まで D2 は完遂ではない。
+[ADR 0018](archive/operations/runtime-verification-in-the-loop.md)「動作検証をループに組み込む」を復元にも適用する — **復元したことのないバックアップはバックアップではない**。エクスポートを作っても、**空の Cosmos へ復元して Problem が戻ることを 1 回通す**まで D2 は完遂ではない。
 
 それが済むまで、撤収ガード（`cicd/scripts/env/persistent_layer_guard.py`）は **Cosmos が居る RG の撤収を拒否する**。**これは「Cosmos の置き場所が間違っている」という意味ではなく**、データを裸で消さないための足場である。
 
@@ -152,7 +152,7 @@ Key Vault / Storage / Log Analytics は**両層に同じ型が居る**（アプ�
 
 - Good, because 実装が要らない（Azure の機能を有効にするだけ）
 - Bad, because **復元経路が毎週テストされない** — 壊れていることに気づくのが、いちばん困っているとき
-- Bad, because Cosmos の機能に依存し、[ADR 0018](archive/operations/runtime-verification-in-the-loop.md) の「実際に 1 回通す」を満たしにくい
+- Bad, because Cosmos の機能に依存し、[ADR 0018](archive/operations/runtime-verification-in-the-loop.md)「動作検証をループに組み込む」(実際に 1 回通す) を満たしにくい
 - Bad, because 保持期間の外に出たデータを守れない
 
 ## 動作検証（実装後に何を叩くか / [ADR 0018](archive/operations/runtime-verification-in-the-loop.md)）

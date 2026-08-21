@@ -37,6 +37,14 @@ UNCOVERED = [
     "ローカルに実体が無く機械では真偽を判定できないため検査対象外",
     "リンク検査の走査対象外にある Markdown — `apps/**` / `.claude/**` / `.github/**` の md は"
     "未検査 (検査するのは `docs/**` / `cicd/**` / リポジトリ直下の *.md のみ)",
+    "md への参照のうち**引用形でないもの** — 末尾に `/ CLAUDE.md` と添えるだけの帰属表記や、"
+    "`§8.3` のような節番号指定は、実在検査ができない (何を引いたのかが本文に無い)。"
+    "**直すときは引用形 (`<path>.md「実在する文言」`) に書き換えること** — そうすれば"
+    "次に移動したとき unresolved-md-references が拾う",
+    "参照先の md 自体が見つからない引用 — パス表記の揺れ (`$SCRIPT_DIR/README.md` 等) と"
+    "区別できないため報告しない。ファイルの実在は broken-doc-links が md → md についてのみ見る",
+    "凍結された記録の中の引用 — `docs/adr/archive/**` と `docs/debrief/journal.md` は"
+    "**当時の引用として正しい**ので走査しない (直すと記録が記録でなくなる)",
 ]
 
 # リンク検査の走査対象。ここに無いディレクトリの md は**検査されない** —
@@ -58,6 +66,33 @@ LINK_SCAN_ROOT_FILES = "*.md"
 # ローカルにだけある `.venv` (実測: `apps/services/ai-agent/.venv` 配下に md 38 本) を
 # 拾うと、同じコミットでも実行場所で結果が変わる検出器になる。
 EXCLUDED_DIR_NAMES = {"node_modules", ".venv", "worktrees", ".git"}
+
+# ── 引用形の md 参照 (`<path>.md「X」` / `<path>.md の X 節`) の走査設定 ─────────
+# 「CLAUDE.md にこう書いてある」と引きながら、その文言が**移動済み / 最初から無い**
+# 事故を拾う (#387 の 2)。broken-doc-links はリンク先ファイルの実在しか見ないので、
+# **ファイルは在るのに中身が別物**というこの形は素通りしていた。
+MD_REF_SCAN_DIRS = ("apps", "cicd", "docs", ".github", ".claude")
+MD_REF_SCAN_EXTS = frozenset(
+    {".py", ".ts", ".tsx", ".js", ".mjs", ".sh", ".yml", ".yaml", ".md"}
+)
+# **凍結された記録は走査しない。** 退役 ADR とセッション記録は「その時点の引用」が
+# 正しい姿で、現在の文面に追随させると記録として壊れる。黙って狭めないため UNCOVERED
+# にも書いてある。
+FROZEN_RECORD_PREFIXES = ("docs/adr/archive/", "docs/debrief/journal.md")
+
+# 参照先 md → (任意の閉じ括弧) → 「引用」 または 「の X 節」。
+# 閉じ括弧を許すのは `[`a.md`](path/a.md)「X」` という書き方が普通にあるため。
+# 「の <12 文字まで>」を挟めるのは `CLAUDE.md の不変条件「X」` の形を拾うため
+# (句読点と鉤括弧は挟めないので、別の文の引用符まで飲み込むことはない)。
+_MD_REFERENCE = re.compile(
+    r"((?:[\w.-]+/)*[\w.-]+\.md)"
+    r"[)\]`]{0,2}\s*"
+    r"(?:(?:の[^「」\n。、]{0,12})?「([^」]{2,120})」"
+    r"|の\s*([^\s「」()（）,、。]{2,40})\s*節)"
+)
+# 比較のときに落とす飾り。**強調・引用符・改行・行頭のコメント記号は「文言が同じか」に
+# 関係しない** — コメントの折り返しで `#` や `*` が挟まるだけで偽陽性になるのを防ぐ。
+_DECORATION = re.compile(r"[\s*`「」『』\"'　_#]")
 
 _FENCED_CODE = re.compile(r"```.*?```", re.DOTALL)
 # インラインリンク [text](target) / 画像 ![alt](target)。title 付き (target "title") も拾う
@@ -118,6 +153,153 @@ def broken_links_in(md_file: Path, text: str, root: Path) -> list[dict]:
     return findings
 
 
+# ── 引用形の md 参照が解決するか (純粋関数) ─────────────────────────────────
+
+
+def normalize_reference_text(text: str) -> str:
+    """文言の比較用に飾りを落とす。
+
+    落とすのは強調 (`**`) / 各種の引用符 / 空白と改行 / 行頭のコメント記号だけで、
+    **文字そのものは 1 つも落とさない**。折り返して `#` が挟まっただけの引用を
+    「見つからない」と誤報しないための正規化であって、曖昧一致ではない。
+    """
+    return _DECORATION.sub("", text)
+
+
+def iter_md_references(text: str) -> list[tuple[str, str, str]]:
+    """`<path>.md「X」` / `<path>.md の X 節` を (参照先, 文言, 種別) で返す。
+
+    種別は "quote" (本文のどこかに在ればよい) / "section" (見出しに在ること)。
+    """
+    references = []
+    for match in _MD_REFERENCE.finditer(text):
+        target, quoted, section = match.group(1), match.group(2), match.group(3)
+        if quoted is not None:
+            references.append((target, quoted, "quote"))
+        else:
+            references.append((target, section, "section"))
+    return references
+
+
+def headings_of(markdown: str) -> str:
+    """ATX 見出し行だけを連ねたもの ("section" 参照の照合先)。"""
+    return "\n".join(
+        line for line in markdown.splitlines() if line.lstrip().startswith("#")
+    )
+
+
+def reference_resolves(phrase: str, kind: str, target_text: str) -> bool:
+    """引用した文言が参照先に実在するか。
+
+    "quote" は本文全体、"section" は見出し行だけを照合先にする。
+    **部分一致で判定するのは意図的** — 引用は原文の一部を切り出す形が普通で、
+    完全一致を要求すると「正しい引用」がほぼ全部落ちる。
+    """
+    haystack = target_text if kind == "quote" else headings_of(target_text)
+    return normalize_reference_text(phrase) in normalize_reference_text(haystack)
+
+
+def resolve_reference_target(src_file: Path, target: str, root: Path) -> list[Path]:
+    """参照先の候補 (実在するものだけ)。
+
+    - パスを含む形 (`apps/bff/CLAUDE.md`) → リポジトリルート相対 / 参照元からの相対
+    - 素の名前 (`CLAUDE.md`) → 参照元から**ルートへ遡る各階層**の同名ファイル
+      (領域別 CLAUDE.md → root CLAUDE.md の探し方そのもの)
+
+    **他所の領域の CLAUDE.md は候補に入れない** — 例えば frontend のコードが
+    `CLAUDE.md` とだけ書いて BFF の CLAUDE.md の文言を引いていたら、それは
+    「読み手が辿り着けない参照」なので、解決しないのが正しい。
+    """
+    if "/" in target:
+        candidates = [root / target, src_file.parent / target]
+    else:
+        candidates = []
+        directory = src_file.parent
+        while True:
+            candidates.append(directory / target)
+            if directory == root:
+                break
+            directory = directory.parent
+    resolved = []
+    for candidate in candidates:
+        absolute = candidate.resolve()
+        if absolute.is_file() and absolute.is_relative_to(root):
+            resolved.append(absolute)
+    return resolved
+
+
+def unresolved_md_references_in(src_file: Path, text: str, root: Path) -> list[dict]:
+    """1 ファイル分の「解決しない引用」。
+
+    **参照先そのものが見つからない引用は報告しない** — `$SCRIPT_DIR/README.md` の
+    ような変数入りのパス表記と「本当に無いファイル」を機械では区別できないため
+    (UNCOVERED に明示済み)。ここが見るのは「ファイルは在るのに文言が無い」だけ。
+    """
+    findings = []
+    for target, phrase, kind in iter_md_references(text):
+        candidates = resolve_reference_target(src_file, target, root)
+        if not candidates:
+            continue
+        for candidate in candidates:
+            try:
+                target_text = candidate.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if reference_resolves(phrase, kind, target_text):
+                break
+        else:
+            findings.append(
+                {
+                    "file": src_file.relative_to(root).as_posix(),
+                    "reference": target,
+                    "phrase": " ".join(phrase.split()),
+                }
+            )
+    return findings
+
+
+def iter_reference_scanned_files(root: Path) -> list[Path]:
+    """引用検査の対象ファイル (走査範囲は MD_REF_SCAN_DIRS + リポジトリ直下の *.md)。"""
+    files: list[Path] = []
+    for scan_dir in MD_REF_SCAN_DIRS:
+        target = root / scan_dir
+        if not target.is_dir():
+            continue
+        files.extend(f for f in target.rglob("*") if f.suffix in MD_REF_SCAN_EXTS)
+    files.extend(root.glob(LINK_SCAN_ROOT_FILES))
+    selected = []
+    for f in files:
+        relative = f.relative_to(root).as_posix()
+        if EXCLUDED_DIR_NAMES & set(f.relative_to(root).parts):
+            continue
+        if relative.startswith(FROZEN_RECORD_PREFIXES):
+            continue
+        selected.append(f)
+    return sorted(set(selected))
+
+
+def detect_unresolved_md_references(root: Path) -> list[dict]:
+    """`<path>.md「X」` と引きながら、その文言が参照先に無いもの。
+
+    走査対象の実在は main() が事前に検査する (missing_scan_dirs)。
+    """
+    findings = []
+    for src_file in iter_reference_scanned_files(root):
+        try:
+            text = src_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            findings.append(
+                {
+                    "file": src_file.relative_to(root).as_posix(),
+                    "reference": "(読めません)",
+                    "phrase": str(exc),
+                }
+            )
+            continue
+        findings.extend(unresolved_md_references_in(src_file, text, root))
+    return findings
+
+
 def iter_scanned_markdown(root: Path) -> list[Path]:
     """リンク検査の対象となる Markdown を列挙する (走査範囲は LINK_SCAN_DIRS が定義)。"""
     md_files: list[Path] = []
@@ -135,14 +317,17 @@ def iter_scanned_markdown(root: Path) -> list[Path]:
 
 
 def missing_scan_dirs(root: Path) -> list[str]:
-    """LINK_SCAN_DIRS のうち実在しないもの。
+    """走査対象 (LINK_SCAN_DIRS + MD_REF_SCAN_DIRS) のうち実在しないもの。
 
     走査対象が (改名・移動で) 消えると、検査していないのに 0 件になり
     「異常なし」として緑になる。main() がこれを**前提不足 (exit 1)** として扱い、
     run を落とすことで沈黙と健全を区別する — レポート内の finding にすると
     「検出処理は走った」ことになってしまう。
     """
-    return [d for d in LINK_SCAN_DIRS if not (root / d).is_dir()]
+    # 引用検査の走査対象 (MD_REF_SCAN_DIRS) も同じ扱い。片方だけ前提を守ると、
+    # 「apps/ が消えたので引用を 1 件も見ていない」状態が 0 件で緑になる。
+    expected = list(dict.fromkeys(LINK_SCAN_DIRS + MD_REF_SCAN_DIRS))
+    return [d for d in expected if not (root / d).is_dir()]
 
 
 def detect_broken_doc_links(root: Path) -> list[dict]:
@@ -212,6 +397,11 @@ def detect_all(root: Path) -> dict:
             "name": "placeholder のままのテスト script",
             "findings": detect_placeholder_test_scripts(root),
         },
+        {
+            "id": "unresolved-md-references",
+            "name": "解決しない md の引用 (`<path>.md「X」` / `の X 節` が参照先に無い)",
+            "findings": detect_unresolved_md_references(root),
+        },
     ]
     total = sum(len(d["findings"]) for d in detectors)
     report = {
@@ -226,6 +416,11 @@ def detect_all(root: Path) -> dict:
 def _finding_line(finding: dict) -> str:
     if "script" in finding:
         return f"- `{finding['file']}` scripts.`{finding['script']}`: `{finding['command']}`"
+    if "reference" in finding:
+        return (
+            f"- `{finding['file']}` が `{finding['reference']}` から引いている "
+            f"「{finding['phrase']}」が参照先に無い"
+        )
     return f"- `{finding['file']}` → `{finding['target']}`"
 
 

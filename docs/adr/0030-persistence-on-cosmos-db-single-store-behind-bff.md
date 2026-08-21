@@ -140,6 +140,6 @@ ADR 0018 に従い、「設定したか」ではなく振る舞いで書く。
 - Issue: [#165](https://github.com/yomote/mind-inbox/issues/165) / 後続: [#83](https://github.com/yomote/mind-inbox/issues/83) (embedding 索引) / [#46](https://github.com/yomote/mind-inbox/issues/46) (SP ロール最小化)
 - 要件: `docs/design/requirements.md` FR-4 / NFR-1 / NFR-2
 - 現行の構造: [`docs/design/basic_design.md`](../design/basic_design.md) の「永続化」節 (本 ADR の決定を反映済み)
-- 出典となった旧方針: [`docs/design/archive/basic_design_poc.md`](../design/archive/basic_design_poc.md) の Phase 2 (「Cosmos DB / **Redis**」— 本 ADR が Redis の部分を改める。archive は現行方針として読まないこと)
+- 出典となった旧方針: [`docs/design/archive/basic_design_poc.md`](../design/archive/basic_design_poc.md) の Phase 2 — 短命なセッション履歴の移行先に「Azure Cache for Redis」を挙げていた (本 ADR が Redis の部分を改める。archive は現行方針として読まないこと)
 - 実装計画: `docs/design/implementation_plan_v2.md` §6 宿題 (Problem 永続化と M2 索引の関係)
 - 関連 ADR: [0002](0002-container-apps-not-aks.md) (scale-to-zero) / [0004](0004-mockapi-as-frontend-truth.md) (mock を残す方針) / [0007](0007-problem-centric-two-layer-domain-model.md) (Mention を Problem に内包 = 1 ドキュメントで完結) / [0013](0013-standing-low-cost-dev-env-with-auto-deploy.md) (予算 ¥3,000) / [0017](0017-container-apps-access-via-auth-gate.md) (Functions Y1 は VNet 統合非対応) / [0018](archive/operations/runtime-verification-in-the-loop.md) (動作検証)

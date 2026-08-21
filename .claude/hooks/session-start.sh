@@ -57,7 +57,8 @@ if [ "$BEHIND" != "?" ] && [ "$BEHIND" -gt 0 ] 2>/dev/null; then
 ⚠️ このブランチは origin/main より **${BEHIND} コミット遅れ**ています。
 **これから作業を始めるなら**最新の main から切り直すこと。
 **既に作業中 / PR を出しているなら追随しない** — strict (Require branches to be up to date) は
-OFF なので遅れたままマージでき、反射的に main を取り込むと pm-accept が失効して再受け入れが要る。
+OFF なので遅れたままマージでき、反射的に main を取り込むと pm-accept が失効して再受け入れが要る
+(**引き継ぎは当てにしない** — #323 が open。docs/team.md / .claude/skills/merge/SKILL.md も同じ)。
 追随するのは**コンフリクトが実際に出たとき**だけ。"
 fi
 

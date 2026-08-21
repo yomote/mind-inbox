@@ -83,7 +83,7 @@ PR 作成 (opened)
    → 全スレッド解決 → あなたが merge ボタンを押す
 ```
 
-- **自動 Resolve の挙動仕様**は [`review-rubric.md`](../../.github/claude/review-rubric.md) の「再レビュー時の挙動 (収束 + 自動 Resolve)」が正典 (ここには再掲しない)。Routine セッションは管理 GitHub 接続経由で resolve / merge ツールを **PAT なしで**持つ (実測確認済み) が、**merge は使わせない**。
+- **自動 Resolve の挙動仕様**は [`review-rubric.md`](../../.github/claude/review-rubric.md)「Part 4 — 再レビューの規律 (単発の質と同じくらい効いている)」が正典 (ここには再掲しない)。Routine セッションは管理 GitHub 接続経由で resolve / merge ツールを **PAT なしで**持つ (実測確認済み) が、**merge は使わせない**。
 - **強制力と「merge は人間」の設計理由**は [ADR 0008](../adr/archive/operations/pr-review-via-cloud-routine.md)。運用としては、ブランチ保護「会話の解決を必須」により未解決スレッドが残るとマージできない。
 
 ## Verification

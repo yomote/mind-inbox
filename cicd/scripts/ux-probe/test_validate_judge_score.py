@@ -6,7 +6,8 @@
 UX トレンド (status ページ) と M2 の起動判定がそのぶん狂う。狂いは採点の
 時系列にしか現れないので、他に気づく手段が無い。
 
-仕様: `.github/claude/ux-rubric.md` の「出力ルール 1/2」(verdict の閾値と機械可読ブロック)。
+仕様: `.github/claude/ux-rubric.md`「出力ルール (UX 採点レポート)」の 1/2
+(verdict の閾値と機械可読ブロック)。
 
 ここで test しないこと:
 - スコアそのものの妥当性 (rubric と PO の抜き打ち監査の領域)

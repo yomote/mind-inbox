@@ -9,9 +9,24 @@
 #
 # ⚠️ **あるべき論への変更を混ぜていません** (#390 の着工条件)。特に
 #    `enforce_admins = false` は [#387](https://github.com/yomote/mind-inbox/issues/387)
-#    が「apply すると測定済みの門バイパスが復活する」と指摘して needs-human に
-#    なっている当の値です。**直すのは #387 の裁定後**。ここで黙って true にすると
-#    「現状の写し」ではなくなり、plan が現実との差分を出さなくなります。
+#    が「apply すると測定済みの門バイパスが復活する」と指摘した当の値です。
+#
+#    **2026-08-21 に PO 裁定が出ました (案 A)**: あるべき姿は
+#    `enforce_admins = true` (= 管理者バイパス無効 / Bypass list を空)。
+#    **それでもここは観測値の `false` のままにしてあります。** 理由は 2 つ:
+#      1. ここは「現状の写し」で、あるべき姿の置き場ではない。意図を書き写すと
+#         plan が現実との差分を出さなくなり、「今どうなっているか」が消える
+#      2. **意図を先に書くと mgmt-bootstrap のキットが動かなくなる** —
+#         `cicd/scripts/mgmt-bootstrap/bootstrap.sh` は plan が import-only
+#         (`0 to add, 0 to change, 0 to destroy`) のときだけ apply する。ここを
+#         true にすると plan に差分が立ち、state の初回取り込みごと拒否される
+#
+#    **あるべき姿 (`true`) が書いてあるのは `cicd/github/settings.yml` の方**で、
+#    実際に PUT されるのもそちらです (`.github/workflows/github-settings.yml` の
+#    mode=apply)。**宣言が 2 か所にあるので、どちらが生きているかを毎回確かめること**:
+#    2026-08-21 時点の「apply される宣言」= `cicd/github/settings.yml`。
+#    この写しを true にするのは、**apply 後に現実が true になったのを観測してから**
+#    (それが「写し」の正しい更新のしかた)。
 #
 # ── provider が **管理しない** 項目 (#373 / #389 が指す穴の一部) ─────────────
 # `github_branch_protection_v3` の引数は provider docs (実測コミット c55240a、
@@ -64,7 +79,8 @@ resource "github_branch_protection_v3" "main" {
   repository = var.github_repository
   branch     = "main"
 
-  # 観測値: false。#387 の裁定対象 (上のコメント)。
+  # 観測値: false。**あるべき姿は true** (#387 / PO 裁定 2026-08-21 案 A) だが、
+  # ここは写しなので観測値のまま。詳細は冒頭コメント。
   enforce_admins = false
 
   # 観測値: false。宣言 (settings.yml) も false で一致している。

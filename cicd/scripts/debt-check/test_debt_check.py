@@ -15,15 +15,21 @@ from pathlib import Path
 
 from detect import (
     EXCLUDED_DIR_NAMES,
+    FROZEN_RECORD_PREFIXES,
     LINK_SCAN_DIRS,
+    MD_REF_SCAN_DIRS,
     UNCOVERED,
     detect_all,
     detect_broken_doc_links,
     detect_placeholder_test_scripts,
+    detect_unresolved_md_references,
     is_checkable_relative,
     iter_inline_links,
+    iter_md_references,
     iter_scanned_markdown,
     main,
+    reference_resolves,
+    resolve_reference_target,
 )
 
 
@@ -35,8 +41,15 @@ def _repo(tmp_path: Path) -> Path:
     走査対象を足したらここも足す (足し忘れは未検査として全テストが落ちる)。
     """
     assert set(LINK_SCAN_DIRS) == {"docs", "cicd"}, "走査対象が変わっている"
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "cicd").mkdir()
+    assert set(MD_REF_SCAN_DIRS) == {
+        "apps",
+        "cicd",
+        "docs",
+        ".github",
+        ".claude",
+    }, "引用検査の走査対象が変わっている"
+    for name in ("docs", "cicd", "apps", ".github", ".claude"):
+        (tmp_path / name).mkdir()
     return tmp_path
 
 
@@ -270,3 +283,211 @@ def test_l1_検出ありのmarkdownはIssue本文として成立する(tmp_path)
     assert "`docs/index.md` → `missing.md`" in md
     # 検出があっても uncovered は消えない
     assert "カバーしていない" in md
+
+
+# ── 解決しない md の引用 (#387 の 2) ─────────────────────────────────────────
+#
+# **検出対象の文字列をテスト本文に素で置かない。** 置くとこのファイル自身が走査
+# 対象になったとき偽の finding が立つ (検出器が自分の testfixture を負債として
+# 報告する)。組み立てて作る。
+_Q_OPEN, _Q_CLOSE = "\u300c", "\u300d"
+
+
+def _quote_ref(target: str, phrase: str) -> str:
+    """`<target>「<phrase>」` の形の引用を作る。"""
+    return f"{target}{_Q_OPEN}{phrase}{_Q_CLOSE}"
+
+
+def _section_ref(target: str, heading: str) -> str:
+    """`<target> の <heading> 節` の形の引用を作る。"""
+    return f"{target} の {heading} 節"
+
+
+def test_l1_引用した文言が参照先に無ければ報告し_在れば報告しない(tmp_path) -> None:
+    """#387 の 2 そのもの。
+
+    無いと何が静かに通るか:
+        「CLAUDE.md にこう書いてある」と引いたまま、その文言が**別のファイルへ
+        移された / 最初から無い**状態が誰にも気づかれずに残る。`broken-doc-links`
+        は**リンク先ファイルの実在**しか見ないので、ファイルが在る限り緑のまま
+        通る (実際 #385 の移送で 7 箇所がこの形ですり抜けた)。
+    """
+    root = _repo(tmp_path)
+    (root / "CLAUDE.md").write_text(
+        "# 規約\n\n- **取れなかったものを異常なしと書かない**\n", encoding="utf-8"
+    )
+    (root / "cicd" / "a.py").write_text(
+        f"# {_quote_ref('CLAUDE.md', '取れなかったものを異常なしと書かない')}\n",
+        encoding="utf-8",
+    )
+    (root / "cicd" / "b.py").write_text(
+        f"# {_quote_ref('CLAUDE.md', 'テストファーストで切る')}\n", encoding="utf-8"
+    )
+    findings = detect_unresolved_md_references(root)
+    assert [(f["file"], f["phrase"]) for f in findings] == [
+        ("cicd/b.py", "テストファーストで切る")
+    ]
+
+
+def test_l1_折り返しや強調が挟まっても同じ文言なら解決する(tmp_path) -> None:
+    """偽陽性は検出器の死 (この repo の既存規律)。
+
+    無いと何が静かに通るか:
+        コメントの折り返しで `#` や `*` が挟まっただけの**正しい引用**を毎週
+        報告するようになり、Issue がノイズで埋まって本物の finding が読まれなく
+        なる。実物では `.github/workflows/github-terraform-check.yml` の引用が
+        2 行に折り返されている。
+    """
+    root = _repo(tmp_path)
+    (root / "CLAUDE.md").write_text(
+        "- **取れなかったものを異常なしと書かない**\n", encoding="utf-8"
+    )
+    wrapped = _quote_ref("CLAUDE.md", "取れなかったものを\n#    異常なしと書かない")
+    (root / "cicd" / "w.yml").write_text(f"# {wrapped}\n", encoding="utf-8")
+    assert detect_unresolved_md_references(root) == []
+
+
+def test_l1_節の引用は見出しにだけ解決する(tmp_path) -> None:
+    """`の X 節` は「節がある」という主張なので、本文一致では通さない。
+
+    無いと何が静かに通るか:
+        見出しが消えて本文の一言だけが残った状態を「節はある」と読ませてしまう。
+        読み手は目次から辿れず、参照が案内として機能しない。
+    """
+    root = _repo(tmp_path)
+    (root / "cicd" / "CLAUDE.md").write_text(
+        "# cicd\n\n## stub fallback を壊さない\n\n本文に 命名規約 とだけ書いてある\n",
+        encoding="utf-8",
+    )
+    (root / "cicd" / "ok.py").write_text(
+        f"# {_section_ref('cicd/CLAUDE.md', 'stub fallback を壊さない')}\n",
+        encoding="utf-8",
+    )
+    (root / "cicd" / "ng.py").write_text(
+        f"# {_section_ref('cicd/CLAUDE.md', '命名規約')}\n", encoding="utf-8"
+    )
+    assert [f["file"] for f in detect_unresolved_md_references(root)] == ["cicd/ng.py"]
+
+
+def test_l1_素のCLAUDE_mdは参照元から遡る階層だけを候補にする(tmp_path) -> None:
+    """`CLAUDE.md` とだけ書いたとき、どこを指したことになるか。
+
+    無いと何が静かに通るか:
+        リポジトリ中のどの CLAUDE.md でも当たれば合格にすると、
+        **読み手が辿り着けない参照**が合格になる (frontend のコードが素の
+        `CLAUDE.md` と書いて BFF の CLAUDE.md の文言を引いていた実例 = #387 の 2)。
+    """
+    root = _repo(tmp_path)
+    (root / "CLAUDE.md").write_text("# root\n", encoding="utf-8")
+    (root / "apps" / "bff").mkdir(parents=True)
+    (root / "apps" / "bff" / "CLAUDE.md").write_text(
+        "# bff\n\nstub fallback を壊さない\n", encoding="utf-8"
+    )
+    (root / "apps" / "frontend").mkdir(parents=True)
+    (root / "apps" / "frontend" / "x.ts").write_text(
+        f"// {_quote_ref('CLAUDE.md', 'stub fallback を壊さない')}\n", encoding="utf-8"
+    )
+    assert [f["file"] for f in detect_unresolved_md_references(root)] == [
+        "apps/frontend/x.ts"
+    ]
+    # 明示的にパスで書けば解決する (= 直し方が存在する)
+    (root / "apps" / "frontend" / "x.ts").write_text(
+        f"// {_quote_ref('apps/bff/CLAUDE.md', 'stub fallback を壊さない')}\n",
+        encoding="utf-8",
+    )
+    assert detect_unresolved_md_references(root) == []
+    # 候補の解決規則そのものも固定する (相対パスでも辿れる)
+    candidates = resolve_reference_target(
+        root / "apps" / "frontend" / "x.ts", "../bff/CLAUDE.md", root
+    )
+    assert [c.relative_to(root).as_posix() for c in candidates] == [
+        "apps/bff/CLAUDE.md"
+    ]
+
+
+def test_l1_参照先のmdが見つからない引用は報告しない(tmp_path) -> None:
+    """UNCOVERED に明示した線引き。
+
+    無いと何が静かに通るか:
+        `$SCRIPT_DIR/README.md` のような**変数入りのパス表記**を毎週「壊れている」
+        と報告し、直しようのない finding で Issue が埋まる (偽陽性は検出器の死)。
+        代わりに「報告しない」ことを UNCOVERED に書いて、狭さを毎回見せている。
+    """
+    root = _repo(tmp_path)
+    (root / "cicd" / "s.sh").write_text(
+        f"# {_quote_ref('$SCRIPT_DIR/README.md', 'App 権限の最小化と根拠')}\n",
+        encoding="utf-8",
+    )
+    assert detect_unresolved_md_references(root) == []
+    assert any("見つからない引用" in item for item in UNCOVERED), (
+        "報告しない線引きを UNCOVERED に書いていない (silent caps)"
+    )
+
+
+def test_l1_凍結された記録は走査しない(tmp_path) -> None:
+    """退役 ADR とセッション記録は「当時の引用」が正しい姿。
+
+    無いと何が静かに通るか:
+        過去の記録を現在の文面に追随させろという finding が毎週立ち、直すと
+        **記録が記録でなくなる** (書いた時点で何と書いてあったかが失われる)。
+    """
+    root = _repo(tmp_path)
+    assert FROZEN_RECORD_PREFIXES == (
+        "docs/adr/archive/",
+        "docs/debrief/journal.md",
+    ), "凍結範囲が変わっている"
+    (root / "CLAUDE.md").write_text("# root\n", encoding="utf-8")
+    stale = f"- {_quote_ref('CLAUDE.md', '当時はこう書いてあった')}\n"
+    (root / "docs" / "adr" / "archive" / "operations").mkdir(parents=True)
+    (root / "docs" / "adr" / "archive" / "operations" / "old.md").write_text(
+        stale, encoding="utf-8"
+    )
+    (root / "docs" / "debrief").mkdir(parents=True)
+    (root / "docs" / "debrief" / "journal.md").write_text(stale, encoding="utf-8")
+    assert detect_unresolved_md_references(root) == []
+    # 凍結範囲の外に同じものを置けば報告される (= 除外が効きすぎていない)
+    (root / "docs" / "live.md").write_text(stale, encoding="utf-8")
+    assert [f["file"] for f in detect_unresolved_md_references(root)] == [
+        "docs/live.md"
+    ]
+
+
+def test_単体_引用の切り出しと照合は純粋関数で決まる() -> None:
+    """判定の 1 行 (`iter_md_references` / `reference_resolves`) を直接押さえる。
+
+    無いと何が静かに通るか:
+        走査 (IO) と一緒にしか検査していないと、**照合の緩め方** (例: 見出し限定を
+        本文一致に変える / 正規化で文字を落とす) が偽陽性・偽陰性として現れるまで
+        気づけない。
+    """
+    quote = _quote_ref("apps/bff/CLAUDE.md", "副作用を伴うツール呼び出し")
+    assert iter_md_references(f"# {quote}") == [
+        ("apps/bff/CLAUDE.md", "副作用を伴うツール呼び出し", "quote")
+    ]
+    assert iter_md_references(
+        f"# {_section_ref('cicd/CLAUDE.md', 'リソース命名')}"
+    ) == [("cicd/CLAUDE.md", "リソース命名", "section")]
+    body = "# 見出し\n\n本文に **副作用を伴う** ツール呼び出し\n"
+    assert reference_resolves("見出し", "section", body)
+    assert not reference_resolves("本文に", "section", body), (
+        "見出し限定のはずが本文でも通っている"
+    )
+    assert reference_resolves("副作用を伴う ツール呼び出し", "quote", body)
+    assert not reference_resolves("存在しない文言", "quote", body)
+
+
+def test_l1_新しい検出器がレポートに載っている(tmp_path) -> None:
+    """検出器を書いても detect_all に繋がなければ 1 度も走らない。
+
+    無いと何が静かに通るか:
+        週次 run のレポートに検出器の節ごと現れず、**動いていないことに誰も
+        気づかない** (0 件と未実行が同じ見た目になる)。
+    """
+    root = _repo(tmp_path)
+    report = detect_all(root)
+    ids = [d["id"] for d in report["detectors"]]
+    assert "unresolved-md-references" in ids
+    section = next(
+        d for d in report["detectors"] if d["id"] == "unresolved-md-references"
+    )
+    assert section["name"] in report["markdown"]

@@ -195,7 +195,7 @@ az rest --method get --url "https://management.azure.com/subscriptions/$(az acco
 | `management-resources-present` | 層タグ / 名指しの管理系リソースが居る RG の撤収 | **恒久** (`ALLOW_PROTECTED_DELETE` は可)                  |
 | `data-restore-unproven`        | Cosmos が居る RG の撤収                         | **暫定**                                                  |
 
-**`data-restore-unproven` は「Cosmos がアプリ系に居るのが間違い」という意味ではありません。** アプリ系に居るのが正しい姿で、止めている理由は **バックアップからの復元をまだ 1 回も通していない**ことだけです ([ADR 0018](../adr/archive/operations/runtime-verification-in-the-loop.md) 「復元したことのないバックアップはバックアップではない」)。
+**`data-restore-unproven` は「Cosmos がアプリ系に居るのが間違い」という意味ではありません。** アプリ系に居るのが正しい姿で、止めている理由は **バックアップからの復元をまだ 1 回も通していない**ことだけです ([ADR 0018](../adr/archive/operations/runtime-verification-in-the-loop.md)「動作検証をループに組み込む」— 復元したことのないバックアップはバックアップではない)。
 
 ### 実証が済んだら何をするか (やらないとガードが死ぬ)
 
