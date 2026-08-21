@@ -57,7 +57,11 @@ uv run --directory apps/services/ai-agent pytest   # Python は uv
   正典 [`docs/testing/strategy.md`](docs/testing/strategy.md) §1.2 は言語非依存の「コメント」要件)
 - **単体テストを書いてよいのは「壊れても例外が出ず、データが静かに間違う」ところだけ。**
   受け渡し・ルーティング・型の詰め替えには書かない。派手に落ちるものは実環境の通し
-  (ゴールデンパス) が守る
+  (ゴールデンパス) が守る。**この入場条件が掛かるのはアプリのロジック (BFF / frontend /
+  ai-agent)。`cicd/scripts/` の自動化 (シェル / workflow / composite action) の配線検証は
+  例外で、スタブ実行ファイルを PATH に置いて通しで流す配線テストを `npm run test:scripts`
+  に置いてよい** (PR の CI に実動作経路が無く、配線テストが唯一の検出点になるため /
+  正典 [`docs/testing/strategy.md`](docs/testing/strategy.md) §2.2)
 - **状態・副作用を持つ新モジュールは、判定を純粋関数に切り出してテストする。**
   シェルや workflow の中に判定を埋めない。テストが書けない構成は設計の警報
 - **テストが本当に効くか確かめる (ミューテーション)。** 判定の 1 行を壊してテストが
