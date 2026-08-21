@@ -103,8 +103,10 @@ def test_単体_一覧が引けたときは既存の判定をそのまま使う(
     )
 
 
-def test_単体_Issue_の突合はタイトル完全一致() -> None:
-    """部分一致にすると別 workflow の Issue に相乗りし、他人の障害を勝手に閉じる。"""
+def test_単体_Issue_の突合はタイトル完全一致かつ重複を取りこぼさない() -> None:
+    """部分一致にすると別 workflow の Issue に相乗りし、他人の障害を勝手に閉じる。
+    逆に先頭 1 件しか返さないと、重複して立った Issue が復旧後も open のまま残り、
+    「Issue 一覧が現在の状態を表す」が崩れる (PR #509 Codex P2)。"""
     title = rules.issue_title("deploy")
     issues = [
         {"number": 1, "title": "[ci-failure] golden-path-monitor が落ちている"},
@@ -112,9 +114,25 @@ def test_単体_Issue_の突合はタイトル完全一致() -> None:
         {"number": 3, "title": title},
         {"number": 4, "title": title},
     ]
-    assert rules.select_issue_number(issues, title) == 3
-    assert rules.select_issue_number([], title) is None
-    assert rules.select_issue_number([{"number": "9", "title": title}], title) is None
+    assert rules.select_issue_numbers(issues, title) == [3, 4]
+    assert rules.select_issue_numbers([], title) == []
+    assert rules.select_issue_numbers([{"number": "9", "title": title}], title) == []
+
+
+def test_単体_通報の持ち時間を使い切ったら_gh_を呼ばない() -> None:
+    """無いと何が静かに通るか: gh が無応答だと待ちが 12 分超になり、job 全体が
+    10 分制限の 4 workflow (status-page / debt-check / debt-review-request / ux-eval)
+    では **本処理が成功していても job ごと打ち切られ**、判定にもサマリにも到達せず
+    run が cancelled になる — #507 の症状がそのまま戻る (PR #509 Codex P1)。"""
+    # 予算が潤沢なら 1 回分の上限まで使ってよい
+    assert rules.next_call_timeout(100.0, 30.0) == 30.0
+    # 残りが 1 回分に満たなければ残り全部
+    assert rules.next_call_timeout(5.0, 30.0) == 5.0
+    # 使い切ったら None = 呼ばずに失敗として報告側へ倒す
+    assert rules.next_call_timeout(0.0, 30.0) is None
+    assert rules.next_call_timeout(-3.0, 30.0) is None
+    # 意味のない極小スライスで呼ばない (待つだけ待って必ず失敗するのを避ける)
+    assert rules.next_call_timeout(0.4, 30.0) is None
 
 
 def test_単体_ラベルの既存衝突と本当のエラーを分ける() -> None:

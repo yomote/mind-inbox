@@ -43,6 +43,27 @@ LABEL_DESCRIPTION = "落ちた workflow 自身が立てた Issue (ADR 0035 D2)"
 LOOKUP_ATTEMPTS = 3
 WRITE_ATTEMPTS = 2
 
+# gh 1 回あたりの上限と、**通報ステップ全体**の締め切り。
+# 呼び出し元のうち 4 workflow は job 全体が 10 分制限なので、通報の待ちで job ごと
+# 打ち切られると step_verdict() に到達せず run が cancelled になる (PR #509 Codex P1)。
+# 全体を 120 秒で切り、切れたら待たずに「予算切れ」として報告側へ倒す。
+PER_CALL_TIMEOUT_SECONDS = 30.0
+TOTAL_BUDGET_SECONDS = 120.0
+
+
+class Budget:
+    """通報ステップ全体の残り時間。**足りなければ gh を呼ばずに失敗として記録する。**"""
+
+    def __init__(self, total_seconds: float) -> None:
+        self.total = total_seconds
+        self._start = time.monotonic()
+
+    def remaining(self) -> float:
+        return self.total - (time.monotonic() - self._start)
+
+    def slice_for_call(self) -> float | None:
+        return rules.next_call_timeout(self.remaining(), PER_CALL_TIMEOUT_SECONDS)
+
 
 class GhResult:
     def __init__(self, returncode: int, stdout: str, stderr: str) -> None:
@@ -65,6 +86,22 @@ def _backoff_seconds() -> float:
         return 2.0
 
 
+def _total_budget_seconds() -> float:
+    raw = os.environ.get("REPORT_FAILURE_DEADLINE_SECONDS", "")
+    if not raw:
+        return TOTAL_BUDGET_SECONDS
+    try:
+        return max(1.0, float(raw))
+    except ValueError:
+        # 値が壊れていても通報は止めない。ただし黙って既定に戻さず理由を出す。
+        print(
+            f"::warning::REPORT_FAILURE_DEADLINE_SECONDS={raw!r} を数値として読めないため "
+            f"{TOTAL_BUDGET_SECONDS:.0f} 秒を使う",
+            flush=True,
+        )
+        return TOTAL_BUDGET_SECONDS
+
+
 def log(message: str) -> None:
     print(message, flush=True)
 
@@ -84,7 +121,12 @@ def summary(message: str) -> None:
 
 
 def run_gh(
-    args: list[str], *, label: str, attempts: int = 1, quiet_failure: bool = False
+    args: list[str],
+    *,
+    label: str,
+    budget: Budget,
+    attempts: int = 1,
+    quiet_failure: bool = False,
 ) -> GhResult:
     """gh を叩く。**標準エラーは捨てず、失敗した試行を毎回ログに出す。**
 
@@ -94,12 +136,19 @@ def run_gh(
     backoff = _backoff_seconds()
     result = GhResult(1, "", "gh を 1 度も実行できなかった")
     for attempt in range(1, attempts + 1):
+        allowance = budget.slice_for_call()
+        if allowance is None:
+            result = GhResult(
+                1, "", f"通報ステップの持ち時間 {budget.total:.0f} 秒を使い切った (未実行)"
+            )
+            log(f"{label}: 予算切れのため実行しない (残り {budget.remaining():.1f} 秒)")
+            return result
         try:
             completed = subprocess.run(
                 ["gh", *args],
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=allowance,
             )
             result = GhResult(completed.returncode, completed.stdout, completed.stderr)
         except (OSError, subprocess.SubprocessError) as exc:
@@ -114,7 +163,7 @@ def run_gh(
                 f"cmd=`gh {' '.join(args)}` stderr={_one_line(result.stderr)}"
             )
         if attempt < attempts:
-            time.sleep(backoff * attempt)
+            time.sleep(min(backoff * attempt, max(0.0, budget.remaining())))
     return result
 
 
@@ -146,22 +195,23 @@ def main() -> int:
         f"cancelled-is-failure={cancelled_is_failure} / title={title!r}"
     )
 
+    budget = Budget(_total_budget_seconds())
     failures: list[str] = []
     if not job_status.strip():
         # job.status が取れないと「復旧」も「障害」も判定できない。黙って noop にしない。
         failures.append("JOB_STATUS が空 (呼び出し元の job-status 入力を確認)")
 
-    ensure_label(repo, failures)
-    lookup_ok, existing = find_open_issue(repo, title, failures)
+    ensure_label(repo, budget, failures)
+    lookup_ok, existing = find_open_issue(repo, title, budget, failures)
 
     action = rules.plan_action(
         job_status,
         work_ran,
         cancelled_is_failure,
         lookup_ok=lookup_ok,
-        has_open_issue=existing is not None,
+        has_open_issue=bool(existing),
     )
-    log(f"判定: {action} (open Issue={existing if existing is not None else 'なし/不明'})")
+    log(f"判定: {action} (open Issue={existing if existing else 'なし/不明'})")
     if not lookup_ok and action == rules.OPEN:
         # 「一覧が引けなかった」を「open Issue は無い」に丸めると、この 1 行が消えて
         # 重複 Issue が理由不明で湧く。丸めた瞬間に test_notify.py が落ちる。
@@ -170,7 +220,9 @@ def main() -> int:
             "(無通報より重複を選ぶ / ADR 0035 D2)"
         )
 
-    apply_action(action, repo, title, existing, what, workflow, run_url, sha, ref, failures)
+    apply_action(
+        action, repo, title, existing, what, workflow, run_url, sha, ref, budget, failures
+    )
 
     verdict = rules.step_verdict(job_status, cancelled_is_failure, failures)
     if failures:
@@ -181,7 +233,7 @@ def main() -> int:
     return 1 if verdict.fail_step else 0
 
 
-def ensure_label(repo: str, failures: list[str]) -> None:
+def ensure_label(repo: str, budget: Budget, failures: list[str]) -> None:
     result = run_gh(
         [
             "label",
@@ -195,6 +247,7 @@ def ensure_label(repo: str, failures: list[str]) -> None:
             LABEL_DESCRIPTION,
         ],
         label="ラベル作成",
+        budget=budget,
         quiet_failure=True,  # 既存衝突が既定なので、分類してから下で必ず 1 行出す
     )
     kind = rules.classify_label_create(result.returncode, result.stderr)
@@ -209,8 +262,10 @@ def ensure_label(repo: str, failures: list[str]) -> None:
         )
 
 
-def find_open_issue(repo: str, title: str, failures: list[str]) -> tuple[bool, int | None]:
-    """open な ci-failure Issue を 1 件探す。戻り値は (一覧が引けたか, 番号 or None)。
+def find_open_issue(
+    repo: str, title: str, budget: Budget, failures: list[str]
+) -> tuple[bool, list[int]]:
+    """open な ci-failure Issue を探す。戻り値は (一覧が引けたか, 番号の一覧)。
 
     **旧実装が無言で死んでいたのがここ。** 引けなかったことを「Issue は無い」と
     同じ値に丸めると、失敗した回に Issue が立たない / 成功した回に Issue が
@@ -232,6 +287,7 @@ def find_open_issue(repo: str, title: str, failures: list[str]) -> tuple[bool, i
             "100",
         ],
         label="open な ci-failure Issue の一覧取得",
+        budget=budget,
         attempts=LOOKUP_ATTEMPTS,
     )
     if not result.ok:
@@ -239,28 +295,29 @@ def find_open_issue(repo: str, title: str, failures: list[str]) -> tuple[bool, i
             f"open Issue の一覧を取得できなかった (rc={result.returncode}): "
             f"{_one_line(result.stderr)}"
         )
-        return False, None
+        return False, []
     try:
         issues = json.loads(result.stdout or "[]")
     except json.JSONDecodeError as exc:
         failures.append(f"open Issue の一覧を JSON として読めなかった: {exc}")
-        return False, None
+        return False, []
     if not isinstance(issues, list):
         failures.append(f"open Issue の一覧が配列ではない: {_one_line(str(issues))}")
-        return False, None
-    return True, rules.select_issue_number(issues, title)
+        return False, []
+    return True, rules.select_issue_numbers(issues, title)
 
 
 def apply_action(
     action: str,
     repo: str,
     title: str,
-    existing: int | None,
+    existing: list[int],
     what: str,
     workflow: str,
     run_url: str,
     sha: str,
     ref: str,
+    budget: Budget,
     failures: list[str],
 ) -> None:
     if action == rules.NOOP:
@@ -268,37 +325,18 @@ def apply_action(
         return
 
     if action in (rules.CLOSE, rules.APPEND):
-        if existing is None:
+        if not existing:
             failures.append(f"{action} と判定したのに対象 Issue 番号が無い (実装の不整合)")
             return
-        body = (
-            rules.recovery_comment(run_url, sha, ref)
-            if action == rules.CLOSE
-            else rules.failure_comment(run_url, sha, ref)
-        )
-        comment = run_gh(
-            ["issue", "comment", str(existing), "-R", repo, "--body", body],
-            label=f"#{existing} へのコメント",
-            attempts=WRITE_ATTEMPTS,
-        )
-        if not comment.ok:
-            failures.append(
-                f"#{existing} にコメントできなかった: {_one_line(comment.stderr)}"
-            )
         if action == rules.APPEND:
-            log(f"既存の #{existing} に追記した")
-            return
-        closed = run_gh(
-            ["issue", "close", str(existing), "-R", repo, "--reason", "completed"],
-            label=f"#{existing} のクローズ",
-            attempts=WRITE_ATTEMPTS,
-        )
-        if closed.ok:
-            log(f"復旧したので #{existing} を閉じた")
+            append_recurrence(repo, existing[0], run_url, sha, ref, budget, failures)
         else:
-            failures.append(f"#{existing} を閉じられなかった: {_one_line(closed.stderr)}")
+            close_all(repo, existing, run_url, sha, ref, budget, failures)
         return
 
+    if not budget.remaining() > 0:
+        # 予算切れでも run_gh が失敗として記録するので、ここで黙って抜けない
+        log("持ち時間を使い切った状態で Issue の新規作成に入る (下の結果を参照)")
     created = run_gh(
         [
             "issue",
@@ -313,12 +351,101 @@ def apply_action(
             rules.issue_body(what, workflow, run_url, sha, ref),
         ],
         label="Issue の新規作成",
+        budget=budget,
         attempts=WRITE_ATTEMPTS,
     )
     if created.ok:
         log(f"新規 Issue を立てた: {_one_line(created.stdout)}")
     else:
         failures.append(f"Issue を作成できなかった: {_one_line(created.stderr)}")
+
+
+def append_recurrence(
+    repo: str,
+    number: int,
+    run_url: str,
+    sha: str,
+    ref: str,
+    budget: Budget,
+    failures: list[str],
+) -> None:
+    """再発を既存 Issue に追記する。**成功したときだけ「追記した」と出す。**
+
+    無条件に成功メッセージを出すと、直後の ::error:: と矛盾したログになり、
+    運用者が「追記済み」と誤認する (PR #509 Codex P1 / AGENTS.md「取れなかったものを
+    異常なしと書かない」)。追記できないと状況ページの再発時刻も進まない。
+    """
+    result = run_gh(
+        [
+            "issue",
+            "comment",
+            str(number),
+            "-R",
+            repo,
+            "--body",
+            rules.failure_comment(run_url, sha, ref),
+        ],
+        label=f"#{number} への再発の追記",
+        budget=budget,
+        attempts=WRITE_ATTEMPTS,
+    )
+    if result.ok:
+        log(f"既存の #{number} に追記した")
+    else:
+        failures.append(
+            f"#{number} に再発を追記できなかった (追記されていない / "
+            f"状況ページの再発時刻が進まない): {_one_line(result.stderr)}"
+        )
+
+
+def close_all(
+    repo: str,
+    numbers: list[int],
+    run_url: str,
+    sha: str,
+    ref: str,
+    budget: Budget,
+    failures: list[str],
+) -> None:
+    """復旧したので**完全一致した Issue を全部**閉じる。
+
+    1 件だけ閉じると、一覧が引けなかった障害回に立った重複 Issue が open のまま残り、
+    「Issue 一覧が現在の状態を表す」(ADR 0035 D2) が次の成功 run まで崩れる
+    (PR #509 Codex P2)。閉じられなかった番号は名指しで failures に積む。
+    """
+    if len(numbers) > 1:
+        log(f"同じタイトルの open Issue が {len(numbers)} 件ある: {numbers} — 全部閉じる")
+    for number in numbers:
+        comment = run_gh(
+            [
+                "issue",
+                "comment",
+                str(number),
+                "-R",
+                repo,
+                "--body",
+                rules.recovery_comment(run_url, sha, ref),
+            ],
+            label=f"#{number} への復旧コメント",
+            budget=budget,
+            attempts=WRITE_ATTEMPTS,
+        )
+        if not comment.ok:
+            failures.append(
+                f"#{number} に復旧コメントを書けなかった: {_one_line(comment.stderr)}"
+            )
+        closed = run_gh(
+            ["issue", "close", str(number), "-R", repo, "--reason", "completed"],
+            label=f"#{number} のクローズ",
+            budget=budget,
+            attempts=WRITE_ATTEMPTS,
+        )
+        if closed.ok:
+            log(f"復旧したので #{number} を閉じた")
+        else:
+            failures.append(
+                f"#{number} を閉じられなかった (open のまま残る): {_one_line(closed.stderr)}"
+            )
 
 
 def run() -> int:

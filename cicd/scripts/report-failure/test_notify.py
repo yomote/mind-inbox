@@ -19,6 +19,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,11 @@ if os.path.exists(log):
     calls = json.load(open(log))
 calls.append(argv)
 json.dump(calls, open(log, "w"))
+
+hang = os.environ.get("GH_STUB_HANG", "")
+if hang and key in set(filter(None, hang.split(","))):
+    import time as _t
+    _t.sleep(float(os.environ.get("GH_STUB_HANG_SECONDS", "30")))
 
 seen = sum(1 for c in calls if "-".join(c[:2]) == key)
 fail = set(filter(None, os.environ.get("GH_STUB_FAIL", "").split(",")))
@@ -80,6 +86,8 @@ def run_notify(
     fail_times: int = 0,
     issues: list[dict] | None = None,
     raw_issues: str | None = None,
+    hang: str = "",
+    deadline: str = "",
 ) -> tuple[subprocess.CompletedProcess, list[list[str]], str]:
     log = tmp_path / "calls.json"
     summary = tmp_path / "summary.md"
@@ -89,11 +97,14 @@ def run_notify(
         "GH_STUB_LOG": str(log),
         "GH_STUB_FAIL": fail,
         "GH_STUB_FAIL_TIMES": str(fail_times),
+        "GH_STUB_HANG": hang,
+        "GH_STUB_HANG_SECONDS": "30",
         "GH_STUB_ISSUES": (
             raw_issues if raw_issues is not None else json.dumps(issues or [])
         ),
         "GITHUB_STEP_SUMMARY": str(summary),
         "REPORT_FAILURE_BACKOFF_SECONDS": "0",
+        "REPORT_FAILURE_DEADLINE_SECONDS": deadline or "120",
         "JOB_STATUS": job_status,
         "WORK_RAN": work_ran,
         "CANCELLED_IS_FAILURE": cancelled_is_failure,
@@ -310,3 +321,57 @@ def test_単体_想定外の例外でも無言にならず緑を汚さない(mon
 
 def _boom(*_args, **_kwargs):
     raise RuntimeError("想定外")
+
+
+def test_単体_追記に失敗したら追記したと言わない(gh_stub, tmp_path) -> None:
+    """無いと何が静かに通るか: 「既存の #42 に追記した」と ::error:: が同じログに並び、
+    運用者が追記済みと誤認する。状況ページの再発時刻も進んでいないのに、進んだように
+    読める (PR #509 Codex P1 / AGENTS.md「取れなかったものを異常なしと書かない」)。"""
+    proc, _calls, _ = run_notify(
+        gh_stub,
+        tmp_path,
+        job_status="failure",
+        fail="issue-comment",
+        issues=[{"number": 42, "title": TITLE_DEPLOY}],
+    )
+    assert "既存の #42 に追記した" not in proc.stdout
+    assert "#42 に再発を追記できなかった" in proc.stdout
+    assert "::error::" in proc.stdout
+
+
+def test_単体_復旧時は重複した_Issue_を全部閉じる(gh_stub, tmp_path) -> None:
+    """一覧が引けない障害回は重複覚悟で立てる設計なので、復旧で 1 件しか閉じないと
+    元の Issue が open のまま残り、状況ページが直った後も赤を出し続ける
+    (PR #509 Codex P2)。"""
+    proc, calls, _ = run_notify(
+        gh_stub,
+        tmp_path,
+        issues=[
+            {"number": 42, "title": TITLE_DEPLOY},
+            {"number": 51, "title": "[ci-failure] status-page が落ちている"},
+            {"number": 77, "title": TITLE_DEPLOY},
+        ],
+    )
+    assert proc.returncode == 0
+    closed = [c[2] for c in calls if c[:2] == ["issue", "close"]]
+    assert closed == ["42", "77"]  # 別 workflow の #51 は触らない
+    assert "open Issue が 2 件ある" in proc.stdout
+
+
+def test_単体_gh_が無応答でも持ち時間を超えて待たない(gh_stub, tmp_path) -> None:
+    """無いと何が静かに通るか: gh の無応答で通報が 12 分超待ち、job 全体が 10 分制限の
+    workflow (status-page / debt-check / debt-review-request / ux-eval) では
+    **本処理が成功していても job ごと打ち切られ**、判定にもサマリにも到達しない。
+    run は cancelled になり、#507 と同じ「成功したのに赤」が別の形で戻る
+    (PR #509 Codex P1)。"""
+    started = time.monotonic()
+    proc, _calls, summary = run_notify(
+        gh_stub, tmp_path, hang="issue-list", deadline="3"
+    )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 20, f"持ち時間 3 秒に対して {elapsed:.1f} 秒待った"
+    assert proc.returncode == 0  # デプロイの緑は汚さない
+    assert "予算切れのため実行しない" in proc.stdout  # 待たずに諦めたことを明示する
+    assert "::error::" in proc.stdout and summary.strip()  # 諦めたことを隠さない
+    assert "通報ステップ終了" in proc.stdout  # 判定とサマリまで必ず到達する

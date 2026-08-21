@@ -46,7 +46,8 @@ __all__ = [
     "issue_title",
     "plan_action",
     "recovery_comment",
-    "select_issue_number",
+    "next_call_timeout",
+    "select_issue_numbers",
     "step_verdict",
 ]
 
@@ -105,19 +106,24 @@ def plan_action(
     return NOOP
 
 
-def select_issue_number(issues: Sequence[dict], title: str) -> int | None:
-    """タイトル**完全一致**の Issue 番号を、渡された順の先頭から 1 件返す。
+def select_issue_numbers(issues: Sequence[dict], title: str) -> list[int]:
+    """タイトル**完全一致**の Issue 番号を、渡された順で**全部**返す。
 
     部分一致にすると別 workflow の Issue に相乗りする (旧実装の jq も完全一致だった)。
     jq 式ではなくここに置いたのは、シェルの中では「一致しなかった」と
     「jq 自体が壊れた」が同じ空文字列になり、区別できないため。
+
+    **1 件だけ返さないのは重複があり得るから** (PR #509 Codex P2)。一覧が引けなかった
+    障害回は重複覚悟で新規に立てる設計なので、復旧時に先頭 1 件しか閉じないと
+    元の Issue が open のまま残り、「Issue 一覧が現在の状態を表す」(ADR 0035 D2) が
+    崩れる。追記は先頭 1 件だけで足りる (状況ページも一覧の先頭を読む) が、
+    **クローズは全部**が要る。
     """
-    for issue in issues:
-        if issue.get("title") == title:
-            number = issue.get("number")
-            if isinstance(number, int):
-                return number
-    return None
+    return [
+        issue["number"]
+        for issue in issues
+        if issue.get("title") == title and isinstance(issue.get("number"), int)
+    ]
 
 
 def classify_label_create(returncode: int, stderr: str) -> str:
@@ -132,6 +138,24 @@ def classify_label_create(returncode: int, stderr: str) -> str:
     if "already exists" in stderr.lower():
         return "already-exists"
     return "error"
+
+
+def next_call_timeout(
+    remaining_seconds: float, per_call_seconds: float, min_slice_seconds: float = 1.0
+) -> float | None:
+    """残り予算で 1 回の gh 呼び出しに与えてよい秒数。予算切れなら None (呼ばない)。
+
+    無いと何が静かに通るか (PR #509 Codex P1): gh が無応答になると
+    ラベル 1 回 + 一覧 3 回 + 書き込み 2 回 × 各 120 秒 で **12 分超**待つ。
+    report-failure を呼ぶ workflow のうち status-page / debt-check /
+    debt-review-request / ux-eval は **job 全体が 10 分制限**なので、
+    本処理が成功していても通報の待ちで job ごと打ち切られ、step_verdict() に
+    到達せず run が cancelled になる — #507 の症状がそのまま戻る。
+    全体に締め切りを置き、切れたら待たずに「予算切れ」として報告側へ倒す。
+    """
+    if remaining_seconds < min_slice_seconds:
+        return None
+    return min(per_call_seconds, remaining_seconds)
 
 
 class StepVerdict(NamedTuple):
