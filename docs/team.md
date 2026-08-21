@@ -115,17 +115,17 @@ user の対話窓口。**常に 1 本**で、使い捨てローテーション�
 
 - **共通の規律** — 審査基準は `.github/claude/*-rubric.md` (+ 共通規約 `_common.md`) が正典 (rubric-as-truth)。**judge はコードを変更せず、投稿もしない** (投稿は呼び出し元の責務)。`qa-reviewer` だけがテストコードに限って書ける
 - **機構で縛ってある** — judge に渡してあるのは**読み取り専用の GitHub MCP ツール**だけで、コメント投稿・resolve・merge・issue 更新は渡していない。`ToolSearch` も渡していない (後から書き込みツールを読み込めるため)。付与先は `code-reviewer` / `qa-reviewer` / `release-judge` の 3 体に限っている
-- **痕跡** — PR コメント (代役レビューは `<!-- standin-review -->` + 現 head SHA 付き) / release-gate のレポート / status ページの Routine 行
+- **痕跡** — PR コメント (代役レビューは `<!-- standin-review -->` + 現 head SHA 付き) / release-gate のレポート。**status ページには judge の行が無い** (下記)
 - **今の状態: Codex は 2026-08-13 に PR [#388](https://github.com/yomote/mind-inbox/pull/388) で 2 回動いた** — 03:58 UTC に `.claude/skills/dispatch/SKILL.md` へ P2 指摘を投稿し ([discussion_r3772284108](https://github.com/yomote/mind-inbox/pull/388#discussion_r3772284108))、13:00 UTC に `6d618d8` を再レビューして `Didn't find any major issues` を投稿した ([issuecomment-5280750928](https://github.com/yomote/mind-inbox/pull/388#issuecomment-5280750928)。後者は 12:58 の `@codex review` コメントで明示的に起こしたもの)。よって「Codex が利用上限で停止しているので代役の `code-reviewer` が技術レビューを担う」([#345](https://github.com/yomote/mind-inbox/issues/345)) は、**少なくとも 2026-08-13 時点では成り立たない**。ただし確認できたのは**この日に 2 回投稿できたという事実だけ**で、利用上限が恒久的に解けたかは **未検証** (残量は GitHub から読めない) — 下の「未定 / 未検証」を見ること
 - **代役 `code-reviewer` に回すときの前提は変わらない** — **代役は Claude なので独立性は回復しない**。実装もレビューも同じ系統のモデルで、同じ盲点を共有する (モデル名を分けても系統は同じ)。代役は Codex が沈黙している間だけ目隠しを薄くする措置であって、代替ではない
-- **今の状態: 代役 judge を自動起動する経路がまだ無い。** PR レビュー Routine は web UI での登録が必要で未登録のため、status ページのその行は**恒常 🔴 が正しい状態** (「登録されていない」という事実を出している)。それまで judge は PM が手で呼ぶ — **呼び忘れれば沈黙する**
+- **今の状態: 代役 judge を自動起動する経路がまだ無い。** PR レビュー Routine は web UI での登録が必要で、未登録のまま。**status ページにこの行は無い** — [`watchers.json`](../cicd/scripts/status-page/watchers.json) の `routines` にあるのは「当番 PM tick」1 行だけで、PR レビュー Routine の行は退役時 ([PR #385](https://github.com/yomote/mind-inbox/pull/385)) に削除済み (2026-08-21 実測)。**つまり「呼ばれていない」を赤で教えてくれる場所はどこにも無い** — judge は PM が手で呼ぶしかなく、**呼び忘れれば何の印も出ずに沈黙する**。行を戻すなら Routine の登録が先 (登録の無い行は恒常 🔴 になり、赤が常態化して読まれなくなる)
 
 ## 6. GitHub Actions
 
 **規律ではなく機構で守る層**。セッションの生死に依存せず、run 履歴が必ず残る。
 
 - **PR ごとの門** — `test` (4 層テスト + lint/build) / `CodeQL` (**GitHub の default setup**。自前 workflow だった `codeql.yml` は 2026-08-14 の PO 裁定で退役 — [#408](https://github.com/yomote/mind-inbox/issues/408)) / `iac-validate` / `adr-number-guard` (ADR 採番の衝突) / `auto-improve-guard` (自動改変の範囲)
-- **マージの門** — `review-gate` が commit status を貼る。緑になる条件は 3 つ: (1) `[pm-accept]` + 現 head SHA の受け入れコメント、(2) レビュースレッドが全解決、(3) コード PR なら**独立レビューが 1 本** (担い手は Codex でも代役 judge でもよい)。**push で受け入れは失効する** (実装差分が不変の main 追随だけは引き継ぐ)。さらに 30 分毎の sweep が advisory・マージ執行・ストール検知を回す
+- **マージの門** — `review-gate` が commit status を貼る。緑になる条件は 3 つ: (1) `[pm-accept]` + 現 head SHA の受け入れコメント、(2) レビュースレッドが全解決、(3) コード PR なら**独立レビューが 1 本** (担い手は Codex でも代役 judge でもよい)。**push で受け入れは失効する**。実装差分が不変の main 追随だけは引き継がれる建前だが、**成立を当てにしない** ([#323](https://github.com/yomote/mind-inbox/issues/323) が open — 指紋が patch 本文まで畳むため、base が進んだだけの追随でも失効することがある / 2026-08-12 実測)。さらに 30 分毎の sweep が advisory・マージ執行・ストール検知を回す
 - **配る** — `deploy` (main → dev) / `build-images` (ghcr へ事前ビルド)
 - **見張る** — `golden-path-monitor` (毎朝の実環境チェック) / `ux-eval` (UX 機械計測) / `debt-check` / `security-sweep` / `refresh-infra-diagram` / `status-page`
 - **手で叩く** — `ops-inspect` (外の事実を read-only で取る) / `github-settings` (宣言 → 現実の点検・適用) / `ux-data-migrate`

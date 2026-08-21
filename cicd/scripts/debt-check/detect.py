@@ -37,6 +37,35 @@ UNCOVERED = [
     "ローカルに実体が無く機械では真偽を判定できないため検査対象外",
     "リンク検査の走査対象外にある Markdown — `apps/**` / `.claude/**` / `.github/**` の md は"
     "未検査 (検査するのは `docs/**` / `cicd/**` / リポジトリ直下の *.md のみ)",
+    "md への参照のうち**引用形でないもの** — 末尾に `/ CLAUDE.md` と添えるだけの帰属表記や、"
+    "`§8.3` のような節番号指定は、実在検査ができない (何を引いたのかが本文に無い)。"
+    "**直すときは引用形 (`<path>.md「実在する文言」`) に書き換えること** — そうすれば"
+    "次に移動したとき unresolved-md-references が拾う",
+    "参照先の md 自体が見つからない引用 — パス表記の揺れ (`$SCRIPT_DIR/README.md` 等) と"
+    "区別できないため報告しない。ファイルの実在は broken-doc-links が md → md についてのみ見る",
+    "凍結された記録の中の引用 — ADR 本文 (`docs/adr/**`。退役分を含む) / 実測記録 "
+    "(`docs/reviews/**`) / `docs/debrief/journal.md` は**当時の引用として正しい**ので走査しない "
+    "(索引の README.md は除く = 走査する)。**`Accepted` の ADR 本文は書き換えない** (AGENTS.md)、"
+    "**実測記録は測定日時点の事実として残す** (docs/documentation/strategy.md) という規約があり、"
+    "報告しても直せないため — 腐った参照は supersede か索引側で扱う",
+    "引用検査の対象外にある拡張子 — 検査するのは detect.py の MD_REF_SCAN_EXTS に並べた "
+    "拡張子だけ (.py/.ts/.tsx/.js/.mjs/.sh/.yml/.yaml/.md/.tf/.bicep)。"
+    "ここに無い形式のファイルが md を引用していても 1 行も検査されない",
+    "文言に含まれる `*` の変化 — 照合の正規化で `*` を落としている "
+    "(`data/*` と `data/` が同じ文言になる)。落とさないと、参照先の強調 (`**X**`) の"
+    "内側を引用している箇所が偽陽性になる (実測 2026-08-21: 正しい引用が 5 件落ちた) — "
+    "**精度を取って、この変化は見ないことにしている**",
+    "参照先と引用が**14 文字より離れている**引用 — 例: "
+    "`strategy.md §2.3 / §6.4 — 分界は「X」` (実物あり)。上限を広げると誤検出が増えるので"
+    "広げていない (実測: 24 文字に広げると、引用ではなく**書き手自身の言葉**を鉤括弧で"
+    "括っただけの箇所を 3 件拾った — `cicd/iac/README.md` 等)。**この長さの引用は"
+    "1 行も検査されていない**",
+    "引用に添えられた**節番号 (`§1.3` など) の正しさ** — 引用の実在は見るが、"
+    "**その節の中にあるかまでは見ていない** (本文のどこかにあれば解決とする)。"
+    "節が消えて文言だけ別の節へ移った場合、明示された参照位置は腐っているのに検出されない "
+    "(PR #512 Codex P2 / 節の範囲切り出しが要るので別 Issue へ)",
+    "参照先の fenced code の中にある文言 — 「引用」の照合では本文全体を見るので、"
+    "**コード例の中の文字列にも当たる**。節 (`の X 節`) の照合では fenced code を落としている",
 ]
 
 # リンク検査の走査対象。ここに無いディレクトリの md は**検査されない** —
@@ -59,7 +88,122 @@ LINK_SCAN_ROOT_FILES = "*.md"
 # 拾うと、同じコミットでも実行場所で結果が変わる検出器になる。
 EXCLUDED_DIR_NAMES = {"node_modules", ".venv", "worktrees", ".git"}
 
-_FENCED_CODE = re.compile(r"```.*?```", re.DOTALL)
+# ── 引用形の md 参照 (`<path>.md「X」` / `<path>.md の X 節`) の走査設定 ─────────
+# 「CLAUDE.md にこう書いてある」と引きながら、その文言が**移動済み / 最初から無い**
+# 事故を拾う (#387 の 2)。broken-doc-links はリンク先ファイルの実在しか見ないので、
+# **ファイルは在るのに中身が別物**というこの形は素通りしていた。
+MD_REF_SCAN_DIRS = ("apps", "cicd", "docs", ".github", ".claude")
+# 拡張子は**リポジトリ内で実際に md を引用しているもの**を並べる。`.tf` / `.bicep` は
+# 実物がある (`cicd/github/terraform/rulesets.tf` が docs/team.md を、`cicd/iac/*.bicep` が
+# runbook を引いている) ので入れてある。**ここに無い拡張子は 1 行も検査されない** —
+# 走査範囲の狭さは 0 件と区別が付かないので UNCOVERED にも書く (PR #512 Codex P2)。
+MD_REF_SCAN_EXTS = frozenset(
+    {
+        ".py",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".mjs",
+        ".sh",
+        ".yml",
+        ".yaml",
+        ".md",
+        ".tf",
+        ".bicep",
+    }
+)
+# **凍結された記録は走査しない。** ADR 本文 (退役分を含む) とセッション記録は
+# 「その時点の引用」が正しい姿で、現在の文面に追随させると記録として壊れる。加えて
+# **`Accepted` の ADR 本文は書き換えない**のがこのリポジトリの規約 (AGENTS.md /
+# `docs/adr/README.md`) なので、直せないものを毎週報告しても finding が消えない
+# (PR #512 Codex P1)。腐った参照は supersede か索引側で扱う。
+# 黙って狭めないため UNCOVERED にも書いてある。
+#
+# ADR の**索引** (`docs/adr/README.md` / `docs/adr/archive/README.md`) は記録ではなく
+# 現役の案内なので走査する。判定は下の is_frozen_record。
+FROZEN_RECORD_PREFIXES = ("docs/debrief/journal.md",)
+# **中身が記録で、索引 (README.md) だけが現役**のディレクトリ:
+#   - `docs/adr/` — ADR 本文 (退役分の `archive/` を含む)
+#   - `docs/reviews/` — rubric の導出元となる**実測記録**。「測定日時点の事実として残す /
+#     書き換えない」と `docs/documentation/strategy.md` と各ファイル冒頭が明記している
+#     (PR #512 Codex P1)。書き換えると rubric の根拠だったときの表現が失われ、
+#     測定スナップショットを再現できなくなる
+RECORD_DIR_PREFIXES = ("docs/adr/", "docs/reviews/")
+
+# 参照先 md → (任意の閉じ括弧) → 「引用」 または 「の X 節」。
+#
+# ⚠️ **引用と「例示」は機械では区別できない。** md 名の直後に来る鉤括弧は引用として
+# 扱うので、「〜は誤り」という取り消し線が `CLAUDE.md` に溜まる …を md 名が先に来る
+# 語順で書くと、**例示のつもりの鉤括弧が引用として拾われる**。逃げ道を検出器側に作る
+# (助詞を絞る等) と本物の引用も落ちるので、**書き手側で語順を変えて** (鉤括弧を md 名の
+# 前に置く。この段落自身がその書き方) 曖昧さを外すこと。
+# 閉じ括弧を許すのは `[`a.md`](path/a.md)「X」` という書き方が普通にあるため。
+# 「の <12 文字まで>」を挟めるのは `CLAUDE.md の不変条件「X」` の形を拾うため
+# (句読点と鉤括弧は挟めないので、別の文の引用符まで飲み込むことはない)。
+_MD_REFERENCE = re.compile(
+    r"((?:[\w.-]+/)*[\w.-]+\.md)"
+    # 参照先と引用のあいだの**つなぎ**。書き方が何通りもある — 実物だけでも
+    # `](path)「X」` / `CLAUDE.md:「X」` / `strategy.md:59「X」` / `… 59 行目「X」` /
+    # `CLAUDE.md の不変条件「X」`。**区切りを 1 つずつ足すとモグラ叩きになり、
+    # 足し忘れた形が「0 件」に化ける** (PR #512 で Codex が 2 ラウンド続けて別の形を
+    # 指摘した) ので、**短いつなぎを一括で許す**形にしてある。
+    # 句点・読点・鉤括弧・改行は跨がない = 別の文の引用符まで飲み込まない。
+    #
+    # **14 文字という上限は精度のため**で、広げると誤検出が増える (実測 2026-08-21:
+    # 24 文字に広げると、引用ではなく*書き手自身の言葉*を鉤括弧で括っただけの箇所を
+    # 3 件拾った)。**その代わり、この長さを超える引用は 1 行も検査されない**ので
+    # UNCOVERED に明示してある (PR #512 Codex P2)。
+    # ただし **`ADR` と 別の `.md` はつなぎに含めない**。どちらも*別の参照先*を
+    # 導入するもので、含めると引用の帰属を間違える:
+    #   - `domain_rules.md §1 と ADR 0024「X」` → 「X」は ADR 0024 のもの (実物あり)
+    #   - `foo.md と bar.md「X」` → 「X」は bar.md のもの。`.md` を弾くことで
+    #     **鉤括弧にいちばん近い参照先**が選ばれる (PR #512 Codex P2)
+    # **`§` は弾かない** — `strategy.md §1.3 の「X」` は*同じファイルの節*を指しており、
+    # 参照先は変わらない。一律に弾くとこの形が丸ごと未検査になる (PR #512 Codex P2)。
+    r"(?:(?!ADR|\.md)[^「」\n。、]){0,14}?"
+    r"(?:「([^」]{2,120})」|の\s*([^\s「」()（）,、。]{2,40})\s*節)"
+)
+# 比較のときに落とす飾り。**強調・引用符・改行・行頭のコメント記号は「文言が同じか」に
+# 関係しない** — コメントの折り返しで `#` や `*` が挟まるだけで偽陽性になるのを防ぐ。
+#
+# ⚠️ **`_` は落とさない。** Markdown の強調記号でもあるが、コード識別子の一部でもある
+# (`auto_merge` / `enforce_admins`)。位置を問わず消すと `auto_merge` と `automerge` が
+# 同じ文言になり、**まさに検出したい文言変更が 0 件で通る** (PR #512 Codex P2)。
+# ⚠️ **句読記号 (`?` `！` など) も落とさない。** `_` と同じ理由 —
+# 「無いと何が静かに通るか?」の `?` が参照先から消えても 0 件で通ってしまう
+# (PR #512 Codex P2)。落としてよいのは**構造上の装飾**だけ。
+_DECORATION = re.compile(r"[\s*`「」『』\"'　]")
+# 折り返したコメントの**行頭**の記号 (`#` / `//` / `*` / `--`)。行頭に限るのが要点 —
+# `#` を位置に関係なく落とすと `Issue #323` と `Issue 323` が同じ文言になり、
+# **番号の書き換えが 0 件で通る** (PR #512 Codex P2)。
+#
+# さらに **引用の 2 行目以降にしか適用しない**。引用そのものが `--force` / `#323` の
+# ように記号で始まることがあり、1 行目にも適用すると `--force` と `force` が同じ
+# 文言になる (PR #512 Codex P2)。**参照先 (haystack) には一切適用しない** —
+# 照合は部分一致なので必要が無く、適用すると参照先の `--force …` の行が削られて
+# 正しい引用を偽陽性にする。
+# 記号の**後ろに空白があること**を要求する。0 文字を許すと、2 行目以降が
+# `--force` / `#323` / `//host` で始まる複数行引用で、その接頭記号ごと落ちてしまう
+# (PR #512 Codex P2)。折り返しのコメント記号は必ず空白を挟むので、これで区別できる。
+_LINE_LEAD = re.compile(r"^[ \t]*(?:#+|//+|\*+|--+)[ \t]+")
+# 引用の省略記号。`A … B` は「A と B のあいだを省いた」という意味なので、
+# **断片ごとに実在を確かめる** (省略を含む引用は実物がある —
+# `.github/claude/review-rubric.md` / PR #512 Codex)。
+_ELLIPSIS = re.compile(r"…+|\.\.\.+")
+
+# fenced code の開始・終了行。**行頭 (インデント 0〜3) でしか fence にならない**
+# のが要点 — 正規表現で `` ``` `` を素朴に対応付けると、**表の中に出てくる
+# インラインの `` ``` `` を開始と誤認して、そこから次の `` ``` `` までを丸ごと
+# 落とす**。実物では docs/testing/property-based-testing.md の見出し
+# `### 6.2` / `### 6.3` が消え、その節を引用している箇所が腐敗扱いになっていた
+# (PR #512 Codex P2)。**`~~~` も fence** (CommonMark) なので両方見る。
+_FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})([^`]*)$")
+_FENCE_CLOSE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
+# ATX 見出し行。**インデントは 0〜3 文字まで**で、`#` のあとに空白 (または行末) が要る
+# — 4 文字以上のインデントは Markdown ではコードブロックであり、その中の
+# `# コメント` は見出しではない (実物: docs/design/archive/basic_design_poc.md)。
+# `lstrip()` で判定すると、この差が消えて**削除済みの節への参照が解決済みに化ける**。
+_ATX_HEADING = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
 # インラインリンク [text](target) / 画像 ![alt](target)。title 付き (target "title") も拾う
 _INLINE_LINK = re.compile(r"\]\(\s*<?([^)<>\s]+)>?(?:\s+\"[^\"]*\")?\s*\)")
 
@@ -69,8 +213,33 @@ def log(message: str) -> None:
 
 
 def strip_fenced_code(text: str) -> str:
-    """コード fence 内を検査対象から外す (例示のリンクを壊れ扱いしない)。"""
-    return _FENCED_CODE.sub("", text)
+    """コード fence 内を検査対象から外す (例示のリンクを壊れ扱いしない)。
+
+    **行単位で開始 fence を認識し、同じ記号で長さが足りる終了 fence にだけ対応させる**
+    (CommonMark の規則)。正規表現で素朴に対応付けると、行の途中に出てくる
+    `` ``` `` を開始と誤認して**本物の見出しごと落とす** (PR #512 Codex P2)。
+    閉じ忘れた fence は文書末まで続く扱い — これも CommonMark と同じ。
+    """
+    kept: list[str] = []
+    fence: str | None = None
+    for line in text.splitlines():
+        if fence is None:
+            opening = _FENCE_OPEN.match(line)
+            # backtick fence の情報文字列に backtick は入れられない (CommonMark)。
+            # これを見ないと `` ```py `x` `` のような行を fence と誤認する
+            if opening and (opening.group(1)[0] == "~" or "`" not in opening.group(2)):
+                fence = opening.group(1)
+                continue
+            kept.append(line)
+            continue
+        closing = _FENCE_CLOSE.match(line)
+        if (
+            closing
+            and closing.group(1)[0] == fence[0]
+            and len(closing.group(1)) >= len(fence)
+        ):
+            fence = None
+    return "\n".join(kept)
 
 
 def iter_inline_links(text: str) -> list[str]:
@@ -118,6 +287,210 @@ def broken_links_in(md_file: Path, text: str, root: Path) -> list[dict]:
     return findings
 
 
+# ── 引用形の md 参照が解決するか (純粋関数) ─────────────────────────────────
+
+
+def normalize_reference_text(text: str) -> str:
+    """文言の比較用に飾りを落とす。
+
+    落とすのは強調 (`**`) / 各種の引用符 / 空白と改行だけで、**文言そのものの文字は
+    1 つも落とさない**。曖昧一致ではない。
+
+    ⚠️ `*` は落とす。`data/*` のような**ワイルドカードの `*` が参照先から消えても
+    気づけない**代わりに、参照先の強調 (`**X**`) の内側を引用している箇所を偽陽性に
+    しない (実測 2026-08-21: `*` を保持すると正しい引用が 5 件落ちた)。UNCOVERED に明示。
+    """
+    return _DECORATION.sub("", text)
+
+
+def normalize_quoted_phrase(phrase: str) -> str:
+    """引用そのものの正規化 (折り返したコメント記号を落としてから正規化する)。
+
+    落とすのは **2 行目以降の行頭**にあるコメント記号だけ。1 行目に適用しないのは、
+    引用自体が `--force` / `#323` のように記号で始まることがあるため
+    (適用すると `--force` と `force` が同じ文言になる / PR #512 Codex P2)。
+    """
+    lines = phrase.split("\n")
+    unwrapped = [lines[0]] + [_LINE_LEAD.sub("", line) for line in lines[1:]]
+    return normalize_reference_text("\n".join(unwrapped))
+
+
+def iter_md_references(text: str) -> list[tuple[str, str, str]]:
+    """`<path>.md「X」` / `<path>.md の X 節` を (参照先, 文言, 種別) で返す。
+
+    種別は "quote" (本文のどこかに在ればよい) / "section" (見出しに在ること)。
+    """
+    references = []
+    for match in _MD_REFERENCE.finditer(text):
+        target, quoted, section = match.group(1), match.group(2), match.group(3)
+        if quoted is not None:
+            references.append((target, quoted, "quote"))
+        else:
+            references.append((target, section, "section"))
+    return references
+
+
+def headings_of(markdown: str) -> str:
+    """ATX 見出し行だけを連ねたもの ("section" 参照の照合先)。
+
+    **fenced code の中は見出しではない。** 落とさないと ```sh ブロックの
+    `# 何とか` がシェルのコメントのまま見出しに化け、**実際には削除済みの節への参照を
+    「解決済み」として 0 件に数える** (PR #512 Codex P2)。`~~~` fence も同じ。
+
+    **4 文字以上インデントされた `#` も見出しではない** (Markdown ではコードブロック)。
+    `#` のあとに空白が要ることも含め、ATX 見出しの規則で判定する。
+    """
+    return "\n".join(
+        line
+        for line in strip_fenced_code(markdown).splitlines()
+        if _ATX_HEADING.match(line)
+    )
+
+
+def reference_resolves(phrase: str, kind: str, target_text: str) -> bool:
+    """引用した文言が参照先に実在するか。
+
+    "quote" は本文全体、"section" は見出し行だけを照合先にする。
+    **部分一致で判定するのは意図的** — 引用は原文の一部を切り出す形が普通で、
+    完全一致を要求すると「正しい引用」がほぼ全部落ちる。
+    """
+    haystack = target_text if kind == "quote" else headings_of(target_text)
+    normalized_haystack = normalize_reference_text(haystack)
+    fragments = [
+        normalize_quoted_phrase(f)
+        for f in _ELLIPSIS.split(phrase)
+        if normalize_quoted_phrase(f)
+    ]
+    # **出現順まで見る。** 断片が「どこかにある」だけで通すと、参照先で順序が
+    # 逆転していても解決済みになる (PR #512 Codex P2) — 引用は原文の並びを
+    # 主張しているので、それが崩れたら別の文章になっている。
+    position = 0
+    for fragment in fragments:
+        found = normalized_haystack.find(fragment, position)
+        if found < 0:
+            return False
+        position = found + len(fragment)
+    return True
+
+
+def resolve_reference_target(src_file: Path, target: str, root: Path) -> list[Path]:
+    """参照先の候補 (実在するものだけ)。
+
+    - パスを含む形 (`apps/bff/CLAUDE.md`) → リポジトリルート相対 / 参照元からの相対
+    - 素の名前 (`CLAUDE.md`) → 参照元から**ルートへ遡る各階層**の同名ファイル
+      (領域別 CLAUDE.md → root CLAUDE.md の探し方そのもの)
+
+    **他所の領域の CLAUDE.md は候補に入れない** — 例えば frontend のコードが
+    `CLAUDE.md` とだけ書いて BFF の CLAUDE.md の文言を引いていたら、それは
+    「読み手が辿り着けない参照」なので、解決しないのが正しい。
+    """
+    if "/" in target:
+        candidates = [root / target, src_file.parent / target]
+    else:
+        candidates = []
+        directory = src_file.parent
+        while True:
+            candidates.append(directory / target)
+            if directory == root:
+                break
+            directory = directory.parent
+    resolved = []
+    for candidate in candidates:
+        absolute = candidate.resolve()
+        if absolute.is_file() and absolute.is_relative_to(root):
+            resolved.append(absolute)
+    return resolved
+
+
+def unresolved_md_references_in(src_file: Path, text: str, root: Path) -> list[dict]:
+    """1 ファイル分の「解決しない引用」。
+
+    **参照先そのものが見つからない引用は報告しない** — `$SCRIPT_DIR/README.md` の
+    ような変数入りのパス表記と「本当に無いファイル」を機械では区別できないため
+    (UNCOVERED に明示済み)。ここが見るのは「ファイルは在るのに文言が無い」だけ。
+    """
+    findings = []
+    for target, phrase, kind in iter_md_references(text):
+        candidates = resolve_reference_target(src_file, target, root)
+        if not candidates:
+            continue
+        for candidate in candidates:
+            try:
+                target_text = candidate.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if reference_resolves(phrase, kind, target_text):
+                break
+        else:
+            findings.append(
+                {
+                    "file": src_file.relative_to(root).as_posix(),
+                    "reference": target,
+                    "phrase": " ".join(phrase.split()),
+                }
+            )
+    return findings
+
+
+def is_frozen_record(relative_path: str) -> bool:
+    """引用検査の対象外 (= 当時の引用が正しい記録) か。
+
+    - `docs/debrief/journal.md` — セッション記録
+    - `docs/adr/**` の ADR 本文 — **`Accepted` の ADR 本文は書き換えない**規約
+      (AGENTS.md) があるので、報告しても直せない
+    - `docs/reviews/**` の実測記録 — **測定日時点の事実として残す**規約
+      (`docs/documentation/strategy.md`)。直すと測定スナップショットが再現できない
+    - ただし**索引** (`README.md`) は現役の案内なので対象に**含める**
+    """
+    if relative_path.startswith(FROZEN_RECORD_PREFIXES):
+        return True
+    if relative_path.startswith(RECORD_DIR_PREFIXES):
+        return not relative_path.endswith("/README.md")
+    return False
+
+
+def iter_reference_scanned_files(root: Path) -> list[Path]:
+    """引用検査の対象ファイル (走査範囲は MD_REF_SCAN_DIRS + リポジトリ直下の *.md)。"""
+    files: list[Path] = []
+    for scan_dir in MD_REF_SCAN_DIRS:
+        target = root / scan_dir
+        if not target.is_dir():
+            continue
+        files.extend(f for f in target.rglob("*") if f.suffix in MD_REF_SCAN_EXTS)
+    files.extend(root.glob(LINK_SCAN_ROOT_FILES))
+    selected = []
+    for f in files:
+        relative = f.relative_to(root).as_posix()
+        if EXCLUDED_DIR_NAMES & set(f.relative_to(root).parts):
+            continue
+        if is_frozen_record(relative):
+            continue
+        selected.append(f)
+    return sorted(set(selected))
+
+
+def detect_unresolved_md_references(root: Path) -> list[dict]:
+    """`<path>.md「X」` と引きながら、その文言が参照先に無いもの。
+
+    走査対象の実在は main() が事前に検査する (missing_scan_dirs)。
+    """
+    findings = []
+    for src_file in iter_reference_scanned_files(root):
+        try:
+            text = src_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            findings.append(
+                {
+                    "file": src_file.relative_to(root).as_posix(),
+                    "reference": "(読めません)",
+                    "phrase": str(exc),
+                }
+            )
+            continue
+        findings.extend(unresolved_md_references_in(src_file, text, root))
+    return findings
+
+
 def iter_scanned_markdown(root: Path) -> list[Path]:
     """リンク検査の対象となる Markdown を列挙する (走査範囲は LINK_SCAN_DIRS が定義)。"""
     md_files: list[Path] = []
@@ -135,14 +508,17 @@ def iter_scanned_markdown(root: Path) -> list[Path]:
 
 
 def missing_scan_dirs(root: Path) -> list[str]:
-    """LINK_SCAN_DIRS のうち実在しないもの。
+    """走査対象 (LINK_SCAN_DIRS + MD_REF_SCAN_DIRS) のうち実在しないもの。
 
     走査対象が (改名・移動で) 消えると、検査していないのに 0 件になり
     「異常なし」として緑になる。main() がこれを**前提不足 (exit 1)** として扱い、
     run を落とすことで沈黙と健全を区別する — レポート内の finding にすると
     「検出処理は走った」ことになってしまう。
     """
-    return [d for d in LINK_SCAN_DIRS if not (root / d).is_dir()]
+    # 引用検査の走査対象 (MD_REF_SCAN_DIRS) も同じ扱い。片方だけ前提を守ると、
+    # 「apps/ が消えたので引用を 1 件も見ていない」状態が 0 件で緑になる。
+    expected = list(dict.fromkeys(LINK_SCAN_DIRS + MD_REF_SCAN_DIRS))
+    return [d for d in expected if not (root / d).is_dir()]
 
 
 def detect_broken_doc_links(root: Path) -> list[dict]:
@@ -212,6 +588,11 @@ def detect_all(root: Path) -> dict:
             "name": "placeholder のままのテスト script",
             "findings": detect_placeholder_test_scripts(root),
         },
+        {
+            "id": "unresolved-md-references",
+            "name": "解決しない md の引用 (`<path>.md「X」` / `の X 節` が参照先に無い)",
+            "findings": detect_unresolved_md_references(root),
+        },
     ]
     total = sum(len(d["findings"]) for d in detectors)
     report = {
@@ -226,6 +607,11 @@ def detect_all(root: Path) -> dict:
 def _finding_line(finding: dict) -> str:
     if "script" in finding:
         return f"- `{finding['file']}` scripts.`{finding['script']}`: `{finding['command']}`"
+    if "reference" in finding:
+        return (
+            f"- `{finding['file']}` が `{finding['reference']}` から引いている "
+            f"「{finding['phrase']}」が参照先に無い"
+        )
     return f"- `{finding['file']}` → `{finding['target']}`"
 
 

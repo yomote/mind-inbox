@@ -69,7 +69,7 @@ curl -s -o /dev/null -w '%{http_code}\n' "https://<vv-wrap-fqdn>/health"    # �
 
 - Functions (Consumption) の実送信元 IP が `possibleOutboundIpAddresses` の 20 個の**どれでもない** IP から出ており、リストをいくら同期しても 403 が再発した
 - 許可リストを一時的に全開放すると全経路が疎通 (実 AI 応答まで確認) → 詰まりの犯人が IP 制限だと確定
-- [ADR 0017](../adr/0017-container-apps-access-via-auth-gate.md) が Option D を「IP 変動に脆い」と退けた判断の実地裏付け
+- [ADR 0017](../adr/0017-container-apps-access-via-auth-gate.md) が「Option D は IP 変動に脆く、GitHub Actions runner からの smoke 実測とも相性が悪い」と退けた判断の実地裏付け
 
 </details>
 

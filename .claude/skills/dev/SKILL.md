@@ -54,7 +54,7 @@ npm test            # test:contract → test:fast → test:e2e (通し)
 - `npm run lint:md` だけ回したいときは `npx markdownlint-cli2 "<変えたファイル>"`
 - 整形は `npm run format` (prettier + ruff format)
 
-**PR を出す前に `npm run test:fast` をローカルで緑にする。** テストを足すときの判断基準は [テスト戦略](../../../docs/testing/strategy.md) が正典 (「無いと何が静かに通るか?」を 1 文で書けないテストは書かない)。
+**PR を出す前に `npm run test:fast` をローカルで緑にする。** テストを足すときの判断基準は [テスト戦略](../../../docs/testing/strategy.md) が正典 ([`CLAUDE.md`](../../../CLAUDE.md)「無いと何が静かに通るか?」を 1 文で書けないテストは書かない)。
 
 ## 動かないときの当たり
 

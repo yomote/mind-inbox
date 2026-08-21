@@ -2,7 +2,9 @@
 
 **現行の GitHub 設定を [`integrations/github`](https://registry.terraform.io/providers/integrations/github) provider で宣言し直したもの。** [Issue #390](https://github.com/yomote/mind-inbox/issues/390) の A-1 (「`github-settings` 5,221 行は provider の再実装」) に対する着工分です。
 
-> **⛔ apply しない。** 2026-08-14 の PO 裁定は「**宣言 + plan まで**」。実 apply も現行設定の変更も、[#387](https://github.com/yomote/mind-inbox/issues/387) (needs-human: 宣言と規約文の食い違い 4 件) の裁定が先です。特に `enforce_admins = false` は、apply すると測定済みの門バイパスが復活します。
+> **⛔ apply しない。** 2026-08-14 の PO 裁定は「**宣言 + plan まで**」。
+>
+> **`enforce_admins` は 2026-08-21 に裁定が出ました (#387 / 案 A)** — あるべき姿は `true` (管理者バイパス無効)。**それを書いたのは [`cicd/github/settings.yml`](../settings.yml) の方**で、実際に PUT されるのもそちらです (`github-settings` workflow の mode=apply)。ここは「現状の写し」なので **観測値の `false` のまま**にしてあります (理由は [`branch_protection.tf`](branch_protection.tf) の冒頭コメント — 意図を写すと plan が現実との差分を出さなくなるうえ、mgmt-bootstrap の import-only apply が差分を理由に拒否されます)。**この写しを `true` にするのは、apply 後に現実が `true` になったのを観測してから**です。
 >
 > **例外は 1 つ** (2026-08-16 の PO 裁定によるキット化): [`cicd/scripts/mgmt-bootstrap/`](../../scripts/mgmt-bootstrap/README.md) が **plan が import-only (`0 to add, 0 to change, 0 to destroy`) のときだけ** PO の手で apply を実行できます。import-only の apply は state への取り込みだけで **GitHub の実設定を 1 つも変更しない**ため、上の前提と両立します。差分が 1 つでもあればキットは適用を拒否します。
 

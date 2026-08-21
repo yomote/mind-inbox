@@ -7,7 +7,7 @@
     **ノイズで埋める** (正常な自己中断で毎回 Issue を立てる)。
     どちらも「動いているように見えて壊れている」типの失敗なので、
     シェルの中に埋めずにテストできる形にする
-    (CLAUDE.md「状態・副作用を持つ新モジュールはテストファーストで切る」)。
+    (docs/testing/strategy.md「状態・副作用を持つ新モジュールはテストファーストで切る」)。
 
 使い方:
     python3 decide.py <job_status> <work_ran> <cancelled_is_failure> <has_open_issue>

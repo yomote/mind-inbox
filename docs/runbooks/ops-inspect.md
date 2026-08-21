@@ -35,7 +35,7 @@ GitHub の Actions タブ → `ops-inspect` → **Run workflow** → Branch で 
 
 ## workflow artifact をエージェントが取る (失敗した run の証拠)
 
-> **できる。** 2026-08-09 の [ADR 0029](../adr/archive/operations/probe-record-transport-via-issue-comment.md) は「agent は artifact を落とせない」を前提に書かれたが、その直後に `*.blob.core.windows.net` が egress 許可に入った (#168 / 下の節)。**前提が変わったのに再測定されず、「取れない」だけが 4 日間リポジトリ中に残って調査を止めていた** (#287 / #293)。
+> **できる。** 2026-08-09 の [ADR 0029](../adr/archive/operations/probe-record-transport-via-issue-comment.md) は「agent セッションからは artifact をダウンロードできない」を前提に書かれたが、その直後に `*.blob.core.windows.net` が egress 許可に入った (#168 / 下の節)。**前提が変わったのに再測定されず、「取れない」だけが 4 日間リポジトリ中に残って調査を止めていた** (#287 / #293)。
 
 `gh` は使えないので **MCP + `curl` の 2 段**で取る。
 

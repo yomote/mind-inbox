@@ -15,19 +15,19 @@
 退避したものは、AI エージェントが開発を回すための運用規約でした。この領域は毎日変わります。
 実際、同じテーマが数日で 3〜4 代替わりしていました:
 
-| テーマ | 系譜 |
-| --- | --- |
+| テーマ                  | 系譜                             |
+| ----------------------- | -------------------------------- |
 | PR レビューを誰がやるか | 0008 → 0026 → 0035 → 0052 (4 代) |
-| セッション分配の方針 | 0021 → 0033 → 0048 (3 代) |
-| PM 機構 | 0035 → 0040 → 0043 (3 代) |
-| UX 改善ループ | 0022 → 0027 → 0037 → 0041 (4 代) |
-| 実行状態の地図 | 0011 → 0044 (2 代) |
+| セッション分配の方針    | 0021 → 0033 → 0048 (3 代)        |
+| PM 機構                 | 0035 → 0040 → 0043 (3 代)        |
+| UX 改善ループ           | 0022 → 0027 → 0037 → 0041 (4 代) |
+| 実行状態の地図          | 0011 → 0044 (2 代)               |
 
 「PR レビューは今どうなっているか」を知るのに 4 本読んで最新を特定する必要がある状態は、
 **不変記録の棚として機能していません**。ADR という形式がこの領域に合っていなかった、というのが結論です。
 
 さらに、退避対象の内容は `CLAUDE.md` にも要約されて二重管理になっていました。片方を直しても
-もう片方に古い記述が残るため、`CLAUDE.md` の本文に「〜は誤り」「〜は撤回」という取り消し線が
+もう片方に古い記述が残るため、「〜は誤り」「〜は撤回」という取り消し線が `CLAUDE.md` の本文に
 溜まっていく原因になっていました。
 
 ### 追加の退避 (2026-08-14) — 開発設備の運用判断も ADR ではない
@@ -54,8 +54,30 @@ Accept も Reject もしていません (分類のやり直しであって裁定
 
 `0035-role-split-across-agents-and-actions.md` → `operations/role-split-across-agents-and-actions.md`
 
-**番号があると ADR に見えるため**、退避時に落としています。ここにあるファイルを
-「ADR 0035」と呼ばないでください。
+**番号があると ADR に見えるため**、退避時に落としています。
+
+### 呼び方 — **番号で呼んでよい。ただし対応表で引くこと** (2026-08-21 改定 / [#387](https://github.com/yomote/mind-inbox/issues/387))
+
+以前ここには「ここにあるファイルを『ADR 0035』と呼ばないでください」と書いていましたが、
+**着地初日から守られていませんでした** — archive と journal を除く全文走査で
+`ADR NNNN` の呼び方が **449 件 / 119 ファイル** (`review-gate/check.py` だけで 42 件、
+`review-gate.yml` で 17 件 / #387 の計測)。番号を**永続 ID として意図的に据え置いた**のに
+呼称だけ禁じたので、**守れない規約**でした。守られない規約を置いたままにすると、
+「ここに書いてあることは守らなくてよい」が他の行にも伝染します。そこで実態に合わせます:
+
+- **番号で呼んでよい** (「ADR 0035」「旧 0054」など)。過去の Issue / PR / コード
+  コメントの呼び方を、このために書き換えることも**しません** (`sed` が届かない場所に
+  同じ呼び方が残っており、直しても揃わない)
+- **ただし、番号から中身を引くときは必ず対応表を通すこと** — 下の
+  [「退避した 30 本」](#退避した-30-本) か [`retired-numbers.txt`](retired-numbers.txt)。
+  `docs/adr/` に同じ番号のファイルは**もう無い**ので、番号だけで探すと
+  「見つからない = 無かった」と読み違えます
+- **これは「現行ルール」への格上げではありません。** ここにあるものは
+  **退役済みの記録**で、現行ルールではない — 呼び方を許すことと、中身を今も守るべき
+  規約として引くことは別です。現行の運用ルールの正典は
+  root [`CLAUDE.md`](../../../CLAUDE.md) の索引から辿ること
+- **新規に書くものを「ADR」と呼ぶ基準は変わりません** — 運用・プロセスの決め事は
+  ADR ではない ([`../README.md`](../README.md))
 
 ## 番号は振り直していない (欠番はそのまま)
 
@@ -86,38 +108,38 @@ Accept も Reject もしていません (分類のやり直しであって裁定
 
 ## 退避した 30 本
 
-| 旧番号 | ファイル | 内容 |
-| --- | --- | --- |
-| 0008 | [pr-review-via-cloud-routine.md](operations/pr-review-via-cloud-routine.md) | PR レビューは Claude Code on the web の Routine で行う (API キー Actions / 管理版 Code Review を採らない) |
-| 0011 | [github-projects-as-execution-dashboard.md](operations/github-projects-as-execution-dashboard.md) | GitHub Projects は実行状態のダッシュボードに徹し、設計の真実は docs に置く |
-| 0014 | [design-comprehension-gate-and-debrief.md](operations/design-comprehension-gate-and-debrief.md) | 設計理解ゲートとゼミ型デブリーフで、user の意思決定・学習をループに組み込む |
-| 0018 | [runtime-verification-in-the-loop.md](operations/runtime-verification-in-the-loop.md) | 動作検証をループに組み込む — 実態の読み取り・PR への証跡・ローカルブラウザ検証 |
-| 0019 | [independent-judge-agents-security-qa-release.md](operations/independent-judge-agents-security-qa-release.md) | セキュリティ / QA / リリース判定を実装コンテキストから分離した独立 judge エージェントにする |
-| 0020 | [hitl-choice-format-and-needs-human-queue.md](operations/hitl-choice-format-and-needs-human-queue.md) | 人間の確認は選択肢形式で出し、人間宿題は needs-human キューに一元化する |
-| 0021 | [parent-session-as-pm-orchestrator.md](operations/parent-session-as-pm-orchestrator.md) | 親セッションを PM ハブにして、並行作業は子セッションへ分配する (hub-and-spoke) |
-| 0022 | [autonomous-ux-improvement-loop.md](operations/autonomous-ux-improvement-loop.md) | UX 品質は自律改善ループで維持する — 観測・評価・改善 (PR まで) を自動化し、人間は基準定義と例外裁定に徹する |
-| 0026 | [cd-watchdog-routine.md](operations/cd-watchdog-routine.md) | CD の赤は毎時の watchdog Routine が検知し、診断と fix PR まで無人で進める |
-| 0027 | [ux-improvement-loop-ab-protocol-and-mutation-boundary.md](operations/ux-improvement-loop-ab-protocol-and-mutation-boundary.md) | UX 自律改善ループ M2 — 採点の無人化を先行させ、A/B は実環境の外で回し、改変対象はパスで縛る |
-| 0028 | [dispatch-packet-in-issue-and-session-start-preflight.md](operations/dispatch-packet-in-issue-and-session-start-preflight.md) | 分配は「起票パケットを Issue 本文に残す」形にし、並行の衝突は SessionStart の事前提示と CI で防ぐ |
-| 0029 | [probe-record-transport-via-issue-comment.md](operations/probe-record-transport-via-issue-comment.md) | UX プローブ記録は artifact ではなく Issue コメントで採点セッションへ運ぶ |
-| 0031 | [agent-reaches-outside-via-github-actions.md](operations/agent-reaches-outside-via-github-actions.md) | サンドボックスの外にある事実は GitHub Actions 経由で取る (その場しのぎの回避策を作らない) |
-| 0032 | [use-case-acceptance-tests-against-real-wiring.md](operations/use-case-acceptance-tests-against-real-wiring.md) | ユースケース受け入れテストを「mock を通らない実配線」で持つ (L3-real) |
-| 0033 | [parent-implements-via-subagent-when-child-sessions-are-gated.md](operations/parent-implements-via-subagent-when-child-sessions-are-gated.md) | 子セッションを起動できない環境では、親が subagent で実装を回す (旧 0021 の改訂) |
-| 0035 | [role-split-across-agents-and-actions.md](operations/role-split-across-agents-and-actions.md) | 開発ループの役割を分け、それぞれを「生死が見える場所」に置く |
-| 0036 | [merge-gate-as-required-check-and-pm-cadence.md](operations/merge-gate-as-required-check-and-pm-cadence.md) | マージの門を required check で機構化し、PM の運転リズムを定める |
-| 0037 | [scheduled-evals-split-mechanical-actions-llm-pm-tick.md](operations/scheduled-evals-split-mechanical-actions-llm-pm-tick.md) | 定期評価を「機械計測 = Actions」と「LLM 採点 = PM tick」に分ける |
-| 0038 | [security-checks-as-mechanized-triggers.md](operations/security-checks-as-mechanized-triggers.md) | セキュリティ検査のトリガーを人の判断から機構へ移す (週次 sweep / PR 自動指名 / リリース judge) |
-| 0040 | [project-continuity-three-layers.md](operations/project-continuity-three-layers.md) | プロジェクト継続性を 3 層 (機構化された完遂 / 当番 PM / 窓口 PM) で保証する |
-| 0041 | [ux-observations-on-git-data-branch.md](operations/ux-observations-on-git-data-branch.md) | UX 観測データの蓄積先を Issue コメントから git データブランチへ移す |
-| 0042 | [pm-accept-carryover-and-merge-queue.md](operations/pm-accept-carryover-and-merge-queue.md) | pm-accept は「実装差分が不変の main 追随」に引き継ぎ、直列化は Merge Queue に任せる |
-| 0043 | [pm-self-driving-mode.md](operations/pm-self-driving-mode.md) | PM を自走モードにする — 実物指標・週次目標・引く当番・日次ダイジェスト・窓口台帳 |
-| 0044 | [stream-lanes-as-the-project-map.md](operations/stream-lanes-as-the-project-map.md) | プロジェクトの地図を固定レーン (stream ラベル) で持ち、Projects board を正式に畳む |
-| 0045 | [e2e-artifacts-are-secret-by-default.md](operations/e2e-artifacts-are-secret-by-default.md) | 実環境 E2E の成果物は既定で秘密扱いにし、trace は公開鍵で暗号化して残す |
-| 0047 | [security-posture-in-layers-free-tier-first.md](operations/security-posture-in-layers-free-tier-first.md) | セキュリティ対策を「無料枠優先 + 責任分担が重ならない層」で段階導入する |
-| 0048 | [child-sessions-are-usable-again-with-a-one-way-poke-channel.md](operations/child-sessions-are-usable-again-with-a-one-way-poke-channel.md) | 子セッションは再び起動できる — 会話は Routine 経由で片道 1 分なので、分配先は往復の少ない作業に限る |
-| 0052 | [codex-derived-review-rubric-and-stand-in-judge.md](operations/codex-derived-review-rubric-and-stand-in-judge.md) | PR レビューの基準を Codex の実レビュー 215 件から導出し、Codex 不在の間は代役 judge が読む |
-| 0053 | [synthetic-user-exploration-poc.md](operations/synthetic-user-exploration-poc.md) | 合成ユーザーによる探索テストは「採点が繋がってから」「週 1 手動 1 回」から始める |
-| 0054 | [readonly-investigation-identity-on-unprotected-branch.md](operations/readonly-investigation-identity-on-unprotected-branch.md) | 調査用 read-only ID を保護のないブランチ (`ops/inspect`) に紐づける — **2026-08-14 の debrief で追加退避** (開発設備の運用判断)。条件の正典は [Runbook](../../runbooks/azure-oidc-cd-setup.md#read-only-識別の受容条件-正典) / 恒久解は [#405](https://github.com/yomote/mind-inbox/issues/405) |
+| 旧番号 | ファイル                                                                                                                                      | 内容                                                                                                                                                                                                                                                                                            |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0008   | [pr-review-via-cloud-routine.md](operations/pr-review-via-cloud-routine.md)                                                                   | PR レビューは Claude Code on the web の Routine で行う (API キー Actions / 管理版 Code Review を採らない)                                                                                                                                                                                       |
+| 0011   | [github-projects-as-execution-dashboard.md](operations/github-projects-as-execution-dashboard.md)                                             | GitHub Projects は実行状態のダッシュボードに徹し、設計の真実は docs に置く                                                                                                                                                                                                                      |
+| 0014   | [design-comprehension-gate-and-debrief.md](operations/design-comprehension-gate-and-debrief.md)                                               | 設計理解ゲートとゼミ型デブリーフで、user の意思決定・学習をループに組み込む                                                                                                                                                                                                                     |
+| 0018   | [runtime-verification-in-the-loop.md](operations/runtime-verification-in-the-loop.md)                                                         | 動作検証をループに組み込む — 実態の読み取り・PR への証跡・ローカルブラウザ検証                                                                                                                                                                                                                  |
+| 0019   | [independent-judge-agents-security-qa-release.md](operations/independent-judge-agents-security-qa-release.md)                                 | セキュリティ / QA / リリース判定を実装コンテキストから分離した独立 judge エージェントにする                                                                                                                                                                                                     |
+| 0020   | [hitl-choice-format-and-needs-human-queue.md](operations/hitl-choice-format-and-needs-human-queue.md)                                         | 人間の確認は選択肢形式で出し、人間宿題は needs-human キューに一元化する                                                                                                                                                                                                                         |
+| 0021   | [parent-session-as-pm-orchestrator.md](operations/parent-session-as-pm-orchestrator.md)                                                       | 親セッションを PM ハブにして、並行作業は子セッションへ分配する (hub-and-spoke)                                                                                                                                                                                                                  |
+| 0022   | [autonomous-ux-improvement-loop.md](operations/autonomous-ux-improvement-loop.md)                                                             | UX 品質は自律改善ループで維持する — 観測・評価・改善 (PR まで) を自動化し、人間は基準定義と例外裁定に徹する                                                                                                                                                                                     |
+| 0026   | [cd-watchdog-routine.md](operations/cd-watchdog-routine.md)                                                                                   | CD の赤は毎時の watchdog Routine が検知し、診断と fix PR まで無人で進める                                                                                                                                                                                                                       |
+| 0027   | [ux-improvement-loop-ab-protocol-and-mutation-boundary.md](operations/ux-improvement-loop-ab-protocol-and-mutation-boundary.md)               | UX 自律改善ループ M2 — 採点の無人化を先行させ、A/B は実環境の外で回し、改変対象はパスで縛る                                                                                                                                                                                                     |
+| 0028   | [dispatch-packet-in-issue-and-session-start-preflight.md](operations/dispatch-packet-in-issue-and-session-start-preflight.md)                 | 分配は「起票パケットを Issue 本文に残す」形にし、並行の衝突は SessionStart の事前提示と CI で防ぐ                                                                                                                                                                                               |
+| 0029   | [probe-record-transport-via-issue-comment.md](operations/probe-record-transport-via-issue-comment.md)                                         | UX プローブ記録は artifact ではなく Issue コメントで採点セッションへ運ぶ                                                                                                                                                                                                                        |
+| 0031   | [agent-reaches-outside-via-github-actions.md](operations/agent-reaches-outside-via-github-actions.md)                                         | サンドボックスの外にある事実は GitHub Actions 経由で取る (その場しのぎの回避策を作らない)                                                                                                                                                                                                       |
+| 0032   | [use-case-acceptance-tests-against-real-wiring.md](operations/use-case-acceptance-tests-against-real-wiring.md)                               | ユースケース受け入れテストを「mock を通らない実配線」で持つ (L3-real)                                                                                                                                                                                                                           |
+| 0033   | [parent-implements-via-subagent-when-child-sessions-are-gated.md](operations/parent-implements-via-subagent-when-child-sessions-are-gated.md) | 子セッションを起動できない環境では、親が subagent で実装を回す (旧 0021 の改訂)                                                                                                                                                                                                                 |
+| 0035   | [role-split-across-agents-and-actions.md](operations/role-split-across-agents-and-actions.md)                                                 | 開発ループの役割を分け、それぞれを「生死が見える場所」に置く                                                                                                                                                                                                                                    |
+| 0036   | [merge-gate-as-required-check-and-pm-cadence.md](operations/merge-gate-as-required-check-and-pm-cadence.md)                                   | マージの門を required check で機構化し、PM の運転リズムを定める                                                                                                                                                                                                                                 |
+| 0037   | [scheduled-evals-split-mechanical-actions-llm-pm-tick.md](operations/scheduled-evals-split-mechanical-actions-llm-pm-tick.md)                 | 定期評価を「機械計測 = Actions」と「LLM 採点 = PM tick」に分ける                                                                                                                                                                                                                                |
+| 0038   | [security-checks-as-mechanized-triggers.md](operations/security-checks-as-mechanized-triggers.md)                                             | セキュリティ検査のトリガーを人の判断から機構へ移す (週次 sweep / PR 自動指名 / リリース judge)                                                                                                                                                                                                  |
+| 0040   | [project-continuity-three-layers.md](operations/project-continuity-three-layers.md)                                                           | プロジェクト継続性を 3 層 (機構化された完遂 / 当番 PM / 窓口 PM) で保証する                                                                                                                                                                                                                     |
+| 0041   | [ux-observations-on-git-data-branch.md](operations/ux-observations-on-git-data-branch.md)                                                     | UX 観測データの蓄積先を Issue コメントから git データブランチへ移す                                                                                                                                                                                                                             |
+| 0042   | [pm-accept-carryover-and-merge-queue.md](operations/pm-accept-carryover-and-merge-queue.md)                                                   | pm-accept は「実装差分が不変の main 追随」に引き継ぎ、直列化は Merge Queue に任せる                                                                                                                                                                                                             |
+| 0043   | [pm-self-driving-mode.md](operations/pm-self-driving-mode.md)                                                                                 | PM を自走モードにする — 実物指標・週次目標・引く当番・日次ダイジェスト・窓口台帳                                                                                                                                                                                                                |
+| 0044   | [stream-lanes-as-the-project-map.md](operations/stream-lanes-as-the-project-map.md)                                                           | プロジェクトの地図を固定レーン (stream ラベル) で持ち、Projects board を正式に畳む                                                                                                                                                                                                              |
+| 0045   | [e2e-artifacts-are-secret-by-default.md](operations/e2e-artifacts-are-secret-by-default.md)                                                   | 実環境 E2E の成果物は既定で秘密扱いにし、trace は公開鍵で暗号化して残す                                                                                                                                                                                                                         |
+| 0047   | [security-posture-in-layers-free-tier-first.md](operations/security-posture-in-layers-free-tier-first.md)                                     | セキュリティ対策を「無料枠優先 + 責任分担が重ならない層」で段階導入する                                                                                                                                                                                                                         |
+| 0048   | [child-sessions-are-usable-again-with-a-one-way-poke-channel.md](operations/child-sessions-are-usable-again-with-a-one-way-poke-channel.md)   | 子セッションは再び起動できる — 会話は Routine 経由で片道 1 分なので、分配先は往復の少ない作業に限る                                                                                                                                                                                             |
+| 0052   | [codex-derived-review-rubric-and-stand-in-judge.md](operations/codex-derived-review-rubric-and-stand-in-judge.md)                             | PR レビューの基準を Codex の実レビュー 215 件から導出し、Codex 不在の間は代役 judge が読む                                                                                                                                                                                                      |
+| 0053   | [synthetic-user-exploration-poc.md](operations/synthetic-user-exploration-poc.md)                                                             | 合成ユーザーによる探索テストは「採点が繋がってから」「週 1 手動 1 回」から始める                                                                                                                                                                                                                |
+| 0054   | [readonly-investigation-identity-on-unprotected-branch.md](operations/readonly-investigation-identity-on-unprotected-branch.md)               | 調査用 read-only ID を保護のないブランチ (`ops/inspect`) に紐づける — **2026-08-14 の debrief で追加退避** (開発設備の運用判断)。条件の正典は [Runbook](../../runbooks/azure-oidc-cd-setup.md#read-only-識別の受容条件-正典) / 恒久解は [#405](https://github.com/yomote/mind-inbox/issues/405) |
 
 ## ここに置いたものの扱い
 

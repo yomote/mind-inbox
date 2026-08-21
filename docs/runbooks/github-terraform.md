@@ -6,7 +6,9 @@
 - CI で `terraform plan` を回せるようにしたいが、**トークンをどこに置くか**を決める必要があるとき ([Issue #390](https://github.com/yomote/mind-inbox/issues/390) の needs-human)
 - 「宣言と現実が一致しているか」を確かめたいとき
 
-> **⛔ apply しない。** 2026-08-14 の PO 裁定は「宣言 + plan まで」。実 apply は [#387](https://github.com/yomote/mind-inbox/issues/387) の裁定 (`enforce_admins` をどちらに揃えるか) が先です。この Runbook にも apply の手順は書きません。
+> **⛔ apply しない。** 2026-08-14 の PO 裁定は「宣言 + plan まで」。この Runbook にも apply の手順は書きません。
+>
+> `enforce_admins` の裁定 ([#387](https://github.com/yomote/mind-inbox/issues/387)) は **2026-08-21 に案 A で決着**しました (あるべき姿 = `true` / 管理者バイパス無効)。**直したのは `cicd/github/settings.yml`** — GitHub へ実際に PUT するのはそちらだからです。この `.tf` は現状の写しなので `false` のまま (`branch_protection.tf` の冒頭コメント)。**「宣言が 2 か所ある」ので、直す前にどちらが apply される側かを確かめること。**
 
 ## Prerequisites
 

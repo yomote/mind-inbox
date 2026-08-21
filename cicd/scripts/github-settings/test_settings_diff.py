@@ -29,7 +29,7 @@
       secret scanning → push protection / Dependabot alerts → security updates の
       有効化順序)
     - Issue #344 の「満たすべき性質」 2 (差分を見せてから適用する) / 3 (check は
-      読み取りのみ) と、CLAUDE.md の「取れなかったものを合格と書かない」
+      読み取りのみ) と、CLAUDE.md「取れなかったものを『異常なし』と書かない」
 
 プロパティは hypothesis ではなく固定 seed の乱数生成で書いている
 (Python 側に hypothesis が未導入 — strategy.md §3)。生成器はこのファイルの
