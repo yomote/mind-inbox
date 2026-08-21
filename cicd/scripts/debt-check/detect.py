@@ -51,6 +51,10 @@ UNCOVERED = [
     "引用検査の対象外にある拡張子 — 検査するのは detect.py の MD_REF_SCAN_EXTS に並べた "
     "拡張子だけ (.py/.ts/.tsx/.js/.mjs/.sh/.yml/.yaml/.md/.tf/.bicep)。"
     "ここに無い形式のファイルが md を引用していても 1 行も検査されない",
+    "文言に含まれる `*` の変化 — 照合の正規化で `*` を落としている "
+    "(`data/*` と `data/` が同じ文言になる)。落とさないと、参照先の強調 (`**X**`) の"
+    "内側を引用している箇所が偽陽性になる (実測 2026-08-21: 正しい引用が 5 件落ちた) — "
+    "**精度を取って、この変化は見ないことにしている**",
     "参照先と引用が**14 文字より離れている**引用 — 例: "
     "`strategy.md §2.3 / §6.4 — 分界は「X」` (実物あり)。上限を広げると誤検出が増えるので"
     "広げていない (実測: 24 文字に広げると、引用ではなく**書き手自身の言葉**を鉤括弧で"
@@ -172,7 +176,13 @@ _DECORATION = re.compile(r"[\s*`「」『』\"'　]")
 # 折り返したコメントの**行頭**の記号 (`#` / `//` / `*` / `--`)。行頭に限るのが要点 —
 # `#` を位置に関係なく落とすと `Issue #323` と `Issue 323` が同じ文言になり、
 # **番号の書き換えが 0 件で通る** (PR #512 Codex P2)。
-_LINE_LEAD = re.compile(r"^[ \t]*(?:#+|//+|\*+|--+)[ \t]*", re.MULTILINE)
+#
+# さらに **引用の 2 行目以降にしか適用しない**。引用そのものが `--force` / `#323` の
+# ように記号で始まることがあり、1 行目にも適用すると `--force` と `force` が同じ
+# 文言になる (PR #512 Codex P2)。**参照先 (haystack) には一切適用しない** —
+# 照合は部分一致なので必要が無く、適用すると参照先の `--force …` の行が削られて
+# 正しい引用を偽陽性にする。
+_LINE_LEAD = re.compile(r"^[ \t]*(?:#+|//+|\*+|--+)[ \t]*")
 # 引用の省略記号。`A … B` は「A と B のあいだを省いた」という意味なので、
 # **断片ごとに実在を確かめる** (省略を含む引用は実物がある —
 # `.github/claude/review-rubric.md` / PR #512 Codex)。
@@ -243,14 +253,26 @@ def broken_links_in(md_file: Path, text: str, root: Path) -> list[dict]:
 def normalize_reference_text(text: str) -> str:
     """文言の比較用に飾りを落とす。
 
-    落とすのは強調 (`**`) / 各種の引用符 / 空白と改行 / **行頭の**コメント記号だけで、
-    **文言そのものの文字は 1 つも落とさない**。折り返して `#` が挟まっただけの引用を
-    「見つからない」と誤報しないための正規化であって、曖昧一致ではない。
+    落とすのは強調 (`**`) / 各種の引用符 / 空白と改行だけで、**文言そのものの文字は
+    1 つも落とさない**。曖昧一致ではない。
 
-    コメント記号を**行頭に限る**のが要点。位置を問わず落とすと `Issue #323` と
-    `Issue 323` が同じ文言になり、**番号の書き換えが 0 件で通る**。
+    ⚠️ `*` は落とす。`data/*` のような**ワイルドカードの `*` が参照先から消えても
+    気づけない**代わりに、参照先の強調 (`**X**`) の内側を引用している箇所を偽陽性に
+    しない (実測 2026-08-21: `*` を保持すると正しい引用が 5 件落ちた)。UNCOVERED に明示。
     """
-    return _DECORATION.sub("", _LINE_LEAD.sub("", text))
+    return _DECORATION.sub("", text)
+
+
+def normalize_quoted_phrase(phrase: str) -> str:
+    """引用そのものの正規化 (折り返したコメント記号を落としてから正規化する)。
+
+    落とすのは **2 行目以降の行頭**にあるコメント記号だけ。1 行目に適用しないのは、
+    引用自体が `--force` / `#323` のように記号で始まることがあるため
+    (適用すると `--force` と `force` が同じ文言になる / PR #512 Codex P2)。
+    """
+    lines = phrase.split("\n")
+    unwrapped = [lines[0]] + [_LINE_LEAD.sub("", line) for line in lines[1:]]
+    return normalize_reference_text("\n".join(unwrapped))
 
 
 def iter_md_references(text: str) -> list[tuple[str, str, str]]:
@@ -292,9 +314,9 @@ def reference_resolves(phrase: str, kind: str, target_text: str) -> bool:
     haystack = target_text if kind == "quote" else headings_of(target_text)
     normalized_haystack = normalize_reference_text(haystack)
     fragments = [
-        normalize_reference_text(f)
+        normalize_quoted_phrase(f)
         for f in _ELLIPSIS.split(phrase)
-        if normalize_reference_text(f)
+        if normalize_quoted_phrase(f)
     ]
     # **出現順まで見る。** 断片が「どこかにある」だけで通すと、参照先で順序が
     # 逆転していても解決済みになる (PR #512 Codex P2) — 引用は原文の並びを

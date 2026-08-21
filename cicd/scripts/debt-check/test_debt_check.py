@@ -427,6 +427,21 @@ def test_単体_参照先のmdが見つからない引用は報告しない(tmp_
     )
 
 
+def test_単体_ワイルドカードの記号を見ないことを明示する() -> None:
+    """精度のために切り捨てた範囲を隠さない (PR #512 Codex P2)。
+
+    無いと何が静かに通るか:
+        照合の正規化は `*` を落とすので、`data/*` と `data/` が同じ文言になり、
+        **ワイルドカードが消えた変更を検出できない**。落とさない選択もあるが、
+        参照先の強調 (`**X**`) の内側を引用している箇所が偽陽性になる (実測: 5 件)。
+        **どちらを選んだにせよ、見ていない範囲は毎回出す。**
+    """
+    assert reference_resolves("data/*", "quote", "data/ を読む")  # 現状の仕様
+    assert any("`*` の変化" in item for item in UNCOVERED), (
+        "`*` を落としていることを UNCOVERED に書いていない (silent caps)"
+    )
+
+
 def test_単体_つなぎの長さ制限を検査できない範囲として明示する() -> None:
     """精度のために切り捨てた範囲を隠さない (PR #512 Codex P2)。
 
@@ -588,14 +603,22 @@ def test_単体_文言そのものの文字は照合で落とさない() -> None
     assert reference_resolves("auto_merge", "quote", "**auto_merge** を使う")
     assert not reference_resolves("静かに通るか?", "quote", "静かに通るか を書く")
     assert not reference_resolves("大事だ！", "quote", "大事だ と書く")
-    # `#` も同じ — **行頭のコメント記号としてだけ**落とす。位置を問わず落とすと
-    # `Issue #323` と `Issue 323` が同じ文言になる (PR #512 Codex P2)
+    # `#` も同じ — **折り返した行頭のコメント記号としてだけ**落とす。位置を問わず
+    # 落とすと `Issue #323` と `Issue 323` が同じ文言になる (PR #512 Codex P2)
     assert not reference_resolves("Issue #323", "quote", "Issue 323 を見る")
     assert reference_resolves("Issue #323", "quote", "**Issue #323** を見る")
-    # 構造上の装飾は落とす (折り返しの行頭 `#` / `//` / 強調 / 全角空白)
+    # **引用の 1 行目には適用しない** — 引用自体が記号で始まることがある
+    # (`--force` / `#323` / PR #512 Codex P2)
+    assert not reference_resolves("--force", "quote", "force を付ける")
+    assert not reference_resolves("#323", "quote", "Issue 323")
+    assert reference_resolves("--force", "quote", "`--force` を付ける")
+    # 構造上の装飾は落とす (強調 / 全角空白 / 引用 2 行目以降の折り返し)
     assert reference_resolves("静かに通るか?", "quote", "**静かに通るか?**")
-    assert reference_resolves("前半 後半", "quote", "# 前半\n#   後半\n")
-    assert reference_resolves("前半 後半", "quote", "// 前半\n//   後半\n")
+    assert reference_resolves("前半\n#   後半", "quote", "前半 後半")
+    assert reference_resolves("前半\n//   後半", "quote", "前半 後半")
+    # **参照先には行頭の除去を適用しない** — 適用すると参照先の `--force …` の行が
+    # 削られ、正しい引用が偽陽性になる
+    assert reference_resolves("--force", "quote", "見出し\n--force を付ける")
 
 
 def test_単体_引用検査の対象拡張子には_tf_と_bicep_が入っている(tmp_path) -> None:
