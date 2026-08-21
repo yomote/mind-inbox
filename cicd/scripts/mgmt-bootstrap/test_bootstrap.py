@@ -1,4 +1,4 @@
-"""bootstrap.sh の分岐を、az / terraform / curl をスタブして振る舞いで固定する。
+"""[単体] bootstrap.sh の分岐を、az / terraform / curl をスタブして振る舞いで固定する。
 
 無いと何が静かに通るか:
     1. **pem の漏えい** — `az keyvault secret set` は既定でシークレット値を含む JSON を
@@ -21,13 +21,23 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
+from check_permissions import PermissionReport, compare_permissions
+
 KIT_DIR = Path(__file__).resolve().parent
 SCRIPT = KIT_DIR / "bootstrap.sh"
-HTML = KIT_DIR / "create-github-app.html"
+README = KIT_DIR / "README.md"
+CHECK_PERMISSIONS = KIT_DIR / "check_permissions.py"
+
+# 想定する権限集合。**bootstrap.sh から読み込まずに直書きする** — シェル側を読んで
+# しまうと、シェルの EXPECTED_PERMISSIONS を書き換えたときに期待値も一緒に動いて
+# しまい、「想定が黙って広がった」を検出できなくなる。両者の一致は
+# test_単体_シェルの想定権限集合が単体テストの期待値と一致する が見る。
+EXPECTED = {"administration": "write", "metadata": "read"}
 
 # ---------------------------------------------------------------------------
 # スタブ — 呼び出しごとに argv と env を記録ディレクトリへ残す。
@@ -124,11 +134,16 @@ case "$url" in
     fi ;;
   */app/installations/42/access_tokens)
     code=201
-    if [ "${STUB_GH_TOKEN:-ok}" = "noadmin" ]; then
-      echo '{"token": "ghs_STUBTOKEN_SECRET", "permissions": {"administration": "read", "metadata": "read"}}' > "$out"
-    else
-      echo '{"token": "ghs_STUBTOKEN_SECRET", "permissions": {"administration": "write", "metadata": "read"}}' > "$out"
-    fi ;;
+    # permissions は App の実権限がそのまま返る欄。手動フォーム作成 (#497) では
+    # ここが「2 つに絞れているか」を機械が見られる唯一の場所なので、下限割れ
+    # (noadmin) だけでなく余分 (extra) / 不足 (nometa) も再現する。
+    case "${STUB_GH_TOKEN:-ok}" in
+      noadmin) perms='{"administration": "read", "metadata": "read"}' ;;
+      extra)   perms='{"administration": "write", "metadata": "read", "contents": "read", "actions": "write"}' ;;
+      nometa)  perms='{"administration": "write"}' ;;
+      *)       perms='{"administration": "write", "metadata": "read"}' ;;
+    esac
+    echo "{\"token\": \"ghs_STUBTOKEN_SECRET\", \"permissions\": $perms}" > "$out" ;;
   *) echo "curl stub: 未対応 URL: $url" >&2; exit 9 ;;
 esac
 printf '%s' "$code"
@@ -401,6 +416,144 @@ def test_token_without_admin_write_is_rejected(kit):
     assert not calls_matching(kit, "terraform")
 
 
+def test_単体_余分な権限を持つ_App_は_KV_格納の前に止まる(kit):
+    """余分な権限を持つ App は **KV 格納より前に**止まる (#498 Codex P2)。
+
+    無いと何が静かに通るか:
+        **過剰権限の App が「動くので」そのまま定着する。** App は手動フォームで
+        作る (#497) ため、権限が 2 つに絞れているかを機械が見る場所はこの
+        installation token 応答しかない。「administration が write か」だけの
+        下限チェックだと Contents / Actions を余分に付けた App でも満たすので、
+        その pem が Key Vault に入り、以後の plan/apply が過剰権限で回り続ける。
+    """
+    r = run_kit(kit, modes={"STUB_GH_TOKEN": "extra"})
+    assert r.returncode != 0
+    assert "余分" in r.stderr, "何が余分なのかを言わずに止まっている"
+    # 何が余分かが名指しで出る (「権限が違います」だけでは PO が直せない)
+    assert "contents=read" in r.stderr and "actions=write" in r.stderr
+    assert not calls_matching(kit, "az", "keyvault", "secret", "set"), \
+        "過剰権限 App の pem を Key Vault へ入れてはいけない"
+    assert not calls_matching(kit, "terraform")
+
+
+def test_単体_権限が不足している_App_も止まる(kit):
+    """不足側も落とす (完全一致であって「余分が無ければ OK」ではない)。"""
+    r = run_kit(kit, modes={"STUB_GH_TOKEN": "nometa"})
+    assert r.returncode != 0
+    assert "不足" in r.stderr and "metadata=read" in r.stderr
+    assert not calls_matching(kit, "az", "keyvault", "secret", "set")
+    assert not calls_matching(kit, "terraform")
+
+
+def test_単体_想定どおりの_2_権限なら_KV_格納まで到達する(kit):
+    """対照実験: 想定どおりの 2 権限ちょうどなら通り、KV 格納まで到達する。
+    上の 3 つが「常に落ちるだけの検査」になっていないことをここで固定する。"""
+    r = run_kit(kit)
+    assert r.returncode == 0, r.stderr
+    assert "完全一致" in r.stdout, "権限集合を完全一致で検証した旨が出ていない"
+    assert calls_matching(kit, "az", "keyvault", "secret", "set")
+
+
+# ---------------------------------------------------------------------------
+# 権限集合の照合そのもの — 判定を純粋関数として直接叩く (#498 Codex P2 3 回目)
+#
+# 上のスタブ経由テストは「シェルが判定を呼び、結果どおりに止まる / 進む」という
+# **配線**を見る。ここで見るのは**判定の中身**で、Azure も curl も openssl も要らない。
+#
+# 無いと何が静かに通るか:
+#   分類 (余分 / 値ちがい / 不足) を 1 種類でも見落とす変更が、スクリプト全体を
+#   スタブで流す経路でしか検出できなくなる。スタブは curl の応答パターンを足した
+#   ぶんしか分岐を持てないので、**用意し忘れた組み合わせ (値ちがいと不足の同時発生
+#   など) は誰も見ない**まま「下限チェックへの退行」に戻れてしまう。
+# ---------------------------------------------------------------------------
+
+def test_単体_余分な権限は余分として名指しされる():
+    got = {"administration": "write", "metadata": "read",
+           "contents": "read", "actions": "write"}
+    report = compare_permissions(EXPECTED, got)
+    assert not report.matches
+    assert report.extra == ("actions=write", "contents=read")
+    assert report.wrong == () and report.missing == ()
+
+
+def test_単体_レベルが違う権限は値ちがいとして名指しされる():
+    """`administration: read` は「余分」でも「不足」でもない。**別欄**にしないと
+    PO は権限を外そうとしてしまい、直し方を間違える。"""
+    report = compare_permissions(EXPECTED, {"administration": "read", "metadata": "read"})
+    assert not report.matches
+    assert report.wrong == ("administration=read (期待 write)",)
+    assert report.extra == () and report.missing == ()
+
+
+def test_単体_欠けている権限は不足として名指しされる():
+    report = compare_permissions(EXPECTED, {"administration": "write"})
+    assert not report.matches
+    assert report.missing == ("metadata=read",)
+    assert report.extra == () and report.wrong == ()
+
+
+def test_単体_想定と完全一致なら_3_欄すべてが空になる():
+    """対照実験。上の 3 本が「常に何か言う検査」になっていないことをここで固定する。
+    これが無いと、`extra = 全部` のような雑な実装でも 3 本とも緑になる。"""
+    report = compare_permissions(EXPECTED, dict(EXPECTED))
+    assert report.matches
+    assert report == PermissionReport(extra=(), wrong=(), missing=())
+    assert report.render() == "||", "一致時は 3 欄とも空 (シェルは空文字で分岐する)"
+
+
+def test_単体_余分と値ちがいと不足は同時に報告される():
+    """3 つが同時に起きる App でも、最初の 1 つで打ち切らずに全部出す
+    (打ち切ると PO は直して再実行するたびに 1 つずつしか進めない)。"""
+    report = compare_permissions(
+        EXPECTED, {"administration": "read", "contents": "write"}
+    )
+    assert report.extra == ("contents=write",)
+    assert report.wrong == ("administration=read (期待 write)",)
+    assert report.missing == ("metadata=read",)
+    # シェル (bootstrap.sh の ${perm_report%%|*} 系) が読む 1 行の書式そのもの
+    assert report.render() == "contents=write|administration=read (期待 write)|metadata=read"
+
+
+def test_単体_CLI_は不一致でも終了コード_0_で_3_欄を返す(tmp_path: Path):
+    """シェルは `set -euo pipefail` 下の `$(...)` で受ける。ここで非ゼロを返すと、
+    「何が余分か」を出す前に errexit で落ちて PO 向けの文面が消える。"""
+    resp = tmp_path / "resp.json"
+    resp.write_text(json.dumps(
+        {"token": "ghs_x", "permissions": {"administration": "write", "contents": "read"}}
+    ))
+    r = subprocess.run(
+        [sys.executable, str(CHECK_PERMISSIONS), str(resp),
+         "administration=write", "metadata=read"],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "contents=read||metadata=read"
+
+
+def test_単体_シェルの想定権限集合が単体テストの期待値と一致する():
+    """`EXPECTED_PERMISSIONS` を根拠なく広げる変更をここで止める。
+
+    無いと何が静かに通るか: 判定関数の単体テストは EXPECTED を直書きしているので、
+    シェル側に `contents=read` を足しても単体は全部緑のまま通る。"""
+    m = re.search(r"^EXPECTED_PERMISSIONS=\(([^)]*)\)", SCRIPT.read_text(), re.M)
+    assert m, "bootstrap.sh に EXPECTED_PERMISSIONS の宣言が無い (表記が変わった?)"
+    pairs = dict(tok.strip('"').split("=", 1) for tok in m.group(1).split())
+    assert pairs == EXPECTED, \
+        f"bootstrap.sh の想定権限 {pairs} が単体テストの期待値 {EXPECTED} とずれている"
+
+
+def test_単体_判定は_bootstrap_sh_の中に埋め戻されていない():
+    """判定を heredoc で書き戻す退行を静的に止める (cicd/CLAUDE.md)。
+
+    無いと何が静かに通るか: check_permissions.py を残したまま、シェル側に
+    `python3 - <<PY` で判定を書き戻しても、振る舞いテストは全部緑のまま通る
+    (= 純粋関数のテストが実際には何も守っていない状態に戻る)。"""
+    text = SCRIPT.read_text()
+    assert "check_permissions.py" in text, "bootstrap.sh が判定モジュールを呼んでいない"
+    assert "<<'PY'" not in text and "<<PY" not in text, \
+        "bootstrap.sh に Python の heredoc を戻さない (判定は check_permissions.py へ)"
+
+
 # ---------------------------------------------------------------------------
 # Terraform 段 — #387 の門
 # ---------------------------------------------------------------------------
@@ -444,17 +597,82 @@ def test_no_set_x_in_script():
         "bootstrap.sh に set -o xtrace を足してはいけない (set -x と同義)"
 
 
-def test_manifest_is_minimal_and_webhookless():
-    """manifest の権限集合が README の根拠表と同じ 2 つだけで、webhook が無いこと。
-    権限を足す変更は、この固定を根拠 (README) ごと更新しない限り通らない。"""
-    html = HTML.read_text()
-    m = re.search(r'<textarea name="manifest"[^>]*>\s*(\{.*?\})\s*</textarea>', html, re.S)
-    assert m, "manifest の textarea が見つからない"
-    manifest = json.loads(m.group(1))
-    assert manifest["default_permissions"] == {
-        "administration": "write",
-        "metadata": "read",
-    }, "権限は根拠を書いた 2 つだけ (足すなら README の根拠表と同じ PR で)"
-    assert manifest["public"] is False
-    assert "hook_attributes" not in manifest, "webhook は無効 (受け側エンドポイントを持たない)"
-    assert manifest.get("default_events") == []
+def _table_rows_after_heading(md: str, heading_needle: str) -> list[list[str]]:
+    """見出し `heading_needle` を含む行の**直後に最初に現れる** markdown テーブルの
+    データ行を、セルのリストとして返す。見つからなければ落とす (取れなかったものを
+    「空でした」として返さない)。"""
+    lines = md.splitlines()
+    start = next(
+        (i for i, ln in enumerate(lines) if ln.startswith("#") and heading_needle in ln),
+        None,
+    )
+    assert start is not None, f"README に見出し '{heading_needle}' が無い"
+    rows: list[list[str]] = []
+    for line in lines[start + 1 :]:
+        stripped = line.strip()
+        if stripped.startswith("|"):
+            cells = [c.strip() for c in stripped.strip("|").split("|")]
+            if all(set(c) <= set("-: ") and c for c in cells):
+                continue  # 区切り行
+            rows.append(cells)
+        elif rows:
+            break  # テーブルが終わった
+        elif stripped.startswith("#"):
+            pytest.fail(f"'{heading_needle}' の直後にテーブルが無い (次の見出しに到達)")
+    assert rows, f"'{heading_needle}' の下にテーブルの行が無い"
+    return rows[1:]  # ヘッダ行を落とす
+
+
+# フォーム表記 (PO が画面で選ぶ文言) ↔ API 表記 (根拠表・installation token の permissions)
+FORM_LEVEL_TO_API = {"Read and write": "write", "Read-only": "read"}
+
+
+def test_単体_README_の権限表_2_つが同じ権限集合を指す():
+    """README の 2 つの表 —「フォームに入れる値」(PO が画面に写す正典) と
+    「入れた権限」(1 行ずつの根拠) — が同じ権限集合を指していること。
+
+    無いと何が静かに通るか:
+        **根拠の無い権限を持つ App が作られる。** App の作成は手動フォームなので、
+        権限集合を機械が読む場所は README のこの 2 表しか無い。bootstrap.sh は
+        installation token の `administration` が write **であること**しか見ておらず
+        (下限の確認)、余分な権限が付いていても素通りする。よって片方の表にだけ
+        権限行を足す / 値をずらす変更は、テストも実行も緑のまま通ってしまう。
+    """
+    md = README.read_text()
+
+    form = {}
+    for cells in _table_rows_after_heading(md, "Repository permissions"):
+        name, level = cells[0].strip("`* "), cells[1].strip("`* ")
+        assert level in FORM_LEVEL_TO_API, \
+            f"'{name}' の設定値 '{level}' は GitHub のフォームに無い表記 (Read and write / Read-only)"
+        form[name.lower()] = FORM_LEVEL_TO_API[level]
+
+    granted = set()
+    for cells in _table_rows_after_heading(md, "入れた権限"):
+        cell = cells[0].strip()
+        if cell in ("〃", "同上", ""):
+            continue  # 直前の権限に対する追加の根拠行
+        m = re.fullmatch(r"`([a-z_]+):\s*(read|write)`", cell)
+        assert m, f"「入れた権限」表の権限セルが `name: level` 形式でない: {cell!r}"
+        granted.add((m.group(1), m.group(2)))
+
+    assert form == {"administration": "write", "metadata": "read"}, \
+        f"フォームに入れる権限は根拠を書いた 2 つだけ: {form}"
+    assert granted == set(form.items()), \
+        f"根拠表 {granted} とフォームの表 {set(form.items())} がずれている (足すなら両方同じ PR で)"
+
+
+def test_単体_却下した権限がフォームの表に入っていない():
+    """「入れなかった権限」に挙げた権限が、フォームの表に入り込んでいないこと
+    (= 却下の記録を残したまま黙って付与する、を落とす)。"""
+    md = README.read_text()
+    granted = {
+        cells[0].strip("`* ").lower()
+        for cells in _table_rows_after_heading(md, "Repository permissions")
+    }
+    rejected = set()
+    for cells in _table_rows_after_heading(md, "入れなかった権限"):
+        rejected |= {n.lower() for n in re.findall(r"`([a-z_]+)`", cells[0])}
+    assert rejected, "「入れなかった権限」表から権限名を 1 つも読めていない (表記が変わった?)"
+    assert not (rejected & granted), \
+        f"却下したはずの権限がフォームの表に入っている: {sorted(rejected & granted)}"
