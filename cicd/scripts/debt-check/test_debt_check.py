@@ -574,27 +574,66 @@ def test_単体_引用検査の対象拡張子には_tf_と_bicep_が入って�
     ]
 
 
-def test_単体_コロン区切りと行番号つきの引用も拾う(tmp_path) -> None:
-    """PR #512 Codex P2。
+def test_単体_つなぎの書き方が違っても同じ引用として拾う(tmp_path) -> None:
+    """PR #512 Codex P2 (2 ラウンド分)。
 
     無いと何が静かに通るか:
-        `CLAUDE.md:「X」` (コロン区切り) や `strategy.md:59「X」` (行番号つき) は
-        リポジトリに実在する書き方 (`cicd/modules/bootstrap-core.bicep` ほか) なのに、
-        区切り規則から外れていると**その引用元だけ文言が移動しても 0 件のまま**になる。
+        参照先と引用のあいだの**つなぎ**は書き方が何通りもある (実物だけで 5 種)。
+        区切りを 1 つずつ足す実装だと**足し忘れた形が「0 件」に化ける** —
         走査しているつもりの範囲に穴が開き、狭さが 0 件と区別できない。
+        実際 Codex は 2 ラウンド続けて別の形 (`:` / `N 行目`) を指摘した。
     """
     expected = [("CLAUDE.md", "実在する文言", "quote")]
-    colon = "CLAUDE.md:" + _Q_OPEN + "実在する文言" + _Q_CLOSE
-    wide = "CLAUDE.md\uff1a" + _Q_OPEN + "実在する文言" + _Q_CLOSE  # 全角コロン
-    numbered = "CLAUDE.md:12" + _Q_OPEN + "実在する文言" + _Q_CLOSE
-    assert iter_md_references(colon) == expected
-    assert iter_md_references(wide) == expected
-    assert iter_md_references(numbered) == expected
+    quoted = _Q_OPEN + "実在する文言" + _Q_CLOSE
+    forms = {
+        "直後": "CLAUDE.md" + quoted,
+        "コロン": "CLAUDE.md:" + quoted,
+        "全角コロン": "CLAUDE.md\uff1a" + quoted,
+        "行番号": "CLAUDE.md:12" + quoted,
+        "N 行目": "[`CLAUDE.md`](CLAUDE.md) 59 行目" + quoted,
+        "助詞つき": "CLAUDE.md の不変条件" + quoted,
+        "リンクの閉じ括弧": "[`x`](CLAUDE.md)" + quoted,
+    }
+    for name, text in forms.items():
+        assert iter_md_references(text) == expected, name
 
     root = _repo(tmp_path)
     (root / "CLAUDE.md").write_text("# root\n\n実在する文言\n", encoding="utf-8")
-    (root / "cicd" / "ok.bicep").write_text(f"// {colon}\n", encoding="utf-8")
-    (root / "cicd" / "ng.bicep").write_text(
-        "// CLAUDE.md:" + _Q_OPEN + "移動した文言" + _Q_CLOSE + "\n", encoding="utf-8"
+    (root / "cicd" / "ok.bicep").write_text(
+        "// " + forms["コロン"] + "\n", encoding="utf-8"
     )
-    assert [f["file"] for f in detect_unresolved_md_references(root)] == ["cicd/ng.bicep"]
+    (root / "cicd" / "ng.bicep").write_text(
+        "// CLAUDE.md 59 行目" + _Q_OPEN + "移動した文言" + _Q_CLOSE + "\n",
+        encoding="utf-8",
+    )
+    assert [f["file"] for f in detect_unresolved_md_references(root)] == [
+        "cicd/ng.bicep"
+    ]
+
+
+def test_単体_つなぎに別の参照先が挟まったら引用として拾わない() -> None:
+    """つなぎを広げたことで生まれる誤検出を止める (PR #512)。
+
+    無いと何が静かに通るか:
+        `§` や `ADR` は**別の参照先**を導入する語。つなぎに含めると
+        `domain_rules.md §1 と ADR 0024「X」` の「X」を domain_rules.md からの引用と
+        読み違え、**直しようのない finding** を毎週報告する (偽陽性は検出器の死)。
+        実物が `apps/bff/src/domain/sentences.property.test.ts` にある。
+    """
+    quoted = _Q_OPEN + "ADR の文言" + _Q_CLOSE
+    assert iter_md_references("docs/design/domain_rules.md \u00a71 と ADR 0024" + quoted) == []
+    assert iter_md_references("docs/testing/strategy.md \u00a71.2 の" + quoted) == []
+
+
+def test_単体_省略記号を含む引用は断片ごとに実在を確かめる() -> None:
+    """`A … B` は「あいだを省いた」という意味 (PR #512)。
+
+    無いと何が静かに通るか:
+        - 省略を丸ごと 1 文字列として照合すると、**正しい引用が毎週偽陽性**になる
+          (実物が `.github/claude/review-rubric.md` にある)
+        - 逆に省略があるからと素通しすると、**片方の断片が消えていても気づけない**
+    """
+    body = "前半の文言 — 途中は関係ない話 — 後半の文言\n"
+    assert reference_resolves("前半の文言 … 後半の文言", "quote", body)
+    assert not reference_resolves("前半の文言 … 消えた文言", "quote", body)
+    assert not reference_resolves("消えた文言 … 後半の文言", "quote", body)

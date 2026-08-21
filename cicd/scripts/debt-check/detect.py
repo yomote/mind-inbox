@@ -129,11 +129,17 @@ RECORD_DIR_PREFIXES = ("docs/adr/", "docs/reviews/")
 # (句読点と鉤括弧は挟めないので、別の文の引用符まで飲み込むことはない)。
 _MD_REFERENCE = re.compile(
     r"((?:[\w.-]+/)*[\w.-]+\.md)"
-    # 閉じ括弧 / 行番号 (`strategy.md:59`) / 区切りのコロン (`CLAUDE.md:「X」`)。
-    # コロン区切りは実物がある (`cicd/modules/bootstrap-core.bicep` / PR #512 Codex P2)。
-    r"[)\]`]{0,2}(?::\d+)?\s*[:：]?\s*"
-    r"(?:(?:の[^「」\n。、]{0,12})?「([^」]{2,120})」"
-    r"|の\s*([^\s「」()（）,、。]{2,40})\s*節)"
+    # 参照先と引用のあいだの**つなぎ**。書き方が何通りもある — 実物だけでも
+    # `](path)「X」` / `CLAUDE.md:「X」` / `strategy.md:59「X」` / `… 59 行目「X」` /
+    # `CLAUDE.md の不変条件「X」`。**区切りを 1 つずつ足すとモグラ叩きになり、
+    # 足し忘れた形が「0 件」に化ける** (PR #512 で Codex が 2 ラウンド続けて別の形を
+    # 指摘した) ので、**短いつなぎを一括で許す**形にしてある。
+    # 句点・読点・鉤括弧・改行は跨がない = 別の文の引用符まで飲み込まない。
+    # ただし **`§` と `ADR` はつなぎに含めない**。これらは*別の参照先*を導入する語で、
+    # 含めると `domain_rules.md §1 と ADR 0024「X」` の「X」を domain_rules.md の
+    # 引用として誤って読む (実物あり / 誤検出は検出器の死)。
+    r"(?:(?!§|ADR)[^「」\n。、]){0,14}?"
+    r"(?:「([^」]{2,120})」|の\s*([^\s「」()（）,、。]{2,40})\s*節)"
 )
 # 比較のときに落とす飾り。**強調・引用符・改行・行頭のコメント記号は「文言が同じか」に
 # 関係しない** — コメントの折り返しで `#` や `*` が挟まるだけで偽陽性になるのを防ぐ。
@@ -141,7 +147,11 @@ _MD_REFERENCE = re.compile(
 # ⚠️ **`_` は落とさない。** Markdown の強調記号でもあるが、コード識別子の一部でもある
 # (`auto_merge` / `enforce_admins`)。位置を問わず消すと `auto_merge` と `automerge` が
 # 同じ文言になり、**まさに検出したい文言変更が 0 件で通る** (PR #512 Codex P2)。
-_DECORATION = re.compile(r"[\s*`「」『』\"'　#]")
+_DECORATION = re.compile(r"[\s*`「」『』\"'　#?？!！]")
+# 引用の省略記号。`A … B` は「A と B のあいだを省いた」という意味なので、
+# **断片ごとに実在を確かめる** (省略を含む引用は実物がある —
+# `.github/claude/review-rubric.md` / PR #512 Codex)。
+_ELLIPSIS = re.compile(r"…+|\.\.\.+")
 
 _FENCED_CODE = re.compile(r"```.*?```", re.DOTALL)
 # インラインリンク [text](target) / 画像 ![alt](target)。title 付き (target "title") も拾う
@@ -252,7 +262,12 @@ def reference_resolves(phrase: str, kind: str, target_text: str) -> bool:
     完全一致を要求すると「正しい引用」がほぼ全部落ちる。
     """
     haystack = target_text if kind == "quote" else headings_of(target_text)
-    return normalize_reference_text(phrase) in normalize_reference_text(haystack)
+    normalized_haystack = normalize_reference_text(haystack)
+    fragments = [f for f in _ELLIPSIS.split(phrase) if normalize_reference_text(f)]
+    return all(
+        normalize_reference_text(fragment) in normalized_haystack
+        for fragment in fragments
+    )
 
 
 def resolve_reference_target(src_file: Path, target: str, root: Path) -> list[Path]:
