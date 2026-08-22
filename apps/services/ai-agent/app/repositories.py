@@ -109,8 +109,8 @@ class CosmosSessionRepository:
     """会話セッション (ChatHistory) の Cosmos 永続化 (#188)。
 
     直列化は app.history.ChatHistory の serialize() / deserialize() (MAF Message
-    ベース。SK 形式の既存文書も読める後方互換つき — M1-5 の SK 除去) を使い、
-    この実装の内側に閉じる。文書は {id: session_id, history: <JSON 文字列>}。
+    ベース) を使い、この実装の内側に閉じる。
+    文書は {id: session_id, history: <JSON 文字列>}。
     寿命はコンテナ TTL (7 日 / bicep 宣言) — _ts 起点なので save のたびに延びる。
     """
 

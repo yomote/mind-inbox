@@ -10,13 +10,14 @@
 ここで test しないこと:
 - 実 Cosmos への I/O・TTL 失効の実測 (ADR 0030 動作検証 4 = live 検証の領域)
 - InMemory 実装 (test_repositories.py が pin 済み)
+- SK ChatHistory.serialize 形式 (items/content_type) の読み取り。M1-5 の移行期に
+  限った後方互換で、その形式の文書は TTL 7 日の経過で消滅済みのため #502 で削除した
+  (守る仕様そのものが無くなったので、テストも一緒に落とした)
 
 fixture 置き換え (M1-5 / #82): SK 依存除去に伴い ChatHistory を SK 型から
 app.history.ChatHistory (MAF Message ベース) へ差し替えた。メッセージの
 role は素の str、テキストは .text になったが、roundtrip の検証意図は不変。
 """
-
-import json
 
 from app.history import ChatHistory
 from app.repositories import (
@@ -81,58 +82,6 @@ class TestCosmosSessionRepository:
     async def test_l1_delete_nonexistent_is_noop(self, fake_cosmos_container):
         repo = CosmosSessionRepository(fake_cosmos_container)
         await repo.delete("nonexistent")  # should not raise
-
-    async def test_l1_reads_legacy_sk_serialized_document(self, fake_cosmos_container):
-        # 後方互換 (M1-5): PR #261 が書いた SK ChatHistory.serialize 形式の既存文書
-        # (sessions コンテナ / TTL 7 日) も読めること。
-        # 無いと: SK 除去のデプロイ直後、進行中の会話履歴が黙って壊れて返る
-        # (復元失敗が例外なら /chat が 500、形だけ読めて空なら文脈が静かに消える)。
-        sk_doc = {
-            "messages": [
-                {
-                    "metadata": {},
-                    "content_type": "message",
-                    "role": "system",
-                    "items": [
-                        {"metadata": {}, "content_type": "text", "text": "sys prompt"}
-                    ],
-                },
-                {
-                    "metadata": {},
-                    "content_type": "message",
-                    "role": "user",
-                    "items": [
-                        {"metadata": {}, "content_type": "text", "text": "こんにちは"}
-                    ],
-                },
-                {
-                    "metadata": {},
-                    "content_type": "message",
-                    "role": "assistant",
-                    "items": [
-                        {
-                            "metadata": {},
-                            "content_type": "text",
-                            "text": "どうしました？",
-                        }
-                    ],
-                },
-            ]
-        }
-        await fake_cosmos_container.upsert_item(
-            body={"id": "s-legacy", "history": json.dumps(sk_doc, ensure_ascii=False)}
-        )
-
-        repo = CosmosSessionRepository(fake_cosmos_container)
-        restored = await repo.get("s-legacy")
-
-        assert isinstance(restored, ChatHistory)
-        assert [m.role for m in restored.messages] == ["system", "user", "assistant"]
-        assert [m.text for m in restored.messages] == [
-            "sys prompt",
-            "こんにちは",
-            "どうしました？",
-        ]
 
 
 class TestCosmosApprovalRepository:

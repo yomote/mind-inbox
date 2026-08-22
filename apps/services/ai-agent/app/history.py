@@ -8,10 +8,10 @@ MAF の `Message` 型の上に薄く実装する。メッセージの実体は M
 そのもの (role は素の str、テキストは `.text`)。
 
 直列化は MAF Message の SerializationMixin (to_dict / from_dict) に委譲する。
-`deserialize` は PR #261 が書いた SK ChatHistory.serialize 形式の既存 Cosmos
-文書 (sessions コンテナ / TTL 7 日) も読める — 移行デプロイ直後に進行中の
-会話履歴が黙って空になるのを防ぐ後方互換 (この互換分岐は SK 文書の自然消滅
-後に消してよい)。
+M1-5 の移行期には SK ChatHistory.serialize 形式 (items/content_type) の既存
+Cosmos 文書も読む後方互換分岐を持っていたが、sessions コンテナの TTL 7 日が
+M1-5 デプロイ (2026-08-14) から経過して SK 形式の文書は消滅したため撤去した
+(#502)。
 """
 
 from __future__ import annotations
@@ -57,22 +57,9 @@ class ChatHistory:
 
     @classmethod
     def deserialize(cls, raw: str) -> "ChatHistory":
-        """serialize の逆。SK ChatHistory.serialize 形式 (items/content_type) も読む。"""
+        """serialize の逆 (MAF Message.from_dict ベース)。"""
         data = json.loads(raw)
-        messages: list[Message] = []
-        for m in data.get("messages", []):
-            if "items" in m:
-                # SK 形式 (PR #261 時点の既存文書): role は素の str、テキストは
-                # items[].content_type == "text" の text を連結して写す
-                text = "".join(
-                    item.get("text", "")
-                    for item in m["items"]
-                    if item.get("content_type") == "text"
-                )
-                messages.append(Message(role=m["role"], contents=[text]))
-            else:
-                messages.append(Message.from_dict(m))
-        return cls(messages)
+        return cls(Message.from_dict(m) for m in data.get("messages", []))
 
 
 # ── 会話履歴の窓 (#486 / design-gate 承認 2026-08-17) ──────────────────────────
