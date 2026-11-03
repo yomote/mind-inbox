@@ -20,7 +20,7 @@
     "@azure/cosmos": "^4.10.0",
     "@azure/functions": "^4.16.2",
     "@trpc/server": "^11.18.0",
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
